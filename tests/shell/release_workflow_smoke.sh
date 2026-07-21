@@ -46,6 +46,8 @@ if grep -E '^[[:space:]]+uses:' "${workflow}" | grep -Ev '@[0-9a-f]{40}([[:space
 fi
 
 validate="$(job_block validate)"
+release_draft="$(job_block verify-release-draft)"
+pgxn_meta="$(job_block pgxn-meta)"
 pgxn_artifact="$(job_block pgxn-artifact)"
 source_attestation="$(job_block verify-source-attestation)"
 approval="$(job_block approve-publishing)"
@@ -61,10 +63,21 @@ default_verify="$(job_block docker-verify-default)"
 prepare_summary="$(job_block prepare-summary)"
 publish_summary="$(job_block publish-summary)"
 
-grep -qF 'contents: write' <<<"${validate}"
-grep -qF '[[ "${MODE}" == prepare && "${{ github.sha }}" != "${CANDIDATE_SHA}" ]]' <<<"${validate}"
+if grep -qF 'contents: write' <<<"${validate}"; then
+  echo "release validation has unnecessary write permission" >&2
+  exit 1
+fi
+grep -qF '[[ "${{ github.sha }}" != "${CANDIDATE_SHA}" ]]' <<<"${validate}"
+
+grep -qF 'contents: write' <<<"${release_draft}"
+grep -qF "needs.validate.outputs.mode == 'publish'" <<<"${release_draft}"
+grep -qF 'test "$(jq -r .draft' <<<"${release_draft}"
+
+grep -qF 'container: pgxn/pgxn-tools@sha256:' <<<"${pgxn_meta}"
+grep -qF 'validate_pgxn_meta META.json' <<<"${pgxn_meta}"
 
 grep -qF "needs.validate.outputs.mode == 'prepare'" <<<"${pgxn_artifact}"
+grep -qF -- '- pgxn-meta' <<<"${pgxn_artifact}"
 grep -qF 'release/build-packages.sh' <<<"${pgxn_artifact}"
 grep -qF 'source-payload-${{ needs.validate.outputs.version }}' <<<"${pgxn_artifact}"
 grep -qF 'actions/attest@' <<<"${pgxn_artifact}"
@@ -77,8 +90,13 @@ grep -qF 'prepare_run_id' <<<"${source_attestation}"
 
 grep -qF "needs.validate.outputs.mode == 'publish'" <<<"${approval}"
 grep -qF 'environment: release' <<<"${approval}"
+grep -qF -- '- verify-release-draft' <<<"${approval}"
+grep -qF -- '- pgxn-meta' <<<"${approval}"
 
 grep -qF 'approve-publishing' <<<"${publish_pgxn}"
+grep -qF 'publish-docker-verify' <<<"${publish_pgxn}"
+grep -qF 'docker-verify-default' <<<"${publish_pgxn}"
+grep -qF 'validate_pgxn_meta META.json' <<<"${publish_pgxn}"
 grep -qF 'PGXN_USERNAME' <<<"${publish_pgxn}"
 grep -qF 'PGXN_PASSWORD' <<<"${publish_pgxn}"
 grep -qF 'pgxn-release "dist/pgContext-' <<<"${publish_pgxn}"
@@ -116,13 +134,15 @@ grep -qF 'linux/amd64' <<<"${docker_verify}"
 grep -qF 'linux/arm64' <<<"${docker_verify}"
 
 grep -qF 'approve-publishing' <<<"${publish_docker}"
-grep -qF 'ref: ${{ github.sha }}' <<<"${publish_docker}"
+grep -qF 'ref: ${{ needs.validate.outputs.tag }}' <<<"${publish_docker}"
 grep -qF 'scripts/promote-release-image.sh' <<<"${publish_docker}"
 grep -qF 'EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}' <<<"${publish_docker}"
 
 for block in "${published_verify}" "${default_verify}"; do
   grep -qF 'publish-docker' <<<"${block}"
+  grep -qF 'scripts/resolve-oci-digest.sh' <<<"${block}"
   grep -qF 'scripts/verify-release-image.sh --registry' <<<"${block}"
+  grep -qF 'EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}' <<<"${block}"
   grep -qF 'linux/amd64' <<<"${block}"
   grep -qF 'linux/arm64' <<<"${block}"
 done

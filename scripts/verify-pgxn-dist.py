@@ -119,6 +119,17 @@ def main() -> None:
         if meta.get("provides", {}).get("pgcontext", {}).get("version") != version:
             fail("META.json provides.pgcontext.version does not match the archive")
         resources = meta.get("resources", {})
+        invalid_resource_keys = sorted(
+            key
+            for key in resources
+            if key not in {"homepage", "bugtracker", "repository"}
+            and re.fullmatch(r"[xX]_.*", key) is None
+        )
+        if invalid_resource_keys:
+            fail(
+                "META.json contains invalid resource keys: "
+                + ", ".join(invalid_resource_keys)
+            )
         if resources.get("homepage") != REPOSITORY:
             fail("META.json homepage does not match the pgContext repository")
         if resources.get("repository", {}).get("url") != f"{REPOSITORY}.git":

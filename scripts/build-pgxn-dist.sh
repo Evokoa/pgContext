@@ -65,6 +65,7 @@ if [[ -n "$(git -C "${ROOT}" status --short)" && "${ALLOW_DIRTY}" -ne 1 ]]; then
 fi
 
 "${ROOT}/scripts/validate-release.py" --tag "${TAG}"
+"${ROOT}/scripts/validate-pgxn-meta.sh" "${ROOT}/META.json"
 mkdir -p "${OUT_DIR}"
 ARCHIVE="${OUT_DIR}/pgContext-${VERSION}.zip"
 rm -f "${ARCHIVE}"

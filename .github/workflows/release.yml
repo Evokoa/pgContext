@@ -45,8 +45,6 @@ jobs:
   validate:
     name: Validate release
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
     outputs:
       mode: ${{ steps.release.outputs.mode }}
       tag: ${{ steps.release.outputs.tag }}
@@ -80,7 +78,7 @@ jobs:
             echo "Candidate SHA must be a full lowercase Git commit: ${CANDIDATE_SHA}" >&2
             exit 1
           fi
-          if [[ "${MODE}" == prepare && "${{ github.sha }}" != "${CANDIDATE_SHA}" ]]; then
+          if [[ "${{ github.sha }}" != "${CANDIDATE_SHA}" ]]; then
             echo "Dispatch this workflow from the candidate tag/commit ${CANDIDATE_SHA}" >&2
             exit 1
           fi
@@ -132,19 +130,6 @@ jobs:
             exit 1
           fi
 
-      - name: Verify GitHub Release is an empty draft
-        if: steps.release.outputs.mode == 'publish'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          release="$(gh api --paginate "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name == \"${TAG}\")")"
-          [[ -n "${release}" ]] || { echo "Draft release does not exist: ${TAG}" >&2; exit 1; }
-          test "$(jq -r .draft <<<"${release}")" = true
-          test "$(jq '.assets | length' <<<"${release}")" -eq 0
-
       - name: Checkout release tag
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -158,10 +143,47 @@ jobs:
       - name: Validate release metadata
         run: scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-master
 
+  verify-release-draft:
+    name: Verify GitHub Release is an empty draft
+    if: needs.validate.outputs.mode == 'publish'
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Verify empty draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release="$(gh api --paginate "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name == \"${TAG}\")")"
+          [[ -n "${release}" ]] || { echo "Draft release does not exist: ${TAG}" >&2; exit 1; }
+          test "$(jq -r .draft <<<"${release}")" = true
+          test "$(jq '.assets | length' <<<"${release}")" -eq 0
+
+  pgxn-meta:
+    name: Validate PGXN metadata
+    needs: validate
+    runs-on: ubuntu-24.04
+    container: pgxn/pgxn-tools@sha256:a54f1e66c563c7e47b34ed08597d0ee5da1168303b61ef47e66a4a9904ab849d
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+
+      - name: Validate canonical PGXN metadata
+        run: validate_pgxn_meta META.json
+
   pgxn-artifact:
     name: Build and attest source payload
     if: needs.validate.outputs.mode == 'prepare'
-    needs: validate
+    needs:
+      - validate
+      - pgxn-meta
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -196,6 +218,8 @@ jobs:
     if: needs.validate.outputs.mode == 'publish'
     needs:
       - validate
+      - pgxn-meta
+      - verify-release-draft
       - verify-source-attestation
     runs-on: ubuntu-24.04
     environment: release
@@ -243,6 +267,8 @@ jobs:
     needs:
       - validate
       - approve-publishing
+      - publish-docker-verify
+      - docker-verify-default
     runs-on: ubuntu-24.04
     permissions:
       actions: read
@@ -273,6 +299,7 @@ jobs:
             --tag "${{ needs.validate.outputs.tag }}" \
             --candidate-sha "${{ needs.validate.outputs.commit_sha }}" \
             dist
+          validate_pgxn_meta META.json
 
       - name: Publish to PGXN
         env:
@@ -577,8 +604,7 @@ jobs:
           PREPARED_IMAGE: ${{ env.IMAGE_NAME }}:pg17-${{ needs.validate.outputs.tag }}-prepared
         run: |
           set -euo pipefail
-          digest="$(docker buildx imagetools inspect "${PREPARED_IMAGE}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          digest="$(scripts/resolve-oci-digest.sh "${PREPARED_IMAGE}")"
           scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${digest}" "${PLATFORM}"
           gh attestation verify "oci://${{ env.IMAGE_NAME }}@${digest}" \
             --bundle-from-oci \
@@ -600,7 +626,7 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.validate.outputs.tag }}
           persist-credentials: false
 
       - name: Set up Docker Buildx
@@ -660,13 +686,14 @@ jobs:
 
       - name: Pull and verify published image
         env:
+          EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}
           PLATFORM: ${{ matrix.platform.name }}
           PUBLISHED_IMAGE: ${{ env.IMAGE_NAME }}:pg17-${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          digest="$(docker buildx imagetools inspect "${PUBLISHED_IMAGE}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${digest}" "${PLATFORM}"
+          digest="$(scripts/resolve-oci-digest.sh "${PUBLISHED_IMAGE}")"
+          test "${digest}" = "${EXPECTED_DIGEST}"
+          scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${EXPECTED_DIGEST}" "${PLATFORM}"
 
   docker-verify-default:
     name: Verify default published image ${{ matrix.platform.name }}
@@ -707,11 +734,12 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform.name }}
           DEFAULT_IMAGE: ${{ env.IMAGE_NAME }}:${{ needs.validate.outputs.tag }}
+          EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}
         run: |
           set -euo pipefail
-          digest="$(docker buildx imagetools inspect "${DEFAULT_IMAGE}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${digest}" "${PLATFORM}"
+          digest="$(scripts/resolve-oci-digest.sh "${DEFAULT_IMAGE}")"
+          test "${digest}" = "${EXPECTED_DIGEST}"
+          scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${EXPECTED_DIGEST}" "${PLATFORM}"
 
   publish-summary:
     name: Publish summary

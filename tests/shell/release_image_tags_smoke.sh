@@ -58,3 +58,8 @@ rm -f "${FAKE_DOCKER_STATE}" "${FAKE_TRANSIENT_STATE}"
 FAKE_TRANSIENT_INSPECT=1 PGCONTEXT_PROMOTE_INSPECT_DELAY_SECONDS=0 \
   PATH="${tmp}:${PATH}" scripts/promote-release-image.sh \
   "${image}" "${tag}" "${sha}" "${digest}"
+
+rm -f "${FAKE_TRANSIENT_STATE}"
+resolved="$(FAKE_TRANSIENT_INSPECT=1 PGCONTEXT_OCI_INSPECT_DELAY_SECONDS=0 \
+  PATH="${tmp}:${PATH}" scripts/resolve-oci-digest.sh "${image}:${tag}")"
+test "${resolved}" = "${digest}"
