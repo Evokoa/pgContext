@@ -152,7 +152,8 @@ V1 artifact policy, then verifies the complete payload.
 Verify the GitHub-verified signed annotated tag, `SHA256SUMS`, the immutable
 candidate SHA in `PROVENANCE.json`, the source archive's Sigstore attestation,
 and the OCI manifest digest and attestation before use. Publishing the fully
-populated draft locks its tag and assets under GitHub release immutability.
+populated draft does not lock its tag or assets, so the project policy forbids
+replacing either after publication; corrections require a new version.
 
 Creating or pushing the signed release tag, package/image publication, and
 hosted uploads require separate maintainer authorization. The current open work

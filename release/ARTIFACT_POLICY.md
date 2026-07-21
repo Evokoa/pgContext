@@ -11,6 +11,7 @@ candidate. The OCI image carries BuildKit provenance plus a Sigstore
 attestation and must be selected by its published manifest digest rather than a
 mutable convenience tag when reproducibility matters.
 
-Publishing the draft release makes its tag and assets immutable and generates a
-GitHub release attestation. Do not describe an individual file as having an
-embedded signature; verification applies to the signed tag and attestations.
+GitHub release immutability is intentionally disabled. Maintainers must never
+replace a published asset or move a published version tag; corrections require
+a new release version. Do not describe an individual file as having an embedded
+signature; verification applies to the signed tag and build attestations.

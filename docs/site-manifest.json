@@ -708,7 +708,7 @@
         "../docs/contributor_guide/release_process.md"
       ],
       "path": "release/README.md",
-      "sha256": "ac9d7322ad0abf91137cbba794e8d8a0d12a2ad24d72714c0245a83c1c401886"
+      "sha256": "d7765406083d4c8c1d32a6c8247634bd7840be0e2d081f3d584290c55c2016d1"
     }
   ],
   "renderer": "github-markdown",

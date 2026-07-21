@@ -342,7 +342,7 @@ jobs:
             --candidate-sha "${{ needs.validate.outputs.commit_sha }}" \
             dist
 
-      - name: Attach immutable source payload
+      - name: Attach reviewed source payload
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
