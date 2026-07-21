@@ -1,0 +1,1 @@
+{"must":[{"should":[{"key":"tenant_id","match":{"any":["acme","globex"]}},{"key":"metadata.topic","match":"billing"}]}]}

@@ -1,0 +1,356 @@
+//! Bounded synchronous query orchestration.
+
+use std::collections::BTreeSet;
+
+use crate::{
+    BudgetUsage, Cancellation, Candidate, CandidateSource, Completion, ExecutionBudget,
+    ExecutionOutcome, ExecutionState, FilterCandidateSource, QueryError, QueryIr, Result,
+    SourceReadiness, SourceRechecker, StageDiagnostic, StageKind, TelemetrySink,
+    types::deterministic_points,
+};
+
+/// Pure executor composed from owned synchronous query ports.
+pub struct QueryExecutor<'a> {
+    candidates: &'a mut dyn CandidateSource,
+    filter: Option<&'a mut dyn FilterCandidateSource>,
+    rechecker: &'a mut dyn SourceRechecker,
+    telemetry: &'a mut dyn TelemetrySink,
+    cancellation: &'a dyn Cancellation,
+}
+
+impl<'a> QueryExecutor<'a> {
+    /// Creates a pure executor over caller-owned adapters.
+    #[must_use]
+    pub fn new(
+        candidates: &'a mut dyn CandidateSource,
+        filter: Option<&'a mut dyn FilterCandidateSource>,
+        rechecker: &'a mut dyn SourceRechecker,
+        telemetry: &'a mut dyn TelemetrySink,
+        cancellation: &'a dyn Cancellation,
+    ) -> Self {
+        Self {
+            candidates,
+            filter,
+            rechecker,
+            telemetry,
+            cancellation,
+        }
+    }
+
+    /// Executes one validated query with hard work limits.
+    ///
+    /// Cancellation is checked before and after each port call. All port DTOs
+    /// are owned, so no PostgreSQL buffer pin or mmap view can escape an
+    /// adapter.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError`] for invalid queries, adapter failures, telemetry
+    /// failures, or a port returning more values than requested.
+    pub fn execute(
+        &mut self,
+        query: &QueryIr,
+        budget: ExecutionBudget,
+    ) -> Result<ExecutionOutcome> {
+        query.validate()?;
+        let mut usage = BudgetUsage::default();
+        let mut diagnostics = Vec::new();
+
+        if query.limit() > budget.max_results() {
+            return Ok(outcome(
+                Completion::BudgetExhausted,
+                Vec::new(),
+                diagnostics,
+                usage,
+            ));
+        }
+
+        if cancelled(self.cancellation)? {
+            return Ok(outcome(
+                Completion::Cancelled,
+                Vec::new(),
+                diagnostics,
+                usage,
+            ));
+        }
+
+        let readiness = self.candidates.readiness(query)?;
+        if cancelled(self.cancellation)? {
+            return Ok(outcome(
+                Completion::Cancelled,
+                Vec::new(),
+                diagnostics,
+                usage,
+            ));
+        }
+        match readiness {
+            SourceReadiness::Ready => {}
+            SourceReadiness::RebuildRequired { reason } => {
+                let diagnostic = StageDiagnostic::new(
+                    StageKind::Readiness,
+                    "rebuild_required",
+                    0,
+                    0,
+                    Some(reason),
+                );
+                self.telemetry.record(&diagnostic)?;
+                diagnostics.push(diagnostic);
+                if cancelled(self.cancellation)? {
+                    return Ok(ExecutionOutcome::new(
+                        ExecutionState::RebuildRequired { reason },
+                        Completion::Cancelled,
+                        Vec::new(),
+                        diagnostics,
+                        usage,
+                    ));
+                }
+                return Ok(ExecutionOutcome::new(
+                    ExecutionState::RebuildRequired { reason },
+                    Completion::Complete,
+                    Vec::new(),
+                    diagnostics,
+                    usage,
+                ));
+            }
+            SourceReadiness::NotReady { reason } => {
+                let diagnostic =
+                    StageDiagnostic::new(StageKind::Readiness, "not_ready", 0, 0, Some(reason));
+                self.telemetry.record(&diagnostic)?;
+                diagnostics.push(diagnostic);
+                if cancelled(self.cancellation)? {
+                    return Ok(ExecutionOutcome::new(
+                        ExecutionState::NotReady { reason },
+                        Completion::Cancelled,
+                        Vec::new(),
+                        diagnostics,
+                        usage,
+                    ));
+                }
+                return Ok(ExecutionOutcome::new(
+                    ExecutionState::NotReady { reason },
+                    Completion::Complete,
+                    Vec::new(),
+                    diagnostics,
+                    usage,
+                ));
+            }
+        }
+
+        let filter_batch = if query.filter().is_some() {
+            let Some(filter) = self.filter.as_deref_mut() else {
+                return Err(QueryError::PortFailure {
+                    stage: "filter_candidate_source",
+                    message: "query has a filter but no filter adapter is available".to_owned(),
+                });
+            };
+            let batch = filter.filter_candidates(query, budget.max_filter_candidates())?;
+            if cancelled(self.cancellation)? {
+                return Ok(outcome(
+                    Completion::Cancelled,
+                    Vec::new(),
+                    diagnostics,
+                    usage,
+                ));
+            }
+            if batch.point_ids().len() > budget.max_filter_candidates() {
+                return Err(contract_violation(
+                    "filter_candidate_source",
+                    budget.max_filter_candidates(),
+                    batch.point_ids().len(),
+                ));
+            }
+            usage.add_filter_candidates(batch.point_ids().len());
+            usage.add_stage();
+            let diagnostic = StageDiagnostic::new(
+                StageKind::FilterCandidates,
+                if batch.exhausted() {
+                    "filter_candidates_exhausted"
+                } else {
+                    "filter_candidates_partial"
+                },
+                0,
+                batch.point_ids().len(),
+                None,
+            );
+            self.telemetry.record(&diagnostic)?;
+            diagnostics.push(diagnostic);
+            if cancelled(self.cancellation)? {
+                return Ok(outcome(
+                    Completion::Cancelled,
+                    Vec::new(),
+                    diagnostics,
+                    usage,
+                ));
+            }
+            if !batch.exhausted() || usage.stages() >= budget.max_stages() {
+                return Ok(outcome(
+                    Completion::BudgetExhausted,
+                    Vec::new(),
+                    diagnostics,
+                    usage,
+                ));
+            }
+            Some(batch)
+        } else {
+            None
+        };
+
+        if usage.stages() >= budget.max_stages() {
+            return Ok(outcome(
+                Completion::BudgetExhausted,
+                Vec::new(),
+                diagnostics,
+                usage,
+            ));
+        }
+
+        let page =
+            self.candidates
+                .candidates(query, filter_batch.as_ref(), budget.max_candidates())?;
+        if cancelled(self.cancellation)? {
+            return Ok(outcome(
+                Completion::Cancelled,
+                Vec::new(),
+                diagnostics,
+                usage,
+            ));
+        }
+        if page.candidates().len() > budget.max_candidates() {
+            return Err(contract_violation(
+                "candidate_source",
+                budget.max_candidates(),
+                page.candidates().len(),
+            ));
+        }
+        usage.add_candidates(page.candidates().len());
+        usage.add_stage();
+        let mut completion = if page.exhausted() {
+            Completion::Complete
+        } else {
+            Completion::BudgetExhausted
+        };
+        let diagnostic = StageDiagnostic::new(
+            StageKind::Candidates,
+            if page.exhausted() {
+                "candidate_source_exhausted"
+            } else {
+                "candidate_source_partial"
+            },
+            filter_batch
+                .as_ref()
+                .map_or(0, |batch| batch.point_ids().len()),
+            page.candidates().len(),
+            None,
+        );
+        self.telemetry.record(&diagnostic)?;
+        diagnostics.push(diagnostic);
+
+        if cancelled(self.cancellation)? {
+            return Ok(outcome(
+                Completion::Cancelled,
+                Vec::new(),
+                diagnostics,
+                usage,
+            ));
+        }
+        if page.candidates().is_empty() {
+            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
+        }
+        if usage.stages() >= budget.max_stages() {
+            return Ok(outcome(
+                Completion::BudgetExhausted,
+                Vec::new(),
+                diagnostics,
+                usage,
+            ));
+        }
+
+        let recheck_limit = budget.max_rechecks().min(page.candidates().len());
+        if recheck_limit < page.candidates().len() {
+            completion = Completion::BudgetExhausted;
+        }
+        let rows = self
+            .rechecker
+            .recheck(query, page.candidates(), recheck_limit)?;
+        if cancelled(self.cancellation)? {
+            return Ok(outcome(
+                Completion::Cancelled,
+                Vec::new(),
+                diagnostics,
+                usage,
+            ));
+        }
+        if rows.len() > recheck_limit {
+            return Err(contract_violation(
+                "source_rechecker",
+                recheck_limit,
+                rows.len(),
+            ));
+        }
+        let candidate_ids = page
+            .candidates()
+            .iter()
+            .map(Candidate::point_id)
+            .collect::<BTreeSet<_>>();
+        if let Some(row) = rows
+            .iter()
+            .find(|row| !candidate_ids.contains(&row.point_id()))
+        {
+            return Err(QueryError::UnexpectedPointId {
+                stage: "source_rechecker",
+                point_id: row.point_id(),
+            });
+        }
+        usage.add_rechecks(rows.len());
+        usage.add_stage();
+        let points = deterministic_points(rows, query.limit(), query.score_order());
+        let diagnostic = StageDiagnostic::new(
+            StageKind::SourceRecheck,
+            "authoritative_source_recheck",
+            page.candidates().len(),
+            points.len(),
+            None,
+        );
+        self.telemetry.record(&diagnostic)?;
+        diagnostics.push(diagnostic);
+
+        if cancelled(self.cancellation)? {
+            return Ok(outcome(
+                Completion::Cancelled,
+                Vec::new(),
+                diagnostics,
+                usage,
+            ));
+        }
+
+        Ok(outcome(completion, points, diagnostics, usage))
+    }
+}
+
+fn outcome(
+    completion: Completion,
+    points: Vec<crate::HydratedCandidate>,
+    diagnostics: Vec<StageDiagnostic>,
+    usage: BudgetUsage,
+) -> ExecutionOutcome {
+    ExecutionOutcome::new(
+        ExecutionState::Ready,
+        completion,
+        points,
+        diagnostics,
+        usage,
+    )
+}
+
+fn contract_violation(stage: &'static str, requested: usize, returned: usize) -> QueryError {
+    QueryError::PortContractViolation {
+        stage,
+        requested,
+        returned,
+    }
+}
+
+fn cancelled(cancellation: &dyn Cancellation) -> Result<bool> {
+    cancellation.check_interrupt()?;
+    Ok(cancellation.is_cancelled())
+}

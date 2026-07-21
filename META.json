@@ -1,0 +1,41 @@
+{
+  "name": "pgContext",
+  "abstract": "Vector and hybrid retrieval over authoritative PostgreSQL tables",
+  "description": "pgContext adds exact vector search, persisted HNSW, metadata-filtered ANN, and hybrid retrieval while PostgreSQL remains the source of truth.",
+  "version": "0.1.0",
+  "maintainer": [
+    "Evokoa Team <team@evokoa.com>"
+  ],
+  "license": "apache_2_0",
+  "provides": {
+    "pgcontext": {
+      "file": "pgcontext.control",
+      "version": "0.1.0",
+      "docfile": "README.md"
+    }
+  },
+  "resources": {
+    "homepage": "https://github.com/evokoa/pgcontext",
+    "documentation": "https://github.com/evokoa/pgcontext/tree/main/docs",
+    "bugtracker": {
+      "web": "https://github.com/evokoa/pgcontext/issues"
+    },
+    "repository": {
+      "url": "https://github.com/evokoa/pgcontext.git",
+      "web": "https://github.com/evokoa/pgcontext",
+      "type": "git"
+    }
+  },
+  "meta-spec": {
+    "version": "1.0.0",
+    "url": "https://pgxn.org/meta/spec.txt"
+  },
+  "tags": [
+    "vector",
+    "hnsw",
+    "postgresql",
+    "retrieval",
+    "rust",
+    "pgrx"
+  ]
+}

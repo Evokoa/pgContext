@@ -1,0 +1,245 @@
+{
+  "version": 1,
+  "renderer": "github-markdown",
+  "sections": [
+    {
+      "title": "Project",
+      "pages": [
+        {
+          "title": "Overview",
+          "path": "index.md"
+        },
+        {
+          "title": "pgContext vs. pgvector vs. Qdrant",
+          "path": "pgcontext-vs-pgvector-vs-qdrant.md"
+        },
+        {
+          "title": "pgContext vs. pgvector benchmark",
+          "path": "benchmarks/pgvector.md"
+        },
+        {
+          "title": "Quickstart",
+          "path": "quickstart.md"
+        },
+        {
+          "title": "Release notes",
+          "path": "release_notes.md"
+        },
+        {
+          "title": "Roadmap",
+          "path": "roadmap.md"
+        },
+        {
+          "title": "Known issues",
+          "path": "known_issues.md"
+        }
+      ]
+    },
+    {
+      "title": "User guide",
+      "pages": [
+        {
+          "title": "User guide overview",
+          "path": "user_guide/README.md"
+        },
+        {
+          "title": "Installation",
+          "path": "user_guide/installation.md"
+        },
+        {
+          "title": "Configuration",
+          "path": "user_guide/configuration.md"
+        },
+        {
+          "title": "Collection quickstart",
+          "path": "user_guide/quickstart.md"
+        },
+        {
+          "title": "Playground",
+          "path": "user_guide/playground.md"
+        },
+        {
+          "title": "Collections",
+          "path": "user_guide/collections.md"
+        },
+        {
+          "title": "Vector search",
+          "path": "user_guide/vector_search.md"
+        },
+        {
+          "title": "Indexes",
+          "path": "user_guide/indexes.md"
+        },
+        {
+          "title": "pgvector Coexist Mode",
+          "path": "user_guide/pgvector_coexist.md"
+        },
+        {
+          "title": "Filters",
+          "path": "user_guide/filters.md"
+        },
+        {
+          "title": "Hybrid retrieval",
+          "path": "user_guide/hybrid_retrieval.md"
+        },
+        {
+          "title": "Client examples",
+          "path": "user_guide/client_examples.md"
+        },
+        {
+          "title": "Multi-tenancy",
+          "path": "user_guide/multi_tenancy.md"
+        },
+        {
+          "title": "Configuration storage",
+          "path": "user_guide/storage.md"
+        },
+        {
+          "title": "Operations",
+          "path": "user_guide/operations.md"
+        },
+        {
+          "title": "Security",
+          "path": "user_guide/security.md"
+        },
+        {
+          "title": "Troubleshooting",
+          "path": "user_guide/troubleshooting.md"
+        },
+        {
+          "title": "Rollback",
+          "path": "user_guide/rollback.md"
+        },
+        {
+          "title": "Support policy",
+          "path": "user_guide/support_policy.md"
+        },
+        {
+          "title": "Known limitations",
+          "path": "user_guide/limitations.md"
+        },
+        {
+          "title": "Errors",
+          "path": "user_guide/errors.md"
+        },
+        {
+          "title": "SQL API",
+          "path": "user_guide/api_reference.md"
+        },
+        {
+          "title": "Metric semantics",
+          "path": "user_guide/metric_semantics.md"
+        },
+        {
+          "title": "Metric/operator matrix",
+          "path": "user_guide/metric_operator_matrix.md"
+        },
+        {
+          "title": "SQL object inventory",
+          "path": "user_guide/sql_object_inventory.md"
+        },
+        {
+          "title": "Parity matrix",
+          "path": "user_guide/parity_matrix.md"
+        },
+        {
+          "title": "Migrating from pgvector",
+          "path": "user_guide/pgvector_migration.md"
+        },
+        {
+          "title": "Release notes detail",
+          "path": "user_guide/release_notes.md"
+        },
+        {
+          "title": "Product roadmap",
+          "path": "user_guide/roadmap.md"
+        }
+      ]
+    },
+    {
+      "title": "Contributor guide",
+      "pages": [
+        {
+          "title": "Contributor overview",
+          "path": "contributor_guide/README.md"
+        },
+        {
+          "title": "Architecture",
+          "path": "contributor_guide/architecture.md"
+        },
+        {
+          "title": "Repository map",
+          "path": "contributor_guide/repository_map.md"
+        },
+        {
+          "title": "PostgreSQL modules",
+          "path": "contributor_guide/postgres_module_organization.md"
+        },
+        {
+          "title": "Storage and memory",
+          "path": "contributor_guide/storage_memory.md"
+        },
+        {
+          "title": "Vector engine",
+          "path": "contributor_guide/vector_engine.md"
+        },
+        {
+          "title": "Serving-memory decision",
+          "path": "contributor_guide/serving_memory_decision.md"
+        },
+        {
+          "title": "Build phase profile",
+          "path": "contributor_guide/build_profile_2026-07.md"
+        },
+        {
+          "title": "HNSW callbacks",
+          "path": "contributor_guide/hnsw_callback_contract.md"
+        },
+        {
+          "title": "HNSW storage",
+          "path": "contributor_guide/hnsw_storage_contract.md"
+        },
+        {
+          "title": "Scripts",
+          "path": "contributor_guide/scripts.md"
+        },
+        {
+          "title": "Testing",
+          "path": "contributor_guide/testing.md"
+        },
+        {
+          "title": "Benchmark methodology",
+          "path": "contributor_guide/benchmark_methodology.md"
+        },
+        {
+          "title": "Fuzzing",
+          "path": "contributor_guide/fuzzing.md"
+        },
+        {
+          "title": "Safety and security",
+          "path": "contributor_guide/security_review.md"
+        },
+        {
+          "title": "Unsafe review",
+          "path": "contributor_guide/unsafe_review.md"
+        },
+        {
+          "title": "Independent unsafe audit",
+          "path": "contributor_guide/unsafe_ffi_audit_2026-07-11.md"
+        },
+        {
+          "title": "Release gates",
+          "path": "contributor_guide/release_gates.md"
+        },
+        {
+          "title": "Release matrix",
+          "path": "contributor_guide/release_matrix.md"
+        },
+        {
+          "title": "Release process",
+          "path": "contributor_guide/release_process.md"
+        }
+      ]
+    }
+  ]
+}

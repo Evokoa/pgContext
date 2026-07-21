@@ -1,0 +1,75 @@
+[package]
+name = "pgcontext-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+rust-version = "1.96"
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+context-core = { path = "../crates/context-core", version = "0.1.0" }
+context-filter = { path = "../crates/context-filter", version = "0.1.0" }
+context-index = { path = "../crates/context-index", version = "0.1.0" }
+context-storage = { path = "../crates/context-storage", version = "0.1.0" }
+libfuzzer-sys = "0.4"
+
+[workspace]
+
+[[bin]]
+name = "filter_json"
+path = "fuzz_targets/filter_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "segment_loader"
+path = "fuzz_targets/segment_loader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "vector_text"
+path = "fuzz_targets/vector_text.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sql_predicate"
+path = "fuzz_targets/sql_predicate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "candidate_mask"
+path = "fuzz_targets/candidate_mask.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cursor_state"
+path = "fuzz_targets/cursor_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hnsw_graph_ops"
+path = "fuzz_targets/hnsw_graph_ops.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hnsw_page"
+path = "fuzz_targets/hnsw_page.rs"
+test = false
+doc = false
+bench = false

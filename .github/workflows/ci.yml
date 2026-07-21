@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  rust:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --check
+      - name: Lint
+        run: cargo clippy --workspace --exclude context-pg --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --workspace --exclude context-pg --all-features
+      - name: Docs
+        run: cargo doc --workspace --exclude context-pg --no-deps
+      - name: Public docs navigation, links, and drift
+        run: scripts/check-public-docs.py --check
+      - name: Public docs gate smoke
+        run: tests/shell/check_public_docs_smoke.sh
+      - name: Parity matrix
+        run: scripts/check-parity-matrix.sh
+      - name: Parity matrix smoke
+        run: tests/shell/check_parity_matrix_smoke.sh
+      - name: SQL object inventory
+        run: scripts/generate-sql-object-inventory.sh --check
+      - name: Benchmark report smoke
+        run: tests/shell/run_benchmark_report_smoke.sh
+      - name: Fuzz campaign report smoke
+        run: tests/shell/run_fuzz_campaigns_smoke.sh
+      - name: Release artifact report smoke
+        run: tests/shell/run_release_artifact_report_smoke.sh
+      - name: Extension SQL artifact smoke
+        run: tests/shell/check_extension_sql_artifact_smoke.sh
+      - name: Security review report smoke
+        run: tests/shell/run_security_review_report_smoke.sh
+      - name: PostgreSQL matrix report smoke
+        run: tests/shell/run_postgres_matrix_gates_smoke.sh
+      - name: Upgrade matrix staging smoke
+        run: tests/shell/upgrade_matrix_staging_smoke.sh
+      - name: Source hygiene
+        run: scripts/check-source-hygiene.sh
+      - name: Repository contract
+        run: scripts/check-repository-contract.sh
+      - name: Repository contract smoke
+        run: tests/shell/check_repository_contract_smoke.sh
+      - name: Public release surface smoke
+        run: tests/shell/release_public_surface_smoke.sh
+      - name: Release payload smoke
+        run: tests/shell/build_packages_smoke.sh
+      - name: Release payload negative smoke
+        run: tests/shell/build_packages_negative_smoke.sh
+      - name: PGXN source archive smoke
+        run: tests/shell/pgxn_dist_smoke.sh
+      - name: Release image tag contract
+        run: tests/shell/release_image_tags_smoke.sh
+      - name: Release workflow contract
+        run: tests/shell/release_workflow_smoke.sh
+
+  pgvector-coexist:
+    name: pgvector coexist (live PG17)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+      - name: Install PostgreSQL 17 and pgvector (pgdg)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            postgresql-17 postgresql-server-dev-17 postgresql-17-pgvector
+          sudo pg_ctlcluster 17 main start
+      - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-pgrx
+            ~/.pgrx
+          key: cargo-pgrx-0.19.1-pg17-${{ runner.os }}
+      - name: Install cargo-pgrx
+        run: |
+          command -v cargo-pgrx >/dev/null || cargo install cargo-pgrx --version 0.19.1 --locked
+          cargo pgrx init --pg17 /usr/lib/postgresql/17/bin/pg_config || true
+      - name: Build and install pgContext
+        run: |
+          cargo pgrx install --sudo \
+            --pg-config /usr/lib/postgresql/17/bin/pg_config \
+            --no-default-features --features pg17 --release
+          sudo python3 scripts/transform-sql-artifact-coexist.py \
+            "$(/usr/lib/postgresql/17/bin/pg_config --sharedir)/extension/pgcontext--0.1.0.sql"
+      - name: Coexist verification
+        run: |
+          PGCONTEXT_COEXIST_PSQL="sudo -u postgres psql" scripts/check-pgvector-coexist.sh
+
+  benchmark-harness:
+    name: Benchmark harness unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned harness dependencies
+        run: |
+          python -m pip install \
+            'numpy<3' \
+            'fastembed==0.7.3' \
+            'psycopg[binary]==3.2.9' \
+            'qdrant-client==1.18.0' \
+            'certifi==2025.8.3'
+      - name: Harness unit tests
+        run: |
+          cd benchmarks/pgvector_comparison
+          python -m unittest discover -p 'test_*.py' -v
+
+  supply-chain:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+      - name: Install cargo-audit
+        run: |
+          source release/tool-versions.env
+          cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked
+      - name: Install cargo-deny
+        run: |
+          source release/tool-versions.env
+          cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked
+      - name: Audit
+        run: cargo audit
+      - name: Deny
+        run: cargo deny check
+
+  secret-scan:
+    name: Secret history scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.25.x"
+          cache: false
+      - name: Install gitleaks
+        run: |
+          source release/tool-versions.env
+          go install "github.com/gitleaks/gitleaks/v8@v${GITLEAKS_VERSION}"
+      - name: Scan complete Git history
+        run: |
+          gitleaks git . --config .gitleaks.toml --redact=100 --no-banner --no-color
+          tests/shell/gitleaks_config_smoke.sh

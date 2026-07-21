@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore only release-scanner sentinels and one historical fake fixture"
+regexTarget = "line"
+regexes = [
+  '''b"-----BEGIN (RSA |OPENSSH )?PRIVATE KEY-----"''',
+  '''MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7bXFakeMaterial''',
+]

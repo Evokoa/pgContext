@@ -1,0 +1,9 @@
+# target|max_len
+filter_json|4096
+sql_predicate|4096
+vector_text|4096
+segment_loader|65536
+candidate_mask|65536
+cursor_state|1024
+hnsw_graph_ops|4096
+hnsw_page|4096

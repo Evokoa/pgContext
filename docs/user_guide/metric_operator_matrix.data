@@ -1,0 +1,18 @@
+Representation|Metric|Exact core operator|SQL operator|Order for nearest-first search|Current SQL lifecycle
+dense|L2|`DistanceMetric::L2::distance`|`<->`|ascending distance|stable
+dense|Inner product|`DistanceMetric::InnerProduct::distance`|`inner_product` helper|descending raw similarity|stable
+dense|Negative inner product|`DistanceMetric::NegativeInnerProduct::distance`|`<#>`|ascending distance|stable
+dense|Cosine distance|`DistanceMetric::Cosine::distance`|`<=>`|ascending distance|stable
+dense|L1|`DistanceMetric::L1::distance`|`<+>`|ascending distance|stable
+half|L2|`DistanceMetric::L2::distance_half`|`<->`|ascending distance|experimental
+half|Inner product|`DistanceMetric::InnerProduct::distance_half`|`halfvec_inner_product` helper|descending raw similarity|experimental
+half|Negative inner product|`DistanceMetric::NegativeInnerProduct::distance_half`|`<#>`|ascending distance|experimental
+half|Cosine distance|`DistanceMetric::Cosine::distance_half`|`<=>`|ascending distance|experimental
+half|L1|`DistanceMetric::L1::distance_half`|`<+>`|ascending distance|experimental
+sparse|L2|`DistanceMetric::L2::distance_sparse`|`<->`|ascending distance|experimental
+sparse|Inner product|`DistanceMetric::InnerProduct::distance_sparse`|`sparsevec_inner_product` helper|descending raw similarity|experimental
+sparse|Negative inner product|`DistanceMetric::NegativeInnerProduct::distance_sparse`|`<#>`|ascending distance|experimental
+sparse|Cosine distance|`DistanceMetric::Cosine::distance_sparse`|`<=>`|ascending distance|experimental
+sparse|L1|`DistanceMetric::L1::distance_sparse`|`<+>`|ascending distance|experimental
+bit|Hamming|`BitVector::hamming_distance`|`<~>`|ascending distance|experimental
+bit|Jaccard distance|`BitVector::jaccard_distance`|`<%>`|ascending distance|experimental

@@ -1,0 +1,1 @@
+{"must":[{"key":"tenant_id","match":"acme"},{"key":"price","range":{"gte":10,"lt":20}}],"should":[{"key":"metadata.topic","match":{"value":"billing"}}],"must_not":[{"key":"archived","match":true}]}

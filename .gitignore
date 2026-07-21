@@ -1,0 +1,70 @@
+# Operating-system metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+Thumbs.db
+Desktop.ini
+
+# Editor and local tooling
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.direnv/
+.envrc.local
+__pycache__/
+*.py[cod]
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Internal planning, agent configuration, and local reference repositories
+.agents/
+.claude/
+.codex/
+.private/
+planning/
+archive/
+reference/
+
+# Rust and pgrx build output
+target/
+fuzz/target/
+.pgrx/
+*.profraw
+*.profdata
+
+# Fuzzing, coverage, and generated reports
+fuzz/artifacts/
+fuzz/coverage/
+coverage/
+artifacts/
+reports/
+# Exception: the committed benchmark reports linked from the docs.
+!docs/benchmarks/reports/
+!docs/benchmarks/reports/**
+dist/
+*.log
+
+# Local PostgreSQL and Docker state
+pgdata/
+docker-data/
+playground/.env

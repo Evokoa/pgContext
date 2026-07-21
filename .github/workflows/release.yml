@@ -1,0 +1,421 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Prepare candidate artifacts or publish the accepted release
+        required: true
+        type: choice
+        options: [prepare, publish]
+      tag:
+        description: Release tag in vX.Y.Z form
+        required: true
+        type: string
+      candidate_sha:
+        description: Full 40-character commit SHA resolved by the release tag
+        required: true
+        type: string
+      prepared_digest:
+        description: Accepted GHCR manifest digest (required for publish)
+        required: false
+        type: string
+      prepare_run_id:
+        description: Successful prepare workflow run ID (required for publish)
+        required: false
+        type: string
+
+concurrency:
+  group: pgcontext-release
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/evokoa/pgcontext
+
+jobs:
+  validate:
+    name: Validate immutable release inputs
+    runs-on: ubuntu-24.04
+    outputs:
+      mode: ${{ steps.release.outputs.mode }}
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      candidate_sha: ${{ steps.release.outputs.candidate_sha }}
+      short_sha: ${{ steps.release.outputs.short_sha }}
+      prepared_digest: ${{ steps.release.outputs.prepared_digest }}
+      prepare_run_id: ${{ steps.release.outputs.prepare_run_id }}
+    steps:
+      - name: Checkout exact release tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate tag, SHA, and mode
+        id: release
+        env:
+          MODE: ${{ inputs.mode }}
+          TAG: ${{ inputs.tag }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          PREPARED_DIGEST: ${{ inputs.prepared_digest }}
+          PREPARE_RUN_ID: ${{ inputs.prepare_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "${MODE}" == prepare || "${MODE}" == publish ]]
+          [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          actual_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-parse "${TAG}^{commit}")"
+          [[ "${actual_sha}" == "${CANDIDATE_SHA}" ]]
+          [[ "${tag_sha}" == "${CANDIDATE_SHA}" ]]
+          scripts/validate-release.py --tag "${TAG}"
+          if [[ "${MODE}" == publish ]]; then
+            [[ "${PREPARED_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+            [[ "${PREPARE_RUN_ID}" =~ ^[0-9]+$ ]]
+          elif [[ -n "${PREPARED_DIGEST}" || -n "${PREPARE_RUN_ID}" ]]; then
+            echo "prepared_digest and prepare_run_id are only accepted in publish mode" >&2
+            exit 2
+          fi
+          echo "mode=${MODE}" >>"${GITHUB_OUTPUT}"
+          echo "tag=${TAG}" >>"${GITHUB_OUTPUT}"
+          echo "version=${TAG#v}" >>"${GITHUB_OUTPUT}"
+          echo "candidate_sha=${CANDIDATE_SHA}" >>"${GITHUB_OUTPUT}"
+          echo "short_sha=${CANDIDATE_SHA:0:12}" >>"${GITHUB_OUTPUT}"
+          echo "prepared_digest=${PREPARED_DIGEST}" >>"${GITHUB_OUTPUT}"
+          echo "prepare_run_id=${PREPARE_RUN_ID}" >>"${GITHUB_OUTPUT}"
+
+  prepare-source:
+    name: Prepare PGXN and Homebrew artifacts
+    if: ${{ needs.validate.outputs.mode == 'prepare' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact release tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - name: Reconfirm candidate SHA
+        run: test "$(git rev-parse HEAD)" = "${{ needs.validate.outputs.candidate_sha }}"
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+      - name: Build source artifacts
+        run: |
+          release/build-packages.sh --out-dir dist/payload "${{ needs.validate.outputs.tag }}"
+          scripts/render-homebrew-formula.sh --archive "dist/payload/pgContext-${{ needs.validate.outputs.version }}.zip" --out-dir dist/homebrew
+      - name: Upload prepared source artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pgcontext-source-${{ needs.validate.outputs.version }}-${{ needs.validate.outputs.short_sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/payload
+            dist/homebrew
+
+  prepare-image:
+    name: Prepare and verify local multi-arch image
+    if: ${{ needs.validate.outputs.mode == 'prepare' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "${{ needs.validate.outputs.candidate_sha }}"
+      - uses: docker/setup-qemu-action@68827325e0b33c7199eb31dd4e31fbe9023e06e3 # v3
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
+      - name: Build and test both architectures without publishing
+        run: |
+          scripts/build-release-image.sh --out-dir dist/image "${{ needs.validate.outputs.tag }}"
+          archive="$(find dist/image -maxdepth 1 -name '*.oci.tar' -type f)"
+          metadata="$(find dist/image -maxdepth 1 -name '*.metadata.json' -type f)"
+          image="$(jq -r '."image.name"' "${metadata}")"
+          digest="$(jq -r '."containerimage.digest"' "${metadata}")"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          scripts/verify-release-image.sh "${archive}" "${image}" linux/amd64
+          scripts/verify-release-image.sh "${archive}" "${image}" linux/arm64
+          jq -n --arg candidate_sha "${{ needs.validate.outputs.candidate_sha }}" --arg mode prepare --arg tag "${{ needs.validate.outputs.tag }}" --arg image "${image}" --arg manifest_digest "${digest}" --arg archive_sha256 "$(sha256sum "${archive}" | awk '{print $1}')" '{candidate_sha: $candidate_sha, mode: $mode, tag: $tag, image: $image, manifest_digest: $manifest_digest, archive_sha256: $archive_sha256}' >dist/image/prepared-inputs.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pgcontext-prepared-image-${{ needs.validate.outputs.short_sha }}
+          path: dist/image
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-preflight:
+    name: Approve and revalidate prepared inputs
+    if: ${{ needs.validate.outputs.mode == 'publish' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@68827325e0b33c7199eb31dd4e31fbe9023e06e3 # v3
+      - name: Download exact prepare-run artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          run_json="$(gh run view "${{ needs.validate.outputs.prepare_run_id }}" --json conclusion,event,headSha,workflowName)"
+          [[ "$(jq -r .conclusion <<<"${run_json}")" == success ]]
+          [[ "$(jq -r .headSha <<<"${run_json}")" == "${{ needs.validate.outputs.candidate_sha }}" ]]
+          [[ "$(jq -r .workflowName <<<"${run_json}")" == Release ]]
+          [[ "$(jq -r .event <<<"${run_json}")" == workflow_dispatch ]]
+          gh run download "${{ needs.validate.outputs.prepare_run_id }}" --name "pgcontext-prepared-image-${{ needs.validate.outputs.short_sha }}" --dir accepted/image
+          gh run download "${{ needs.validate.outputs.prepare_run_id }}" --name "pgcontext-source-${{ needs.validate.outputs.version }}-${{ needs.validate.outputs.short_sha }}" --dir accepted/source
+      - name: Revalidate accepted artifacts
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ needs.validate.outputs.candidate_sha }}"
+          [[ "$(find accepted/image -name '*.oci.tar' -type f | wc -l)" == 1 ]]
+          [[ "$(find accepted/image -name '*.metadata.json' -type f | wc -l)" == 1 ]]
+          [[ "$(find accepted/image -name prepared-inputs.json -type f | wc -l)" == 1 ]]
+          archive="$(find accepted/image -name '*.oci.tar' -type f)"
+          metadata="$(find accepted/image -name '*.metadata.json' -type f)"
+          record="$(find accepted/image -name prepared-inputs.json -type f)"
+          jq -e 'keys == ["archive_sha256", "candidate_sha", "image", "manifest_digest", "mode", "tag"]' "${record}"
+          candidate_sha="$(jq -er .candidate_sha "${record}")"
+          mode="$(jq -er .mode "${record}")"
+          tag="$(jq -er .tag "${record}")"
+          image="$(jq -er .image "${record}")"
+          manifest_digest="$(jq -er .manifest_digest "${record}")"
+          archive_sha256="$(jq -er .archive_sha256 "${record}")"
+          [[ "${candidate_sha}" == "${{ needs.validate.outputs.candidate_sha }}" ]]
+          [[ "${mode}" == prepare ]]
+          [[ "${tag}" == "${{ needs.validate.outputs.tag }}" ]]
+          [[ "${manifest_digest}" == "${{ needs.validate.outputs.prepared_digest }}" ]]
+          [[ "$(jq -er '."containerimage.digest"' "${metadata}")" == "${manifest_digest}" ]]
+          [[ "$(jq -er '."image.name"' "${metadata}")" == "${image}" ]]
+          [[ "$(sha256sum "${archive}" | awk '{print $1}')" == "${archive_sha256}" ]]
+          scripts/verify-oci-image.py --image "${image}" --version "${{ needs.validate.outputs.version }}" --revision "${{ needs.validate.outputs.candidate_sha }}" "${archive}"
+          scripts/verify-release-image.sh "${archive}" "${image}" linux/amd64
+          scripts/verify-release-image.sh "${archive}" "${image}" linux/arm64
+          source_archive="accepted/source/payload/pgContext-${{ needs.validate.outputs.version }}.zip"
+          scripts/verify-release-payload.py --tag "${{ needs.validate.outputs.tag }}" --candidate-sha "${{ needs.validate.outputs.candidate_sha }}" accepted/source/payload
+          scripts/render-homebrew-formula.sh --archive "${source_archive}" --out-dir target/preflight-homebrew
+          cmp target/preflight-homebrew/pgcontext.rb accepted/source/homebrew/pgcontext.rb
+          cmp target/preflight-homebrew/pgrx@0.19.1.rb accepted/source/homebrew/pgrx@0.19.1.rb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pgcontext-accepted-inputs-${{ needs.validate.outputs.short_sha }}
+          path: accepted
+          if-no-files-found: error
+          retention-days: 1
+
+  pgxn-status:
+    name: Check immutable PGXN version
+    if: ${{ needs.validate.outputs.mode == 'publish' }}
+    needs: [validate, publish-image]
+    runs-on: ubuntu-24.04
+    environment: release
+    outputs:
+      exists: ${{ steps.pgxn.outputs.exists }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pgcontext-accepted-inputs-${{ needs.validate.outputs.short_sha }}
+          path: accepted
+      - name: Check existing version
+        id: pgxn
+        run: |
+          url="https://api.pgxn.org/dist/pgcontext/${{ needs.validate.outputs.version }}/META.json"
+          status="$(curl --silent --show-error --location --output /tmp/pgxn-meta.json --write-out '%{http_code}' "${url}")"
+          case "${status}" in
+            200)
+              python3 -c 'import json,sys; data=json.load(open("/tmp/pgxn-meta.json")); assert data["name"].lower()=="pgcontext" and data["version"]==sys.argv[1]' "${{ needs.validate.outputs.version }}"
+              remote_sha1="$(jq -er .sha1 /tmp/pgxn-meta.json)"
+              local_sha1="$(sha1sum "accepted/source/payload/pgContext-${{ needs.validate.outputs.version }}.zip" | awk '{print $1}')"
+              [[ "${remote_sha1}" == "${local_sha1}" ]] || {
+                echo "existing PGXN archive conflicts with the accepted release input" >&2
+                exit 1
+              }
+              echo "exists=true" >>"${GITHUB_OUTPUT}"
+              ;;
+            404) echo "exists=false" >>"${GITHUB_OUTPUT}" ;;
+            *) echo "unexpected PGXN API status: ${status}" >&2; exit 1 ;;
+          esac
+
+  publish-pgxn:
+    name: Publish PGXN archive
+    if: ${{ needs.validate.outputs.mode == 'publish' }}
+    needs: [validate, publish-image, pgxn-status]
+    runs-on: ubuntu-24.04
+    environment: release
+    container: pgxn/pgxn-tools@sha256:a54f1e66c563c7e47b34ed08597d0ee5da1168303b61ef47e66a4a9904ab849d
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pgcontext-accepted-inputs-${{ needs.validate.outputs.short_sha }}
+          path: accepted
+      - name: Publish accepted source
+        env:
+          PGXN_USERNAME: ${{ secrets.PGXN_USERNAME }}
+          PGXN_PASSWORD: ${{ secrets.PGXN_PASSWORD }}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ needs.validate.outputs.candidate_sha }}"
+          if [ "${{ needs.pgxn-status.outputs.exists }}" = true ]; then
+            echo "PGXN ${{ needs.validate.outputs.version }} is already published; leaving it unchanged"
+          else
+            pgxn-release "accepted/source/payload/pgContext-${{ needs.validate.outputs.version }}.zip"
+          fi
+
+  publish-github:
+    name: Attach source archive to GitHub release
+    if: ${{ needs.validate.outputs.mode == 'publish' }}
+    needs: [validate, publish-pgxn]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pgcontext-accepted-inputs-${{ needs.validate.outputs.short_sha }}
+          path: accepted
+      - name: Create release and attach accepted source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ needs.validate.outputs.candidate_sha }}"
+          scripts/render-release-notes.py --candidate-sha "${{ needs.validate.outputs.candidate_sha }}" --output target/release-notes.md
+          if ! gh release view "${{ needs.validate.outputs.tag }}" >/dev/null 2>&1; then
+            gh release create "${{ needs.validate.outputs.tag }}" --verify-tag --title "pgContext ${{ needs.validate.outputs.version }}" --notes-file target/release-notes.md
+          else
+            gh release view "${{ needs.validate.outputs.tag }}" --json body | jq -jr .body >target/existing-release-notes.md
+            cmp target/release-notes.md target/existing-release-notes.md
+          fi
+          mkdir -p existing
+          for asset in accepted/source/payload/*; do
+            name="$(basename "${asset}")"
+            if gh release view "${{ needs.validate.outputs.tag }}" --json assets --jq '.assets[].name' | grep -Fxq "${name}"; then
+              gh release download "${{ needs.validate.outputs.tag }}" --pattern "${name}" --dir existing
+              cmp "${asset}" "existing/${name}"
+            else
+              gh release upload "${{ needs.validate.outputs.tag }}" "${asset}"
+            fi
+          done
+
+  publish-image:
+    name: Promote accepted GHCR manifest
+    if: ${{ needs.validate.outputs.mode == 'publish' }}
+    needs: [validate, publish-preflight]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "${{ needs.validate.outputs.candidate_sha }}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pgcontext-accepted-inputs-${{ needs.validate.outputs.short_sha }}
+          path: accepted
+      - uses: docker/setup-qemu-action@68827325e0b33c7199eb31dd4e31fbe9023e06e3 # v3
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
+      - uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Publish and verify immutable manifest
+        run: |
+          archive="$(find accepted/image -name '*.oci.tar' -type f)"
+          sha_ref="${IMAGE_NAME}:pg17-sha-${{ needs.validate.outputs.short_sha }}"
+          prepared_ref="${IMAGE_NAME}:pg17-${{ needs.validate.outputs.tag }}-prepared"
+          for reference in "${sha_ref}" "${prepared_ref}"; do
+            if output="$(docker buildx imagetools inspect "${reference}" 2>&1)"; then
+              actual="$(awk '/^Digest:/ {print $2; exit}' <<<"${output}")"
+              [[ "${actual}" == "${{ needs.validate.outputs.prepared_digest }}" ]] || {
+                echo "refusing to overwrite immutable tag ${reference}" >&2
+                exit 1
+              }
+            else
+              case "${output}" in
+                *"manifest unknown"* | *": not found"* | *"no such manifest"*) ;;
+                *) echo "failed to inspect ${reference}: ${output}" >&2; exit 1 ;;
+              esac
+            fi
+          done
+          skopeo_image="quay.io/skopeo/stable@sha256:c7d3c512612f52805023cd38351081dad7e2729fc13d14b701e47c7c8bdd6615"
+          docker run --rm -v "${PWD}:/workspace:ro" -v "${HOME}/.docker:/root/.docker:ro" "${skopeo_image}" copy --all --preserve-digests "oci-archive:/workspace/${archive}" "docker://${sha_ref}"
+          docker run --rm -v "${PWD}:/workspace:ro" -v "${HOME}/.docker:/root/.docker:ro" "${skopeo_image}" copy --all --preserve-digests "oci-archive:/workspace/${archive}" "docker://${prepared_ref}"
+          for reference in "${sha_ref}" "${prepared_ref}"; do
+            actual="$(docker buildx imagetools inspect "${reference}" | awk '/^Digest:/ {print $2; exit}')"
+            [[ "${actual}" == "${{ needs.validate.outputs.prepared_digest }}" ]]
+          done
+          digest_ref="${IMAGE_NAME}@${{ needs.validate.outputs.prepared_digest }}"
+          scripts/verify-release-image.sh --registry "${digest_ref}" linux/amd64
+          scripts/verify-release-image.sh --registry "${digest_ref}" linux/arm64
+          scripts/promote-release-image.sh "${IMAGE_NAME}" "${{ needs.validate.outputs.tag }}" "${{ needs.validate.outputs.candidate_sha }}" "${{ needs.validate.outputs.prepared_digest }}"
+
+  publish-homebrew:
+    name: Publish Homebrew tap formulas
+    if: ${{ needs.validate.outputs.mode == 'publish' }}
+    needs: [validate, publish-github]
+    runs-on: macos-15
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          path: source
+          persist-credentials: false
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          repository: Evokoa/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pgcontext-accepted-inputs-${{ needs.validate.outputs.short_sha }}
+          path: accepted
+      - name: Build and stage formulas
+        working-directory: source
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ needs.validate.outputs.candidate_sha }}"
+          mkdir -p ../tap/Formula
+          cp ../accepted/source/homebrew/pgcontext.rb ../tap/Formula/pgcontext.rb
+          cp ../accepted/source/homebrew/pgrx@0.19.1.rb ../tap/Formula/pgrx@0.19.1.rb
+      - name: Commit and push tap update
+        working-directory: tap
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          brew style Formula/pgcontext.rb Formula/pgrx@0.19.1.rb
+          git diff --check
+          git add Formula/pgcontext.rb Formula/pgrx@0.19.1.rb
+          if git diff --cached --quiet; then
+            echo "Homebrew formulas are already current"
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git commit -m "pgcontext ${VERSION}"
+            git push origin HEAD:main
+          fi

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and discussion
+    url: https://discord.gg/GnHR8ezuwG
+    about: Ask usage questions or discuss ideas before filing an issue.
+  - name: Security vulnerability
+    url: https://github.com/evokoa/pgcontext/security/policy
+    about: Do not open a public issue for a suspected vulnerability — see SECURITY.md.

@@ -1,0 +1,47 @@
+[package]
+name = "context-test"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+context-core = { path = "../context-core", version = "0.1.0" }
+context-build = { path = "../context-build", version = "0.1.0" }
+context-filter = { path = "../context-filter", version = "0.1.0" }
+context-hybrid = { path = "../context-hybrid", version = "0.1.0" }
+context-index = { path = "../context-index", version = "0.1.0" }
+context-query = { path = "../context-query", version = "0.1.0" }
+context-storage = { path = "../context-storage", version = "0.1.0" }
+
+[[bench]]
+name = "exact_search_baseline"
+harness = false
+
+[[bench]]
+name = "hnsw_baseline"
+harness = false
+
+[[bench]]
+name = "quantized_baseline"
+harness = false
+
+[[bench]]
+name = "filtered_ann_baseline"
+harness = false
+
+[[bench]]
+name = "hybrid_baseline"
+harness = false
+
+[[bench]]
+name = "late_interaction_ann_baseline"
+harness = false
+
+[lints]
+workspace = true

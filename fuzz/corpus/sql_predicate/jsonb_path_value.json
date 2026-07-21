@@ -1,0 +1,1 @@
+{"must":[{"key":"metadata.topic","match":{"value":"billing; DROP TABLE docs; --"}}]}

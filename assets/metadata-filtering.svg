@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 360" role="img" aria-label="How pgContext runs a filtered vector query: a vector plus a metadata filter go into a filter-aware HNSW search that needs no metadata index, then every candidate is re-scored exactly under MVCC and RLS before results are returned.">
+<rect x="1" y="1" width="918" height="358" rx="14" fill="#ffffff" stroke="#e2e5e9"/>
+
+<text x="40" y="46" font-family="-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="21" font-weight="700" fill="#1a1c1e">Filter alongside your vectors &#8212; no metadata index required</text>
+
+<!-- Stage 1: query -->
+<text x="60" y="104" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="12" fill="#8a9098">1 &#183; QUERY</text>
+<rect x="60" y="120" width="210" height="150" rx="8" fill="#fafafa" stroke="#e2e5e9"/>
+<text x="80" y="150" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="13" fill="#1a1c1e">vector  +  filter</text>
+<rect x="80" y="166" width="120" height="24" rx="12" fill="#065f46"/>
+<text x="92" y="182" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="12" fill="#ffffff">must: tenant</text>
+<rect x="80" y="198" width="140" height="24" rx="12" fill="#ffffff" stroke="#065f46"/>
+<text x="92" y="214" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="12" fill="#065f46">should: topic</text>
+<rect x="80" y="230" width="150" height="24" rx="12" fill="#ffffff" stroke="#8b929c"/>
+<text x="92" y="246" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="12" fill="#585d64">must_not: archived</text>
+
+<!-- arrow 1 -->
+<line x1="282" y1="195" x2="330" y2="195" stroke="#8a9098" stroke-width="1.5"/>
+<path d="M330 195 l-9 -5 v10 z" fill="#8a9098"/>
+
+<!-- Stage 2: filter-aware HNSW -->
+<text x="346" y="104" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="12" fill="#8a9098">2 &#183; FILTER-AWARE HNSW</text>
+<rect x="346" y="120" width="228" height="150" rx="8" fill="#fafafa" stroke="#e2e5e9"/>
+<!-- edges (some through excluded connector nodes, dashed) -->
+<line x1="392" y1="168" x2="462" y2="150" stroke="#065f46" stroke-width="1.5"/>
+<line x1="462" y1="150" x2="520" y2="188" stroke="#065f46" stroke-width="1.5"/>
+<line x1="392" y1="168" x2="440" y2="228" stroke="#c3cad2" stroke-width="1.3" stroke-dasharray="3 3"/>
+<line x1="440" y1="228" x2="520" y2="188" stroke="#c3cad2" stroke-width="1.3" stroke-dasharray="3 3"/>
+<line x1="462" y1="150" x2="440" y2="228" stroke="#c3cad2" stroke-width="1.3" stroke-dasharray="3 3"/>
+<!-- excluded connector nodes (hollow, dashed) -->
+<circle cx="440" cy="228" r="9" fill="#ffffff" stroke="#8b929c" stroke-width="1.5" stroke-dasharray="3 2"/>
+<circle cx="505" cy="232" r="9" fill="#ffffff" stroke="#8b929c" stroke-width="1.5" stroke-dasharray="3 2"/>
+<!-- matching nodes (green filled) -->
+<circle cx="392" cy="168" r="10" fill="#065f46"/>
+<circle cx="462" cy="150" r="10" fill="#065f46"/>
+<circle cx="520" cy="188" r="10" fill="#065f46"/>
+<text x="460" y="258" text-anchor="middle" font-family="-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="11.5" fill="#585d64">excluded nodes still route the search</text>
+
+<!-- arrow 2 -->
+<line x1="586" y1="195" x2="634" y2="195" stroke="#8a9098" stroke-width="1.5"/>
+<path d="M634 195 l-9 -5 v10 z" fill="#8a9098"/>
+
+<!-- Stage 3: exact recheck -->
+<text x="650" y="104" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="12" fill="#8a9098">3 &#183; EXACT RECHECK</text>
+<rect x="650" y="120" width="210" height="150" rx="8" fill="#fafafa" stroke="#e2e5e9"/>
+<g font-family="-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12" fill="#1a1c1e">
+  <path d="M672 152 l5 5 l9 -11" fill="none" stroke="#065f46" stroke-width="2"/>
+  <rect x="694" y="146" width="146" height="12" rx="3" fill="#e7efec"/>
+  <path d="M672 186 l5 5 l9 -11" fill="none" stroke="#065f46" stroke-width="2"/>
+  <rect x="694" y="180" width="120" height="12" rx="3" fill="#e7efec"/>
+  <path d="M672 220 l5 5 l9 -11" fill="none" stroke="#065f46" stroke-width="2"/>
+  <rect x="694" y="214" width="132" height="12" rx="3" fill="#e7efec"/>
+</g>
+<text x="755" y="256" text-anchor="middle" font-family="ui-monospace,'SF Mono',Menlo,monospace" font-size="11.5" fill="#585d64">MVCC &#183; RLS &#183; exact score</text>
+
+<!-- footer -->
+<text x="40" y="322" font-family="-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif" font-size="12.5" fill="#585d64">Registering a column or JSONB path makes it filterable immediately. An ordinary index is an optional speed-up, never a prerequisite.</text>
+</svg>

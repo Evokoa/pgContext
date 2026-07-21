@@ -1,0 +1,43 @@
+[package]
+name = "context-pg"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lib]
+name = "pgcontext"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["pg17"]
+pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
+pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
+pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
+pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
+pg_test = []
+
+[dependencies]
+context-core = { path = "../context-core", version = "0.1.0" }
+context-build = { path = "../context-build", version = "0.1.0" }
+context-filter = { path = "../context-filter", version = "0.1.0" }
+context-hybrid = { path = "../context-hybrid", version = "0.1.0" }
+context-index = { path = "../context-index", version = "0.1.0" }
+context-query = { path = "../context-query", version = "0.1.0" }
+context-storage = { path = "../context-storage", version = "0.1.0" }
+pgrx.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+pgrx-tests.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

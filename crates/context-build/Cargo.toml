@@ -1,0 +1,20 @@
+[package]
+name = "context-build"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+context-core = { path = "../context-core", version = "0.1.0" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

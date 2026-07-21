@@ -1,0 +1,101 @@
+# relative source|kind|name or impl signature|reason
+hnsw_am.rs|extern|pgcontext_hnsw_begin_scan|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_build|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_build_callback|guarded PostgreSQL build visitor
+hnsw_am.rs|extern|pgcontext_hnsw_build_empty|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_bulk_delete|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_cost_estimate|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_end_scan|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_get_bitmap|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_get_tuple|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_handler|guarded PostgreSQL AM handler
+hnsw_am.rs|extern|pgcontext_hnsw_insert|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_insert_cleanup|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_rescan|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_vacuum_cleanup|guarded PostgreSQL AM callback
+hnsw_am.rs|extern|pgcontext_hnsw_validate|guarded PostgreSQL AM callback
+hnsw_am.rs|fn|copy_rescan_keys|writes a validated PostgreSQL scan-key destination
+hnsw_am.rs|fn|ensure_hnsw_metric_contract|reads PostgreSQL relation and catalog pointers
+hnsw_am.rs|fn|ensure_hnsw_strategy_operator|reads and releases PostgreSQL syscache tuples
+hnsw_am.rs|fn|ensure_hnsw_support_proc|reads PostgreSQL relation support metadata
+hnsw_am.rs|fn|expand_hnsw_scan|continues a validated live PostgreSQL index scan with a larger bounded candidate budget
+hnsw_am.rs|fn|hnsw_dense_from_datum|decodes a datum using its validated PostgreSQL type OID
+hnsw_am.rs|fn|hnsw_dense_score_metric|reads live dense operator-class metadata
+hnsw_am.rs|fn|hnsw_index_opcintype|reads a live relation-cache OID array
+hnsw_am.rs|fn|hnsw_index_opfamily|reads a live relation-cache OID array
+hnsw_am.rs|fn|hnsw_insert_via_delta_safe|appends a bounded delta record to a live PostgreSQL index relation and updates its metapage
+hnsw_am.rs|fn|hnsw_compact_relation|rebuilds a live PostgreSQL index relation's graph onto fresh pages and republishes its metapage
+hnsw_am.rs|fn|lock_hnsw_compaction_table|reads a live index relation's catalog form and locks its parent table against concurrent maintenance
+hnsw_am.rs|fn|try_lock_hnsw_compaction_table|locks a live index relation's parent table without waiting, so the write path never blocks
+hnsw_am.rs|fn|hnsw_compaction_table_oid|reads a live index relation's catalog form for its parent table OID
+hnsw_am.rs|fn|hnsw_compact_on_threshold|compacts a live index relation from the insert path once its delta segment fills
+hnsw_am.rs|fn|hnsw_operator_namespace|reads and releases a PostgreSQL syscache tuple
+hnsw_am.rs|fn|hnsw_orderby_query|reads a live PostgreSQL scan descriptor and key
+hnsw_am.rs|fn|hnsw_public_type_oid|calls PostgreSQL catalog lookup with a C string
+hnsw_am.rs|fn|hnsw_query_from_orderby_datum|decodes a PostgreSQL scan-key datum
+hnsw_am.rs|fn|hnsw_scan_candidates|reads a live index relation and PostgreSQL pages
+hnsw_am.rs|fn|hnsw_scan_state_ptr|dereferences the AM-owned scan-state slot
+hnsw_am.rs|fn|hnsw_score_metric|reads live relation and operator-class metadata
+hnsw_am.rs|fn|hnsw_support_proc_matches|reads PostgreSQL support-procedure metadata
+hnsw_am.rs|fn|hnsw_vector_from_index_values|reads callback-bounded datum and null arrays
+hnsw_am.rs|fn|hnsw_visible_heap_tid|reads a live scan descriptor and heap snapshot
+hnsw_am.rs|fn|prepare_hnsw_scan|reads a live scan descriptor and mutates owned state
+hnsw_am.rs|fn|serialize_hnsw_insert|acquires a transaction lock for a live PostgreSQL index relation
+hnsw_am.rs|fn|store_hnsw_orderby_distance|writes PostgreSQL-owned order-by result arrays
+hnsw_am/ffi_boundary.rs|fn|PgCallbackScope::borrow|constructs a callback-lifetime-bound shared pointer capability
+hnsw_am/ffi_boundary.rs|fn|PgCallbackScope::borrow_mut|constructs a callback-lifetime-bound mutable pointer capability
+hnsw_am/ffi_boundary.rs|fn|PgCallbackScope::borrow_optional|constructs an optional callback-lifetime-bound shared pointer capability
+hnsw_am/ffi_boundary.rs|fn|PgCallbackScope::borrow_slice|constructs a callback-lifetime-bound counted slice capability
+hnsw_am/ffi_boundary.rs|fn|PgCallbackScope::new|anchors PostgreSQL pointer capabilities to one guarded callback frame
+hnsw_am/options.rs|extern|pgcontext_hnsw_options|guarded PostgreSQL AM callback
+hnsw_am/options.rs|fn|hnsw_quantization_metadata|reads live relation reloptions
+hnsw_am/options.rs|fn|hnsw_reloption_kind|registers PostgreSQL reloption definitions
+hnsw_am/options.rs|fn|hnsw_reloption_string|reads a validated relative C-string offset
+hnsw_am/options.rs|fn|metadata_from_reloptions|reads validated PostgreSQL reloptions
+hnsw_am/options.rs|fn|validate_hnsw_reloptions|validates a PostgreSQL reloptions pointer
+hnsw_am/options.rs|fn|validate_pq_hnsw_reloptions|reads validated product-quantization options
+hnsw_am/storage.rs|fn|decode_hnsw_vector_record|decodes a caller-bounded PostgreSQL page payload
+hnsw_am/storage.rs|fn|decode_hnsw_adjacency_record|decodes a caller-bounded adjacency page payload
+hnsw_am/storage.rs|fn|hnsw_vector_record_view|validates a caller-bounded page payload before exposing borrowed vector and link spans
+hnsw_am/wal_contract/critical_section.rs|fn|HnswWalFinishPermit::finish_generic_wal|finishes the validated Generic WAL state
+hnsw_am/wal_contract/critical_section.rs|fn|HnswWalRegisteredFinishPermit::finish|finishes the exact Generic WAL state captured during registration
+hnsw_am/wal_contract/critical_section.rs|fn|HnswWalRegisteredSinglePage::register|registers one locked PostgreSQL buffer and captures its shadow page
+hnsw_am/wal_contract/critical_section.rs|fn|finish_generic_wal_state|contains the sole direct PostgreSQL Generic WAL completion call
+hnsw_am/vacuum.rs|fn|hnsw_vacuum_stats|reads a live VACUUM index relation
+hnsw_am_page_storage.rs|fn|append_hnsw_vector_record|writes a live PostgreSQL index relation
+hnsw_am_page_storage.rs|fn|append_hnsw_adjacency_record|writes bounded adjacency data to a live PostgreSQL index relation
+hnsw_am_page_storage.rs|fn|append_hnsw_directory_record|writes a bounded directory locator to a live PostgreSQL index relation
+hnsw_am_page_storage.rs|fn|append_hnsw_adjacency_revision|appends adjacency and its authoritative direct-address directory revision
+hnsw_am_page_storage.rs|fn|append_hnsw_bulk_typed_records|packs multiple bounded records into each Generic-WAL PostgreSQL page batch
+hnsw_am_page_storage.rs|fn|append_hnsw_delta_record|writes a bounded delta record to a live PostgreSQL index relation
+hnsw_am_page_storage.rs|fn|append_hnsw_node_revision|appends a node and its authoritative direct-address directory revision
+hnsw_am_page_storage.rs|fn|append_hnsw_typed_record|writes a typed record to a live PostgreSQL index relation
+hnsw_am_page_storage.rs|fn|checked_hnsw_page_item_span|validates a PostgreSQL page item before exposing its bounded span
+hnsw_am_page_storage.rs|fn|copy_hnsw_page_item|copies a checked PostgreSQL page item into Rust-owned storage
+hnsw_am_page_storage.rs|fn|ensure_hnsw_metapage|reads and initializes PostgreSQL index pages
+hnsw_am_graph_scan.rs|fn|find_last_hnsw_page|searches live PostgreSQL index pages for a typed append target
+hnsw_am_graph_scan.rs|fn|hnsw_page_graph_scan_candidates|traverses persisted PostgreSQL HNSW pages
+hnsw_am_graph_scan.rs|fn|hnsw_page_graph_scan_candidates_with_mask|traverses persisted PostgreSQL HNSW pages with a candidate mask
+hnsw_am_graph_scan.rs|fn|hnsw_scan_candidates_with_delta_merge|reads a live index relation's metapage and delta pages to merge with base-graph scan results
+hnsw_am_graph_scan.rs|fn|hnsw_stored_config|reads persisted HNSW configuration from a live relation
+hnsw_am_graph_scan.rs|fn|hnsw_stored_entry_point|reads the published graph entry point from a live relation
+hnsw_am_graph_scan.rs|fn|initialize_hnsw_data_page|initializes a typed writable PostgreSQL page
+hnsw_am_graph_read.rs|fn|PgHnswGraphRead::meta|reads graph metadata from live PostgreSQL pages
+hnsw_am_graph_read.rs|fn|PgHnswGraphRead::load_directory|reads and caches authoritative directory locators from live PostgreSQL pages
+hnsw_am_graph_read.rs|fn|PgHnswGraphRead::load_packed|builds a backend-local packed generation from authoritative PostgreSQL pages
+hnsw_am_graph_read.rs|fn|PgHnswGraphRead::node|reads a graph node from live PostgreSQL pages
+hnsw_am_graph_read.rs|fn|PgHnswGraphRead::with_node_item|visits a validated node item while its PostgreSQL page remains pinned and locked
+hnsw_am_graph_scan.rs|fn|read_hnsw_meta_page|reads typed metadata from a live PostgreSQL page
+hnsw_am_page_storage.rs|fn|read_hnsw_delta_records|reads delta records from a live PostgreSQL relation's delta block range
+hnsw_am_page_storage.rs|fn|read_hnsw_vector_records|reads records from a live PostgreSQL relation
+hnsw_am_page_storage.rs|fn|try_append_hnsw_typed_record|appends a typed payload into a locked PostgreSQL page
+hnsw_am_graph_scan.rs|fn|update_hnsw_metapage|locks and updates PostgreSQL block zero
+hnsw_am_graph_scan.rs|fn|write_hnsw_meta_page|writes typed metadata to a live PostgreSQL page
+hnsw_am_page_storage.rs|fn|write_hnsw_node_revisions_bulk|writes finalized graph nodes and their locators in page-sized Generic-WAL batches
+hnsw_am_page_storage.rs|fn|page_accepts_generation|reads a locked page header to reject records stamped for another base generation
+hnsw_am/shared_registry.rs|extern|hnsw_shared_registry_init_callback|one-time GetNamedDSMSegment initializer zero-filling and locking a fresh shared header
+hnsw_am/shared_registry.rs|fn|AttachedSharedImage::new|attaches a dsm_handle and erases the packed-image view's lifetime to the owning struct
+hnsw_am/shared_registry.rs|fn|commit_shared_slot|writes a registry slot and the shared byte budget total under the header lock
+hnsw_am/shared_registry.rs|fn|evict_shared_slot|removes a poisoned registry slot and its byte budget contribution under the header lock
+hnsw_am/shared_registry.rs|fn|lookup_shared_slot|reads a registry slot under the header lock
+hnsw_am/shared_registry.rs|fn|shared_registry_ptr|attaches the fixed-size named DSM segment backing the shared registry header

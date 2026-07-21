@@ -1,0 +1,1 @@
+{"must":[{"key":"score","range":{"gte":10,"lt":20}}],"should":[{"key":"status","match":{"any":["open","closed"]}}]}

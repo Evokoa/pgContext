@@ -1,0 +1,722 @@
+{
+  "linked_assets": [
+    {
+      "path": "LICENSE",
+      "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+    },
+    {
+      "path": "NOTICE",
+      "sha256": "2b869073991a59c1bacfa17f266589c4ff9418acb837924f2e77f85d28b2b0e5"
+    },
+    {
+      "path": "assets/benchmark-pgvector.svg",
+      "sha256": "3a363881d322afca2da640ecaa644980dd8587f0288b6e947e6659d940a35280"
+    },
+    {
+      "path": "assets/metadata-filtering.svg",
+      "sha256": "a47234a1cba6fca1b07680da22f5b4bc366c1478b520d843a86010acb8fa2fd2"
+    },
+    {
+      "path": "assets/pgcontext-banner.png",
+      "sha256": "fb8152a3a8e66d3d2178745f868869b4cc64190cdf794990a9b52dac6eb4d9ac"
+    },
+    {
+      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-100k-86330dcd.json",
+      "sha256": "fae630bfdfca3f0680c8e2a338384316098ea44495ffe532b2c981d3f7052263"
+    },
+    {
+      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-1m-f29edac4.json",
+      "sha256": "599acaf60dde18ac412452108ff889edc1c2f63c0dcca524955766c9540fbeaa"
+    },
+    {
+      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-clean-74f083c2.json",
+      "sha256": "b580f3da06f24b4105f19a4b96314fdd928808cdfb627dc694dbbc1eea8c9bb8"
+    },
+    {
+      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-cold-cache-100k-0c8129e6.json",
+      "sha256": "f1bb6e1660d6e3e7161d947d2ebf52d65532db25d22db4ce9680acdc5324208b"
+    },
+    {
+      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-concurrency-100k-3ea49bb0.json",
+      "sha256": "75c605e19c47ac71da7abca666034179b0a8502b36f3acf53c34237cf4a1ff91"
+    },
+    {
+      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-filtered-sweep-21eda7ec.json",
+      "sha256": "cc001c979113a9808d9757f30d3bf1a02777f52de053a40ec907feb150bd0f86"
+    },
+    {
+      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-100k-531360f5.json",
+      "sha256": "d875179d2a7e0cdbcc8d6f1c99adca858fe46e763a98a1a757cea66dfa9adca9"
+    },
+    {
+      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-21eda7ec.json",
+      "sha256": "81739eacdda57550d0b355df97548862ebe2884ced49373f2021a41dd43d482f"
+    },
+    {
+      "path": "docs/benchmarks/reports/pgcontext-vs-pgvector-vs-qdrant.html",
+      "sha256": "6692e1b1c19c3d655d62daf90864d71d1a411cf625f7c0f7866c88112b36f73a"
+    },
+    {
+      "path": "docs/benchmarks/reports/pgcontext-vs-pgvector.html",
+      "sha256": "e39fcc2e9e3de1b75306edbb397096035a717f2d7a704abec983dd8cba6fa8de"
+    },
+    {
+      "path": "playground/demo.sql",
+      "sha256": "7bdb370ff00265fa7d303fd2ab176ebbd7cd946ab636294f164a17f292e1c39a"
+    }
+  ],
+  "navigation_sha256": "06636d7214ba08ebc344d8711fefd8da5930322cc75df0a7ae8c0c05cef1cbac",
+  "pages": [
+    {
+      "links": [
+        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-100k-86330dcd.json",
+        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-1m-f29edac4.json",
+        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-clean-74f083c2.json",
+        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-cold-cache-100k-0c8129e6.json",
+        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-concurrency-100k-3ea49bb0.json",
+        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-filtered-sweep-21eda7ec.json",
+        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-100k-531360f5.json",
+        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-21eda7ec.json",
+        "https://github.com/erikbern/ann-benchmarks",
+        "https://huggingface.co/datasets/mteb/scifact",
+        "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2",
+        "reports/pgcontext-vs-pgvector-vs-qdrant.html",
+        "reports/pgcontext-vs-pgvector.html"
+      ],
+      "path": "benchmarks/pgvector.md",
+      "sha256": "eb5a82b354362c4466c86cf95840858f342b8bfec76994ae26c2bb24e06b8849"
+    },
+    {
+      "links": [
+        "architecture.md",
+        "benchmark_methodology.md",
+        "fuzzing.md",
+        "hnsw_callback_contract.md",
+        "postgres_module_organization.md",
+        "release_gates.md",
+        "release_matrix.md",
+        "release_process.md",
+        "repository_map.md",
+        "scripts.md",
+        "security_review.md",
+        "storage_memory.md",
+        "testing.md",
+        "unsafe_ffi_audit_2026-07-11.md",
+        "unsafe_review.md",
+        "vector_engine.md"
+      ],
+      "path": "contributor_guide/README.md",
+      "sha256": "43f40bd2a8390347f4514845ace6bfa008c25715a68d1015840b6463fbc1f85e"
+    },
+    {
+      "links": [
+        "./hnsw_callback_contract.md",
+        "./hnsw_storage_contract.md"
+      ],
+      "path": "contributor_guide/architecture.md",
+      "sha256": "dbbd51ced043f11fd95c813c26ebc86cba0cb6c166c0a069ebeb96caf543452f"
+    },
+    {
+      "links": [
+        "../benchmarks/pgvector.md"
+      ],
+      "path": "contributor_guide/benchmark_methodology.md",
+      "sha256": "48f1aa86ac77e53a65df4cfff441926092d698316707b75eae9dda96b3c740bb"
+    },
+    {
+      "links": [],
+      "path": "contributor_guide/build_profile_2026-07.md",
+      "sha256": "73cc941d30b6283d1761fc8d87a1e11c2492d692355b6cc3ce3ff3874986d8d0"
+    },
+    {
+      "links": [],
+      "path": "contributor_guide/fuzzing.md",
+      "sha256": "d5d826b4f136c90c1febc3b762343b6dda8d836a9c9a3d99ae194df38edf32cc"
+    },
+    {
+      "links": [
+        "./hnsw_storage_contract.md"
+      ],
+      "path": "contributor_guide/hnsw_callback_contract.md",
+      "sha256": "120f89e6dbd1765529e5292ad3b4b5f722bd91b7f1ce3588a9e9bbce2c749855"
+    },
+    {
+      "links": [
+        "https://www.postgresql.org/docs/17/generic-wal.html"
+      ],
+      "path": "contributor_guide/hnsw_storage_contract.md",
+      "sha256": "afbd9663da1270ddff9aa829c0cd43f9846a3b0b2bccfee99f39fbd6b4507457"
+    },
+    {
+      "links": [],
+      "path": "contributor_guide/postgres_module_organization.md",
+      "sha256": "b31809d858145c62cab83a5b60e7d1773d96ceb9921258407d0c50e28b683aaa"
+    },
+    {
+      "links": [
+        "../../release/README.md",
+        "../benchmarks/pgvector.md",
+        "../benchmarks/pgvector.md",
+        "release_matrix.md",
+        "release_process.md"
+      ],
+      "path": "contributor_guide/release_gates.md",
+      "sha256": "1d87fe4d623829af51bfad64f647b92a554f9c81baf72a26e46d7642a3bef9db"
+    },
+    {
+      "links": [],
+      "path": "contributor_guide/release_matrix.md",
+      "sha256": "2f7011f9c39740e85065eb7bf50556fb234a961267d62d1c8a6843154141e851"
+    },
+    {
+      "links": [],
+      "path": "contributor_guide/release_process.md",
+      "sha256": "96a068e0b8ee883373ebb72c1f3326b41fb749bc710d79016d113a7e765575d3"
+    },
+    {
+      "links": [],
+      "path": "contributor_guide/repository_map.md",
+      "sha256": "287b2807bbdd7e128e88b520eddb358e0453f15241ec395b79b88a1df3be145b"
+    },
+    {
+      "links": [],
+      "path": "contributor_guide/scripts.md",
+      "sha256": "386d92ed2554a9e5e3840da77bb1a5036b642814c304ade0aa41f379d0fcd271"
+    },
+    {
+      "links": [
+        "unsafe_ffi_audit_2026-07-11.md"
+      ],
+      "path": "contributor_guide/security_review.md",
+      "sha256": "614fe90a5a25839a0ad3db10005c546d992e4b6f15a6d8e73c9bb6bc20c9bd64"
+    },
+    {
+      "links": [],
+      "path": "contributor_guide/serving_memory_decision.md",
+      "sha256": "09594ec56e578a01dbf74a3125bf639afea0739caad37ca5ff22a43dfbfabef8"
+    },
+    {
+      "links": [
+        "../user_guide/operations.md",
+        "hnsw_storage_contract.md",
+        "unsafe_review.md"
+      ],
+      "path": "contributor_guide/storage_memory.md",
+      "sha256": "2f1645cedc45e59ca02a71afc2729b2b06aa56c407978fb41585380ca12ebb4c"
+    },
+    {
+      "links": [
+        "../../CONTRIBUTING.md",
+        "release_matrix.md"
+      ],
+      "path": "contributor_guide/testing.md",
+      "sha256": "d34ba9fec3dfeb29f10ea5e6d51d12508acbbdd6556f84fcee0083a01dc0158c"
+    },
+    {
+      "links": [],
+      "path": "contributor_guide/unsafe_ffi_audit_2026-07-11.md",
+      "sha256": "d8878591f7005b7743a94a780fd0e20440099c4aa8cdb00d69597b6f27785e60"
+    },
+    {
+      "links": [
+        "./hnsw_callback_contract.md"
+      ],
+      "path": "contributor_guide/unsafe_review.md",
+      "sha256": "61875985c7778f04d4ce0a772245b99b9c6891fac148a6ef5ea7b0177e479b9b"
+    },
+    {
+      "links": [
+        "../benchmarks/pgvector.md"
+      ],
+      "path": "contributor_guide/vector_engine.md",
+      "sha256": "f503531ad5e6eae1af3500359567c829151dc817b518a0002f956c0674732332"
+    },
+    {
+      "links": [
+        "../release/README.md",
+        "benchmarks/pgvector.md",
+        "contributor_guide/README.md",
+        "known_issues.md",
+        "known_issues.md",
+        "pgcontext-vs-pgvector-vs-qdrant.md",
+        "quickstart.md",
+        "release_notes.md",
+        "release_notes.md",
+        "roadmap.md",
+        "user_guide/api_reference.md",
+        "user_guide/collections.md",
+        "user_guide/configuration.md",
+        "user_guide/filters.md",
+        "user_guide/hybrid_retrieval.md",
+        "user_guide/indexes.md",
+        "user_guide/installation.md",
+        "user_guide/installation.md",
+        "user_guide/limitations.md",
+        "user_guide/operations.md",
+        "user_guide/playground.md",
+        "user_guide/troubleshooting.md",
+        "user_guide/vector_search.md"
+      ],
+      "path": "index.md",
+      "sha256": "fad0402bb780c52d38fe0ec6bebbd7a43dd64bb8cae8cee5b8b561031f705f81"
+    },
+    {
+      "links": [
+        "benchmarks/pgvector.md",
+        "user_guide/limitations.md",
+        "user_guide/troubleshooting.md"
+      ],
+      "path": "known_issues.md",
+      "sha256": "7c07412622940284aaf737706aefe6351b5b857a6eddd99835615b7747d691ff"
+    },
+    {
+      "links": [
+        "benchmarks/pgvector.md",
+        "https://github.com/pgvector/pgvector/tree/v0.8.5",
+        "https://github.com/qdrant/qdrant/releases/tag/v1.18.2",
+        "https://qdrant.tech/documentation/concepts/payload/#facet-counts",
+        "https://qdrant.tech/documentation/concepts/payload/#facet-counts",
+        "https://qdrant.tech/documentation/concepts/payload/#update-payload",
+        "https://qdrant.tech/documentation/concepts/points/",
+        "https://qdrant.tech/documentation/concepts/points/",
+        "https://qdrant.tech/documentation/concepts/points/#counting-points",
+        "https://qdrant.tech/documentation/concepts/points/#point-ids",
+        "https://qdrant.tech/documentation/concepts/points/#scroll-points",
+        "https://qdrant.tech/documentation/distributed_deployment/",
+        "https://qdrant.tech/documentation/distributed_deployment/",
+        "https://qdrant.tech/documentation/distributed_deployment/",
+        "https://qdrant.tech/documentation/manage-data/",
+        "https://qdrant.tech/documentation/manage-data/collections/",
+        "https://qdrant.tech/documentation/manage-data/collections/",
+        "https://qdrant.tech/documentation/manage-data/collections/#collection-aliases",
+        "https://qdrant.tech/documentation/manage-data/collections/#collection-with-multiple-vectors",
+        "https://qdrant.tech/documentation/manage-data/indexing/#filterable-hnsw-index",
+        "https://qdrant.tech/documentation/manage-data/indexing/#the-acorn-search-algorithm",
+        "https://qdrant.tech/documentation/manage-data/indexing/#vector-index",
+        "https://qdrant.tech/documentation/manage-data/indexing/#vector-index",
+        "https://qdrant.tech/documentation/manage-data/indexing/#vector-index",
+        "https://qdrant.tech/documentation/manage-data/storage/#versioning",
+        "https://qdrant.tech/documentation/manage-data/vectors/#datatypes",
+        "https://qdrant.tech/documentation/manage-data/vectors/#datatypes",
+        "https://qdrant.tech/documentation/manage-data/vectors/#dense-vectors",
+        "https://qdrant.tech/documentation/manage-data/vectors/#multivectors",
+        "https://qdrant.tech/documentation/manage-data/vectors/#multivectors",
+        "https://qdrant.tech/documentation/manage-data/vectors/#sparse-vectors",
+        "https://qdrant.tech/documentation/operations/snapshots/",
+        "https://qdrant.tech/documentation/ops-monitoring/monitoring/",
+        "https://qdrant.tech/documentation/overview/",
+        "https://qdrant.tech/documentation/overview/#safety",
+        "https://qdrant.tech/documentation/quantization/",
+        "https://qdrant.tech/documentation/quantization/",
+        "https://qdrant.tech/documentation/quantization/",
+        "https://qdrant.tech/documentation/quantization/",
+        "https://qdrant.tech/documentation/search/",
+        "https://qdrant.tech/documentation/search/",
+        "https://qdrant.tech/documentation/search/#metrics",
+        "https://qdrant.tech/documentation/search/#metrics",
+        "https://qdrant.tech/documentation/search/#metrics",
+        "https://qdrant.tech/documentation/search/#metrics",
+        "https://qdrant.tech/documentation/search/explore/",
+        "https://qdrant.tech/documentation/search/explore/",
+        "https://qdrant.tech/documentation/search/explore/#recommendation-api",
+        "https://qdrant.tech/documentation/search/filtering/",
+        "https://qdrant.tech/documentation/search/filtering/",
+        "https://qdrant.tech/documentation/search/filtering/",
+        "https://qdrant.tech/documentation/search/filtering/",
+        "https://qdrant.tech/documentation/search/filtering/#datetime-range",
+        "https://qdrant.tech/documentation/search/hybrid-queries/",
+        "https://qdrant.tech/documentation/search/hybrid-queries/",
+        "https://qdrant.tech/documentation/search/hybrid-queries/",
+        "https://qdrant.tech/documentation/search/hybrid-queries/#custom-scoring-with-a-formula-query",
+        "https://qdrant.tech/documentation/search/hybrid-queries/#hybrid-search",
+        "https://qdrant.tech/documentation/search/search/",
+        "https://qdrant.tech/documentation/search/search/",
+        "https://qdrant.tech/documentation/search/search/#grouping-api",
+        "https://qdrant.tech/documentation/security/",
+        "https://qdrant.tech/documentation/security/#tls",
+        "user_guide/api_reference.md",
+        "user_guide/limitations.md",
+        "user_guide/parity_matrix.md",
+        "user_guide/pgvector_migration.md"
+      ],
+      "path": "pgcontext-vs-pgvector-vs-qdrant.md",
+      "sha256": "60b0530380a4e7c11c2e527865469707ff028759e013896c7a4b0f13a62a51c6"
+    },
+    {
+      "links": [
+        "../playground/demo.sql",
+        "user_guide/playground.md",
+        "user_guide/quickstart.md"
+      ],
+      "path": "quickstart.md",
+      "sha256": "1a2e00f3e18f642de7ac8b1092641fac4a8d07dc4d198eafedc8c6401dc938af"
+    },
+    {
+      "links": [
+        "user_guide/release_notes.md"
+      ],
+      "path": "release_notes.md",
+      "sha256": "93e702fd158a6480e0ac775c8d1d1134bcfc83962f3dae3ecf3ca14c632be1d4"
+    },
+    {
+      "links": [
+        "user_guide/roadmap.md"
+      ],
+      "path": "roadmap.md",
+      "sha256": "939569d9704108a5540bc79266227e83ac0ddeb528f38e3798cbd8db34613b14"
+    },
+    {
+      "links": [
+        "api_reference.md",
+        "client_examples.md",
+        "collections.md",
+        "configuration.md",
+        "errors.md",
+        "filters.md",
+        "hybrid_retrieval.md",
+        "indexes.md",
+        "installation.md",
+        "limitations.md",
+        "metric_operator_matrix.md",
+        "metric_semantics.md",
+        "multi_tenancy.md",
+        "operations.md",
+        "parity_matrix.md",
+        "pgvector_migration.md",
+        "playground.md",
+        "quickstart.md",
+        "release_notes.md",
+        "roadmap.md",
+        "roadmap.md",
+        "rollback.md",
+        "security.md",
+        "sql_object_inventory.md",
+        "storage.md",
+        "support_policy.md",
+        "troubleshooting.md",
+        "vector_search.md"
+      ],
+      "path": "user_guide/README.md",
+      "sha256": "632e2c2a67f6adc432e997d757d7a03a5dadb43b7861a9e2697afbc66470ae63"
+    },
+    {
+      "links": [
+        "indexes.md",
+        "pgvector_coexist.md",
+        "pgvector_coexist.md",
+        "support_policy.md"
+      ],
+      "path": "user_guide/api_reference.md",
+      "sha256": "acf6722086b6b06960d0a043c69c676d41d29e8f4d608cdbaa5b4aff78d0e61c"
+    },
+    {
+      "links": [],
+      "path": "user_guide/client_examples.md",
+      "sha256": "67fffd050540d0559f9ef89691713c8a8ade2f1c6ea9731f336cbd1f57c40057"
+    },
+    {
+      "links": [
+        "roadmap.md"
+      ],
+      "path": "user_guide/collections.md",
+      "sha256": "44af6f1d0c08fbd4b5276a622f345f973f933798eb73ca3d1b7256a2620e1253"
+    },
+    {
+      "links": [
+        "api_reference.md",
+        "indexes.md"
+      ],
+      "path": "user_guide/configuration.md",
+      "sha256": "a278aa344892a986c0182f6b1848f4f81563ea2f574f9fe9d109d53d6417c8f0"
+    },
+    {
+      "links": [],
+      "path": "user_guide/errors.md",
+      "sha256": "01e27cb0d58220bb73168971266e8030acabe39de9517b715c19b7dca2f9883b"
+    },
+    {
+      "links": [],
+      "path": "user_guide/filters.md",
+      "sha256": "cf128b5577f506316611b133ed5e71d7e3c0b5ac8adac6a0ad20c20ae3be38ba"
+    },
+    {
+      "links": [],
+      "path": "user_guide/hybrid_retrieval.md",
+      "sha256": "729ed0adc80971c6963fe8825ba16563739097a3ca6e5ad135883ed530a8290e"
+    },
+    {
+      "links": [
+        "pgvector_coexist.md",
+        "roadmap.md"
+      ],
+      "path": "user_guide/indexes.md",
+      "sha256": "4bfb2b983390033bbd93bd19249241f4053de8be7e2de50c96a33417b17af678"
+    },
+    {
+      "links": [
+        "operations.md",
+        "troubleshooting.md"
+      ],
+      "path": "user_guide/installation.md",
+      "sha256": "cf3d7e8ba99b90836c8429dd4e09654876f3af142110ec2640ac9d34b522eb18"
+    },
+    {
+      "links": [
+        "../benchmarks/pgvector.md",
+        "roadmap.md"
+      ],
+      "path": "user_guide/limitations.md",
+      "sha256": "fb4818b25b66780f3ae75d99721109bd13bcfe8505e31292ecc23993f5da64d7"
+    },
+    {
+      "links": [
+        "metric_semantics.md"
+      ],
+      "path": "user_guide/metric_operator_matrix.md",
+      "sha256": "61bf339d2f6e599ae82d57367fd2abdca5ed91d87b91cb4a86eab7e75d68d022"
+    },
+    {
+      "links": [
+        "metric_operator_matrix.md"
+      ],
+      "path": "user_guide/metric_semantics.md",
+      "sha256": "05a8332b417d4647d047b0fbf6f65d9e42eacb8942a128e379fa6c2e26d5446a"
+    },
+    {
+      "links": [],
+      "path": "user_guide/multi_tenancy.md",
+      "sha256": "3de3aff9eb31db004436b5c9ea77e48a94144ca41a9dcd37955a9be4f8fa1cf2"
+    },
+    {
+      "links": [
+        "../../SECURITY.md",
+        "https://github.com/evokoa/pgcontext/issues",
+        "indexes.md#build-memory-budget",
+        "mailto:team@evokoa.com",
+        "troubleshooting.md"
+      ],
+      "path": "user_guide/operations.md",
+      "sha256": "d3c26c7c5a82ffd581a1384f72daffdd0fd09411119997547e3a5ea1bcde5b7f"
+    },
+    {
+      "links": [],
+      "path": "user_guide/parity_matrix.md",
+      "sha256": "10d5492744f631b298d26197c362be7abc49806081c7d6cf21bcc387b05f2b10"
+    },
+    {
+      "links": [],
+      "path": "user_guide/pgvector_coexist.md",
+      "sha256": "dec164d9fc16e7f088faa2db5b383618bef3b7c00d4680c16c62c997417f6d2e"
+    },
+    {
+      "links": [
+        "roadmap.md",
+        "roadmap.md#pgvector-migration-and-compatibility"
+      ],
+      "path": "user_guide/pgvector_migration.md",
+      "sha256": "0404666ecae1dadc0ad460d98f59ff887691b9856709ddf3c8d8c638b4829728"
+    },
+    {
+      "links": [
+        "../../playground/demo.sql"
+      ],
+      "path": "user_guide/playground.md",
+      "sha256": "3ca69ee71ebfd028a1035c5e81e06e65f25e2ccdd8ab5c5cc45a49682dfa6049"
+    },
+    {
+      "links": [
+        "installation.md",
+        "playground.md"
+      ],
+      "path": "user_guide/quickstart.md",
+      "sha256": "b6d83b5c470bd4acf1ebaac2d145fce79c565dab42c07125fdcf18a83797b6b2"
+    },
+    {
+      "links": [
+        "api_reference.md",
+        "collections.md",
+        "filters.md",
+        "https://github.com/evokoa/pgcontext/issues",
+        "hybrid_retrieval.md",
+        "indexes.md",
+        "installation.md",
+        "installation.md",
+        "limitations.md",
+        "limitations.md",
+        "mailto:team@evokoa.com",
+        "operations.md",
+        "parity_matrix.md",
+        "pgvector_migration.md",
+        "pgvector_migration.md",
+        "playground.md",
+        "playground.md",
+        "quickstart.md",
+        "roadmap.md",
+        "roadmap.md",
+        "rollback.md",
+        "support_policy.md",
+        "vector_search.md"
+      ],
+      "path": "user_guide/release_notes.md",
+      "sha256": "247b77ce98ea91204b4235e8e9e62f77f796ba5952f8055783ebc7c88231143d"
+    },
+    {
+      "links": [
+        "#delivery-phases-post-v1-overview",
+        "#delivery-phases-post-v1-overview",
+        "#named-sparse-ann",
+        "#non-dense-ann-opclasses",
+        "#pgvector-migration-and-compatibility",
+        "#pgvector-migration-and-compatibility",
+        "#reproducible-public-benchmarks",
+        "https://github.com/evokoa/pggraph"
+      ],
+      "path": "user_guide/roadmap.md",
+      "sha256": "c9cb704834ec0a151e0b8dccd5a8a5980eaab90eb7d83fd9f21421042054dc89"
+    },
+    {
+      "links": [],
+      "path": "user_guide/rollback.md",
+      "sha256": "c76b97093e6201ac065b9d476e0b9fe20de674fe966e0172eba4a5ece5187c58"
+    },
+    {
+      "links": [],
+      "path": "user_guide/security.md",
+      "sha256": "8b6ccea904b83990837df46442f03990f88c5079ce80fb4087b1842000ea578d"
+    },
+    {
+      "links": [],
+      "path": "user_guide/sql_object_inventory.md",
+      "sha256": "62b29228a2af0c3536e1ede44a0a5bcfe63f2b37d2f5305b333a3ad33ebc3159"
+    },
+    {
+      "links": [],
+      "path": "user_guide/storage.md",
+      "sha256": "9e8b55dac089d95066ce072569cf5c25f99a3c68ac4ddd58ac63ba072b009833"
+    },
+    {
+      "links": [],
+      "path": "user_guide/support_policy.md",
+      "sha256": "11f1a375efca7609fe8d9eac977449da0c88e1febe8758c3a9d3e2f4dbc98e47"
+    },
+    {
+      "links": [],
+      "path": "user_guide/troubleshooting.md",
+      "sha256": "7d83c0a5b22900c709efe9f2db30be9bf96eb1d444da8671954021c1ec68120c"
+    },
+    {
+      "links": [
+        "metric_operator_matrix.md",
+        "metric_semantics.md",
+        "roadmap.md"
+      ],
+      "path": "user_guide/vector_search.md",
+      "sha256": "c91b036d153d47fa29d933b9e761f50c8fe7de2e9f61d97a54a66c1d74bd4932"
+    }
+  ],
+  "public_files": [
+    {
+      "links": [
+        "AGENTS.md",
+        "CODE_OF_CONDUCT.md",
+        "CONTRIBUTING.md",
+        "LICENSE",
+        "LICENSE",
+        "NOTICE",
+        "SECURITY.md",
+        "assets/benchmark-pgvector.svg",
+        "assets/metadata-filtering.svg",
+        "assets/pgcontext-banner.png",
+        "docs/benchmarks/pgvector.md",
+        "docs/benchmarks/reports/pgcontext-vs-pgvector-vs-qdrant.html",
+        "docs/benchmarks/reports/pgcontext-vs-pgvector.html",
+        "docs/benchmarks/reports/pgcontext-vs-pgvector.html",
+        "docs/benchmarks/reports/pgcontext-vs-pgvector.html",
+        "docs/index.md",
+        "docs/index.md",
+        "docs/known_issues.md",
+        "docs/known_issues.md",
+        "docs/pgcontext-vs-pgvector-vs-qdrant.md",
+        "docs/quickstart.md",
+        "docs/roadmap.md",
+        "docs/roadmap.md",
+        "docs/roadmap.md",
+        "docs/user_guide/api_reference.md",
+        "docs/user_guide/filters.md",
+        "docs/user_guide/filters.md",
+        "docs/user_guide/indexes.md",
+        "docs/user_guide/installation.md",
+        "docs/user_guide/installation.md",
+        "docs/user_guide/operations.md",
+        "docs/user_guide/parity_matrix.md",
+        "docs/user_guide/pgvector_migration.md",
+        "docs/user_guide/playground.md",
+        "docs/user_guide/roadmap.md",
+        "https://discord.gg/GnHR8ezuwG",
+        "https://evokoa.com",
+        "https://evokoa.com",
+        "https://evokoa.com",
+        "https://github.com/evokoa/pgcontext/commits/main",
+        "https://github.com/evokoa/pgcontext/issues",
+        "https://github.com/evokoa/pgcontext/pkgs/container/pgcontext",
+        "https://github.com/evokoa/pgcontext/pulls",
+        "https://github.com/evokoa/pgcontext/releases",
+        "https://github.com/evokoa/pgcontext/stargazers",
+        "https://github.com/evokoa/pggraph",
+        "https://github.com/evokoa/pggraph",
+        "https://img.shields.io/badge/Built%20by-Evokoa-ff6b35?style=for-the-badge",
+        "https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&amp;logo=docker",
+        "https://img.shields.io/badge/Follow%20on%20Product%20Hunt-DA552E?style=for-the-badge&logo=product-hunt&logoColor=white",
+        "https://img.shields.io/badge/Follow%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white",
+        "https://img.shields.io/badge/PostgreSQL-17-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white",
+        "https://img.shields.io/badge/docs-pgContext-0ea5e9?style=flat-square",
+        "https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square",
+        "https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square",
+        "https://img.shields.io/discord/1496159762704896022?style=for-the-badge&label=Join%20Discord&logo=discord&logoColor=white&color=5865F2",
+        "https://img.shields.io/github/issues-pr/evokoa/pgcontext?style=flat-square&logo=github&label=PRs",
+        "https://img.shields.io/github/issues/evokoa/pgcontext?style=flat-square&logo=github&label=issues",
+        "https://img.shields.io/github/last-commit/evokoa/pgcontext?style=flat-square&logo=github&label=last%20commit",
+        "https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars",
+        "https://polygres.com",
+        "https://polygres.com",
+        "https://polygres.com",
+        "https://polygres.com/user-demo",
+        "https://polygres.com/wikipedia",
+        "https://www.postgresql.org/",
+        "https://www.producthunt.com/@evokoa",
+        "https://x.com/polygres",
+        "mailto:team@evokoa.com",
+        "playground/demo.sql"
+      ],
+      "path": "README.md",
+      "sha256": "13464c7a7bf0c4bc926fc065ff150da2896e59d8772527c6974ae88f8553c2c7"
+    },
+    {
+      "links": [],
+      "path": "CONTRIBUTING.md",
+      "sha256": "fefc075d5aa9dec9e6e43b77a05d7f427b27147c1bee1ebc05381693f15439de"
+    },
+    {
+      "links": [
+        "mailto:team@evokoa.com"
+      ],
+      "path": "SECURITY.md",
+      "sha256": "843974ea03ca4df15be4c908023ad719c886a8012166f8b18352ad952fe478bb"
+    },
+    {
+      "links": [],
+      "path": "CODE_OF_CONDUCT.md",
+      "sha256": "d1545185a82a3a0a01c1c8ca8333519b6b75791c3a6f53183a8d6411a9f8e1de"
+    },
+    {
+      "links": [
+        "../docs/contributor_guide/release_matrix.md",
+        "../docs/contributor_guide/release_process.md"
+      ],
+      "path": "release/README.md",
+      "sha256": "1a248238183a0756e6c3b0bae6f3f3aea9913df7dbd499c7df3b270deafb0cf4"
+    }
+  ],
+  "renderer": "github-markdown",
+  "version": 1
+}

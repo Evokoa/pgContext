@@ -1,0 +1,11 @@
+Requirement ID|Capability ID|Current source-to-sink state|Owning public contract|Required consumer|Post-freeze-only evidence
+FLOOR-FILTERED-ANN|CAP-FILTERED-ANN|serving|docs/user_guide/vector_search.md#Filtered ANN candidate work|crates/context-pg/src/table_search.rs|long-duration recall and latency campaigns
+FLOOR-NAMED-DENSE|CAP-NAMED-DENSE|serving|docs/user_guide/collections.md#Register a Vector|crates/context-pg/src/table_search/named.rs|broad workload certification
+FLOOR-VECTOR-CONFIG|CAP-VECTOR-CONFIG|metadata-only|docs/user_guide/collections.md#Register a Vector|crates/context-pg/src/table_search/named.rs|long-duration configuration-churn soak only
+FLOOR-NAMED-SPARSE|CAP-NAMED-SPARSE|exact-only|docs/user_guide/roadmap.md#Named Sparse ANN|crates/context-pg/src/sparse_search.rs|long-duration sparse recall campaigns
+FLOOR-HYBRID-EXECUTION|CAP-HYBRID|partial|docs/user_guide/roadmap.md#Composite Query Execution|crates/context-pg/src/hybrid_query.rs|broad workload and latency certification
+FLOOR-QUANTIZED-HNSW|CAP-QUANTIZATION|metadata-only|docs/user_guide/roadmap.md#Quantized HNSW|crates/context-pg/src/hnsw_am.rs|long-duration quantized recall campaigns
+FLOOR-LATE-INTERACTION|CAP-LATE-INTERACTION|partial|docs/user_guide/roadmap.md#Internally Maintained Late Interaction|crates/context-pg/src/hybrid_query/late_interaction_ann.rs|long-duration memory latency and recall campaigns
+FLOOR-GENERATION-MAINTENANCE|CAP-REBUILDABLE-ARTIFACTS|metadata-only|docs/user_guide/storage.md#Snapshot, Export, And Import Procedure|crates/context-pg/src/artifact_segments/serving_readiness.rs|multi-major recovery certification
+FLOOR-MMAP-SERVING|CAP-REBUILDABLE-ARTIFACTS|partial|docs/user_guide/roadmap.md#Mapped HNSW Serving|crates/context-pg/src/table_search.rs|platform and long-duration memory-pressure certification
+FLOOR-AUTOMATIC-OBSERVABILITY|CAP-OBSERVABILITY|manual-only|docs/user_guide/roadmap.md#Expanded Automatic Observability|crates/context-pg/src/telemetry.rs|long-duration cardinality and privacy soak only; deterministic privacy properties are pre-freeze

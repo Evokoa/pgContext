@@ -1,0 +1,21 @@
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: release/docker/Dockerfile
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: pgcontext
+    ports:
+      - "${PGCONTEXT_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pgcontext"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - pgcontext-data:/var/lib/postgresql/data
+
+volumes:
+  pgcontext-data:

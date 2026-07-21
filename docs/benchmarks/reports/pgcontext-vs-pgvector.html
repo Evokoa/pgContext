@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pgContext vs pgvector — GloVe-100-angular benchmark</title>
+<style>
+:root{
+  --paper:#ffffff; --panel:#fafafa; --ink:#1a1c1e; --muted:#585d64; --faint:#8a9098;
+  --rule:#e2e5e9; --grid:#eef0f3; --pgc:#1f5c8f; --pgv:#8b929c; --accentbg:#eef4fa;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  font-size:16px; line-height:1.6; font-feature-settings:"kern" 1;
+}
+.wrap{max-width:860px; margin:0 auto; padding:56px 28px 80px}
+.serif{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums}
+header{border-bottom:2px solid var(--ink); padding-bottom:20px; margin-bottom:8px}
+.kicker{font-size:12.5px; letter-spacing:.11em; text-transform:uppercase; color:var(--muted); margin:0 0 10px}
+h1{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  font-size:30px; font-weight:600; line-height:1.2; margin:0 0 8px; letter-spacing:-.01em; text-wrap:balance}
+.byline{color:var(--muted); font-size:14.5px; margin:0}
+.meta{display:grid; grid-template-columns:auto 1fr; gap:2px 20px; margin:22px 0 4px;
+  font-size:13.5px; border:1px solid var(--rule); padding:14px 16px; background:var(--panel)}
+.meta dt{color:var(--muted); grid-column:1}
+.meta dd{margin:0; grid-column:2}
+h2{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+  font-size:20px; font-weight:600; margin:44px 0 6px; letter-spacing:-.005em}
+p{margin:0 0 14px; max-width:66ch}
+.lead{font-size:17px}
+.lead b{color:var(--pgc)}
+figure{margin:26px 0 8px; border:1px solid var(--rule); background:var(--paper)}
+.figbody{padding:18px 18px 6px}
+figcaption{font-size:13px; color:var(--muted); padding:2px 18px 14px; font-style:italic}
+figcaption b{font-style:normal; color:var(--ink)}
+.legend{display:flex; gap:22px; flex-wrap:wrap; font-size:13px; color:var(--muted); padding:0 2px 12px}
+.legend span{display:inline-flex; align-items:center; gap:7px}
+.key{width:22px; height:0; border-top-width:3px; border-top-style:solid; display:inline-block}
+.key.dot{position:relative}
+svg{display:block; width:100%; height:auto}
+svg text{font-family:ui-monospace,"SF Mono",Menlo,monospace; font-variant-numeric:tabular-nums}
+table{border-collapse:collapse; width:100%; font-size:14px; margin:6px 0 4px}
+caption{caption-side:top; text-align:left; font-size:13px; color:var(--muted); font-style:italic; padding:0 0 8px}
+th,td{padding:8px 12px; text-align:right; border-bottom:1px solid var(--grid)}
+th:first-child,td:first-child{text-align:left}
+thead th{border-bottom:1.5px solid var(--ink); font-weight:600; font-size:12.5px;
+  text-transform:uppercase; letter-spacing:.05em; color:var(--muted)}
+td.num,th.num{font-family:ui-monospace,"SF Mono",Menlo,monospace; font-variant-numeric:tabular-nums}
+td.win{color:var(--pgc); font-weight:600}
+tbody tr:last-child td{border-bottom:1.5px solid var(--ink)}
+.note{border-left:3px solid var(--pgc); background:var(--accentbg); padding:12px 16px; margin:18px 0; font-size:14.5px}
+footer{margin-top:48px; padding-top:18px; border-top:1px solid var(--rule); color:var(--muted); font-size:13px}
+footer h2{font-size:15px; margin:0 0 8px; color:var(--ink)}
+footer ul{margin:0; padding-left:18px}
+footer li{margin:4px 0; max-width:84ch}
+a{color:var(--pgc)}
+@media(max-width:560px){.wrap{padding:36px 18px 60px} h1{font-size:24px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <p class="kicker">Reproducible benchmark · recognized dataset</p>
+  <h1>pgContext versus pgvector on GloVe-100-angular</h1>
+  <p class="byline">Approximate nearest-neighbor search, 1,183,514 × 100-dimensional vectors, cosine distance</p>
+</header>
+
+<dl class="meta">
+  <dt>Dataset</dt><dd>ann-benchmarks <span class="mono">glove-100-angular</span> — 1,183,514 train, 10,000 test, 100 dims</dd>
+  <dt>Ground truth</dt><dd>Dataset-provided exact neighbors (not self-computed)</dd>
+  <dt>Metric</dt><dd>Angular / cosine · recall@10</dd>
+  <dt>Deployment</dt><dd>pgContext and pgvector in the same PostgreSQL&nbsp;17 container</dd>
+  <dt>Index</dt><dd>HNSW, m = 16, ef_construction = 64, 8-way parallel build (both engines)</dd>
+  <dt>Hardware</dt><dd>Apple M4 Pro · PostgreSQL 17 · pgvector 0.8.5 · NEON kernels</dd>
+  <dt>Date</dt><dd>2026-07-20 · single trial, warm cache, single client</dd>
+</dl>
+
+<p class="lead">At every search setting the two engines return <b>the same recall</b> —
+both trace one curve from 0.73 to 0.91 — but pgContext answers each query
+<b>3.8 to 5.3× faster</b>. The gap widens with search effort: at
+<span class="mono">ef_search</span>&nbsp;512, pgContext holds 0.910 recall@10 at
+<b>2.44&nbsp;ms</b> where pgvector reaches the same recall at 12.97&nbsp;ms.</p>
+
+<figure>
+  <div class="figbody">
+    <div class="legend">
+      <span><i class="key" style="border-top-color:var(--pgc)"></i>pgContext</span>
+      <span><i class="key" style="border-top-color:var(--pgv)"></i>pgvector</span>
+      <span style="color:var(--faint)">points labeled by ef_search</span>
+    </div>
+    <div id="fig1"></div>
+  </div>
+  <figcaption><b>Figure 1.</b> Latency–recall frontier (log latency axis). Lower and
+  further right is better. The curves share the same horizontal positions — equal
+  recall — while pgContext sits far below pgvector at every point.</figcaption>
+</figure>
+
+<figure>
+  <div class="figbody">
+    <div class="legend">
+      <span><i class="key" style="border-top-color:var(--pgc)"></i>pgContext</span>
+      <span><i class="key" style="border-top-color:var(--pgv)"></i>pgvector</span>
+    </div>
+    <div id="fig2"></div>
+  </div>
+  <figcaption><b>Figure 2.</b> Query latency (p50) against search effort. pgvector's
+  latency climbs steeply with <span class="mono">ef_search</span>; pgContext stays
+  low, so the speed advantage grows as recall targets rise.</figcaption>
+</figure>
+
+<h2>Results</h2>
+<table>
+  <caption>Table 1. Recall@10 and median (p50) query latency at each ef_search.</caption>
+  <thead><tr><th>ef_search</th><th class="num">pgContext recall</th><th class="num">pgContext p50</th><th class="num">pgvector recall</th><th class="num">pgvector p50</th><th class="num">speed-up</th></tr></thead>
+  <tbody>
+    <tr><td class="num">64</td><td class="num">0.731</td><td class="num win">0.67 ms</td><td class="num">0.750</td><td class="num">2.56 ms</td><td class="num">3.8×</td></tr>
+    <tr><td class="num">128</td><td class="num">0.810</td><td class="num win">0.94 ms</td><td class="num">0.820</td><td class="num">4.14 ms</td><td class="num">4.4×</td></tr>
+    <tr><td class="num">256</td><td class="num">0.868</td><td class="num win">1.46 ms</td><td class="num">0.870</td><td class="num">7.09 ms</td><td class="num">4.9×</td></tr>
+    <tr><td class="num">512</td><td class="num">0.910</td><td class="num win">2.44 ms</td><td class="num">0.910</td><td class="num">12.97 ms</td><td class="num">5.3×</td></tr>
+  </tbody>
+</table>
+
+<table>
+  <caption>Table 2. Index build time (HNSW, 8-way parallel budget, 1.18M rows).</caption>
+  <thead><tr><th>System</th><th class="num">Build time</th><th class="num">Relative</th></tr></thead>
+  <tbody>
+    <tr><td>pgvector</td><td class="num">50.3 s</td><td class="num">1.00×</td></tr>
+    <tr><td>pgContext</td><td class="num">88.0 s</td><td class="num">1.75×</td></tr>
+  </tbody>
+</table>
+<p style="font-size:14px;color:var(--muted)">pgvector builds the index faster; pgContext
+trades that for the query-time advantage above. Build throughput is an area of
+active work.</p>
+
+<div class="note">Both systems ran inside the same PostgreSQL container, queried over
+the same connection, on identical vectors with identical HNSW settings. The only
+thing that changes between the two columns is the index engine — so the speed
+difference comes from the engines themselves, not the test setup.</div>
+
+<footer>
+  <h2>Method &amp; reproducibility</h2>
+  <ul>
+    <li>Recall is measured against the dataset's shipped ground-truth neighbors; each
+    query's returned top-10 ids are intersected with the true top-10.</li>
+    <li>Latency is per-query wall-clock (p50 of 10,000 queries), JIT and parallel-gather
+    disabled, warm cache, after a warmup pass; each query plan is verified to use the
+    HNSW index.</li>
+    <li>Single trial on an Apple M4 Pro with NEON distance kernels; absolute numbers are
+    machine-specific. x86 AVX2 kernels exist but are not yet performance-measured.</li>
+    <li>Harness, Dockerfile, and the archived result JSON:
+    <span class="mono">benchmarks/pgvector_comparison/</span>. Three-system comparison
+    including Qdrant: <span class="mono">pgcontext-vs-pgvector-vs-qdrant.html</span>.</li>
+  </ul>
+</footer>
+</div>
+
+<script>
+(function(){
+"use strict";
+const EF=[64,128,256,512];
+const S={
+  pgcontext:{c:"#1f5c8f", recall:[.7312,.8095,.8683,.9102], p50:[.673,.939,1.456,2.443]},
+  pgvector :{c:"#8b929c", recall:[.7499,.8198,.8700,.9100], p50:[2.563,4.137,7.093,12.968]},
+};
+const NS="http://www.w3.org/2000/svg";
+function el(p,t,a){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);p.appendChild(e);return e;}
+function txt(p,x,y,s,a){const e=el(p,"text",Object.assign({x,y,"font-size":11,fill:"#585d64"},a||{}));e.textContent=s;return e;}
+function svg(mount,w,h){const s=document.createElementNS(NS,"svg");s.setAttribute("viewBox",`0 0 ${w} ${h}`);s.setAttribute("role","img");document.getElementById(mount).appendChild(s);return s;}
+function yTitle(s,label,T,H,B){const cy=(T+(H-B))/2;const e=el(s,"text",{x:15,y:cy,"font-size":11.5,fill:"#1a1c1e","text-anchor":"middle",transform:`rotate(-90 15 ${cy})`});e.textContent=label;}
+
+// Figure 1: latency (log y) vs recall (x)
+(function(){
+  const W=800,H=430,L=74,R=54,T=22,B=50;
+  const s=svg("fig1",W,H);
+  const xmin=.70,xmax=.94, ymin=.5,ymax=16;
+  const X=v=>L+(v-xmin)/(xmax-xmin)*(W-L-R);
+  const lY=v=>Math.log10(v), Y=v=>T+(1-(lY(v)-lY(ymin))/(lY(ymax)-lY(ymin)))*(H-T-B);
+  [0.5,1,2,5,10,15].forEach(g=>{el(s,"line",{x1:L,x2:W-R,y1:Y(g),y2:Y(g),stroke:"#eef0f3"});
+    txt(s,L-10,Y(g)+4,g+" ms",{"text-anchor":"end"});});
+  for(let v=.70;v<=.94001;v+=.04){el(s,"line",{x1:X(v),x2:X(v),y1:T,y2:H-B,stroke:"#eef0f3"});
+    txt(s,X(v),H-B+18,v.toFixed(2),{"text-anchor":"middle"});}
+  txt(s,(L+W-R)/2,H-8,"recall@10  →",{"text-anchor":"middle","font-size":11.5,fill:"#1a1c1e"});
+  yTitle(s,"p50 latency (ms, log scale)",T,H,B);
+  for(const k of ["pgvector","pgcontext"]){const d=S[k];
+    let path="";d.recall.forEach((r,i)=>{path+=(i?"L":"M")+X(r).toFixed(1)+" "+Y(d.p50[i]).toFixed(1)+" ";});
+    el(s,"path",{d:path,fill:"none",stroke:d.c,"stroke-width":2});
+    d.recall.forEach((r,i)=>{el(s,"circle",{cx:X(r),cy:Y(d.p50[i]),r:4.5,fill:"#fff",stroke:d.c,"stroke-width":2});
+      txt(s,X(r)+7,Y(d.p50[i])+(k==="pgcontext"?15:-9),String(EF[i]),{fill:d.c,"font-size":10});});
+  }
+})();
+
+// Figure 2: p50 (log y) vs ef, grouped bars
+(function(){
+  const W=800,H=360,L=74,R=20,T=22,B=44;
+  const s=svg("fig2",W,H);
+  const ymin=.5,ymax=16;
+  const lY=v=>Math.log10(v), Y=v=>T+(1-(lY(v)-lY(ymin))/(lY(ymax)-lY(ymin)))*(H-T-B);
+  [0.5,1,2,5,10,15].forEach(g=>{el(s,"line",{x1:L,x2:W-R,y1:Y(g),y2:Y(g),stroke:"#eef0f3"});
+    txt(s,L-10,Y(g)+4,g+" ms",{"text-anchor":"end"});});
+  yTitle(s,"p50 latency (ms, log scale)",T,H,B);
+  const gw=(W-L-R)/EF.length;
+  EF.forEach((ef,i)=>{
+    const cx=L+gw*i+gw/2;
+    txt(s,cx,H-B+18,"ef "+ef,{"text-anchor":"middle","font-size":11.5,fill:"#1a1c1e"});
+    const sys=["pgcontext","pgvector"], bw=30;
+    sys.forEach((k,j)=>{const d=S[k], x=cx-bw-3+j*(bw+6), y=Y(d.p50[i]), base=Y(ymin);
+      el(s,"rect",{x,y,width:bw,height:base-y,fill:d.c,rx:1});
+      txt(s,x+bw/2,y-5,d.p50[i].toFixed(2),{"text-anchor":"middle","font-size":10,fill:"#1a1c1e"});});
+  });
+})();
+})();
+</script>
+</body>
+</html>

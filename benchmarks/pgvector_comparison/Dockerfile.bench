@@ -1,0 +1,56 @@
+# Benchmark-only image: PostgreSQL 17 + pgContext + pgvector in one container,
+# so the three-system comparison runs all Postgres engines in the same Docker
+# deployment mode as Qdrant (matched client/transport boundary). NOT a release
+# artifact -- the shipped pgContext image (release/docker/Dockerfile) does not
+# bundle pgvector.
+ARG RUST_IMAGE=rust:1.96.0-bookworm
+ARG POSTGRES_IMAGE=postgres:17-bookworm
+
+FROM ${RUST_IMAGE} AS builder
+ARG PG_MAJOR=17
+ARG PGRX_VERSION=0.19.1
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+        ca-certificates curl gnupg lsb-release \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+        postgresql-${PG_MAJOR} postgresql-server-dev-${PG_MAJOR} \
+    && rm -rf /var/lib/apt/lists/*
+RUN cargo install cargo-pgrx --version ${PGRX_VERSION} --locked
+WORKDIR /src
+COPY . /src
+RUN cargo pgrx init --pg${PG_MAJOR}=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config \
+    && cargo pgrx package -p context-pg \
+        --pg-config=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config \
+        --out-dir=/package --no-default-features --features=pg${PG_MAJOR}
+
+FROM ${POSTGRES_IMAGE}
+ARG PG_MAJOR=17
+# pgvector from the PostgreSQL apt repository, the same channel a user would
+# install it from alongside pgContext.
+RUN apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+        ca-certificates curl gnupg lsb-release \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+        | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get -o Acquire::Retries=3 update \
+    && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+        postgresql-${PG_MAJOR}-pgvector \
+    && rm -rf /var/lib/apt/lists/*
+# The coexist-transformed SQL artifact is what the checked-in tree ships and is
+# required when pgvector shares the database.
+COPY --from=builder /package/usr/lib/postgresql/${PG_MAJOR}/lib/ \
+    /usr/lib/postgresql/${PG_MAJOR}/lib/
+COPY --from=builder /package/usr/share/postgresql/${PG_MAJOR}/extension/ \
+    /usr/share/postgresql/${PG_MAJOR}/extension/
+COPY sql/pgcontext--0.1.0.sql \
+    /usr/share/postgresql/${PG_MAJOR}/extension/pgcontext--0.1.0.sql
+# Benchmark creates its own databases and extensions; no init hook.
+HEALTHCHECK --interval=5s --timeout=3s --start-period=15s --retries=30 \
+  CMD pg_isready -U "${POSTGRES_USER:-postgres}" || exit 1

@@ -1,0 +1,64 @@
+name: Benchmark Regression
+
+# Nightly reduced-lane performance gate.
+# Runs pgContext against pgvector on PostgreSQL 17 (Qdrant skipped) and
+# fails on machine-independent ratio regressions via
+# scripts/bench-regression.sh. Scheduled and manual only: shared-runner
+# latency is too noisy to block merges, but a red nightly is a regression
+# signal that must be triaged, not ignored.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 * * *"
+
+jobs:
+  bench-regression:
+    name: Reduced-lane perf gate (PostgreSQL 17)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+      - name: Install PostgreSQL 17, headers, and pgvector
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y \
+            postgresql-17 postgresql-server-dev-17 postgresql-17-pgvector
+      - name: Install cargo-pgrx
+        run: |
+          source release/tool-versions.env
+          cargo install cargo-pgrx --version "${CARGO_PGRX_VERSION}" --locked
+      - name: Initialize pgrx
+        run: cargo pgrx init --pg17 /usr/lib/postgresql/17/bin/pg_config
+      - name: Install pgContext
+        run: |
+          cargo pgrx install -p context-pg --release --sudo \
+            --pg-config /usr/lib/postgresql/17/bin/pg_config \
+            --no-default-features --features pg17
+      - name: Start PostgreSQL and create runner role
+        run: |
+          sudo pg_ctlcluster 17 main start
+          sudo -u postgres createuser -s "$(whoami)"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Prepare pinned harness environment
+        # run.sh normally provisions this venv through the local sfw wrapper,
+        # which is unavailable on CI runners; pre-creating it at the expected
+        # path makes run.sh reuse it as-is.
+        run: |
+          python -m venv target/pgvector-benchmark-venv
+          target/pgvector-benchmark-venv/bin/pip install \
+            'numpy<3' \
+            'fastembed==0.7.3' \
+            'psycopg[binary]==3.2.9' \
+            'qdrant-client==1.18.0' \
+            'certifi==2025.8.3'
+      - name: Run reduced-lane regression gate
+        run: |
+          scripts/bench-regression.sh \
+            --dsn "host=/var/run/postgresql port=5432 dbname=postgres"

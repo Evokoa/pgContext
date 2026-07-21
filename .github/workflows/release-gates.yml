@@ -1,0 +1,332 @@
+name: Release Gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_fuzz_campaign:
+        description: "Run the long-duration release fuzz campaign"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      fuzz_duration_seconds:
+        description: "Per-target fuzz duration in seconds"
+        required: false
+        default: "86400"
+      fuzz_jobs:
+        description: "Concurrent fuzz targets"
+        required: false
+        default: "1"
+
+jobs:
+  supported-postgres:
+    name: PostgreSQL ${{ matrix.pg }} release checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pg: "15"
+            feature: pg15
+          - pg: "16"
+            feature: pg16
+          - pg: "17"
+            feature: pg17
+          - pg: "18"
+            feature: pg18
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+      - name: Install PostgreSQL ${{ matrix.pg }} development files
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }}
+      - name: Install cargo-pgrx
+        run: |
+          source release/tool-versions.env
+          cargo install cargo-pgrx --version "${CARGO_PGRX_VERSION}" --locked
+      - name: Initialize pgrx
+        run: cargo pgrx init --pg${{ matrix.pg }} /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+      - name: Check context-pg
+        run: cargo check -p context-pg --no-default-features --features ${{ matrix.feature }}
+      - name: Generate extension SQL
+        run: |
+          mkdir -p target/release-sql
+          cargo pgrx schema -p context-pg pg${{ matrix.pg }} --out target/release-sql/pg${{ matrix.pg }}.sql
+          {
+            echo "command: cargo pgrx schema -p context-pg pg${{ matrix.pg }} --out target/release-sql/pg${{ matrix.pg }}.sql"
+            echo "commit: $(git rev-parse --verify HEAD)"
+            echo "artifact: target/release-sql/pg${{ matrix.pg }}.sql"
+            echo "sha256: $(shasum -a 256 target/release-sql/pg${{ matrix.pg }}.sql | awk '{print $1}')"
+          } > target/release-sql/pg${{ matrix.pg }}.sql.build.log
+      - name: Check checked-in extension SQL
+        if: matrix.pg == '17'
+        run: scripts/check-extension-sql-artifact.sh --pg-major 17
+      - name: Record release artifact report
+        run: |
+          scripts/run-release-artifact-report.sh \
+            --artifact target/release-sql/pg${{ matrix.pg }}.sql \
+            --out-dir target/release-artifacts/pg${{ matrix.pg }}
+      - name: Upload generated SQL artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: postgres-${{ matrix.pg }}-release-sql
+          path: |
+            target/release-sql/pg${{ matrix.pg }}.sql
+            target/release-sql/pg${{ matrix.pg }}.sql.build.log
+      - name: Run pgrx SQL tests
+        if: matrix.pg == '17'
+        run: scripts/run-v1-pgrx-tests.sh
+      - name: Run heavy PostgreSQL matrix
+        run: scripts/run-postgres-matrix-gates.sh --major ${{ matrix.pg }} --mode heavy --out-dir target/postgres-matrix/pg${{ matrix.pg }}-heavy
+      - name: Upload PostgreSQL matrix report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: postgres-${{ matrix.pg }}-matrix-report
+          path: target/postgres-matrix/pg${{ matrix.pg }}-heavy
+      - name: Upload release artifact report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: postgres-${{ matrix.pg }}-release-artifact-report
+          path: target/release-artifacts/pg${{ matrix.pg }}
+
+  release-artifact-summary:
+    name: Combined release artifact evidence
+    runs-on: ubuntu-latest
+    needs: supported-postgres
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+      - name: Install cargo-pgrx
+        run: |
+          source release/tool-versions.env
+          cargo install cargo-pgrx --version "${CARGO_PGRX_VERSION}" --locked
+      - name: Download generated SQL artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: postgres-*-release-sql
+          path: target/release-sql
+          merge-multiple: true
+      - name: Record combined release artifact report
+        run: |
+          scripts/run-release-artifact-report.sh \
+            --artifact target/release-sql/pg15.sql \
+            --artifact target/release-sql/pg16.sql \
+            --artifact target/release-sql/pg17.sql \
+            --artifact target/release-sql/pg18.sql \
+            --out-dir target/release-artifacts/all-postgres
+      - name: Upload combined release artifact report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: combined-release-artifact-report
+          path: target/release-artifacts/all-postgres
+
+  postgres-matrix-summary:
+    name: Combined PostgreSQL matrix evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+      - name: Install supported PostgreSQL development files
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y \
+            postgresql-15 postgresql-server-dev-15 \
+            postgresql-16 postgresql-server-dev-16 \
+            postgresql-17 postgresql-server-dev-17 \
+            postgresql-18 postgresql-server-dev-18
+      - name: Install cargo-pgrx
+        run: |
+          source release/tool-versions.env
+          cargo install cargo-pgrx --version "${CARGO_PGRX_VERSION}" --locked
+      - name: Record combined PostgreSQL matrix report
+        run: |
+          scripts/run-postgres-matrix-gates.sh \
+            --mode all \
+            --out-dir target/postgres-matrix/all-postgres
+      - name: Upload combined PostgreSQL matrix report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: combined-postgres-matrix-report
+          path: target/postgres-matrix/all-postgres
+
+  platform-builds:
+    name: ${{ matrix.os }} fast gates
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --check
+      - name: Lint
+        run: cargo clippy --workspace --exclude context-pg --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --workspace --exclude context-pg --all-features
+      - name: Docs
+        run: cargo doc --workspace --exclude context-pg --no-deps
+      - name: Public docs navigation, links, and drift
+        run: scripts/check-public-docs.py --check
+      - name: Public docs gate smoke
+        run: tests/shell/check_public_docs_smoke.sh
+      - name: Parity matrix
+        run: scripts/check-parity-matrix.sh
+      - name: Parity matrix smoke
+        run: tests/shell/check_parity_matrix_smoke.sh
+      - name: Benchmark report smoke
+        run: tests/shell/run_benchmark_report_smoke.sh
+      - name: Release artifact report smoke
+        run: tests/shell/run_release_artifact_report_smoke.sh
+      - name: Release gates workflow smoke
+        run: tests/shell/check_release_gates_workflow_smoke.sh
+      - name: Security review report smoke
+        run: tests/shell/run_security_review_report_smoke.sh
+      - name: PostgreSQL matrix report smoke
+        run: tests/shell/run_postgres_matrix_gates_smoke.sh
+      - name: Upgrade matrix staging smoke
+        run: tests/shell/upgrade_matrix_staging_smoke.sh
+      - name: Platform build report smoke
+        run: tests/shell/run_platform_build_report_smoke.sh
+      - name: Fast release gate report smoke
+        run: tests/shell/run_fast_release_gate_report_smoke.sh
+      - name: Source hygiene
+        run: scripts/check-source-hygiene.sh
+      - name: Platform build report
+        run: |
+          case "${RUNNER_OS}" in
+            Linux) platform=linux ;;
+            macOS) platform=macos ;;
+            *)
+              echo "unsupported runner OS for platform report: ${RUNNER_OS}" >&2
+              exit 2
+              ;;
+          esac
+          scripts/run-platform-build-report.sh \
+            --platform "${platform}" \
+            --out-dir "target/platform-builds/${platform}"
+      - name: Upload platform build report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-build-report-${{ matrix.os }}
+          path: target/platform-builds
+
+  platform-build-summary:
+    name: Combined platform build evidence
+    runs-on: ubuntu-latest
+    needs: platform-builds
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: platform-build-report-*
+          path: target/platform-builds
+          merge-multiple: true
+      - name: Merge platform build reports
+        run: |
+          scripts/run-platform-build-report.sh \
+            --merge-report target/platform-builds/linux/report.md \
+            --merge-report target/platform-builds/macos/report.md \
+            --out-dir target/platform-builds/release-candidate
+      - name: Upload combined platform build report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: combined-platform-build-report
+          path: target/platform-builds/release-candidate
+
+  supply-chain:
+    name: Supply chain and licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+      - name: Install cargo-audit
+        run: |
+          source release/tool-versions.env
+          cargo install cargo-audit --version "${CARGO_AUDIT_VERSION}" --locked
+      - name: Install cargo-deny
+        run: |
+          source release/tool-versions.env
+          cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked
+      - name: Audit
+        run: cargo audit
+      - name: Deny
+        run: cargo deny check
+      - name: Supply-chain report smoke
+        run: tests/shell/run_supply_chain_report_smoke.sh
+
+  nightly-hardening:
+    name: Nightly hardening smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # nightly
+        with:
+          toolchain: nightly
+          components: miri, rust-src
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+      - name: Fuzz target compile check
+        run: cargo check --manifest-path fuzz/Cargo.toml --bins
+      - name: Fuzz campaign report smoke
+        run: tests/shell/run_fuzz_campaigns_smoke.sh
+      - name: Storage Miri smoke
+        run: env MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p context-storage --test segment_format
+
+  fuzz-release-campaign:
+    name: Release fuzz campaign
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_fuzz_campaign == 'true' }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # nightly
+        with:
+          toolchain: nightly
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+      - name: Run release fuzz campaign
+        run: |
+          scripts/run-fuzz-campaigns.sh \
+            --duration "${{ inputs.fuzz_duration_seconds }}" \
+            --jobs "${{ inputs.fuzz_jobs }}" \
+            --out-dir target/fuzz-campaigns/release-candidate
+      - name: Upload release fuzz campaign report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-fuzz-campaign-report
+          path: target/fuzz-campaigns/release-candidate
