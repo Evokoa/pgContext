@@ -26,6 +26,10 @@ on:
         description: Reviewed source archive SHA-256 from the prepare run (required for publish)
         required: false
         type: string
+      oci_manifest_digest:
+        description: Reviewed OCI manifest sha256 digest from the prepare run (required for publish)
+        required: false
+        type: string
 
 concurrency:
   group: pgcontext-release
@@ -51,6 +55,7 @@ jobs:
       short_sha: ${{ steps.release.outputs.short_sha }}
       prepare_run_id: ${{ steps.release.outputs.prepare_run_id }}
       source_archive_sha256: ${{ steps.release.outputs.source_archive_sha256 }}
+      oci_manifest_digest: ${{ steps.release.outputs.oci_manifest_digest }}
     steps:
       - name: Resolve release input
         id: release
@@ -60,6 +65,7 @@ jobs:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
           PREPARE_RUN_ID: ${{ inputs.prepare_run_id }}
           SOURCE_ARCHIVE_SHA256: ${{ inputs.source_archive_sha256 }}
+          OCI_MANIFEST_DIGEST: ${{ inputs.oci_manifest_digest }}
         run: |
           set -euo pipefail
           if [[ "${MODE}" != prepare && "${MODE}" != publish ]]; then
@@ -87,6 +93,10 @@ jobs:
               echo "Publish mode requires the reviewed source archive SHA-256" >&2
               exit 1
             fi
+            if [[ ! "${OCI_MANIFEST_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Publish mode requires the reviewed OCI manifest digest" >&2
+              exit 1
+            fi
           fi
           echo "mode=${MODE}" >>"${GITHUB_OUTPUT}"
           echo "tag=${TAG}" >>"${GITHUB_OUTPUT}"
@@ -95,6 +105,7 @@ jobs:
           echo "short_sha=${CANDIDATE_SHA:0:12}" >>"${GITHUB_OUTPUT}"
           echo "prepare_run_id=${PREPARE_RUN_ID}" >>"${GITHUB_OUTPUT}"
           echo "source_archive_sha256=${SOURCE_ARCHIVE_SHA256}" >>"${GITHUB_OUTPUT}"
+          echo "oci_manifest_digest=${OCI_MANIFEST_DIGEST}" >>"${GITHUB_OUTPUT}"
 
       - name: Verify signed annotated release tag
         env:
@@ -606,20 +617,11 @@ jobs:
         env:
           TAG: ${{ needs.validate.outputs.tag }}
           COMMIT_SHA: ${{ needs.validate.outputs.commit_sha }}
-          SHORT_SHA: ${{ needs.validate.outputs.short_sha }}
+          EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}
         run: |
           set -euo pipefail
-          prepared="${{ env.IMAGE_NAME }}:pg17-${TAG}-prepared"
-          commit="${{ env.IMAGE_NAME }}:pg17-sha-${SHORT_SHA}"
-          prepared_digest="$(docker buildx imagetools inspect "${prepared}" | awk '/^Digest:/ {print $2; exit}')"
-          commit_digest="$(docker buildx imagetools inspect "${commit}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${prepared_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          if [[ "${prepared_digest}" != "${commit_digest}" ]]; then
-            echo "Prepared tag digest does not match commit tag digest" >&2
-            exit 1
-          fi
           scripts/promote-release-image.sh \
-            "${{ env.IMAGE_NAME }}" "${TAG}" "${COMMIT_SHA}" "${prepared_digest}"
+            "${{ env.IMAGE_NAME }}" "${TAG}" "${COMMIT_SHA}" "${EXPECTED_DIGEST}"
 
   publish-docker-verify:
     name: Verify published image PG17 ${{ matrix.platform.name }}
