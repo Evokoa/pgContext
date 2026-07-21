@@ -70,7 +70,7 @@ jobs:
           persist-credentials: false
 
       - name: Validate release metadata
-        run: scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-main
+        run: scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-master
 
       - name: Capture release commit
         id: commit

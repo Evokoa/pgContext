@@ -19,7 +19,7 @@ grep -qF 'group: pgcontext-release' "${workflow}"
 grep -qF 'options:' "${workflow}"
 grep -qF -- '- prepare' "${workflow}"
 grep -qF -- '- publish' "${workflow}"
-grep -qF 'scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-main' "${workflow}"
+grep -qF 'scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-master' "${workflow}"
 grep -qF 'container: pgxn/pgxn-tools@sha256:' "${workflow}"
 
 if grep -Eq 'pg(14|15|16|18)|postgresql-(14|15|16|18)' "${workflow}"; then

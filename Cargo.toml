@@ -18,7 +18,7 @@ rust-version = "1.96"
 license = "Apache-2.0"
 repository = "https://github.com/evokoa/pgcontext"
 homepage = "https://github.com/evokoa/pgcontext"
-documentation = "https://github.com/evokoa/pgcontext/tree/main/docs"
+documentation = "https://github.com/evokoa/pgcontext/tree/master/docs"
 keywords = ["postgres", "vector-search", "retrieval", "pgcontext"]
 categories = ["database", "science"]
 

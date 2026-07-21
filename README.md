@@ -46,7 +46,7 @@
   <a href="https://github.com/evokoa/pgcontext/pulls">
     <img src="https://img.shields.io/github/issues-pr/evokoa/pgcontext?style=flat-square&logo=github&label=PRs" alt="GitHub pull requests">
   </a>
-  <a href="https://github.com/evokoa/pgcontext/commits/main">
+  <a href="https://github.com/evokoa/pgcontext/commits/master">
     <img src="https://img.shields.io/github/last-commit/evokoa/pgcontext?style=flat-square&logo=github&label=last%20commit" alt="Last commit">
   </a>
 </p>

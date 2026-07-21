@@ -16,7 +16,7 @@
   },
   "resources": {
     "homepage": "https://github.com/evokoa/pgcontext",
-    "documentation": "https://github.com/evokoa/pgcontext/tree/main/docs",
+    "documentation": "https://github.com/evokoa/pgcontext/tree/master/docs",
     "bugtracker": {
       "web": "https://github.com/evokoa/pgcontext/issues"
     },

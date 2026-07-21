@@ -45,7 +45,7 @@ gitleaks git . --config .gitleaks.toml --redact=100 --no-banner --no-color
 
 The 2026-07-11 open-source review used gitleaks 8.30.1 across 573 commits and
 reported no leaks. CI repeats the full-history scan on every pull request and
-push to `main`.
+push to `master`.
 
 The current independent unsafe-boundary findings and remaining sanitizer
 environment gates are recorded in

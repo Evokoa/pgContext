@@ -27,7 +27,7 @@ fi
 for expected in \
   'repository = "https://github.com/evokoa/pgcontext"' \
   'homepage = "https://github.com/evokoa/pgcontext"' \
-  'documentation = "https://github.com/evokoa/pgcontext/tree/main/docs"'
+  'documentation = "https://github.com/evokoa/pgcontext/tree/master/docs"'
 do
   grep -qF "${expected}" Cargo.toml || {
     echo "Cargo workspace metadata is missing: ${expected}" >&2

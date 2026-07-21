@@ -24,9 +24,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True, help="Release tag in vX.Y.Z form")
     parser.add_argument(
-        "--check-main",
+        "--check-master",
         action="store_true",
-        help="Require the release tag's commit to be contained in origin/main",
+        help="Require the release tag's commit to be contained in origin/master",
     )
     return parser.parse_args()
 
@@ -141,7 +141,7 @@ def main() -> None:
     require_equal(
         "documentation URL",
         meta.get("resources", {}).get("documentation"),
-        "https://github.com/evokoa/pgcontext/tree/main/docs",
+        "https://github.com/evokoa/pgcontext/tree/master/docs",
     )
     if "Evokoa Team <team@evokoa.com>" not in meta.get("maintainer", []):
         fail("META.json must name Evokoa Team <team@evokoa.com>")
@@ -150,12 +150,12 @@ def main() -> None:
     if missing_tags:
         fail(f"META.json is missing tags: {', '.join(missing_tags)}")
 
-    if args.check_main:
-        run_git("fetch", "--no-tags", "origin", "main:refs/remotes/origin/main")
+    if args.check_master:
+        run_git("fetch", "--no-tags", "origin", "master:refs/remotes/origin/master")
         tag_sha = run_git("rev-list", "-n", "1", args.tag)
         containing = run_git("branch", "-r", "--contains", tag_sha).split()
-        if "origin/main" not in containing:
-            fail(f"{args.tag} commit {tag_sha} is not contained in origin/main")
+        if "origin/master" not in containing:
+            fail(f"{args.tag} commit {tag_sha} is not contained in origin/master")
 
     print(f"release validation passed for {args.tag} (PostgreSQL 17)")
 
