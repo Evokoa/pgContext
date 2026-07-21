@@ -115,6 +115,7 @@ grep -qF 'linux/amd64' <<<"${docker_verify}"
 grep -qF 'linux/arm64' <<<"${docker_verify}"
 
 grep -qF 'approve-publishing' <<<"${publish_docker}"
+grep -qF 'ref: ${{ github.sha }}' <<<"${publish_docker}"
 grep -qF 'scripts/promote-release-image.sh' <<<"${publish_docker}"
 grep -qF 'pg17-sha-${SHORT_SHA}' <<<"${publish_docker}"
 grep -qF 'pg17-${TAG}-prepared' <<<"${publish_docker}"
