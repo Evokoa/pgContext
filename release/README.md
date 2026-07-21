@@ -24,7 +24,7 @@ release entry points must source it rather than selecting the latest tool.
 
 - `checks/open-source-readiness.sh` runs the bounded clean-source gate.
 - `build-packages.sh` creates and verifies the complete V1 source payload.
-- `ARTIFACT_POLICY.md` defines the unsigned V1 verification boundary.
+- `ARTIFACT_POLICY.md` defines the signed-tag and attestation verification boundary.
 - `docker/Dockerfile` builds PostgreSQL 17 with pgContext installed.
 - `docker/compose.yml` runs the disposable playground.
 - `../scripts/` contains focused contract checks and evidence-report runners.
@@ -149,14 +149,15 @@ source archive twice, and requires the archives to be byte-identical. It stages
 `SHA256SUMS`, `PROVENANCE.json`, an SPDX SBOM, Apache-2.0 license/notice, and the
 V1 artifact policy, then verifies the complete payload.
 
-V1 artifacts are intentionally unsigned. Verify `SHA256SUMS`, the immutable
-candidate SHA in `PROVENANCE.json`, and the OCI manifest digest before use.
-Signing is post-V1 roadmap work.
+Verify the GitHub-verified signed annotated tag, `SHA256SUMS`, the immutable
+candidate SHA in `PROVENANCE.json`, the source archive's Sigstore attestation,
+and the OCI manifest digest and attestation before use. Publishing the fully
+populated draft locks its tag and assets under GitHub release immutability.
 
-Signing, package/image publication, release tags, and hosted uploads require
-separate maintainer authorization. The current open work also includes Linux
-ASan/TSan certification and the longer hardening campaigns described by the
-release matrix.
+Creating or pushing the signed release tag, package/image publication, and
+hosted uploads require separate maintainer authorization. The current open work
+also includes Linux ASan/TSan certification and the longer hardening campaigns
+described by the release matrix.
 
 ## Verify public documentation
 

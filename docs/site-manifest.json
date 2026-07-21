@@ -171,7 +171,7 @@
     {
       "links": [],
       "path": "contributor_guide/release_process.md",
-      "sha256": "96a068e0b8ee883373ebb72c1f3326b41fb749bc710d79016d113a7e765575d3"
+      "sha256": "85c529e2351a73a671da9cb06c89322a63db5108a6394bb03893979c47f311d4"
     },
     {
       "links": [],
@@ -708,7 +708,7 @@
         "../docs/contributor_guide/release_process.md"
       ],
       "path": "release/README.md",
-      "sha256": "1a248238183a0756e6c3b0bae6f3f3aea9913df7dbd499c7df3b270deafb0cf4"
+      "sha256": "ac9d7322ad0abf91137cbba794e8d8a0d12a2ad24d72714c0245a83c1c401886"
     }
   ],
   "renderer": "github-markdown",

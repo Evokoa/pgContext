@@ -138,9 +138,10 @@ scripts/verify-release-payload.py \
   target/release-payload
 ```
 
-V1 artifacts are unsigned and are authenticated by published SHA-256 checksums,
-the immutable candidate SHA in provenance, and the OCI manifest digest. Signing
-and multi-major combined artifact approval remain post-V1 roadmap work.
+V1 uses a GitHub-verified signed annotated tag, published SHA-256 checksums, a
+Sigstore attestation for the source archive, the immutable candidate SHA in
+provenance, and an attested OCI manifest digest. Multi-major combined artifact
+approval remains post-V1 roadmap work.
 
 Capture advisory and license evidence before final release approval:
 

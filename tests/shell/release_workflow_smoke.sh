@@ -19,8 +19,13 @@ grep -qF 'group: pgcontext-release' "${workflow}"
 grep -qF 'options:' "${workflow}"
 grep -qF -- '- prepare' "${workflow}"
 grep -qF -- '- publish' "${workflow}"
+grep -qF 'candidate_sha:' "${workflow}"
+grep -qF 'prepare_run_id:' "${workflow}"
+grep -qF 'source_archive_sha256:' "${workflow}"
 grep -qF 'scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-master' "${workflow}"
 grep -qF 'container: pgxn/pgxn-tools@sha256:' "${workflow}"
+grep -qF 'Release tag signature is not verified by GitHub' "${workflow}"
+grep -qF 'Verify GitHub Release is an empty draft' "${workflow}"
 
 if grep -Eq 'pg(14|15|16|18)|postgresql-(14|15|16|18)' "${workflow}"; then
   echo "release workflow advertises an unsupported PostgreSQL major" >&2
@@ -40,6 +45,7 @@ if grep -E '^[[:space:]]+uses:' "${workflow}" | grep -Ev '@[0-9a-f]{40}([[:space
 fi
 
 pgxn_artifact="$(job_block pgxn-artifact)"
+source_attestation="$(job_block verify-source-attestation)"
 approval="$(job_block approve-publishing)"
 publish_pgxn="$(job_block publish-pgxn)"
 pgxn_verify="$(job_block pgxn-verify)"
@@ -54,8 +60,15 @@ prepare_summary="$(job_block prepare-summary)"
 publish_summary="$(job_block publish-summary)"
 
 grep -qF "needs.validate.outputs.mode == 'prepare'" <<<"${pgxn_artifact}"
-grep -qF 'scripts/build-pgxn-dist.sh' <<<"${pgxn_artifact}"
-grep -qF 'pgxn-source-${{ needs.validate.outputs.version }}' <<<"${pgxn_artifact}"
+grep -qF 'release/build-packages.sh' <<<"${pgxn_artifact}"
+grep -qF 'source-payload-${{ needs.validate.outputs.version }}' <<<"${pgxn_artifact}"
+grep -qF 'actions/attest@' <<<"${pgxn_artifact}"
+grep -qF 'subject-path: dist/pgContext-' <<<"${pgxn_artifact}"
+
+grep -qF "needs.validate.outputs.mode == 'publish'" <<<"${source_attestation}"
+grep -qF 'gh attestation verify' <<<"${source_attestation}"
+grep -qF 'source_archive_sha256' <<<"${source_attestation}"
+grep -qF 'prepare_run_id' <<<"${source_attestation}"
 
 grep -qF "needs.validate.outputs.mode == 'publish'" <<<"${approval}"
 grep -qF 'environment: release' <<<"${approval}"
@@ -69,7 +82,7 @@ grep -qF 'https://api.pgxn.org/dist/pgcontext/' <<<"${pgxn_verify}"
 grep -qF 'pgxn-verify' <<<"${attach_pgxn}"
 grep -qF 'contents: write' <<<"${attach_pgxn}"
 grep -qF 'gh release upload' <<<"${attach_pgxn}"
-grep -qF 'cmp "${archive}"' <<<"${attach_pgxn}"
+grep -qF 'cmp "${asset}"' <<<"${attach_pgxn}"
 if grep -qF -- '--clobber' <<<"${attach_pgxn}"; then
   echo "GitHub release publication can overwrite an immutable asset" >&2
   exit 1
@@ -88,10 +101,12 @@ grep -qF 'packages: write' <<<"${docker_build}"
 grep -qF -- '- docker' <<<"${docker_merge}"
 grep -qF 'pg17-sha-${{ needs.validate.outputs.short_sha }}' <<<"${docker_merge}"
 grep -qF 'pg17-${{ needs.validate.outputs.tag }}-prepared' <<<"${docker_merge}"
-grep -qF 'actions/attest-build-provenance@' <<<"${docker_merge}"
+grep -qF 'actions/attest@' <<<"${docker_merge}"
+grep -qF 'push-to-registry: true' <<<"${docker_merge}"
 
 grep -qF 'docker-merge' <<<"${docker_verify}"
 grep -qF 'scripts/verify-release-image.sh --registry' <<<"${docker_verify}"
+grep -qF 'gh attestation verify "oci://' <<<"${docker_verify}"
 grep -qF 'linux/amd64' <<<"${docker_verify}"
 grep -qF 'linux/arm64' <<<"${docker_verify}"
 

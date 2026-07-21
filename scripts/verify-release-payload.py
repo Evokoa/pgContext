@@ -22,6 +22,9 @@ SECRET_PATTERNS = (
     b"-----BEGIN RSA " + b"PRIVATE KEY-----",
     b"-----BEGIN OPENSSH " + b"PRIVATE KEY-----",
 )
+ALLOWED_BINARY_SIGNATURES = {
+    "assets/pgcontext-banner.png": b"\x89PNG\r\n\x1a\n",
+}
 
 
 def fail(message: str) -> None:
@@ -175,18 +178,30 @@ def main() -> None:
         [str(ROOT / "scripts/verify-pgxn-dist.py"), "--tag", args.tag, str(archive)],
         check=True,
     )
+    archive_prefix = f"pgContext-{version}/"
     with zipfile.ZipFile(archive) as package:
         for info in package.infolist():
             if info.is_dir():
                 continue
             contents = package.read(info)
             if b"\0" in contents:
-                fail(f"source archive contains unexpected binary content: {info.filename}")
+                relative = info.filename.removeprefix(archive_prefix)
+                expected_signature = ALLOWED_BINARY_SIGNATURES.get(relative)
+                if expected_signature is None:
+                    fail(f"source archive contains unexpected binary content: {info.filename}")
+                if not contents.startswith(expected_signature):
+                    fail(f"allowlisted binary has an unexpected signature: {info.filename}")
             if any(pattern in contents for pattern in SECRET_PATTERNS):
                 fail(f"source archive contains private key material: {info.filename}")
 
     policy = (payload / "ARTIFACT_POLICY.md").read_text().lower()
-    if "unsigned" not in policy or "sha-256" not in policy or "post-v1" not in policy:
+    required_policy_terms = (
+        "signed annotated tag",
+        "sha-256",
+        "sigstore",
+        "immutable",
+    )
+    if any(term not in policy for term in required_policy_terms):
         fail("artifact policy does not state the V1 verification boundary")
     print(f"release payload verification passed: {payload}")
 
