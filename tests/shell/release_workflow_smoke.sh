@@ -122,10 +122,20 @@ grep -qF 'provenance: mode=max' <<<"${docker_build}"
 grep -qF 'packages: write' <<<"${docker_build}"
 
 grep -qF -- '- docker' <<<"${docker_merge}"
+grep -qF 'actions/checkout@' <<<"${docker_merge}"
+grep -qF 'ref: ${{ needs.validate.outputs.tag }}' <<<"${docker_merge}"
+grep -qF 'persist-credentials: false' <<<"${docker_merge}"
 grep -qF 'pg17-sha-${{ needs.validate.outputs.short_sha }}' <<<"${docker_merge}"
 grep -qF 'pg17-${{ needs.validate.outputs.tag }}-prepared' <<<"${docker_merge}"
+grep -qF 'scripts/resolve-oci-digest.sh' <<<"${docker_merge}"
 grep -qF 'actions/attest@' <<<"${docker_merge}"
 grep -qF 'push-to-registry: true' <<<"${docker_merge}"
+checkout_line="$(grep -nF 'actions/checkout@' <<<"${docker_merge}" | head -n1 | cut -d: -f1)"
+resolve_line="$(grep -nF 'scripts/resolve-oci-digest.sh' <<<"${docker_merge}" | head -n1 | cut -d: -f1)"
+if ((checkout_line >= resolve_line)); then
+  echo "Docker merge must checkout the release tag before resolving its digest" >&2
+  exit 1
+fi
 
 grep -qF 'docker-merge' <<<"${docker_verify}"
 grep -qF 'scripts/verify-release-image.sh --registry' <<<"${docker_verify}"
