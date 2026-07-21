@@ -12,7 +12,7 @@
 
 <p align="center">
   Hybrid dense + full-text retrieval, filter-aware ANN, and exact, MVCC-visible
-  re-scoring &mdash; a dedicated vector engine's feature set, as a PostgreSQL&nbsp;17 extension.
+  re-scoring: a dedicated vector engine's feature set, as a PostgreSQL&nbsp;17 extension.
 </p>
 
 <p align="center">
@@ -87,7 +87,7 @@ and create a separate authorization, backup, and recovery boundary to keep in
 sync. pgContext keeps retrieval next to the data it searches: your ordinary
 PostgreSQL tables stay the source of truth for vectors, metadata, MVCC, ACL/RLS,
 backup, and replication. HNSW and other acceleration state are derived,
-rebuildable indexes — never a second copy that can drift — and every approximate
+rebuildable indexes (never a second copy that can drift), and every approximate
 result is re-scored exactly against the live row before it is returned, so a fast
 answer is still a correct, permission-safe answer.
 
@@ -103,8 +103,8 @@ full-text hybrid retrieval with reciprocal-rank fusion.
 
 See pgContext's retrieval in action (hosted on [Polygres](https://polygres.com)):
 
-- **[Wikipedia hybrid search](https://polygres.com/wikipedia)** — query a Wikipedia-scale dataset with live semantic + keyword hybrid retrieval.
-- **[Memory demo](https://polygres.com/user-demo)** — an interactive hybrid-retrieval playground with adjustable fusion weights across retrieval channels.
+- **[Wikipedia hybrid search](https://polygres.com/wikipedia)**: query a Wikipedia-scale dataset with live semantic + keyword hybrid retrieval.
+- **[Memory demo](https://polygres.com/user-demo)**: an interactive hybrid-retrieval playground with adjustable fusion weights across retrieval channels.
 
 ## Vector search
 
@@ -123,14 +123,14 @@ See pgContext's retrieval in action (hosted on [Polygres](https://polygres.com))
 </p>
 
 pgContext serves persisted, page-native HNSW straight from durable PostgreSQL
-index pages — an HNSW plan never substitutes fixture candidates or silently
+index pages. An HNSW plan never substitutes fixture candidates or silently
 exact-scans the whole collection. On the standard **GloVe-100-angular** benchmark
 (1,183,514 vectors, cosine), with pgContext and pgvector in the same PostgreSQL 17
 container and built with the same parallel budget:
 
 - **Faster at the same recall.** pgContext matches pgvector's recall at every
-  search setting while answering each query **3.8–5.3× faster** — for example
-  0.910 recall@10 at **2.4 ms** versus **13.0 ms** at `ef_search` 512 — and the
+  search setting while answering each query **3.8-5.3× faster** (for example,
+  0.910 recall@10 at **2.4 ms** versus **13.0 ms** at `ef_search` 512), and the
   advantage widens as you raise the recall target.
 - **Higher recall for the same latency.** Read the other way, that speed is
   quality: given roughly **2.5 ms** per query, pgContext reaches **0.91**
@@ -138,17 +138,17 @@ container and built with the same parallel budget:
   effort in the same time.
 - **Every answer is re-checked exactly.** ANN candidates are resolved back to the
   live row and re-scored exactly, under PostgreSQL MVCC visibility, ACL/RLS, and
-  SQL predicates — a fast answer is still a correct, permission-safe answer.
+  SQL predicates: a fast answer is still a correct, permission-safe answer.
 - **Hybrid retrieval is built in.** Dense vector search fused with PostgreSQL
   full-text ranking (reciprocal-rank fusion) ships in the extension, not as
   application glue.
 
 All figures above are Apple M4 Pro (NEON). See the
 [pgContext vs pgvector report](docs/benchmarks/reports/pgcontext-vs-pgvector.html)
-for the full latency–recall curves, the
+for the full latency and recall curves, the
 [three-system comparison](docs/benchmarks/reports/pgcontext-vs-pgvector-vs-qdrant.html)
-that adds Qdrant — a strong, mature peer that leads at very high recall through
-per-query segment parallelism — and [docs/benchmarks/pgvector.md](docs/benchmarks/pgvector.md)
+that adds Qdrant (a strong, mature peer that leads at very high recall through
+per-query segment parallelism), and [docs/benchmarks/pgvector.md](docs/benchmarks/pgvector.md)
 for every lane.
 
 ## Metadata filtering
@@ -163,7 +163,7 @@ approximate search and recall quietly collapses as the filter gets selective.
 pgContext treats filtering as part of the search, not an afterthought.
 
 Write Qdrant-style filters over your registered PostgreSQL columns **and** JSONB
-paths — `must` / `should` / `must_not`, equality, `any` / `except`, numeric and
+paths: `must` / `should` / `must_not`, equality, `any` / `except`, numeric and
 datetime ranges, `is_null` / `is_empty`:
 
 ```sql
@@ -180,19 +180,19 @@ FROM pgcontext.search(
 );
 ```
 
-Why it's a standout:
+What sets it apart:
 
 - **No filter index to build or maintain.** Registering a column or JSONB path
-  makes it filterable immediately — pgContext plans and runs the filtered search
+  makes it filterable immediately; pgContext plans and runs the filtered search
   for you, no extra index required. Add an ordinary index (say, a btree on the
   column) later only when you want to speed a specific filter up; it's an
   optimization, not a prerequisite.
 - **Filter-aware ANN, not post-filtering.** Below a selectivity crossover
   pgContext scores exactly; above it, it pushes a single reusable mask through
-  the persisted HNSW graph while excluded nodes still act as connectors — so
+  the persisted HNSW graph while excluded nodes still act as connectors, so
   recall holds up even when the filter is highly selective.
 - **One grammar for search, count, and facets.** The same filter drives
-  filtered search, counts, and facet aggregation — a cohesive retrieval API,
+  filtered search, counts, and facet aggregation: a cohesive retrieval API,
   not hand-assembled SQL per query.
 - **Safe and governed by PostgreSQL.** Filters compile to a typed AST with
   bound parameters over registered fields only (no SQL injection, no mutating
@@ -204,24 +204,24 @@ semantics.
 
 ## Roadmap
 
-pgContext 0.1.0 is the foundation, not the finish line — the goal is the most
+pgContext 0.1.0 is the foundation, not the finish line. The goal is the most
 powerful AI search engine you can run inside PostgreSQL. On the way:
 
-- **More vector types and indexing** — first-class `sparsevec` and `bitvec`,
+- **More vector types and indexing.** First-class `sparsevec` and `bitvec`,
   quantized in-graph traversal with exact reranking, and non-dense ANN opclasses.
-- **Lower latency and faster builds at scale** — segmented serving for
+- **Lower latency and faster builds at scale.** Segmented serving for
   per-query parallelism, background-worker compaction that keeps writes fast
   under sustained load, and parallel-build improvements that close the
   index-build-time gap.
-- **Drop-in pgvector compatibility** — run pgvector-spelled SQL unmodified, with
+- **Drop-in pgvector compatibility.** Run pgvector-spelled SQL unmodified, with
   in-place migration and no data movement.
 - **Graph-augmented retrieval.** We plan to bring graph capabilities from our
   sister extension **[pgGraph](https://github.com/evokoa/pggraph)** into
   pgContext, so vector results can expand and re-rank along the relationships in
-  your data — the pattern behind GraphRAG — without leaving Postgres or copying
+  your data (the pattern behind GraphRAG), without leaving Postgres or copying
   data between systems.
 
-We're upfront about what isn't here yet — IVFFlat, x86 performance numbers, and
+We're upfront about what isn't here yet: IVFFlat, x86 performance numbers, and
 full drop-in compatibility all live on the roadmap. See
 [what's not in 0.1.0 yet](docs/user_guide/roadmap.md) and the full
 [roadmap](docs/roadmap.md).
@@ -235,7 +235,7 @@ it:
 CREATE EXTENSION pgcontext;
 ```
 
-Pick whichever install path fits your setup — **Docker** (zero build) or
+Pick whichever install path fits your setup: **Docker** (zero build) or
 **PGXN / source**. The fastest is the pre-built Docker
 image; it is multi-arch (`linux/amd64` and `linux/arm64`) and works on macOS,
 Linux, and Windows via Docker Desktop.
@@ -284,13 +284,13 @@ shell support, verification, uninstall, cleanup, and troubleshooting.
 Package-manager installs are on the way and will be added here once available.
 Until then, use the Docker image or a source build above.
 
-- **PGXN** — `pgxn install pgContext` (distribution `pgContext-0.1.0.zip`).
-- **Homebrew** (macOS) — `brew install pgcontext` from the Evokoa tap.
+- **PGXN**: `pgxn install pgContext` (distribution `pgContext-0.1.0.zip`).
+- **Homebrew** (macOS): `brew install pgcontext` from the Evokoa tap.
 
 ## Installing with an AI Agent
 
 If you are an AI coding agent (or driving one) setting pgContext up in a fresh
-environment, follow **[AGENTS.md](AGENTS.md)** — it gives a deterministic,
+environment, follow **[AGENTS.md](AGENTS.md)**: it gives a deterministic,
 non-interactive install-and-verify recipe (Docker or source), the exact version
 pins, a copy-paste smoke test, and a short explanation of what the extension
 does so you can wire it into an application correctly.
@@ -372,8 +372,8 @@ out of PostgreSQL.
 | Metadata filtering | Registered PostgreSQL fields/JSONB | SQL predicates | Product-specific filters |
 | Drop-in pgvector compatibility | No | Native | No |
 
-For a detailed capability-by-capability view—including where pgvector or Qdrant
-is the better fit—see [pgvector migration](docs/user_guide/pgvector_migration.md),
+For a detailed capability-by-capability view, including where pgvector or Qdrant
+is the better fit, see [pgvector migration](docs/user_guide/pgvector_migration.md),
 the [parity matrix](docs/user_guide/parity_matrix.md), and the full
 [three-way comparison](docs/pgcontext-vs-pgvector-vs-qdrant.md).
 
