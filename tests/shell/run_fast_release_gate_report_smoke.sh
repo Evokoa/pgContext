@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 TMPDIR="${TMPDIR:-${REPO_ROOT}/target/tmp}"
+export PGRX_TEST_PLATFORM=Linux
 mkdir -p "${TMPDIR}"
 work_dir="$(mktemp -d "${TMPDIR}/fast-release-gate-report-test.XXXXXX")"
 trap 'rm -rf "${work_dir}"' EXIT
@@ -67,7 +68,7 @@ case "$*" in
   "clippy -p context-pg --all-targets --features pg17 -- -D warnings") gate="clippy-context-pg" ;;
   "test --workspace --exclude context-pg --all-features") gate="workspace-tests" ;;
   "check -p context-pg --features pg17") gate="context-pg-check" ;;
-  "pgrx test --release -p context-pg pg17 "*) gate="context-pg-pgrx" ;;
+  "pgrx test --release -p context-pg pg17") gate="context-pg-pgrx" ;;
   "doc --workspace --no-deps") gate="docs" ;;
   "audit --db target/cargo-audit-advisory-db") gate="cargo-audit" ;;
   "deny check") gate="cargo-deny" ;;
@@ -213,7 +214,7 @@ do
     END { exit(found ? 0 : 1) }
   ' "${summary}"
 done
-grep -q '^pgrx test --release -p context-pg pg17 pg_pgvector_dense$' "${work_dir}/success.log"
+grep -q '^pgrx test --release -p context-pg pg17$' "${work_dir}/success.log"
 grep -q '^audit --db target/cargo-audit-advisory-db$' "${work_dir}/success.log"
 grep -q '^deny check$' "${work_dir}/success.log"
 

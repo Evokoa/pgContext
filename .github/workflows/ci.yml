@@ -22,6 +22,10 @@ jobs:
         run: cargo clippy --workspace --exclude context-pg --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --workspace --exclude context-pg --all-features
+      - name: Live-backend pgrx runner unit tests
+        run: python3 tests/shell/test_run_pgrx_tests_in_server.py
+      - name: V1 pgrx platform runner smoke
+        run: tests/shell/run_v1_pgrx_tests_smoke.sh
       - name: Docs
         run: cargo doc --workspace --exclude context-pg --no-deps
       - name: Public docs navigation, links, and drift
