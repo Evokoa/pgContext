@@ -404,13 +404,20 @@ GRANT SELECT ON pgcontext._visible_collections TO PUBLIC;
 -- catalog tables. When a dump/restore or table rewrite changes a source
 -- table's oid, the query path detects the drift and refreshes the stored
 -- metadata through these SECURITY DEFINER helpers so the write succeeds as the
--- extension owner. Each helper re-checks that SESSION_USER is a member of the
--- collection's owner role, so a direct call can only refresh a collection the
--- caller already owns (at worst self-inflicted and self-healing on the next
--- query). search_path is pinned to defeat search-path injection.
+-- extension owner.
+--
+-- Security: these helpers accept only identifying keys, never a caller-supplied
+-- oid or attnum. Each re-derives the authoritative oid/attnum from pg_catalog
+-- using the schema, table, and column names already stored in the private
+-- catalog, so a call can only ever set the true current binding of the
+-- already-registered source table. This is deliberate: accepting an oid would
+-- let a collection member repoint _collections.source_table_oid at an unrelated
+-- table they control, and the SECURITY DEFINER payload/backfill paths check
+-- privileges by that oid while mutating the real table by name -- a
+-- confused-deputy escalation. Each helper also re-checks owner-role membership
+-- on SESSION_USER (defence in depth for direct calls) and pins search_path.
 CREATE FUNCTION pgcontext._refresh_collection_source_table(
-    p_collection_id bigint,
-    p_source_table_oid oid
+    p_collection_id bigint
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -428,18 +435,22 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
-    UPDATE pgcontext._collections
-       SET source_table_oid = p_source_table_oid,
+    UPDATE pgcontext._collections AS collections
+       SET source_table_oid = source_class.oid,
            updated_at = pg_catalog.now()
-     WHERE collection_id = p_collection_id;
+      FROM pg_catalog.pg_class AS source_class
+      JOIN pg_catalog.pg_namespace AS source_namespace
+        ON source_namespace.oid = source_class.relnamespace
+     WHERE collections.collection_id = p_collection_id
+       AND source_namespace.nspname = collections.source_schema_name
+       AND source_class.relname = collections.source_table_name
+       AND source_class.relkind IN ('r', 'p');
 END;
 $$;
 
 CREATE FUNCTION pgcontext._refresh_vector_source_binding(
     p_collection_id bigint,
-    p_vector_column_name text,
-    p_source_table_oid oid,
-    p_vector_attnum smallint
+    p_vector_column_name text
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -457,20 +468,29 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
-    UPDATE pgcontext._collection_vectors
-       SET source_table_oid = p_source_table_oid,
-           vector_attnum = p_vector_attnum,
+    UPDATE pgcontext._collection_vectors AS vectors
+       SET source_table_oid = source_class.oid,
+           vector_attnum = source_attribute.attnum,
            updated_at = pg_catalog.now()
-     WHERE collection_id = p_collection_id
-       AND vector_column_name = p_vector_column_name;
+      FROM pg_catalog.pg_class AS source_class
+      JOIN pg_catalog.pg_namespace AS source_namespace
+        ON source_namespace.oid = source_class.relnamespace
+      JOIN pg_catalog.pg_attribute AS source_attribute
+        ON source_attribute.attrelid = source_class.oid
+     WHERE vectors.collection_id = p_collection_id
+       AND vectors.vector_column_name = p_vector_column_name
+       AND source_namespace.nspname = vectors.source_schema_name
+       AND source_class.relname = vectors.source_table_name
+       AND source_class.relkind IN ('r', 'p')
+       AND source_attribute.attname = vectors.vector_column_name
+       AND source_attribute.attnum > 0
+       AND NOT source_attribute.attisdropped;
 END;
 $$;
 
 CREATE FUNCTION pgcontext._refresh_sparse_vector_source_binding(
     p_collection_id bigint,
-    p_vector_name text,
-    p_source_table_oid oid,
-    p_vector_attnum smallint
+    p_vector_name text
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -488,12 +508,61 @@ BEGIN
             USING ERRCODE = '42501';
     END IF;
 
-    UPDATE pgcontext._collection_sparse_vectors
-       SET source_table_oid = p_source_table_oid,
-           vector_attnum = p_vector_attnum,
+    UPDATE pgcontext._collection_sparse_vectors AS sparse_vectors
+       SET source_table_oid = source_class.oid,
+           vector_attnum = source_attribute.attnum,
            updated_at = pg_catalog.now()
-     WHERE collection_id = p_collection_id
-       AND vector_name = p_vector_name;
+      FROM pg_catalog.pg_class AS source_class
+      JOIN pg_catalog.pg_namespace AS source_namespace
+        ON source_namespace.oid = source_class.relnamespace
+      JOIN pg_catalog.pg_attribute AS source_attribute
+        ON source_attribute.attrelid = source_class.oid
+     WHERE sparse_vectors.collection_id = p_collection_id
+       AND sparse_vectors.vector_name = p_vector_name
+       AND source_namespace.nspname = sparse_vectors.source_schema_name
+       AND source_class.relname = sparse_vectors.source_table_name
+       AND source_class.relkind IN ('r', 'p')
+       AND source_attribute.attname = sparse_vectors.vector_column_name
+       AND source_attribute.attnum > 0
+       AND NOT source_attribute.attisdropped;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._refresh_payload_source_bindings(
+    p_collection_id bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections
+         WHERE collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'permission denied to refresh collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE pgcontext._collection_payload_columns AS payload_columns
+       SET source_table_oid = source_class.oid,
+           column_attnum = source_attribute.attnum,
+           updated_at = pg_catalog.now()
+      FROM pg_catalog.pg_class AS source_class
+      JOIN pg_catalog.pg_namespace AS source_namespace
+        ON source_namespace.oid = source_class.relnamespace
+      JOIN pg_catalog.pg_attribute AS source_attribute
+        ON source_attribute.attrelid = source_class.oid
+     WHERE payload_columns.collection_id = p_collection_id
+       AND source_namespace.nspname = payload_columns.source_schema_name
+       AND source_class.relname = payload_columns.source_table_name
+       AND source_class.relkind IN ('r', 'p')
+       AND source_attribute.attname = payload_columns.column_name
+       AND source_attribute.attnum > 0
+       AND NOT source_attribute.attisdropped;
 END;
 $$;
 

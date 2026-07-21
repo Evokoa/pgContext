@@ -5,7 +5,7 @@ use super::{
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 238;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 239;
 const SQL_CONTRACT_OBJECTS_LEN: usize =
     CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
@@ -798,17 +798,22 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function("_capture_build_point_delta", "", SqlLifecycle::Internal),
     SqlContractObject::function(
         "_refresh_collection_source_table",
-        "p_collection_id bigint, p_source_table_oid oid",
+        "p_collection_id bigint",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
         "_refresh_vector_source_binding",
-        "p_collection_id bigint, p_vector_column_name text, p_source_table_oid oid, p_vector_attnum smallint",
+        "p_collection_id bigint, p_vector_column_name text",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
         "_refresh_sparse_vector_source_binding",
-        "p_collection_id bigint, p_vector_name text, p_source_table_oid oid, p_vector_attnum smallint",
+        "p_collection_id bigint, p_vector_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_refresh_payload_source_bindings",
+        "p_collection_id bigint",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(

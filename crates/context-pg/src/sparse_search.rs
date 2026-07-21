@@ -312,12 +312,13 @@ fn refresh_restored_sparse_metadata(
         return;
     }
 
+    // Route metadata writes through SECURITY DEFINER helpers: `search_sparse`
+    // runs SECURITY INVOKER, so a non-superuser collection member holds no
+    // direct write privilege on the private catalog tables. The helpers
+    // re-derive the authoritative oid/attnum from the stored source identity.
     Spi::run_with_args(
-        "UPDATE pgcontext._collections
-            SET source_table_oid = $1,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $2",
-        &[current_table_oid.into(), collection_id.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1)",
+        &[collection_id.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
@@ -327,15 +328,8 @@ fn refresh_restored_sparse_metadata(
     });
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collection_sparse_vectors
-            SET source_table_oid = $1,
-                vector_attnum = $2,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $3
-            AND vector_name = $4",
+        "SELECT pgcontext._refresh_sparse_vector_source_binding($1, $2)",
         &[
-            current_table_oid.into(),
-            current_vector_attnum.into(),
             collection_id.into(),
             registered_vector.vector_name.as_str().into(),
         ],

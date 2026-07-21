@@ -465,8 +465,8 @@ fn refresh_restored_late_interaction_metadata(
     }
 
     Spi::run_with_args(
-        "SELECT pgcontext._refresh_collection_source_table($1, $2)",
-        &[collection.collection_id.into(), current_table_oid.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1)",
+        &[collection.collection_id.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(

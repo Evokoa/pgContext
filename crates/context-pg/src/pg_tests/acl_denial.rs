@@ -686,6 +686,162 @@ fn late_interaction_search_does_not_require_private_catalog_table_grants() {
 }
 
 #[pg_test]
+fn refresh_helpers_cannot_repoint_collection_to_caller_controlled_table() {
+    acl_create_role("m5_acl_defkey_owner");
+    acl_create_role("m5_acl_defkey_member");
+    acl_grant_api_access("m5_acl_defkey_owner");
+    acl_grant_api_access("m5_acl_defkey_member");
+    // The member is a member of the owner role, so it passes the definer
+    // helper's ownership gate.
+    Spi::run("GRANT m5_acl_defkey_owner TO m5_acl_defkey_member")
+        .expect("member should be granted the owner role");
+
+    acl_set_session_user("m5_acl_defkey_owner");
+    create_hybrid_collection("m5_acl_defkey_docs");
+    upsert_search_points("m5_acl_defkey_docs", &["10", "20"]);
+    acl_reset_session_user();
+
+    acl_set_session_user("m5_acl_defkey_member");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_defkey_scratch (
+             id bigint PRIMARY KEY,
+             embedding vector NOT NULL,
+             body text NOT NULL
+         )",
+    )
+    .expect("member scratch table should be created");
+    let collection_id = Spi::get_one::<i64>(
+        "SELECT collection_id
+           FROM pgcontext._collection_acl
+          WHERE collection_name = 'm5_acl_defkey_docs'",
+    )
+    .expect("acl lookup should succeed")
+    .expect("collection id should exist");
+    // The definer helpers are PUBLIC-executable, but they accept no oid and
+    // re-derive the registered source table, so the member cannot point the
+    // collection at the scratch table they control (confused-deputy vector).
+    Spi::run(&format!(
+        "SELECT pgcontext._refresh_collection_source_table({collection_id})"
+    ))
+    .expect("member refresh call should succeed");
+    Spi::run(&format!(
+        "SELECT pgcontext._refresh_vector_source_binding({collection_id}, 'embedding')"
+    ))
+    .expect("member vector refresh call should succeed");
+    acl_reset_session_user();
+
+    let pinned_to_registered_table = Spi::get_one::<bool>(
+        "SELECT source_table_oid = 'public.m5_acl_defkey_docs'::regclass
+            AND source_table_oid <> 'public.m5_acl_defkey_scratch'::regclass
+           FROM pgcontext._collections
+          WHERE collection_name = 'm5_acl_defkey_docs'",
+    )
+    .expect("collection oid lookup should succeed")
+    .expect("collection row should exist");
+    assert!(
+        pinned_to_registered_table,
+        "refresh helpers must keep source_table_oid pinned to the registered table"
+    );
+}
+
+#[pg_test]
+fn search_refreshes_drifted_source_table_without_catalog_writes() {
+    acl_create_role("m5_acl_search_drift_owner");
+    acl_grant_api_access("m5_acl_search_drift_owner");
+
+    acl_set_session_user("m5_acl_search_drift_owner");
+    create_hybrid_collection("m5_acl_search_drift_docs");
+    upsert_search_points("m5_acl_search_drift_docs", &["10", "20", "30", "40"]);
+
+    Spi::run("DROP TABLE public.m5_acl_search_drift_docs").expect("source table should drop");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_search_drift_docs (
+             id bigint PRIMARY KEY,
+             embedding vector NOT NULL,
+             body text NOT NULL
+         )",
+    )
+    .expect("source table should be recreated");
+    Spi::run(
+        "INSERT INTO public.m5_acl_search_drift_docs (id, embedding, body)
+         VALUES (10, '[1,0]'::vector, 'a'),
+                (20, '[0,0]'::vector, 'b'),
+                (30, '[2,0]'::vector, 'c'),
+                (40, '[3,0]'::vector, 'd')",
+    )
+    .expect("source rows should be reinserted");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collections", "UPDATE"),
+        "collection owners must not need direct _collections UPDATE"
+    );
+
+    let count = Spi::get_one::<i64>(
+        "SELECT count(*)
+           FROM pgcontext.search('m5_acl_search_drift_docs', '[0,0]'::vector, 4)",
+    )
+    .expect("search should execute")
+    .expect("search count should not be null");
+    assert_eq!(
+        count, 4,
+        "search should self-heal source-table drift through SECURITY DEFINER helpers"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
+fn sparse_search_refreshes_drifted_source_table_without_catalog_writes() {
+    acl_create_role("m5_acl_sparse_drift_owner");
+    acl_grant_api_access("m5_acl_sparse_drift_owner");
+
+    acl_set_session_user("m5_acl_sparse_drift_owner");
+    create_dense_sparse_collection("m5_acl_sparse_drift_docs");
+    upsert_hybrid_points("m5_acl_sparse_drift_docs", &["10", "20", "30"]);
+
+    Spi::run("DROP TABLE public.m5_acl_sparse_drift_docs").expect("source table should drop");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_sparse_drift_docs (
+             id bigint PRIMARY KEY,
+             embedding vector NOT NULL,
+             lexical sparsevec NOT NULL,
+             body text NOT NULL
+         )",
+    )
+    .expect("source table should be recreated");
+    Spi::run(
+        "INSERT INTO public.m5_acl_sparse_drift_docs (id, embedding, lexical, body)
+         VALUES (10, '[0,0]'::vector, pgcontext.sparsevec('{1:1}/4'), 'first'),
+                (20, '[3,0]'::vector, pgcontext.sparsevec('{1:3}/4'), 'second'),
+                (30, '[2,0]'::vector, pgcontext.sparsevec('{1:2}/4'), 'third')",
+    )
+    .expect("source rows should be reinserted");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_sparse_vectors", "UPDATE"),
+        "collection owners must not need direct _collection_sparse_vectors UPDATE"
+    );
+
+    let count = Spi::get_one::<i64>(
+        "SELECT count(*)
+           FROM pgcontext.search_sparse(
+                'm5_acl_sparse_drift_docs',
+                'lexical',
+                pgcontext.sparsevec('{1:1}/4'),
+                3
+           )",
+    )
+    .expect("sparse search should execute")
+    .expect("sparse search count should not be null");
+    assert!(
+        count >= 1,
+        "sparse search should self-heal source-table drift through SECURITY DEFINER helpers"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
 fn drop_collection_denies_non_owner_collections() {
     acl_create_role("m2_acl_collection_owner_d");
     acl_create_role("m2_acl_denied_drop");

@@ -475,8 +475,8 @@ fn refresh_restored_query_metadata(
     }
 
     Spi::run_with_args(
-        "SELECT pgcontext._refresh_collection_source_table($1, $2)",
-        &[collection_id.into(), current_table_oid.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1)",
+        &[collection_id.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
@@ -486,12 +486,10 @@ fn refresh_restored_query_metadata(
     });
 
     Spi::run_with_args(
-        "SELECT pgcontext._refresh_vector_source_binding($1, $2, $3, $4)",
+        "SELECT pgcontext._refresh_vector_source_binding($1, $2)",
         &[
             collection_id.into(),
             registered_vector.vector_column_name.as_str().into(),
-            current_table_oid.into(),
-            current_vector_attnum.into(),
         ],
     )
     .unwrap_or_else(|error| {
@@ -518,8 +516,8 @@ fn refresh_restored_sparse_query_metadata(
     }
 
     Spi::run_with_args(
-        "SELECT pgcontext._refresh_collection_source_table($1, $2)",
-        &[collection_id.into(), current_table_oid.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1)",
+        &[collection_id.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
@@ -529,12 +527,10 @@ fn refresh_restored_sparse_query_metadata(
     });
 
     Spi::run_with_args(
-        "SELECT pgcontext._refresh_sparse_vector_source_binding($1, $2, $3, $4)",
+        "SELECT pgcontext._refresh_sparse_vector_source_binding($1, $2)",
         &[
             collection_id.into(),
             registered_vector.vector_name.as_str().into(),
-            current_table_oid.into(),
-            current_vector_attnum.into(),
         ],
     )
     .unwrap_or_else(|error| {
