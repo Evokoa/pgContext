@@ -23,6 +23,7 @@ cp tests/shell/fixtures/release_tags_fake_docker.sh "${tmp}/docker"
 chmod +x "${tmp}/docker"
 export FAKE_DOCKER_LOG="${tmp}/docker.log"
 export FAKE_DOCKER_STATE="${tmp}/registry-mutated"
+export FAKE_TRANSIENT_STATE="${tmp}/inspect-retried"
 export FAKE_EXPECTED_DIGEST="${digest}"
 PATH="${tmp}:${PATH}" scripts/promote-release-image.sh \
   "${image}" "${tag}" "${sha}" "${digest}"
@@ -51,4 +52,9 @@ fi
 
 rm -f "${FAKE_DOCKER_STATE}"
 FAKE_IMMUTABLE_MISSING=1 PATH="${tmp}:${PATH}" scripts/promote-release-image.sh \
+  "${image}" "${tag}" "${sha}" "${digest}"
+
+rm -f "${FAKE_DOCKER_STATE}" "${FAKE_TRANSIENT_STATE}"
+FAKE_TRANSIENT_INSPECT=1 PGCONTEXT_PROMOTE_INSPECT_DELAY_SECONDS=0 \
+  PATH="${tmp}:${PATH}" scripts/promote-release-image.sh \
   "${image}" "${tag}" "${sha}" "${digest}"
