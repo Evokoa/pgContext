@@ -16,7 +16,7 @@ if scripts/build-pgxn-dist.sh --allow-dirty --out-dir "${WORK_DIR}" 0.1.0 \
 fi
 grep -qF 'TAG must use vX.Y.Z form' "${WORK_DIR}/bad-tag.log"
 
-for mode in secret binary identity; do
+for mode in secret binary allowlisted-binary identity; do
   mkdir -p "${WORK_DIR}/${mode}"
   unzip -q "${WORK_DIR}/pgContext-0.1.0.zip" -d "${WORK_DIR}/${mode}/tree"
   case "${mode}" in
@@ -29,6 +29,11 @@ for mode in secret binary identity; do
       printf '\177ELF\000fixture' \
         >"${WORK_DIR}/${mode}/tree/pgContext-0.1.0/compiled.so"
       expected='unexpected binary content'
+      ;;
+    allowlisted-binary)
+      printf '\177ELF\000fixture' \
+        >"${WORK_DIR}/${mode}/tree/pgContext-0.1.0/assets/pgcontext-banner.png"
+      expected='allowlisted binary has an unexpected signature'
       ;;
     identity)
       sed 's#https://github.com/evokoa/pgcontext#https://example.invalid/project#' \

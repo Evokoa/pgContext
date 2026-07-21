@@ -13,19 +13,21 @@ job_block() {
   ' "${workflow}"
 }
 
+grep -qF 'name: Prepare Or Publish Packages' "${workflow}"
 grep -qF 'workflow_dispatch:' "${workflow}"
 grep -qF 'group: pgcontext-release' "${workflow}"
-grep -qF 'candidate_sha:' "${workflow}"
-grep -qF 'prepared_digest:' "${workflow}"
-grep -qF 'prepare_run_id:' "${workflow}"
+grep -qF 'options:' "${workflow}"
+grep -qF -- '- prepare' "${workflow}"
+grep -qF -- '- publish' "${workflow}"
+grep -qF 'scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-main' "${workflow}"
 grep -qF 'container: pgxn/pgxn-tools@sha256:' "${workflow}"
-grep -qF 'repository: Evokoa/homebrew-tap' "${workflow}"
-grep -qF 'scripts/promote-release-image.sh' "${workflow}"
-grep -qF 'scripts/build-release-image.sh' "${workflow}"
-grep -qF 'release/build-packages.sh --out-dir dist/payload' "${workflow}"
 
 if grep -Eq 'pg(14|15|16|18)|postgresql-(14|15|16|18)' "${workflow}"; then
   echo "release workflow advertises an unsupported PostgreSQL major" >&2
+  exit 1
+fi
+if grep -qF 'repository: Evokoa/homebrew-tap' "${workflow}"; then
+  echo "PGXN and Docker workflow unexpectedly publishes Homebrew" >&2
   exit 1
 fi
 if grep -Eq 'uses: [^ ]+@(master|main|v[0-9]+|nightly)([[:space:]]|$)' "${workflow}"; then
@@ -37,61 +39,77 @@ if grep -E '^[[:space:]]+uses:' "${workflow}" | grep -Ev '@[0-9a-f]{40}([[:space
   exit 1
 fi
 
-prepare_image="$(job_block prepare-image)"
-preflight="$(job_block publish-preflight)"
-publish_image="$(job_block publish-image)"
-pgxn_status="$(job_block pgxn-status)"
+pgxn_artifact="$(job_block pgxn-artifact)"
+approval="$(job_block approve-publishing)"
 publish_pgxn="$(job_block publish-pgxn)"
-publish_github="$(job_block publish-github)"
-publish_homebrew="$(job_block publish-homebrew)"
+pgxn_verify="$(job_block pgxn-verify)"
+attach_pgxn="$(job_block attach-pgxn-artifact)"
+docker_build="$(job_block docker)"
+docker_merge="$(job_block docker-merge)"
+docker_verify="$(job_block docker-verify)"
+publish_docker="$(job_block publish-docker)"
+published_verify="$(job_block publish-docker-verify)"
+default_verify="$(job_block docker-verify-default)"
+prepare_summary="$(job_block prepare-summary)"
+publish_summary="$(job_block publish-summary)"
 
-grep -qF "needs.validate.outputs.mode == 'prepare'" <<<"${prepare_image}"
-grep -qF 'linux/amd64' <<<"${prepare_image}"
-grep -qF 'linux/arm64' <<<"${prepare_image}"
-grep -qF 'scripts/verify-release-image.sh' <<<"${prepare_image}"
-if grep -Eq 'packages: write|docker/login-action|skopeo copy|push=true' <<<"${prepare_image}"; then
-  echo "prepare mode can mutate GHCR" >&2
-  exit 1
-fi
+grep -qF "needs.validate.outputs.mode == 'prepare'" <<<"${pgxn_artifact}"
+grep -qF 'scripts/build-pgxn-dist.sh' <<<"${pgxn_artifact}"
+grep -qF 'pgxn-source-${{ needs.validate.outputs.version }}' <<<"${pgxn_artifact}"
 
-grep -qF 'environment: release' <<<"${preflight}"
-grep -qF 'actions: read' <<<"${preflight}"
-grep -qF 'gh run download' <<<"${preflight}"
-grep -qF 'needs: [validate, publish-preflight]' <<<"${publish_image}"
-grep -qF 'packages: write' <<<"${publish_image}"
-grep -qF 'refusing to overwrite immutable tag' <<<"${publish_image}"
-grep -qF 'quay.io/skopeo/stable@sha256:' <<<"${publish_image}"
-grep -qF '"${skopeo_image}" copy --all --preserve-digests' <<<"${publish_image}"
-grep -qF 'scripts/verify-release-image.sh --registry "${digest_ref}" linux/amd64' <<<"${publish_image}"
-grep -qF 'scripts/verify-release-image.sh --registry "${digest_ref}" linux/arm64' <<<"${publish_image}"
+grep -qF "needs.validate.outputs.mode == 'publish'" <<<"${approval}"
+grep -qF 'environment: release' <<<"${approval}"
 
-grep -qF 'needs: [validate, publish-image]' <<<"${pgxn_status}"
-grep -qF 'remote_sha1=' <<<"${pgxn_status}"
-grep -qF 'existing PGXN archive conflicts' <<<"${pgxn_status}"
-grep -qF 'needs: [validate, publish-image, pgxn-status]' <<<"${publish_pgxn}"
-if grep -qF '[[' <<<"${publish_pgxn}"; then
-  echo "PGXN container job uses Bash-only conditionals under its default shell" >&2
-  exit 1
-fi
-grep -qF 'needs: [validate, publish-pgxn]' <<<"${publish_github}"
-grep -qF 'needs: [validate, publish-github]' <<<"${publish_homebrew}"
-grep -qF 'gh release create' <<<"${publish_github}"
-grep -qF 'for asset in accepted/source/payload/*' <<<"${publish_github}"
-grep -qF 'cmp "${asset}"' <<<"${publish_github}"
-for block in "${publish_image}" "${publish_pgxn}" "${publish_github}" "${publish_homebrew}"; do
-  grep -qF 'environment: release' <<<"${block}"
-done
-grep -qF 'scripts/render-homebrew-formula.sh' <<<"${preflight}"
-grep -qF 'scripts/verify-release-payload.py' <<<"${preflight}"
-grep -qF 'scripts/render-release-notes.py' <<<"${publish_github}"
-grep -qF -- '--notes-file target/release-notes.md' <<<"${publish_github}"
-grep -qF 'cmp target/release-notes.md target/existing-release-notes.md' <<<"${publish_github}"
-grep -qF 'cmp target/preflight-homebrew/pgcontext.rb' <<<"${preflight}"
-if grep -qF 'source "${record}"' <<<"${preflight}"; then
-  echo "protected preflight executes a downloaded record as shell code" >&2
-  exit 1
-fi
-if grep -qF -- '--clobber' <<<"${publish_github}"; then
+grep -qF 'approve-publishing' <<<"${publish_pgxn}"
+grep -qF 'PGXN_USERNAME' <<<"${publish_pgxn}"
+grep -qF 'PGXN_PASSWORD' <<<"${publish_pgxn}"
+grep -qF 'pgxn-release "dist/pgContext-' <<<"${publish_pgxn}"
+grep -qF 'https://api.pgxn.org/dist/pgcontext/' <<<"${pgxn_verify}"
+
+grep -qF 'pgxn-verify' <<<"${attach_pgxn}"
+grep -qF 'contents: write' <<<"${attach_pgxn}"
+grep -qF 'gh release upload' <<<"${attach_pgxn}"
+grep -qF 'cmp "${archive}"' <<<"${attach_pgxn}"
+if grep -qF -- '--clobber' <<<"${attach_pgxn}"; then
   echo "GitHub release publication can overwrite an immutable asset" >&2
   exit 1
 fi
+
+grep -qF "needs.validate.outputs.mode == 'prepare'" <<<"${docker_build}"
+grep -qF 'linux/amd64' <<<"${docker_build}"
+grep -qF 'linux/arm64' <<<"${docker_build}"
+grep -qF 'ubuntu-24.04-arm' <<<"${docker_build}"
+grep -qF 'file: release/docker/Dockerfile' <<<"${docker_build}"
+grep -qF 'PG_MAJOR=17' <<<"${docker_build}"
+grep -qF 'push-by-digest=true' <<<"${docker_build}"
+grep -qF 'provenance: mode=max' <<<"${docker_build}"
+grep -qF 'packages: write' <<<"${docker_build}"
+
+grep -qF -- '- docker' <<<"${docker_merge}"
+grep -qF 'pg17-sha-${{ needs.validate.outputs.short_sha }}' <<<"${docker_merge}"
+grep -qF 'pg17-${{ needs.validate.outputs.tag }}-prepared' <<<"${docker_merge}"
+grep -qF 'actions/attest-build-provenance@' <<<"${docker_merge}"
+
+grep -qF 'docker-merge' <<<"${docker_verify}"
+grep -qF 'scripts/verify-release-image.sh --registry' <<<"${docker_verify}"
+grep -qF 'linux/amd64' <<<"${docker_verify}"
+grep -qF 'linux/arm64' <<<"${docker_verify}"
+
+grep -qF 'approve-publishing' <<<"${publish_docker}"
+grep -qF 'scripts/promote-release-image.sh' <<<"${publish_docker}"
+grep -qF 'pg17-sha-${SHORT_SHA}' <<<"${publish_docker}"
+grep -qF 'pg17-${TAG}-prepared' <<<"${publish_docker}"
+
+for block in "${published_verify}" "${default_verify}"; do
+  grep -qF 'publish-docker' <<<"${block}"
+  grep -qF 'scripts/verify-release-image.sh --registry' <<<"${block}"
+  grep -qF 'linux/amd64' <<<"${block}"
+  grep -qF 'linux/arm64' <<<"${block}"
+done
+
+grep -qF 'pgxn-artifact' <<<"${prepare_summary}"
+grep -qF 'docker-verify' <<<"${prepare_summary}"
+grep -qF 'pgxn-verify' <<<"${publish_summary}"
+grep -qF 'attach-pgxn-artifact' <<<"${publish_summary}"
+grep -qF 'publish-docker-verify' <<<"${publish_summary}"
+grep -qF 'docker-verify-default' <<<"${publish_summary}"

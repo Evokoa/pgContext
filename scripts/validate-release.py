@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,6 +23,11 @@ def fail(message: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True, help="Release tag in vX.Y.Z form")
+    parser.add_argument(
+        "--check-main",
+        action="store_true",
+        help="Require the release tag's commit to be contained in origin/main",
+    )
     return parser.parse_args()
 
 
@@ -39,6 +45,18 @@ def control_version() -> str:
 def require_equal(label: str, actual: object, expected: object) -> None:
     if actual != expected:
         fail(f"{label} {actual!r} does not match {expected!r}")
+
+
+def run_git(*args: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.STDOUT,
+        ).strip()
+    except subprocess.CalledProcessError as error:
+        fail(f"git {' '.join(args)} failed: {error.output.strip()}")
 
 
 def toml_value(path: Path, section: str, key: str) -> object:
@@ -131,6 +149,13 @@ def main() -> None:
     missing_tags = sorted(required_tags - set(meta.get("tags", [])))
     if missing_tags:
         fail(f"META.json is missing tags: {', '.join(missing_tags)}")
+
+    if args.check_main:
+        run_git("fetch", "--no-tags", "origin", "main:refs/remotes/origin/main")
+        tag_sha = run_git("rev-list", "-n", "1", args.tag)
+        containing = run_git("branch", "-r", "--contains", tag_sha).split()
+        if "origin/main" not in containing:
+            fail(f"{args.tag} commit {tag_sha} is not contained in origin/main")
 
     print(f"release validation passed for {args.tag} (PostgreSQL 17)")
 

@@ -31,6 +31,9 @@ SECRET_MARKERS = (
     b"-----BEGIN RSA " + b"PRIVATE KEY-----",
     b"-----BEGIN OPENSSH " + b"PRIVATE KEY-----",
 )
+ALLOWED_BINARY_SIGNATURES = {
+    "assets/pgcontext-banner.png": b"\x89PNG\r\n\x1a\n",
+}
 
 
 def fail(message: str) -> None:
@@ -102,7 +105,11 @@ def main() -> None:
                 fail(f"source file exceeds the 10 MiB limit: {name}")
             contents = package.read(name)
             if b"\0" in contents:
-                fail(f"unexpected binary content is present: {name}")
+                expected_signature = ALLOWED_BINARY_SIGNATURES.get(relative.as_posix())
+                if expected_signature is None:
+                    fail(f"unexpected binary content is present: {name}")
+                if not contents.startswith(expected_signature):
+                    fail(f"allowlisted binary has an unexpected signature: {name}")
             if any(marker in contents for marker in SECRET_MARKERS):
                 fail(f"private key material is present: {name}")
 
