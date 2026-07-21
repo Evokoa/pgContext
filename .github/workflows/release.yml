@@ -41,6 +41,8 @@ jobs:
   validate:
     name: Validate release
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     outputs:
       mode: ${{ steps.release.outputs.mode }}
       tag: ${{ steps.release.outputs.tag }}
@@ -72,7 +74,7 @@ jobs:
             echo "Candidate SHA must be a full lowercase Git commit: ${CANDIDATE_SHA}" >&2
             exit 1
           fi
-          if [[ "${{ github.sha }}" != "${CANDIDATE_SHA}" ]]; then
+          if [[ "${MODE}" == prepare && "${{ github.sha }}" != "${CANDIDATE_SHA}" ]]; then
             echo "Dispatch this workflow from the candidate tag/commit ${CANDIDATE_SHA}" >&2
             exit 1
           fi

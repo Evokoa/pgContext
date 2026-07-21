@@ -44,6 +44,7 @@ if grep -E '^[[:space:]]+uses:' "${workflow}" | grep -Ev '@[0-9a-f]{40}([[:space
   exit 1
 fi
 
+validate="$(job_block validate)"
 pgxn_artifact="$(job_block pgxn-artifact)"
 source_attestation="$(job_block verify-source-attestation)"
 approval="$(job_block approve-publishing)"
@@ -58,6 +59,9 @@ published_verify="$(job_block publish-docker-verify)"
 default_verify="$(job_block docker-verify-default)"
 prepare_summary="$(job_block prepare-summary)"
 publish_summary="$(job_block publish-summary)"
+
+grep -qF 'contents: write' <<<"${validate}"
+grep -qF '[[ "${MODE}" == prepare && "${{ github.sha }}" != "${CANDIDATE_SHA}" ]]' <<<"${validate}"
 
 grep -qF "needs.validate.outputs.mode == 'prepare'" <<<"${pgxn_artifact}"
 grep -qF 'release/build-packages.sh' <<<"${pgxn_artifact}"
