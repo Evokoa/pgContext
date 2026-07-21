@@ -40,18 +40,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/evokoa/pgcontext/issues">
-    <img src="https://img.shields.io/github/issues/evokoa/pgcontext?style=flat-square&logo=github&label=issues" alt="GitHub issues">
-  </a>
-  <a href="https://github.com/evokoa/pgcontext/pulls">
-    <img src="https://img.shields.io/github/issues-pr/evokoa/pgcontext?style=flat-square&logo=github&label=PRs" alt="GitHub pull requests">
-  </a>
-  <a href="https://github.com/evokoa/pgcontext/commits/master">
-    <img src="https://img.shields.io/github/last-commit/evokoa/pgcontext?style=flat-square&logo=github&label=last%20commit" alt="Last commit">
-  </a>
-</p>
-
-<p align="center">
   <a href="https://evokoa.com" target="_blank" rel="noreferrer">
   <img
     src="https://img.shields.io/badge/Built%20by-Evokoa-ff6b35?style=for-the-badge"
