@@ -379,6 +379,15 @@ SELECT collection_id,
   FROM pgcontext._collections
  WHERE pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER');
 
+CREATE VIEW pgcontext._visible_collections AS
+SELECT collection_id,
+       owner_role,
+       source_table_oid,
+       source_schema_name,
+       source_table_name
+  FROM pgcontext._collections
+ WHERE pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER');
+
 GRANT SELECT ON pgcontext._collection_acl TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_vectors TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_sparse_vectors TO PUBLIC;
@@ -387,6 +396,106 @@ GRANT SELECT ON pgcontext._visible_collection_payload_columns TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_build_jobs TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_artifact_segments TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_limits TO PUBLIC;
+GRANT SELECT ON pgcontext._visible_collections TO PUBLIC;
+
+-- Drift self-healing writes. Retrieval functions run SECURITY INVOKER so that
+-- source-table SELECT/RLS is enforced against the caller, which means a
+-- non-superuser collection member holds no direct privilege on the private
+-- catalog tables. When a dump/restore or table rewrite changes a source
+-- table's oid, the query path detects the drift and refreshes the stored
+-- metadata through these SECURITY DEFINER helpers so the write succeeds as the
+-- extension owner. Each helper re-checks that SESSION_USER is a member of the
+-- collection's owner role, so a direct call can only refresh a collection the
+-- caller already owns (at worst self-inflicted and self-healing on the next
+-- query). search_path is pinned to defeat search-path injection.
+CREATE FUNCTION pgcontext._refresh_collection_source_table(
+    p_collection_id bigint,
+    p_source_table_oid oid
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections
+         WHERE collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'permission denied to refresh collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE pgcontext._collections
+       SET source_table_oid = p_source_table_oid,
+           updated_at = pg_catalog.now()
+     WHERE collection_id = p_collection_id;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._refresh_vector_source_binding(
+    p_collection_id bigint,
+    p_vector_column_name text,
+    p_source_table_oid oid,
+    p_vector_attnum smallint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections
+         WHERE collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'permission denied to refresh collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE pgcontext._collection_vectors
+       SET source_table_oid = p_source_table_oid,
+           vector_attnum = p_vector_attnum,
+           updated_at = pg_catalog.now()
+     WHERE collection_id = p_collection_id
+       AND vector_column_name = p_vector_column_name;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._refresh_sparse_vector_source_binding(
+    p_collection_id bigint,
+    p_vector_name text,
+    p_source_table_oid oid,
+    p_vector_attnum smallint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections
+         WHERE collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'permission denied to refresh collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE pgcontext._collection_sparse_vectors
+       SET source_table_oid = p_source_table_oid,
+           vector_attnum = p_vector_attnum,
+           updated_at = pg_catalog.now()
+     WHERE collection_id = p_collection_id
+       AND vector_name = p_vector_name;
+END;
+$$;
 
 SELECT pg_catalog.pg_extension_config_dump('pgcontext._collections', '');
 SELECT pg_catalog.pg_extension_config_dump('pgcontext._collection_vectors', '');

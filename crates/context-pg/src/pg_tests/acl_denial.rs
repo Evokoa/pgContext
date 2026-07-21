@@ -535,6 +535,157 @@ fn search_limit_policy_does_not_require_private_catalog_table_grants() {
 }
 
 #[pg_test]
+fn hybrid_query_does_not_require_private_catalog_table_grants() {
+    acl_create_role("m5_acl_query_owner");
+    acl_grant_api_access("m5_acl_query_owner");
+
+    acl_set_session_user("m5_acl_query_owner");
+    create_hybrid_collection("m5_acl_query_docs");
+    upsert_search_points("m5_acl_query_docs", &["10", "20", "30", "40"]);
+
+    // A collection owner in production is a plain (non-superuser) role that
+    // holds no direct privilege on the private catalog tables — only the
+    // PUBLIC visibility views. `pgcontext.query` must resolve the collection
+    // through those views, exactly as `pgcontext.search` does.
+    assert!(
+        !acl_has_table_privilege("pgcontext._collections", "SELECT"),
+        "collection owners must not need direct _collections SELECT"
+    );
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_points", "SELECT"),
+        "collection owners must not need direct _collection_points SELECT"
+    );
+
+    let rows = hybrid_query_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.query(
+                'm5_acl_query_docs',
+                '[0,0]'::vector,
+                'database',
+                'body',
+                4
+           )",
+    );
+    let source_keys = rows
+        .into_iter()
+        .map(|(_point_id, source_key, _score)| source_key)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        source_keys,
+        vec![
+            "20".to_owned(),
+            "10".to_owned(),
+            "30".to_owned(),
+            "40".to_owned()
+        ],
+        "owner without private catalog grants should get fused hybrid results"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
+fn hybrid_query_refreshes_drifted_source_table_without_catalog_writes() {
+    acl_create_role("m5_acl_drift_owner");
+    acl_grant_api_access("m5_acl_drift_owner");
+
+    acl_set_session_user("m5_acl_drift_owner");
+    create_hybrid_collection("m5_acl_drift_docs");
+    upsert_search_points("m5_acl_drift_docs", &["10", "20", "30", "40"]);
+
+    // Simulate a dump/restore: rebuild the source table so its oid changes.
+    // The next query detects the drift and must persist the refreshed oid, but
+    // a plain collection owner holds no direct write privilege on the private
+    // catalog tables. The refresh therefore has to run through the SECURITY
+    // DEFINER helpers rather than a direct UPDATE.
+    Spi::run("DROP TABLE public.m5_acl_drift_docs").expect("source table should drop");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_drift_docs (
+             id bigint PRIMARY KEY,
+             embedding vector NOT NULL,
+             body text NOT NULL
+         )",
+    )
+    .expect("source table should be recreated");
+    Spi::run(
+        "INSERT INTO public.m5_acl_drift_docs (id, embedding, body)
+         VALUES (10, '[1,0]'::vector, 'database internals'),
+                (20, '[0,0]'::vector, 'database database'),
+                (30, '[2,0]'::vector, 'storage database'),
+                (40, '[3,0]'::vector, 'unrelated')",
+    )
+    .expect("source rows should be reinserted");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collections", "UPDATE"),
+        "collection owners must not need direct _collections UPDATE"
+    );
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_vectors", "UPDATE"),
+        "collection owners must not need direct _collection_vectors UPDATE"
+    );
+
+    let rows = hybrid_query_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.query(
+                'm5_acl_drift_docs',
+                '[0,0]'::vector,
+                'database',
+                'body',
+                4
+           )",
+    );
+    assert_eq!(
+        rows.len(),
+        4,
+        "drift refresh should self-heal through SECURITY DEFINER helpers and return results"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
+fn late_interaction_search_does_not_require_private_catalog_table_grants() {
+    acl_create_role("m14_acl_late_owner");
+    acl_grant_api_access("m14_acl_late_owner");
+
+    acl_set_session_user("m14_acl_late_owner");
+    create_late_interaction_collection("m14_acl_late_docs");
+    upsert_hybrid_points("m14_acl_late_docs", &["10", "20", "30", "40"]);
+
+    // The late-interaction resolve needs collection-level source metadata. A
+    // plain owner must reach it through the membership-filtered
+    // `_visible_collections` view, never the base `_collections` table.
+    assert!(
+        !acl_has_table_privilege("pgcontext._collections", "SELECT"),
+        "collection owners must not need direct _collections SELECT"
+    );
+
+    let rows = hybrid_query_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.search_late_interaction(
+                'm14_acl_late_docs',
+                ARRAY['[1,0]'::vector, '[0,1]'::vector],
+                'token_vectors',
+                3
+           )",
+    );
+    assert_eq!(
+        rows.into_iter()
+            .map(|(_point_id, source_key, score)| (source_key, score))
+            .collect::<Vec<_>>(),
+        vec![
+            ("10".to_owned(), 2.0),
+            ("20".to_owned(), 1.5),
+            ("30".to_owned(), 1.0),
+        ],
+        "late-interaction search should work for a member without private catalog grants"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
 fn drop_collection_denies_non_owner_collections() {
     acl_create_role("m2_acl_collection_owner_d");
     acl_create_role("m2_acl_denied_drop");

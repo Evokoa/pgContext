@@ -18,7 +18,7 @@ pub(super) fn resolve_collection(collection_name: &CollectionName) -> QueryColle
                     acl.has_source_table,
                     (
                         SELECT count(*)::bigint
-                          FROM pgcontext._collection_points AS points
+                          FROM pgcontext._visible_collection_points AS points
                          WHERE points.collection_id = acl.collection_id
                            AND points.deleted_at IS NULL
                     )
@@ -475,11 +475,8 @@ fn refresh_restored_query_metadata(
     }
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collections
-            SET source_table_oid = $1,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $2",
-        &[current_table_oid.into(), collection_id.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1, $2)",
+        &[collection_id.into(), current_table_oid.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
@@ -489,17 +486,12 @@ fn refresh_restored_query_metadata(
     });
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collection_vectors
-            SET source_table_oid = $1,
-                vector_attnum = $2,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $3
-            AND vector_column_name = $4",
+        "SELECT pgcontext._refresh_vector_source_binding($1, $2, $3, $4)",
         &[
-            current_table_oid.into(),
-            current_vector_attnum.into(),
             collection_id.into(),
             registered_vector.vector_column_name.as_str().into(),
+            current_table_oid.into(),
+            current_vector_attnum.into(),
         ],
     )
     .unwrap_or_else(|error| {
@@ -526,11 +518,8 @@ fn refresh_restored_sparse_query_metadata(
     }
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collections
-            SET source_table_oid = $1,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $2",
-        &[current_table_oid.into(), collection_id.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1, $2)",
+        &[collection_id.into(), current_table_oid.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
@@ -540,17 +529,12 @@ fn refresh_restored_sparse_query_metadata(
     });
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collection_sparse_vectors
-            SET source_table_oid = $1,
-                vector_attnum = $2,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $3
-            AND vector_name = $4",
+        "SELECT pgcontext._refresh_sparse_vector_source_binding($1, $2, $3, $4)",
         &[
-            current_table_oid.into(),
-            current_vector_attnum.into(),
             collection_id.into(),
             registered_vector.vector_name.as_str().into(),
+            current_table_oid.into(),
+            current_vector_attnum.into(),
         ],
     )
     .unwrap_or_else(|error| {

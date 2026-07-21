@@ -223,7 +223,8 @@ fn default_privileges_visibility_views_without_select(role_name: &str) -> Vec<St
                     '_visible_collection_sparse_vectors',
                     '_visible_collection_points',
                     '_visible_collection_payload_columns',
-                    '_visible_collection_limits'
+                    '_visible_collection_limits',
+                    '_visible_collections'
                 )
                 AND NOT pg_catalog.has_table_privilege($1, pg_class.oid, 'SELECT')
               ORDER BY 1",

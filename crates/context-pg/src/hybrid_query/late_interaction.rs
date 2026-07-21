@@ -265,16 +265,14 @@ pub(super) fn late_interaction_ann_detail(strategy: &MultiVectorAnnStrategy) -> 
 pub(super) fn resolve_late_interaction_collection(
     collection_name: &CollectionName,
 ) -> LateInteractionCollection {
-    Spi::connect(|client| {
+    // Phase 1: identity + owner from the PUBLIC ACL view (which also resolves
+    // aliases). This is readable by any caller, so both members and non-members
+    // reach the ownership gate below and get a consistent error.
+    let (collection_id, owner_role) = Spi::connect(|client| {
         let rows = match client.select(
-            "SELECT acl.collection_id,
-                    acl.owner_role,
-                    collections.source_table_oid,
-                    collections.source_schema_name,
-                    collections.source_table_name
-               FROM pgcontext._collection_acl AS acl
-               JOIN pgcontext._collections AS collections USING (collection_id)
-              WHERE acl.collection_name = $1",
+            "SELECT collection_id, owner_role
+               FROM pgcontext._collection_acl
+              WHERE collection_name = $1",
             Some(1),
             &[collection_name.as_str().into()],
         ) {
@@ -293,7 +291,44 @@ pub(super) fn resolve_late_interaction_collection(
         }
 
         let row = rows.first();
-        let Some(table_oid) = spi_optional_column::<pg_sys::Oid>(&row, 3, "source_table_oid")
+        (
+            spi_required_column::<i64>(&row, 1, "collection_id"),
+            spi_required_column::<pg_sys::Oid>(&row, 2, "owner_role"),
+        )
+    });
+
+    // Ownership gate BEFORE reading source-table metadata. Source metadata lives
+    // behind the membership-filtered `_visible_collections` view, so the check
+    // must precede phase 2 to keep the "permission denied for collection" error
+    // for non-members rather than surfacing an empty-row "no source table".
+    require_late_interaction_owner_role(owner_role, collection_name);
+
+    // Phase 2: source-table metadata from the membership-filtered view. The
+    // caller is a confirmed member, so their row is visible.
+    Spi::connect(|client| {
+        let rows = match client.select(
+            "SELECT source_table_oid, source_schema_name, source_table_name
+               FROM pgcontext._visible_collections
+              WHERE collection_id = $1",
+            Some(1),
+            &[collection_id.into()],
+        ) {
+            Ok(rows) => rows,
+            Err(error) => raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                format!("failed to query late-interaction collection catalog: {error}"),
+            ),
+        };
+
+        if rows.is_empty() {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
+                format!("collection does not exist: {}", collection_name.as_str()),
+            );
+        }
+
+        let row = rows.first();
+        let Some(table_oid) = spi_optional_column::<pg_sys::Oid>(&row, 1, "source_table_oid")
         else {
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
@@ -303,7 +338,7 @@ pub(super) fn resolve_late_interaction_collection(
                 ),
             );
         };
-        let Some(schema_name) = spi_optional_column::<String>(&row, 4, "source_schema_name") else {
+        let Some(schema_name) = spi_optional_column::<String>(&row, 2, "source_schema_name") else {
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
                 format!(
@@ -312,7 +347,7 @@ pub(super) fn resolve_late_interaction_collection(
                 ),
             );
         };
-        let Some(table_name) = spi_optional_column::<String>(&row, 5, "source_table_name") else {
+        let Some(table_name) = spi_optional_column::<String>(&row, 3, "source_table_name") else {
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
                 format!(
@@ -323,8 +358,8 @@ pub(super) fn resolve_late_interaction_collection(
         };
 
         LateInteractionCollection {
-            collection_id: spi_required_column::<i64>(&row, 1, "collection_id"),
-            owner_role: spi_required_column::<pg_sys::Oid>(&row, 2, "owner_role"),
+            collection_id,
+            owner_role,
             table_oid,
             schema_name,
             table_name,
@@ -430,11 +465,8 @@ fn refresh_restored_late_interaction_metadata(
     }
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collections
-            SET source_table_oid = $1,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $2",
-        &[current_table_oid.into(), collection.collection_id.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1, $2)",
+        &[collection.collection_id.into(), current_table_oid.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
@@ -575,10 +607,14 @@ pub(super) fn require_late_interaction_collection_owner(
     collection: &LateInteractionCollection,
     collection_name: &CollectionName,
 ) {
+    require_late_interaction_owner_role(collection.owner_role, collection_name);
+}
+
+fn require_late_interaction_owner_role(owner_role: pg_sys::Oid, collection_name: &CollectionName) {
     let session_user = session_user();
     let is_owner = Spi::get_one_with_args::<bool>(
         "SELECT pg_catalog.pg_has_role($1, $2, 'MEMBER')",
-        &[session_user.as_str().into(), collection.owner_role.into()],
+        &[session_user.as_str().into(), owner_role.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
