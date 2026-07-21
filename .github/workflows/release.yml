@@ -549,8 +549,7 @@ jobs:
         run: |
           set -euo pipefail
           image="${{ env.IMAGE_NAME }}:pg17-${{ needs.validate.outputs.tag }}-prepared"
-          digest="$(docker buildx imagetools inspect "${image}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          digest="$(scripts/resolve-oci-digest.sh "${image}")"
           echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
 
       - name: Attest image provenance
