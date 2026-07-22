@@ -387,7 +387,7 @@ fn search_registered_sparse_table(
     })
 }
 
-const fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
+fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
     match metric {
         DistanceMetric::L2 => "sparsevec_l2_distance",
         DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => {
@@ -395,6 +395,10 @@ const fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
         }
         DistanceMetric::Cosine => "sparsevec_cosine_distance",
         DistanceMetric::L1 => "sparsevec_l1_distance",
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+            "bit distance metrics cannot score sparsevec collections",
+        ),
     }
 }
 

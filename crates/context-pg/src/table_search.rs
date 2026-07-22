@@ -785,7 +785,7 @@ fn facet_registered_table(
     })
 }
 
-pub(super) const fn distance_function(metric: DistanceMetric) -> &'static str {
+pub(super) fn distance_function(metric: DistanceMetric) -> &'static str {
     match metric {
         DistanceMetric::L2 => "l2_distance",
         DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => {
@@ -793,6 +793,10 @@ pub(super) const fn distance_function(metric: DistanceMetric) -> &'static str {
         }
         DistanceMetric::Cosine => "cosine_distance",
         DistanceMetric::L1 => "l1_distance",
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+            "bit distance metrics cannot score vector collections",
+        ),
     }
 }
 

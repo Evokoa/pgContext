@@ -58,6 +58,8 @@ pub(crate) const fn distance_metric_label(metric: DistanceMetric) -> &'static st
         DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => "inner_product",
         DistanceMetric::Cosine => "cosine",
         DistanceMetric::L1 => "l1",
+        DistanceMetric::Hamming => "hamming",
+        DistanceMetric::Jaccard => "jaccard",
     }
 }
 

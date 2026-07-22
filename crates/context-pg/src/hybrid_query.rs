@@ -544,7 +544,7 @@ fn search_limit_from_sql(limit: i32) -> SearchLimit {
     }
 }
 
-const fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
+fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
     match metric {
         DistanceMetric::L2 => "sparsevec_l2_distance",
         DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => {
@@ -552,6 +552,10 @@ const fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
         }
         DistanceMetric::Cosine => "sparsevec_cosine_distance",
         DistanceMetric::L1 => "sparsevec_l1_distance",
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+            "bit distance metrics cannot score sparsevec collections",
+        ),
     }
 }
 
@@ -569,7 +573,7 @@ pub(super) fn policy_to_i64(value: usize, label: &'static str) -> i64 {
     }
 }
 
-const fn distance_function(metric: DistanceMetric) -> &'static str {
+fn distance_function(metric: DistanceMetric) -> &'static str {
     match metric {
         DistanceMetric::L2 => "l2_distance",
         DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => {
@@ -577,6 +581,10 @@ const fn distance_function(metric: DistanceMetric) -> &'static str {
         }
         DistanceMetric::Cosine => "cosine_distance",
         DistanceMetric::L1 => "l1_distance",
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+            "bit distance metrics cannot score vector collections",
+        ),
     }
 }
 
