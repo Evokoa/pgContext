@@ -26,6 +26,8 @@ jobs:
         run: python3 tests/shell/test_run_pgrx_tests_in_server.py
       - name: V1 pgrx platform runner smoke
         run: tests/shell/run_v1_pgrx_tests_smoke.sh
+      - name: pgrx CI matrix contract
+        run: bash tests/shell/check_ci_pgrx_matrix_smoke.sh
       - name: Docs
         run: cargo doc --workspace --exclude context-pg --no-deps
       - name: Public docs navigation, links, and drift
@@ -70,6 +72,38 @@ jobs:
         run: tests/shell/release_image_tags_smoke.sh
       - name: Release workflow contract
         run: tests/shell/release_workflow_smoke.sh
+
+  pgrx:
+    name: pgrx (PG${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["17", "18"]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+      - name: Install PostgreSQL ${{ matrix.pg }} development files
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+            https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }}
+      - name: Install and initialize cargo-pgrx
+        run: |
+          cargo install cargo-pgrx --version 0.19.1 --locked
+          cargo pgrx init --pg${{ matrix.pg }} /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+      - name: Run full pgrx suite
+        run: PG_MAJOR=${{ matrix.pg }} scripts/run-v1-pgrx-tests.sh
 
   pgvector-coexist:
     name: pgvector coexist (live PG17)
