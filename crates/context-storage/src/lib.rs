@@ -41,8 +41,10 @@ pub use delta_segment::{
     decode_delta_page, decode_delta_record, encode_delta_page, encode_delta_record,
 };
 pub use hnsw_graph_payload::{
-    HnswGraphArtifactRecord, HnswGraphPayloadError, decode_hnsw_graph_payload,
-    encode_hnsw_graph_payload,
+    CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HnswGraphArtifactRecord, HnswGraphPayload,
+    HnswGraphPayloadError, HnswGraphQuantization, HnswGraphQuantizationCodebook,
+    MIN_READABLE_HNSW_GRAPH_PAYLOAD_VERSION, decode_hnsw_graph_payload,
+    decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
 };
 pub use mmap_file::{MappedSegment, map_segment_file};
 pub use packed_graph_image::{
