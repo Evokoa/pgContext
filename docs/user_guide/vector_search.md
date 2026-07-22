@@ -317,7 +317,7 @@ FROM pgcontext.discover('docs', ARRAY[101, 205], 10);
 ```
 
 Query-constructor helpers return validated JSON plans that clients can persist,
-inspect, or translate without relying on internal catalog tables:
+inspect, translate, or execute without relying on internal catalog tables:
 
 ```sql
 SELECT pgcontext.query_rerank(
@@ -333,12 +333,27 @@ SELECT pgcontext.query_rerank(
   ]),
   10
 );
+
+SELECT point_id, source_key, score
+FROM pgcontext.execute_query(
+  'docs',
+  pgcontext.query_rerank(
+    pgcontext.query_prefetch(ARRAY[
+      pgcontext.query_nearest('[0,0,0]'::pgcontext.vector, 50),
+      pgcontext.query_sparse_nearest('keywords', '{1:1}/3'::pgcontext.sparsevec, 50),
+      pgcontext.query_full_text('postgres retrieval', 'body', 50)
+    ]),
+    10
+  )
+);
 ```
 
 Formula text is preserved as an opaque client-plan value. It must contain 1 to
-512 UTF-8 bytes; executable formula semantics are not implied by this JSON
-constructor. Query-plan argument validation is shared with the pure query layer,
-while PostgreSQL remains responsible for SQL/JSON conversion and SQLSTATEs.
+512 UTF-8 bytes. `execute_query` accepts finite literals, `$score`/`score`,
+parentheses, unary signs, and `+`, `-`, `*`, and `/`; unsupported syntax fails
+before candidate work. Composite execution is depth/node/work bounded, applies
+authoritative source rechecks before fusion, and supports dense (including
+quantized HNSW), named sparse, full-text, and owned late-interaction leaves.
 
 ## Late-Interaction Rerank
 

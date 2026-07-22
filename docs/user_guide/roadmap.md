@@ -262,7 +262,7 @@ Validated by end-to-end serving tests before promotion.
 
 ## Composite Query Execution
 
-Status: planned after all advanced candidate sources.
+Status: implemented for the PostgreSQL 17 profile.
 
 Depends on: metadata-filtered ANN, quantized HNSW, named sparse ANN, and late
 interaction.

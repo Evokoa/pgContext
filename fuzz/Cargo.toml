@@ -13,6 +13,7 @@ cargo-fuzz = true
 context-core = { path = "../crates/context-core", version = "0.1.0" }
 context-filter = { path = "../crates/context-filter", version = "0.1.0" }
 context-index = { path = "../crates/context-index", version = "0.1.0" }
+context-query = { path = "../crates/context-query", version = "0.1.0" }
 context-storage = { path = "../crates/context-storage", version = "0.1.0" }
 libfuzzer-sys = "0.4"
 
@@ -77,6 +78,13 @@ bench = false
 [[bin]]
 name = "quantized_codes"
 path = "fuzz_targets/quantized_codes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "query_plan"
+path = "fuzz_targets/query_plan.rs"
 test = false
 doc = false
 bench = false

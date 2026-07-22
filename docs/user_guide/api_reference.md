@@ -76,6 +76,9 @@ Search and query:
 - `pgcontext.explore(collection text, context_point_ids bigint[], limit integer)`
 - `pgcontext.query(collection text, vector vector, text_query text, text_column text, limit integer)`
 - `pgcontext.query_nearest(vector vector, limit integer)`
+- `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, limit integer)`
+- `pgcontext.query_full_text(text_query text, text_column text, limit integer)`
+- `pgcontext.query_late_interaction(query_vectors vector[], candidates_per_query integer, limit integer)`
 - `pgcontext.query_recommend(positive_point_ids bigint[], negative_point_ids bigint[], limit integer)`
 - `pgcontext.query_discover(context_point_ids bigint[], limit integer)`
 - `pgcontext.query_lookup(point_ids bigint[])`
@@ -84,6 +87,7 @@ Search and query:
 - `pgcontext.query_score_threshold(branch jsonb, min_score double precision, max_score double precision)`
 - `pgcontext.query_formula(branch jsonb, formula text)`
 - `pgcontext.query_rerank(branch jsonb, limit integer)`
+- `pgcontext.execute_query(collection text, plan jsonb)`
 - `pgcontext.explain(collection text, text_column text)`
 - `pgcontext.scroll(collection text, cursor text, limit integer)`
 - `pgcontext.count(collection text)`

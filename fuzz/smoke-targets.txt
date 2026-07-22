@@ -8,3 +8,4 @@ cursor_state|1024
 hnsw_graph_ops|4096
 hnsw_page|4096
 quantized_codes|65536
+query_plan|4096

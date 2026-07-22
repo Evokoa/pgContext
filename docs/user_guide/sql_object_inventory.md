@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `08abd78f879d5c17c8885ba3d738cf3fe1185a54306791dd8e163d4560a78201`
+Full SQL artifact SHA-256: `41b08d4b8a5d19199f203c89884ececdc7bb570aa488b9bce8299717de14005f`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,9 +16,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 18 |
 | Schemas | 0 |
-| Functions | 255 |
-| Tables | 15 |
-| Views | 10 |
+| Functions | 268 |
+| Tables | 16 |
+| Views | 11 |
 | Triggers | 4 |
 | Casts | 23 |
 | Operators | 42 |
@@ -63,6 +63,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._collections`
 - table `pgcontext._embedding_migrations`
 - table `pgcontext._model_versions`
+- table `pgcontext._pgvector_ownership_conversions`
 - table `pgcontext._query_stats`
 - trigger `pgcontext_build_jobs_no_progress_regression`
 - trigger `pgcontext_build_jobs_terminal_state`
@@ -78,16 +79,20 @@ The artifact fingerprint covers every object declaration, function result shape,
 - view `pgcontext._visible_collection_sparse_vectors`
 - view `pgcontext._visible_collection_vectors`
 - view `pgcontext._visible_collections`
+- view `pgcontext._visible_pgvector_ownership_conversions`
 
 ## Function Names
 
 Overload argument and result identities are pinned by the artifact fingerprint and bidirectional `contract_registry` test.
 
+- `"_begin_pgvector_ownership_conversion"`
 - `"_hnsw_candidates"`
 - `"_hnsw_masked_candidates"`
 - `"_hnsw_sparse_candidates"`
 - `"_hnsw_sparse_masked_candidates"`
 - `"_mmap_hnsw_artifact_candidates"`
+- `"_sync_pgvector_ownership_columns"`
+- `"_transition_pgvector_ownership_conversion"`
 - `"adopt_pgvector"`
 - `"artifact_segment_diagnostics"`
 - `"artifact_segment_memory"`
@@ -140,6 +145,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"create_collection"`
 - `"create_collection_alias"`
 - `"create_embedding_migration"`
+- `"cutover_pgvector_ownership_conversion"`
 - `"delete_payload"`
 - `"delete_points"`
 - `"discover"`
@@ -149,12 +155,14 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"enable_pgvector_binding"`
 - `"encode_artifact_segment"`
 - `"estimate_index_memory"`
+- `"execute_query"`
 - `"explain"`
 - `"explain_late_interaction"`
 - `"explain_late_interaction_ann"`
 - `"explain_sparse"`
 - `"explore"`
 - `"facet"`
+- `"finalize_pgvector_ownership_conversion"`
 - `"grouped_search"`
 - `"halfvec"`
 - `"halfvec_avg_final"`
@@ -197,6 +205,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"model_versions"`
 - `"negative_inner_product"`
 - `"optimization_status"`
+- `"pgvector_ownership_conversions"`
 - `"product_quantize"`
 - `"product_reconstruct"`
 - `"publish_artifact_segment"`
@@ -205,12 +214,15 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"query_cohort_stats"`
 - `"query_discover"`
 - `"query_formula"`
+- `"query_full_text"`
+- `"query_late_interaction"`
 - `"query_lookup"`
 - `"query_nearest"`
 - `"query_prefetch"`
 - `"query_recommend"`
 - `"query_rerank"`
 - `"query_score_threshold"`
+- `"query_sparse_nearest"`
 - `"query_weight"`
 - `"recall_check"`
 - `"recommend"`
@@ -227,7 +239,9 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"rerank_quantized_candidates"`
 - `"retire_artifact_segment"`
 - `"retry_build_job"`
+- `"rollback_pgvector_ownership_conversion"`
 - `"run_build_job"`
+- `"run_pgvector_ownership_conversion"`
 - `"scalar_quantize"`
 - `"scalar_reconstruct"`
 - `"scroll"`
@@ -267,6 +281,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"sparsevec_typmod_out"`
 - `"sparsevec_values"`
 - `"start_build_job"`
+- `"start_pgvector_ownership_conversion"`
 - `"telemetry"`
 - `"update_build_job"`
 - `"update_embedding_migration"`
