@@ -114,6 +114,25 @@ fn hnsw_mapped_serving_publishes_attaches_and_matches_exact_oracle() {
     let mapped = Spi::get_one::<Vec<i64>>(ann)
         .expect("mapped AM attachment query should succeed")
         .expect("mapped AM attachment query should return ids");
+    let mapped_work = Spi::get_one::<String>(
+        "SELECT format('%s,%s,%s', page_visits, node_reads, candidates)
+           FROM pgcontext.hnsw_last_scan_work()",
+    )
+    .expect("mapped AM work evidence should be readable")
+    .expect("mapped AM work evidence should exist");
+    let counters = mapped_work
+        .split(',')
+        .map(str::parse::<i64>)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("mapped AM work counters should be integers");
+    let [page_visits, node_reads, candidates] = counters.as_slice() else {
+        panic!("unexpected mapped AM work evidence: {mapped_work}");
+    };
+    assert_eq!(*page_visits, 0, "mapped traversal must not read graph pages");
+    let maximum_node_reads = 128_i64
+        * (i64::try_from(context_index::MAX_GRAPH_LAYERS).unwrap_or(i64::MAX) + 1);
+    assert!((1..=maximum_node_reads).contains(node_reads));
+    assert!((1..=128).contains(candidates));
     Spi::run("SET enable_indexscan = off; SET enable_bitmapscan = off")
         .expect("mapped AM exact oracle should disable index scans");
     let exact = Spi::get_one::<Vec<i64>>(

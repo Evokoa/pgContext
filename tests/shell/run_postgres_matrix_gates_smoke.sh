@@ -251,8 +251,10 @@ write_crash_restart_hnsw_fixture() {
 set -euo pipefail
 printf 'hnsw_restart_nearest_rechecked: before_restart\n'
 printf 'hnsw_restart_index_scan: before_restart\n'
+printf 'hnsw_mapped_attach: before_restart\n'
 printf 'hnsw_restart_nearest_rechecked: after_restart\n'
 printf 'hnsw_restart_index_scan: after_restart\n'
+printf 'hnsw_mapped_attach: after_restart\n'
 printf 'fake HNSW crash restart gate passed\n'
 SH
   chmod +x "${script_path}"
@@ -908,6 +910,7 @@ cat >"${heavy_root}/tests/heavy/crash_restart_hnsw.sh" <<'SH'
 set -euo pipefail
 printf 'hnsw_restart_nearest_rechecked: before_restart\n'
 printf 'hnsw_restart_index_scan: before_restart\n'
+printf 'hnsw_mapped_attach: before_restart\n'
 printf 'hnsw_restart_nearest_rechecked: after_restart\n'
 printf 'HNSW restart gate passed without after-restart index marker\n'
 SH
@@ -939,6 +942,7 @@ cat >"${heavy_root}/tests/heavy/crash_restart_hnsw.sh" <<'SH'
 set -euo pipefail
 printf 'hnsw_restart_nearest_rechecked: before_restart\n'
 printf 'hnsw_restart_index_scan: before_restart\n'
+printf 'hnsw_mapped_attach: before_restart\n'
 printf 'hnsw_restart_nearest_rechecked: after_restart\n'
 printf 'hnsw_restart_index_scan: x\n'
 printf 'HNSW restart gate passed with placeholder after-restart index marker\n'

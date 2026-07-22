@@ -68,8 +68,10 @@ BUILD_JOB_RESUMABILITY_MARKERS=(
 HNSW_RESTART_MARKERS=(
   "hnsw_restart_nearest_rechecked: before_restart"
   "hnsw_restart_index_scan: before_restart"
+  "hnsw_mapped_attach: before_restart"
   "hnsw_restart_nearest_rechecked: after_restart"
   "hnsw_restart_index_scan: after_restart"
+  "hnsw_mapped_attach: after_restart"
 )
 CONCURRENT_READ_WRITE_MARKERS=(
   "concurrent_hnsw_writer_completed"

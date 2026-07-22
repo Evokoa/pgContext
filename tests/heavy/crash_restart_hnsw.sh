@@ -74,6 +74,28 @@ validate_hnsw_order() {
     printf 'hnsw_restart_nearest_rechecked: %s\n' "${phase}"
 }
 
+validate_mapped_attach() {
+    local phase="$1"
+    local mapped_attaches
+
+    mapped_attaches="$(psql_db -At <<'SQL' | tail -n 1
+SET enable_seqscan = off;
+SET enable_bitmapscan = off;
+SELECT id
+  FROM public.restart_hnsw_docs
+ ORDER BY embedding OPERATOR(pgcontext.<->) '[1,1]'::vector, id
+ LIMIT 1;
+SELECT mapped_attaches
+  FROM pgcontext.hnsw_serving_stats();
+SQL
+)"
+    if [[ ! "${mapped_attaches}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "expected mapped HNSW attachment after ${phase}, got: ${mapped_attaches}" >&2
+        exit 1
+    fi
+    printf 'hnsw_mapped_attach: %s\n' "${phase}"
+}
+
 start_and_install_extension
 reset_database
 
@@ -142,6 +164,10 @@ CHECKPOINT;
 SQL
 
 validate_hnsw_order "before_restart"
-cargo pgrx stop "${PG_VERSION}"
+validate_mapped_attach "before_restart"
+PGRX_DATA_DIR="$(psql_db -Atc 'SHOW data_directory' | tail -n 1)"
+PG_CTL="$(pg_bin pg_ctl)"
+"${PG_CTL}" -D "${PGRX_DATA_DIR}" stop -m immediate
 cargo pgrx start "${PG_VERSION}"
 validate_hnsw_order "after_restart"
+validate_mapped_attach "after_restart"
