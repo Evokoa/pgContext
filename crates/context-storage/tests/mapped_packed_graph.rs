@@ -8,8 +8,9 @@ use std::{
 };
 
 use context_storage::{
-    MappedPackedGraphError, MappedPackedGraphImage, PackedGraphImageLayer, PackedGraphImageNode,
-    SegmentKind, encode_packed_graph_image, write_segment_atomic,
+    MappedGraphIdentity, MappedPackedGraphError, MappedPackedGraphImage, PackedGraphImageLayer,
+    PackedGraphImageNode, SegmentKind, encode_mapped_packed_graph, encode_packed_graph_image,
+    write_segment_atomic,
 };
 
 static TEST_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -64,12 +65,21 @@ fn packed_image() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     )?)
 }
 
+const IDENTITY: MappedGraphIdentity = MappedGraphIdentity {
+    database_oid: 1,
+    index_oid: 2,
+    rel_file_number: 3,
+    directory_epoch: 4,
+    meta_lsn: 5,
+};
+
 #[test]
 fn mapped_packed_graph_owner_keeps_node_borrows_live() -> Result<(), Box<dyn std::error::Error>> {
     let file = TempFile::create();
-    write_segment_atomic(&file.0, SegmentKind::HnswGraph, &packed_image()?)?;
+    let payload = encode_mapped_packed_graph(IDENTITY, &packed_image()?);
+    write_segment_atomic(&file.0, SegmentKind::HnswGraph, &payload)?;
 
-    let mapped = MappedPackedGraphImage::open(&file.0)?;
+    let mapped = MappedPackedGraphImage::open(&file.0, IDENTITY)?;
     let first = mapped
         .view()
         .node(0)
@@ -91,11 +101,30 @@ fn mapped_packed_graph_owner_keeps_node_borrows_live() -> Result<(), Box<dyn std
 #[test]
 fn mapped_packed_graph_rejects_invalid_inner_image() -> Result<(), Box<dyn std::error::Error>> {
     let file = TempFile::create();
-    write_segment_atomic(&file.0, SegmentKind::HnswGraph, b"invalid packed image")?;
+    let payload = encode_mapped_packed_graph(IDENTITY, b"invalid packed image");
+    write_segment_atomic(&file.0, SegmentKind::HnswGraph, &payload)?;
 
     assert!(matches!(
-        MappedPackedGraphImage::open(&file.0),
+        MappedPackedGraphImage::open(&file.0, IDENTITY),
         Err(MappedPackedGraphError::Graph(_))
+    ));
+    Ok(())
+}
+
+#[test]
+fn mapped_packed_graph_rejects_a_different_index_identity() -> Result<(), Box<dyn std::error::Error>>
+{
+    let file = TempFile::create();
+    let payload = encode_mapped_packed_graph(IDENTITY, &packed_image()?);
+    write_segment_atomic(&file.0, SegmentKind::HnswGraph, &payload)?;
+    let wrong = MappedGraphIdentity {
+        index_oid: 99,
+        ..IDENTITY
+    };
+
+    assert!(matches!(
+        MappedPackedGraphImage::open(&file.0, wrong),
+        Err(MappedPackedGraphError::IdentityMismatch)
     ));
     Ok(())
 }
