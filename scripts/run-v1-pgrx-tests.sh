@@ -35,8 +35,8 @@ fi
 # the harness starts. Install the test-enabled extension and execute the same
 # generated wrappers inside PostgreSQL, where those symbols are available.
 PGRX_TEST_DBNAME="${PGRX_TEST_DBNAME:-pgcontext_pgrx_tests}"
-PGHOST="${PGHOST:-localhost}"
-PGPORT="${PGPORT:-288${PG_MAJOR}}"
+PGRX_TEST_HOST="${PGRX_TEST_HOST:-127.0.0.1}"
+PGRX_TEST_PORT="${PGRX_TEST_PORT:-288${PG_MAJOR}}"
 if [[ ! "${PGRX_TEST_DBNAME}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
   echo "PGRX_TEST_DBNAME must be a simple SQL identifier" >&2
   exit 2
@@ -52,13 +52,13 @@ if [[ -z "${extension_version}" ]]; then
   exit 2
 fi
 extension_sql="$("${pgrx_pg_config}" --sharedir)/extension/pgcontext--${extension_version}.sql"
-createdb_connection=(-h "${PGHOST}" -p "${PGPORT}")
+createdb_connection=(-h "${PGRX_TEST_HOST}" -p "${PGRX_TEST_PORT}")
 runner_command=(
   python3 scripts/run_pgrx_tests_in_server.py
   --repo-root "${REPO_ROOT}"
   --psql "${pg_psql}"
-  --host "${PGHOST}"
-  --port "${PGPORT}"
+  --host "${PGRX_TEST_HOST}"
+  --port "${PGRX_TEST_PORT}"
   --database "${PGRX_TEST_DBNAME}"
   --extension-sql "${extension_sql}"
 )
@@ -80,7 +80,10 @@ cluster_log="${cluster_root}/postgres.log"
 cluster_started=false
 cleanup_cluster() {
   if [[ "${cluster_started}" == true ]]; then
-    "${pg_bin}/pg_ctl" stop -D "${cluster_data}" -m fast || true
+    if ! "${pg_bin}/pg_ctl" stop -D "${cluster_data}" -m fast; then
+      echo "preserving test cluster after PostgreSQL shutdown failure: ${cluster_root}" >&2
+      return 1
+    fi
   fi
   case "${cluster_root}" in
     "${cluster_base}/pgcontext-pgrx-pg${PG_MAJOR}."*)
@@ -88,14 +91,22 @@ cleanup_cluster() {
       ;;
     *)
       echo "refusing to remove unexpected test directory: ${cluster_root}" >&2
+      return 1
       ;;
   esac
 }
-trap cleanup_cluster EXIT
+trap 'cleanup_cluster || true' EXIT
 
-"${pg_bin}/initdb" -D "${cluster_data}" --no-locale --encoding=UTF8
+if [[ -n "${PGUSER:-}" ]]; then
+  "${pg_bin}/initdb" -D "${cluster_data}" --no-locale --encoding=UTF8 \
+    --username "${PGUSER}"
+else
+  "${pg_bin}/initdb" -D "${cluster_data}" --no-locale --encoding=UTF8
+fi
 "${pg_bin}/pg_ctl" start -D "${cluster_data}" -l "${cluster_log}" \
-  -o "-p ${PGPORT} -h ${PGHOST}"
+  -o "-p ${PGRX_TEST_PORT} -h ${PGRX_TEST_HOST}"
 cluster_started=true
 "${pg_bin}/createdb" "${createdb_connection[@]}" "${PGRX_TEST_DBNAME}"
 "${runner_command[@]}"
+trap - EXIT
+cleanup_cluster

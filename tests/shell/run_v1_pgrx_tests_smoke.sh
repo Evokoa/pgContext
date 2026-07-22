@@ -63,6 +63,9 @@ cat >"${fake_bin}/pg_ctl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'pg_ctl:%s\n' "$*" >>"${FAKE_PGRX_LOG}"
+if [[ "${1:-}" == "stop" && "${FAKE_PG_CTL_STOP_FAILURE:-false}" == true ]]; then
+  exit 1
+fi
 SH
 cat >"${fake_bin}/createdb" <<'SH'
 #!/usr/bin/env bash
@@ -76,6 +79,9 @@ chmod +x "${fake_bin}/cargo" "${fake_bin}/pg_config" "${fake_bin}/psql" \
 PATH="${fake_bin}:${PATH}" \
   REPO_ROOT="${fixture_root}" \
   PG_MAJOR=18 \
+  PGHOST=/tmp \
+  PGPORT=5432 \
+  PGUSER=postgres \
   PGRX_TEST_PLATFORM=Darwin \
   PGRX_TEST_DBNAME=pgcontext_runner_smoke \
   PGRX_TEST_TMPDIR="${work_dir}/clusters" \
@@ -88,12 +94,16 @@ grep -q '^cargo:pgrx info pg-config pg18$' "${log_path}"
 grep -q \
   '^cargo:pgrx install --test --release -p context-pg .* --no-default-features --features pg18 pg_test$' \
   "${log_path}"
-grep -q '^initdb:-D .*pgcontext-pgrx-pg18\..*/data --no-locale --encoding=UTF8$' \
+grep -q '^initdb:-D .*pgcontext-pgrx-pg18\..*/data --no-locale --encoding=UTF8 --username postgres$' \
   "${log_path}"
 grep -q '^pg_ctl:start -D .*pgcontext-pgrx-pg18\..*/data .*' "${log_path}"
-grep -q '^createdb:.*pgcontext_runner_smoke$' "${log_path}"
+grep -q '^pg_ctl:start .* -o -p 28818 -h 127\.0\.0\.1$' "${log_path}"
+grep -q '^createdb:-h 127\.0\.0\.1 -p 28818 -U postgres pgcontext_runner_smoke$' \
+  "${log_path}"
 grep -q '^pg_ctl:stop -D .*pgcontext-pgrx-pg18\..*/data -m fast$' "${log_path}"
 grep -q 'python3:scripts/run_pgrx_tests_in_server.py .*--database pgcontext_runner_smoke' \
+  "${log_path}"
+grep -q 'python3:scripts/run_pgrx_tests_in_server.py .*--user postgres' \
   "${log_path}"
 grep -q \
   "python3:.*--extension-sql ${fake_share}/extension/pgcontext--0.1.0.sql" \
@@ -102,6 +112,47 @@ if find "${work_dir}/clusters" -mindepth 1 -print -quit | grep -q .; then
   echo "isolated cluster directory should be removed" >&2
   exit 1
 fi
+
+: >"${log_path}"
+if PATH="${fake_bin}:${PATH}" \
+  REPO_ROOT="${fixture_root}" \
+  PG_MAJOR=18 \
+  PGRX_TEST_PLATFORM=Darwin \
+  PGRX_TEST_TMPDIR="${work_dir}/failed-clusters" \
+  FAKE_PG_CTL_STOP_FAILURE=true \
+  FAKE_PGRX_LOG="${log_path}" \
+  FAKE_PGRX_BIN="${fake_bin}" \
+  FAKE_PGRX_SHARE="${fake_share}" \
+  "${fixture_root}/scripts/run-v1-pgrx-tests.sh" \
+  2>"${work_dir}/stop-failure.err"; then
+  echo "failed PostgreSQL shutdown should fail the runner" >&2
+  exit 1
+fi
+grep -q 'preserving test cluster after PostgreSQL shutdown failure' \
+  "${work_dir}/stop-failure.err"
+if ! find "${work_dir}/failed-clusters" -mindepth 1 -maxdepth 1 -type d \
+  -name 'pgcontext-pgrx-pg18.*' -print -quit | grep -q .; then
+  echo "failed PostgreSQL shutdown should preserve the test cluster" >&2
+  exit 1
+fi
+
+: >"${log_path}"
+PATH="${fake_bin}:${PATH}" \
+  REPO_ROOT="${fixture_root}" \
+  PGRX_TEST_PLATFORM=Darwin \
+  PGRX_TEST_TMPDIR="${work_dir}/pg17-clusters" \
+  FAKE_PGRX_LOG="${log_path}" \
+  FAKE_PGRX_BIN="${fake_bin}" \
+  FAKE_PGRX_SHARE="${fake_share}" \
+  "${fixture_root}/scripts/run-v1-pgrx-tests.sh"
+grep -q '^cargo:pgrx info pg-config pg17$' "${log_path}"
+grep -q \
+  '^cargo:pgrx install --test --release -p context-pg .* --no-default-features --features pg17 pg_test$' \
+  "${log_path}"
+grep -q '^initdb:-D .*pgcontext-pgrx-pg17\..*/data --no-locale --encoding=UTF8$' \
+  "${log_path}"
+grep -q '^pg_ctl:start .* -o -p 28817 -h 127\.0\.0\.1$' "${log_path}"
+grep -q '^pg_ctl:stop -D .*pgcontext-pgrx-pg17\..*/data -m fast$' "${log_path}"
 
 : >"${log_path}"
 PATH="${fake_bin}:${PATH}" \
