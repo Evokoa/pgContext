@@ -348,7 +348,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default=Path(__file__).resolve().parents[1],
         help="pgContext repository root",
     )
-    parser.add_argument("--psql", default="psql", help="PostgreSQL 17 psql executable")
+    parser.add_argument("--psql", default="psql", help="PostgreSQL psql executable")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", default="28817")
     parser.add_argument("--database", required=True)
