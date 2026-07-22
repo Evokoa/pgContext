@@ -80,6 +80,14 @@ translated explicitly. PostgreSQL readiness and source visibility checks remain
 in `context-pg`; pure outcomes distinguish ready, rebuild-required, not-ready,
 cancelled, and budget-exhausted states without embedding SQLSTATEs.
 
+`context-pg::retrieval` is the production composition seam for those ports. It
+provides SPI exact/HNSW candidate sources, registered-filter candidates,
+authoritative `_visible_collection_points` source rechecks, a PostgreSQL
+interrupt bridge, and the bounded telemetry sink. The unfiltered registered
+table `search` path resolves collection ownership, source-table `SELECT`, RLS
+visibility, and drift before executing `QueryIr`; exact score and tie ordering
+remain owned by the pure query and metric contracts.
+
 ## Filter Compiler Safety
 
 The filter compiler is a SQL-injection boundary. Field names and JSONB paths are

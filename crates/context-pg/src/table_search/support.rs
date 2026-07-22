@@ -1,7 +1,7 @@
 //! Filter and facet support for table-backed search.
 
 use context_filter::{
-    FieldRegistry, FilterError, PayloadValue, RangeBound, SqlParameter, SqlParameterType,
+    FieldRegistry, Filter, FilterError, PayloadValue, RangeBound, SqlParameter, SqlParameterType,
     parse_filter_json, render_sql_predicate,
 };
 use pgrx::JsonB;
@@ -12,20 +12,20 @@ use serde_json::Value;
 use crate::error::raise_sql_error;
 
 #[derive(Debug, Clone)]
-pub(super) struct FilterField {
-    pub(super) filter_key: String,
-    pub(super) column_name: String,
-    pub(super) jsonb_path: Option<Vec<String>>,
+pub(crate) struct FilterField {
+    pub(crate) filter_key: String,
+    pub(crate) column_name: String,
+    pub(crate) jsonb_path: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct FilterPredicatePlan {
-    pub(super) sql: String,
-    pub(super) parameters: Vec<FilterSqlParameter>,
+pub(crate) struct FilterPredicatePlan {
+    pub(crate) sql: String,
+    pub(crate) parameters: Vec<FilterSqlParameter>,
 }
 
 #[derive(Debug, Clone)]
-pub(super) enum FilterSqlParameter {
+pub(crate) enum FilterSqlParameter {
     Text(String),
     Bool(bool),
     I64(i64),
@@ -44,7 +44,7 @@ pub(super) struct FacetTarget {
     pub(super) jsonb_path: Option<Vec<String>>,
 }
 
-pub(super) fn load_filter_fields(collection_id: i64) -> Vec<FilterField> {
+pub(crate) fn load_filter_fields(collection_id: i64) -> Vec<FilterField> {
     Spi::connect(|client| {
         let rows = match client.select(
             "SELECT filter_key,
@@ -133,34 +133,37 @@ pub(super) fn resolve_filter_plan(
         Err(error) => raise_filter_error(error),
     };
 
+    resolve_typed_filter_plan(fields, &filter, placeholder_offset)
+        .unwrap_or_else(|error| raise_filter_error(error))
+        .into()
+}
+
+pub(crate) fn resolve_typed_filter_plan(
+    fields: &[FilterField],
+    filter: &Filter,
+    placeholder_offset: usize,
+) -> Result<FilterPredicatePlan, FilterError> {
     let mut builder = FieldRegistry::builder();
     for field in fields {
-        let registered = match field.jsonb_path.as_ref() {
+        builder = match field.jsonb_path.as_ref() {
             Some(path) => builder.register_jsonb_path(
                 &field.filter_key,
                 field.column_name.clone(),
                 path.clone(),
             ),
             None => builder.register_column(&field.filter_key, field.column_name.clone()),
-        };
-        builder = match registered {
-            Ok(builder) => builder,
-            Err(error) => raise_filter_error(error),
-        };
+        }?;
     }
     let registry = builder.build();
-    let resolved = match registry.resolve_filter(&filter) {
-        Ok(resolved) => resolved,
-        Err(error) => raise_filter_error(error),
-    };
+    let resolved = registry.resolve_filter(filter)?;
     let plan = render_sql_predicate(&resolved);
-    Some(FilterPredicatePlan {
+    Ok(FilterPredicatePlan {
         sql: shift_placeholders(&plan.sql, placeholder_offset),
         parameters: sql_parameters(plan.parameters, plan.parameter_types),
     })
 }
 
-pub(super) fn push_filter_parameter_args<'a>(
+pub(crate) fn push_filter_parameter_args<'a>(
     args: &mut Vec<DatumWithOid<'a>>,
     parameter_values: &'a [FilterSqlParameter],
 ) {

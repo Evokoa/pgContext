@@ -33,6 +33,7 @@ mod points;
 mod quantization_sql;
 mod query_builders;
 mod query_stats;
+mod retrieval;
 mod settings;
 mod sparse_search;
 mod table_search;
@@ -116,6 +117,7 @@ mod tests {
     include!("pg_tests/quantization.rs");
     include!("pg_tests/query_stats.rs");
     include!("pg_tests/query_builders.rs");
+    include!("pg_tests/retrieval.rs");
     include!("pg_tests/recommendation.rs");
     include!("pg_tests/scroll.rs");
     include!("pg_tests/security.rs");

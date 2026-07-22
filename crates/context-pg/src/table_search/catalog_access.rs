@@ -1,4 +1,4 @@
-pub(super) fn resolve_collection(collection_name: &CollectionName) -> SearchCollection {
+pub(crate) fn resolve_collection(collection_name: &CollectionName) -> SearchCollection {
     Spi::connect(|client| {
         let rows = match client.select(
             "SELECT collection_id, owner_role, has_source_table

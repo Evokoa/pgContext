@@ -13,26 +13,27 @@ use pgrx::prelude::*;
 use crate::domain_types::distance_metric_from_catalog;
 use crate::error::{raise_core_error, raise_sql_error};
 use crate::vector::Vector;
-use support::{
-    FacetTarget, FilterPredicatePlan, facet_expression, load_filter_fields,
-    push_filter_parameter_args, resolve_facet_target, resolve_filter_plan,
+use support::{FacetTarget, facet_expression, resolve_facet_target, resolve_filter_plan};
+pub(crate) use support::{
+    FilterField, FilterPredicatePlan, load_filter_fields, push_filter_parameter_args,
+    resolve_typed_filter_plan,
 };
 
 #[derive(Debug, Clone)]
-pub(super) struct SearchCollection {
-    pub(super) collection_id: i64,
-    pub(super) owner_role: pg_sys::Oid,
+pub(crate) struct SearchCollection {
+    pub(crate) collection_id: i64,
+    pub(crate) owner_role: pg_sys::Oid,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct SearchVector {
+pub(crate) struct SearchVector {
     pub(crate) schema_name: String,
     pub(crate) table_name: String,
     pub(crate) table_oid: pg_sys::Oid,
     pub(crate) vector_column_name: String,
-    pub(super) vector_attnum: i16,
-    pub(super) hnsw_index_oid: Option<pg_sys::Oid>,
-    pub(super) metric: DistanceMetric,
+    pub(crate) vector_attnum: i16,
+    pub(crate) hnsw_index_oid: Option<pg_sys::Oid>,
+    pub(crate) metric: DistanceMetric,
 }
 
 #[pg_extern(schema = "pgcontext", name = "search")]
@@ -50,20 +51,20 @@ pub fn search_collection(
     ),
 > {
     let collection_name = collection_name_from_sql(collection);
-    let collection = resolve_collection(&collection_name);
-    require_collection_owner(&collection, &collection_name);
-    let mut registered_vector =
-        resolve_registered_vector(&collection_name, collection.collection_id);
-    validate_search_drift(collection.collection_id, &mut registered_vector);
-    require_table_select_privilege(&registered_vector);
-
     let limit = search_limit_from_sql(limit);
-    crate::collection_limits::enforce_search_limit(
-        collection.collection_id,
-        &collection_name,
+    let query = context_query::QueryIr::nearest(
+        None,
+        vector.as_slice().to_vec(),
+        context_query::ScoreOrder::LowerIsBetter,
+        None,
         limit.get(),
+    )
+    .unwrap_or_else(|error| crate::error::raise_query_error(error));
+    let rows = crate::retrieval::run_query(
+        &collection_name,
+        query,
+        crate::retrieval::CandidateAdapter::Exact,
     );
-    let rows = search_registered_table(collection.collection_id, &registered_vector, vector, limit);
     TableIterator::new(rows)
 }
 
@@ -195,7 +196,7 @@ pub fn facet_collection(
     TableIterator::new(rows)
 }
 
-pub(super) fn collection_name_from_sql(collection_name: String) -> CollectionName {
+pub(crate) fn collection_name_from_sql(collection_name: String) -> CollectionName {
     match CollectionName::new(collection_name) {
         Ok(collection_name) => collection_name,
         Err(error) => raise_core_error(error),
@@ -220,7 +221,7 @@ fn raise_scroll_cursor_error(error: ScrollCursorError) -> ! {
     )
 }
 
-pub(super) fn search_limit_from_sql(limit: i32) -> SearchLimit {
+pub(crate) fn search_limit_from_sql(limit: i32) -> SearchLimit {
     let limit = match usize::try_from(limit) {
         Ok(limit) => limit,
         Err(_) => raise_sql_error(
@@ -236,7 +237,7 @@ pub(super) fn search_limit_from_sql(limit: i32) -> SearchLimit {
 
 include!("table_search/catalog_access.rs");
 
-pub(in crate::table_search) fn search_registered_table(
+pub(crate) fn search_registered_table(
     collection_id: i64,
     registered_vector: &SearchVector,
     query: Vector,
@@ -785,7 +786,7 @@ fn facet_registered_table(
     })
 }
 
-pub(super) fn distance_function(metric: DistanceMetric) -> &'static str {
+pub(crate) fn distance_function(metric: DistanceMetric) -> &'static str {
     match metric {
         DistanceMetric::L2 => "l2_distance",
         DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => {
@@ -800,7 +801,7 @@ pub(super) fn distance_function(metric: DistanceMetric) -> &'static str {
     }
 }
 
-pub(super) fn require_collection_owner(
+pub(crate) fn require_collection_owner(
     collection: &SearchCollection,
     collection_name: &CollectionName,
 ) {

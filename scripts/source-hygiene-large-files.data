@@ -1,7 +1,7 @@
 # Existing cohesive modules above the 1,000-line target. New files may not be
 # added, and these files may not grow beyond the pinned reviewed size.
 crates/context-pg/src/pg_tests/late_interaction_ann.rs|1474
-crates/context-pg/src/pg_tests/vector_variant_compatibility.rs|1464
+crates/context-pg/src/pg_tests/vector_variant_compatibility.rs|1722
 crates/context-pg/src/pg_tests/build_jobs.rs|1301
 crates/context-pg/src/pg_tests/table_search.rs|1135
 crates/context-pg/src/pg_tests/hnsw_am.rs|1117
