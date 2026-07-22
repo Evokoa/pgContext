@@ -339,7 +339,13 @@ pub fn weighted_fusion(
         }
 
         let branch_weight = branch.weight / total_weight;
-        let score_range = maximum - minimum;
+        let scale = minimum.abs().max(maximum.abs());
+        let (scaled_minimum, scaled_maximum) = if minimum == maximum {
+            (minimum, maximum)
+        } else {
+            (minimum / scale, maximum / scale)
+        };
+        let score_range = scaled_maximum - scaled_minimum;
         let mut best_in_branch = BTreeMap::<u64, f64>::new();
         for candidate in branch.candidates {
             let score = candidate
@@ -349,10 +355,16 @@ pub fn weighted_fusion(
                 1.0
             } else {
                 match branch.direction {
-                    ScoreDirection::HigherIsBetter => (score - minimum) / score_range,
-                    ScoreDirection::LowerIsBetter => (maximum - score) / score_range,
+                    ScoreDirection::HigherIsBetter => {
+                        (score / scale - scaled_minimum) / score_range
+                    }
+                    ScoreDirection::LowerIsBetter => (scaled_maximum - score / scale) / score_range,
                 }
             };
+            if !normalized.is_finite() {
+                return Err(WeightedFusionError::InvalidScore);
+            }
+            let normalized = normalized.clamp(0.0, 1.0);
             best_in_branch
                 .entry(candidate.point_id())
                 .and_modify(|existing| *existing = existing.max(normalized))

@@ -63,6 +63,29 @@ fn weighted_fusion_rejects_invalid_weights_and_missing_scores() {
     );
 }
 
+#[test]
+fn weighted_fusion_normalizes_extreme_finite_scores_without_nan() {
+    let points = [scored(1, -1.0e308), scored(2, 0.0), scored(3, 1.0e308)];
+    let fused = weighted_fusion(
+        &[WeightedBranch::new(
+            &points,
+            1.0,
+            ScoreDirection::HigherIsBetter,
+        )],
+        3,
+    )
+    .expect("all finite scores should be normalizable");
+
+    assert_eq!(
+        fused
+            .iter()
+            .map(|point| point.point_id())
+            .collect::<Vec<_>>(),
+        vec![3, 2, 1]
+    );
+    assert!(fused.iter().all(|point| point.score().is_finite()));
+}
+
 proptest! {
     #[test]
     fn one_branch_weighted_and_rrf_preserve_the_same_strict_order(
