@@ -9,9 +9,11 @@ use core::{fmt, mem::size_of};
 
 use context_core::DenseVector;
 
+mod mapped_view;
 mod quantization;
 mod quantized_view;
 
+pub use mapped_view::{MappedGraphNodeView, MappedGraphView, MappedNeighborIter};
 pub use quantization::{
     HnswGraphQuantization, HnswGraphQuantizationCodebook, PreparedQuantizedQuery,
 };
