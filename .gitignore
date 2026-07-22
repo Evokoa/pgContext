@@ -41,6 +41,7 @@ __pycache__/
 .claude/
 .codex/
 .private/
+.temp/
 planning/
 archive/
 reference/
