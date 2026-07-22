@@ -160,6 +160,52 @@ pub struct FusedPoint {
     score: f64,
 }
 
+/// Ordering semantics for one weighted score branch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScoreDirection {
+    /// Larger adapter scores are better.
+    HigherIsBetter,
+    /// Smaller adapter scores are better, as with distances.
+    LowerIsBetter,
+}
+
+/// One scored branch participating in normalized weighted fusion.
+#[derive(Clone, Copy, Debug)]
+pub struct WeightedBranch<'a> {
+    candidates: &'a [BranchCandidate],
+    weight: f64,
+    direction: ScoreDirection,
+}
+
+impl<'a> WeightedBranch<'a> {
+    /// Creates a weighted branch.
+    #[must_use]
+    pub const fn new(
+        candidates: &'a [BranchCandidate],
+        weight: f64,
+        direction: ScoreDirection,
+    ) -> Self {
+        Self {
+            candidates,
+            weight,
+            direction,
+        }
+    }
+}
+
+/// Invalid input to normalized weighted fusion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WeightedFusionError {
+    /// A branch weight is negative or non-finite.
+    InvalidWeight,
+    /// Every supplied branch has zero weight.
+    ZeroTotalWeight,
+    /// A candidate does not carry the score required for weighted fusion.
+    MissingScore,
+    /// A candidate carries a non-finite adapter score.
+    InvalidScore,
+}
+
 impl FusedPoint {
     /// Creates a fused point with its accumulated RRF score.
     #[must_use]
@@ -240,6 +286,95 @@ pub fn reciprocal_rank_fusion_batches(
         .map(CandidateBatch::points)
         .collect::<Vec<_>>();
     reciprocal_rank_fusion(&branches, k, limit)
+}
+
+/// Fuses scored branches using a normalized weighted linear combination.
+///
+/// Scores are min-max normalized independently inside each branch. Distance
+/// branches are inverted so `1.0` always represents that branch's best score.
+/// A constant-score branch contributes `1.0` for every distinct candidate,
+/// preserving its weight instead of discarding the branch. Duplicate point IDs
+/// contribute at most once per branch, using their best normalized score.
+/// Branch weights are normalized by the sum of positive weights. Results sort
+/// by descending fused score and then ascending point ID.
+///
+/// # Errors
+///
+/// Returns [`WeightedFusionError`] for invalid weights, a zero total weight, or
+/// missing/non-finite candidate scores.
+pub fn weighted_fusion(
+    branches: &[WeightedBranch<'_>],
+    limit: usize,
+) -> Result<Vec<FusedPoint>, WeightedFusionError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    if branches
+        .iter()
+        .any(|branch| !branch.weight.is_finite() || branch.weight < 0.0)
+    {
+        return Err(WeightedFusionError::InvalidWeight);
+    }
+    let total_weight = branches.iter().map(|branch| branch.weight).sum::<f64>();
+    if !total_weight.is_finite() || total_weight <= 0.0 {
+        return Err(WeightedFusionError::ZeroTotalWeight);
+    }
+
+    let mut fused_scores = BTreeMap::<u64, f64>::new();
+    for branch in branches.iter().filter(|branch| branch.weight > 0.0) {
+        let mut minimum = f64::INFINITY;
+        let mut maximum = f64::NEG_INFINITY;
+        for candidate in branch.candidates {
+            let score = candidate
+                .branch_score()
+                .ok_or(WeightedFusionError::MissingScore)?;
+            if !score.is_finite() {
+                return Err(WeightedFusionError::InvalidScore);
+            }
+            minimum = minimum.min(score);
+            maximum = maximum.max(score);
+        }
+        if branch.candidates.is_empty() {
+            continue;
+        }
+
+        let branch_weight = branch.weight / total_weight;
+        let score_range = maximum - minimum;
+        let mut best_in_branch = BTreeMap::<u64, f64>::new();
+        for candidate in branch.candidates {
+            let score = candidate
+                .branch_score()
+                .ok_or(WeightedFusionError::MissingScore)?;
+            let normalized = if score_range == 0.0 {
+                1.0
+            } else {
+                match branch.direction {
+                    ScoreDirection::HigherIsBetter => (score - minimum) / score_range,
+                    ScoreDirection::LowerIsBetter => (maximum - score) / score_range,
+                }
+            };
+            best_in_branch
+                .entry(candidate.point_id())
+                .and_modify(|existing| *existing = existing.max(normalized))
+                .or_insert(normalized);
+        }
+        for (point_id, normalized) in best_in_branch {
+            *fused_scores.entry(point_id).or_default() += normalized * branch_weight;
+        }
+    }
+
+    let mut fused = fused_scores
+        .into_iter()
+        .map(|(point_id, score)| FusedPoint::new(point_id, score))
+        .collect::<Vec<_>>();
+    fused.sort_by(|left, right| {
+        right
+            .score()
+            .total_cmp(&left.score())
+            .then_with(|| left.point_id().cmp(&right.point_id()))
+    });
+    fused.truncate(limit);
+    Ok(fused)
 }
 
 /// Returns the package version compiled into this crate.

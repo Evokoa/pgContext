@@ -13,5 +13,8 @@ categories.workspace = true
 [dependencies]
 context-core = { path = "../context-core", version = "0.1.0" }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true
