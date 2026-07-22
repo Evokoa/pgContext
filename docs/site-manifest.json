@@ -373,7 +373,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "094bfb1bce5417443bc962fcc36fcc8dcf1c0f8e848d95d95bfb0cbadcc750d8"
+      "sha256": "716dab5be9919b8fd63960df7e454e40a045ffb23d9b4baf35c08323100afe24"
     },
     {
       "links": [],
@@ -469,16 +469,18 @@
       "sha256": "cbb5a00be667441d0d3fe2ff04eda97f8a8b3dca656b14af544289c1911743eb"
     },
     {
-      "links": [],
+      "links": [
+        "pgvector_migration.md#converting-column-ownership"
+      ],
       "path": "user_guide/pgvector_coexist.md",
-      "sha256": "ed60e2ceb543aa3c4260c0998d421d1bda5ff24f4d6d6b31505f4f4852fb365c"
+      "sha256": "26c1d44491758e64010e4275dec247efc30e0ebee027f7fffaf226799ff69030"
     },
     {
       "links": [
         "pgvector_coexist.md"
       ],
       "path": "user_guide/pgvector_migration.md",
-      "sha256": "63b891fa28777c18384964ec5250c9fa77d3e0dd94a249e8861747cad027eb9f"
+      "sha256": "d99a4b3dbdb283769f50f70adc75901e4761e2c5d90becb4fb419c4e238e97c2"
     },
     {
       "links": [

@@ -42,7 +42,7 @@ type MigrationReportRow = (
 );
 
 /// Returns whether `type_oid` belongs to the pgvector extension.
-fn type_owned_by_pgvector(type_oid: pg_sys::Oid) -> bool {
+pub(crate) fn type_owned_by_pgvector(type_oid: pg_sys::Oid) -> bool {
     // SAFETY: syscache lookups over a valid type OID; both functions accept
     // arbitrary OIDs and return InvalidOid/NULL for misses.
     unsafe {

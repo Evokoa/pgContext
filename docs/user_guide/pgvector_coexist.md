@@ -91,6 +91,21 @@ pgvector's packed layout. PostgreSQL exposes prepared statements only for the
 current backend, so drain or recycle application sessions at a type-ownership
 cutover.
 
+Use `pgcontext.start_pgvector_ownership_conversion` plus
+`run_pgvector_ownership_conversion` for an atomic metadata-only conversion, or
+select `restricted_online` for bounded shadow backfill and a caller-executed
+`CREATE INDEX CONCURRENTLY`. The online profile requires explicit INSERT column
+lists; both modes require explicit review of application and string-bodied
+stored-function dependencies that PostgreSQL cannot inventory. The online
+profile supports at most one source ANN index with the requested metric and
+requires the caller to have schema/index-build privileges. It refuses
+catalog-discoverable unsupported dependencies. After its drained cutover,
+`rollback_pgvector_ownership_conversion` restores the synchronized pgvector
+column and original index; `finalize_pgvector_ownership_conversion` instead
+removes that rollback boundary. See
+[Migrating from pgvector](pgvector_migration.md#converting-column-ownership) for
+the complete sequence and operational restrictions.
+
 Dropping either prerequisite is blocked while the bridge is installed. Bridge
 indexes in turn block `DROP EXTENSION pgcontext_pgvector` under `RESTRICT`.
 Remove or convert those indexes first; dropping the bridge then removes its

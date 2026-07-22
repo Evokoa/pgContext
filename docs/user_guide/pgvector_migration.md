@@ -40,6 +40,102 @@ it verifies the type owner and reports defaults, arrays, generated columns,
 partitions, dependent views, and complex indexes that must be handled before an
 ownership cutover. Index adoption never changes the column type.
 
+## Converting Column Ownership
+
+Install the certified bridge, inventory the target, and choose one of two
+fail-closed modes:
+
+```sql
+SELECT *
+FROM pgcontext.start_pgvector_ownership_conversion(
+    'public.items'::regclass,
+    'embedding',
+    'fast',
+    'cosine',
+    application_dependencies_reviewed => true
+);
+
+SELECT *
+FROM pgcontext.run_pgvector_ownership_conversion(
+    1,
+    sessions_drained => true
+);
+```
+
+Fast mode takes `ACCESS EXCLUSIVE`, refuses named prepared statements in the
+calling backend, changes a certified `public.vector`/`public.halfvec` column to
+the corresponding pgContext-owned type without rewriting the heap, and rebuilds
+certified pgvector HNSW or IVFFlat indexes as `pgcontext_hnsw`. Dimensioned
+sources become an unmodified canonical base type plus a validated dimension
+CHECK constraint; `NOT NULL`, values, and index options/tablespace are
+preserved when the target AM can represent them. Because `pgcontext_hnsw` does
+not currently expose pgvector's per-index HNSW reloptions, a source HNSW index
+with nondefault options is refused rather than silently changed. IVFFlat `lists`
+is intentionally not translated when that access method is rebuilt as HNSW.
+Invalid source indexes and indexes with comments are also refused. The caller
+must retain `CREATE` on the table schema and on any preserved nondefault
+tablespace needed to rebuild an index.
+The operation is one transaction.
+
+Restricted-online mode is for the narrow supported profile when the long lock
+is unacceptable:
+
+```sql
+SELECT *
+FROM pgcontext.start_pgvector_ownership_conversion(
+    'public.items'::regclass,
+    'embedding',
+    'restricted_online',
+    'cosine',
+    application_uses_column_lists => true,
+    application_dependencies_reviewed => true
+);
+
+-- Repeat in separate transactions until status = 'index_pending'.
+SELECT * FROM pgcontext.run_pgvector_ownership_conversion(1, 1000);
+
+-- Execute the returned next_command as a top-level statement, then certify it.
+CREATE INDEX CONCURRENTLY ...;
+SELECT * FROM pgcontext.run_pgvector_ownership_conversion(1);
+
+-- Drain/recycle application sessions before the short locked swap.
+SELECT * FROM pgcontext.cutover_pgvector_ownership_conversion(
+    1,
+    sessions_drained => true
+);
+```
+
+The shadow trigger runs in the same source DML transaction and overwrites direct
+shadow assignments from the authoritative column. Backfill calls persist a
+heap-TID range cursor and examine a bounded range; an authoritative full scan is
+reserved for the end of a pass and resets the cursor if concurrent locks or
+drift left mismatches behind. That scan runs without the cutover's
+`ACCESS EXCLUSIVE` lock; the certified trigger preserves equality until the
+short lock upgrade freezes DML. Candidate index construction is deliberately
+emitted to the caller because PostgreSQL forbids `CREATE INDEX CONCURRENTLY`
+inside a function transaction. After cutover, the trigger maintains the old
+pgvector column for rollback. Use `rollback_pgvector_ownership_conversion(1)`
+to restore the original column and indexes, or
+`finalize_pgvector_ownership_conversion(1)` to validate once more and
+irreversibly remove the rollback column.
+
+The caller that executes `next_command` must own the table and have `CREATE` on
+its schema. Final validation, like cutover validation, scans while the reverse
+trigger is active under `ACCESS SHARE`; only the final trigger/column DDL uses
+the upgraded exclusive lock.
+
+Online mode adds a physical column, so applications must use explicit INSERT
+column lists throughout the migration. PostgreSQL cannot inventory prepared SQL
+in other backends; the `sessions_drained` value is an operator attestation, not
+automatic global detection. PostgreSQL also does not record column dependencies
+for application SQL or ordinary string-bodied SQL/PLpgSQL functions, so
+`application_dependencies_reviewed => true` is a required operator attestation
+that those call sites were inventoried and can accept the type-ownership change.
+The conversion refuses catalog-discoverable unsupported dependencies including
+RLS, comments, custom column statistics/storage, and unsupported index options
+rather than attempting partial rewrites. `sparsevec`, arrays/domains, partitions,
+and composite-row dependencies remain unsupported.
+
 ## Filters and Hybrid Retrieval
 
 Register payload columns and JSONB paths that should be filterable:
@@ -65,12 +161,12 @@ surface. The production serving path is exact table-backed search first, with
 `pgcontext_hnsw` maturing behind explicit recall, visibility, filter, and
 restart gates. IVFFlat's training/list maintenance model is not the selected
 artifact shape for pgContext's PostgreSQL-native source-table ownership model.
-Applications that depend on IVFFlat during migration should keep those pgvector
-indexes in place for that workload, and register the same source tables with
-pgContext for exact search, filters, hybrid retrieval, diagnostics, and HNSW
-evaluation. `pgcontext.adopt_pgvector()` inventories IVFFlat and emits a
-rebuild-as-HNSW plan; pgContext does not translate IVFFlat options or claim an
-IVFFlat implementation.
+Applications that depend on IVFFlat during bind-mode evaluation should keep
+those pgvector indexes in place for that workload, and register the same source
+tables with pgContext for exact search, filters, hybrid retrieval, diagnostics,
+and HNSW evaluation. `pgcontext.adopt_pgvector()` and fast ownership conversion
+inventory IVFFlat and emit or execute a rebuild-as-HNSW plan; pgContext does not
+translate IVFFlat options or claim an IVFFlat implementation.
 
 ## Current Gaps
 

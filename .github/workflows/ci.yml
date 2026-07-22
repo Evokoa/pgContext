@@ -147,6 +147,7 @@ jobs:
         run: |
           PGCONTEXT_COEXIST_PSQL="sudo -u postgres psql" scripts/check-pgvector-coexist.sh
           PGCONTEXT_BRIDGE_PSQL="sudo -u postgres psql" scripts/check-pgvector-bridge.sh
+          PGCONTEXT_CONVERSION_PSQL="sudo -u postgres psql" scripts/check-pgvector-ownership-conversion.sh
 
   benchmark-harness:
     name: Benchmark harness unit tests

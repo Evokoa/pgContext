@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 140;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 142;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -313,6 +313,12 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::object(
         SqlObjectKind::Table,
         Some("pgcontext"),
+        "_pgvector_ownership_conversions",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Table,
+        Some("pgcontext"),
         "_build_jobs",
         SqlLifecycle::Internal,
     ),
@@ -386,4 +392,10 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_artifact_segments", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_collection_limits", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_collections", SqlLifecycle::Internal),
+    SqlContractObject::object(
+        SqlObjectKind::View,
+        Some("pgcontext"),
+        "_visible_pgvector_ownership_conversions",
+        SqlLifecycle::Internal,
+    ),
 ];

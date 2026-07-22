@@ -35,6 +35,12 @@ mod operations;
 mod payload_catalog;
 mod payload_mutations;
 mod pgvector_compat;
+#[allow(
+    unsafe_code,
+    reason = "ownership conversion uses certified binary Datum copies and OID-bound relation locks"
+)]
+mod pgvector_ownership;
+mod pgvector_ownership_catalog;
 mod points;
 mod quantization_sql;
 mod query_builders;

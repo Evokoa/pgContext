@@ -239,6 +239,52 @@ for semantics and caveats):
 - `pgcontext.enable_pgvector_binding()` always raises
   `feature_not_supported` with companion-bridge guidance. pgContext and
   pgvector themselves can be installed in either order.
+- `pgcontext.start_pgvector_ownership_conversion(target regclass,
+  column_name text, mode text DEFAULT 'fast', metric text DEFAULT 'cosine',
+  application_uses_column_lists bool DEFAULT false,
+  application_dependencies_reviewed bool DEFAULT false)` starts a persisted
+  conversion for a table-owner role. `mode` is `fast` or
+  `restricted_online`. Online mode immediately adds a canonical shadow column
+  and synchronization trigger, so its explicit column-list attestation is
+  mandatory. Every mode requires the application-dependency attestation
+  because PostgreSQL cannot discover relation references hidden in application
+  SQL or string-bodied SQL/PLpgSQL functions. The caller must have `CREATE` on
+  the target schema (and any preserved nondefault index tablespace) whenever
+  the conversion builds replacement indexes.
+- `pgcontext.run_pgvector_ownership_conversion(conversion_id bigint,
+  batch_size int DEFAULT 1000, sessions_drained bool DEFAULT false)` performs
+  one bounded step. Fast mode requires the session-drain attestation and
+  completes atomically. Online mode backfills at most `batch_size` mismatches;
+  once backfill is complete, `next_command` contains a `CREATE INDEX
+  CONCURRENTLY` command that must be run as its own top-level statement. Call
+  `run_pgvector_ownership_conversion` again to certify that index and advance
+  the job to `ready`.
+- `pgcontext.cutover_pgvector_ownership_conversion(conversion_id bigint,
+  sessions_drained bool DEFAULT false)` performs the locked online name swap
+  after exact row validation and requires all application sessions to have
+  been drained/reprepared. `pgcontext.finalize_pgvector_ownership_conversion`
+  then irreversibly drops the synchronized pgvector rollback column, while
+  `pgcontext.rollback_pgvector_ownership_conversion` restores the original
+  column and indexes before finalization.
+- `pgcontext.pgvector_ownership_conversions()` lists only jobs owned by a role
+  of which `SESSION_USER` is a member. The private job catalog is not dumped;
+  in-flight relation/type OIDs are intentionally never resumed after restore.
+
+Ownership conversion is deliberately restricted to permanent ordinary heap
+tables and directly pgvector-owned `vector`/`halfvec` columns. It refuses
+unsupported defaults, generated/dependent expressions, column ACLs, views,
+catalog-discoverable function dependencies, constraints, RLS policies, user triggers, publications, extended
+statistics, partitions/inheritance, replica identity, composite dependencies,
+column comments/nondefault storage/statistics, and complex or counterfeit
+indexes. Source HNSW indexes with per-index options are refused because the
+current `pgcontext_hnsw` AM cannot represent them; IVFFlat list options are
+intentionally discarded during the documented rebuild-as-HNSW conversion.
+Invalid indexes and indexes with comments are refused rather than silently
+normalizing or losing metadata. Fast conversion uses a binary metadata type
+change and rebuilds certified source ANN indexes as HNSW; for a dimensioned
+source it preserves the dimension invariant with a validated CHECK constraint
+so the heap is not rewritten. Restricted-online conversion supports at most one
+source ANN index and requires its metric to match the requested replacement.
 
 Index maintenance:
 

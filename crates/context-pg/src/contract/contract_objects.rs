@@ -3,11 +3,15 @@
 use super::{
     SqlContractObject, SqlLifecycle,
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
+    contract_pgvector_ownership_objects::{
+        PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS, PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN,
+    },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 267;
-const SQL_CONTRACT_OBJECTS_LEN: usize =
-    CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 263;
+const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
+    + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
+    + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
 static SQL_CONTRACT_OBJECTS_ARRAY: [SqlContractObject; SQL_CONTRACT_OBJECTS_LEN] =
     build_sql_contract_objects();
@@ -26,6 +30,13 @@ const fn build_sql_contract_objects() -> [SqlContractObject; SQL_CONTRACT_OBJECT
 
     while input_index < CATALOG_SQL_CONTRACT_OBJECTS_LEN {
         objects[output_index] = CATALOG_SQL_CONTRACT_OBJECTS[input_index];
+        output_index += 1;
+        input_index += 1;
+    }
+
+    input_index = 0;
+    while input_index < PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN {
+        objects[output_index] = PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS[input_index];
         output_index += 1;
         input_index += 1;
     }
@@ -929,11 +940,6 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
-        "adopt_pgvector",
-        "target regclass, dry_run boolean, drop_old boolean",
-        SqlLifecycle::Experimental,
-    ),
-    SqlContractObject::function(
         "attach_sparse_hnsw_index",
         "collection_name text, vector_name text, index_name text",
         SqlLifecycle::Experimental,
@@ -950,20 +956,13 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function("compact", "index regclass", SqlLifecycle::Experimental),
     SqlContractObject::function(
-        "compare_indexes",
-        "table_name text, column_name text, queries integer",
-        SqlLifecycle::Experimental,
-    ),
-    SqlContractObject::function(
         "current_vector_config_revision",
         "collection bigint",
         SqlLifecycle::Internal,
     ),
-    SqlContractObject::function("enable_pgvector_binding", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_build_stats", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_last_scan_work", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_serving_stats", "", SqlLifecycle::Experimental),
-    SqlContractObject::function("migration_report", "", SqlLifecycle::Experimental),
     // Failpoint setters exist only in pg_test builds; the classification test
     // that reads this registry runs only in those builds, so listing them
     // unconditionally keeps the const array length fixed without ever
