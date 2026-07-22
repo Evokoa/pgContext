@@ -1,6 +1,6 @@
 //! Batched candidate recheck for collection-backed search.
 
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
 
 use context_core::{DistanceMetric, SearchLimit};
 use context_storage::{
@@ -20,6 +20,46 @@ use super::{
     resolve_registered_vector, search_limit_from_sql, table_search_rows_from_spi,
     validate_search_drift,
 };
+
+thread_local! {
+    /// Backend-local capability for the narrow SECURITY DEFINER candidate
+    /// traversal. SQL callers cannot set this flag, so the internal helper is
+    /// usable only while the invoker-safe outer function performs its fixed
+    /// SPI call.
+    static MMAP_CANDIDATE_HELPER_ALLOWED: Cell<bool> = const { Cell::new(false) };
+}
+
+struct MmapCandidateHelperGuard;
+
+impl MmapCandidateHelperGuard {
+    fn enter() -> Self {
+        MMAP_CANDIDATE_HELPER_ALLOWED.with(|allowed| {
+            if allowed.replace(true) {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    "mapped HNSW candidate helper authorization is already active",
+                );
+            }
+        });
+        Self
+    }
+}
+
+impl Drop for MmapCandidateHelperGuard {
+    fn drop(&mut self) {
+        MMAP_CANDIDATE_HELPER_ALLOWED.with(|allowed| allowed.set(false));
+    }
+}
+
+fn consume_mmap_candidate_helper_capability() {
+    let allowed = MMAP_CANDIDATE_HELPER_ALLOWED.with(|allowed| allowed.replace(false));
+    if !allowed {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            "pgcontext internal mapped HNSW candidate helper cannot be called directly",
+        );
+    }
+}
 
 #[pg_extern(schema = "pgcontext", name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
@@ -388,6 +428,11 @@ fn mmap_hnsw_artifact_candidates_internal(
         name!(generation_high_water, i64),
     ),
 > {
+    // This SECURITY DEFINER function must remain SQL-visible so the fixed SPI
+    // call below can cross the private-catalog/file boundary. Require a
+    // backend-local, single-use capability so callers cannot invoke it
+    // directly to bypass source-table ACL/RLS hydration in the outer function.
+    consume_mmap_candidate_helper_capability();
     let collection_name = match context_core::CollectionName::new(collection) {
         Ok(collection_name) => collection_name,
         Err(error) => raise_core_error(error),
@@ -479,6 +524,7 @@ fn load_mmap_artifact_candidates(
             "mmap HNSW result limit exceeds PostgreSQL integer range",
         )
     });
+    let _guard = MmapCandidateHelperGuard::enter();
     Spi::connect(|client| {
         let rows = client.select(
             "SELECT point_id, score, generation_high_water

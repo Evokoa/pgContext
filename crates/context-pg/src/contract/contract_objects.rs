@@ -5,7 +5,7 @@ use super::{
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 252;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 253;
 const SQL_CONTRACT_OBJECTS_LEN: usize =
     CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
@@ -947,6 +947,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "test_set_hnsw_physical_failpoint",
         "name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "test_clear_hnsw_packed_cache",
+        "",
         SqlLifecycle::Internal,
     ),
 ];

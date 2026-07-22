@@ -14,8 +14,9 @@ use context_index::{
     scan_delta_topk, search_graph_read, search_graph_read_with_mask_budgeted,
 };
 use context_storage::{
-    DeltaRecordKind, PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode,
-    PackedGraphImageView, encode_packed_graph_image,
+    DeltaRecordKind, MappedGraphIdentity, MappedPackedGraphImage, PackedGraphImageError,
+    PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView, SegmentHeader, SegmentKind,
+    encode_mapped_packed_graph, encode_packed_graph_image, write_segment_atomic,
 };
 use pgrx::datum::{AnyArray, AnyElement};
 use pgrx::itemptr::{item_pointer_to_u64, u64_to_item_pointer_parts};
@@ -76,6 +77,7 @@ const MAX_HNSW_SCAN_ORDERBYS: usize = 1;
 
 include!("hnsw_am/sql_contract.rs");
 include!("hnsw_am/shared_registry.rs");
+include!("hnsw_am/mapped_files.rs");
 
 static HNSW_HANDLER_FINFO: pg_sys::Pg_finfo_record = pg_sys::Pg_finfo_record { api_version: 1 };
 const HNSW_META_MAGIC: u32 = 0x4853_4e57;
@@ -159,6 +161,12 @@ fn test_set_hnsw_physical_failpoint(name: Option<String>) {
         ),
     };
     hnsw_set_physical_failpoint(failpoint);
+}
+
+#[cfg(feature = "pg_test")]
+#[pg_extern(schema = "pgcontext")]
+fn test_clear_hnsw_packed_cache() {
+    HNSW_PACKED_GRAPH_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 /// Returns L2 distance as `float8` for HNSW order-by operators.

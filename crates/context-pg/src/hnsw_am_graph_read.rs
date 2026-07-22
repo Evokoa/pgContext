@@ -245,11 +245,48 @@ impl PgHnswGraphRead {
             return Ok(Some(cached.graph.clone()));
         }
 
+        // SAFETY: `MyDatabaseId` is initialized before index scans and is
+        // stable for this backend.
+        let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
+        let mapped_identity = hnsw_mapped_identity(
+            database_oid,
+            index_oid,
+            rel_file_number,
+            meta.directory_epoch,
+            meta_lsn,
+        );
+        let mapped_enabled = crate::settings::hnsw_mmap_serving_enabled_from_guc();
+        if mapped_enabled
+            && let Some(image) = attach_mapped_packed_image(
+                mapped_identity,
+                crate::settings::hnsw_mmap_serving_budget_bytes_from_guc(),
+            )
+        {
+            record_hnsw_mapped_attach();
+            let graph = HnswPackedGeneration {
+                base: PackedGraphStore::Mapped(Rc::new(image)),
+            };
+            HNSW_PACKED_GRAPH_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                if cache.len() >= 4 {
+                    cache.clear();
+                }
+                cache.insert(
+                    index_oid,
+                    CachedPackedHnswGraph {
+                        rel_file_number,
+                        epoch: meta.directory_epoch,
+                        meta_lsn,
+                        graph: graph.clone(),
+                    },
+                );
+            });
+            self.packed = Some(graph.clone());
+            return Ok(Some(graph));
+        }
+
         let shared_enabled = crate::settings::hnsw_shared_serving_enabled_from_guc();
         if shared_enabled {
-            // SAFETY: `MyDatabaseId` is set before any backend can reach
-            // index scan code and does not change for the backend's life.
-            let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
             pgrx::debug1!(
                 "pgcontext shared-attach lookup db={database_oid} index={index_oid} epoch={} meta_lsn={meta_lsn}",
                 meta.directory_epoch
@@ -316,8 +353,6 @@ impl PgHnswGraphRead {
             && let Ok(image_bytes) = local_graph.encode_image()
         {
             let budget = crate::settings::hnsw_shared_serving_budget_bytes_from_guc();
-            // SAFETY: see the shared-attach branch above.
-            let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
             pgrx::debug1!(
                 "pgcontext shared-publish db={database_oid} index={index_oid} epoch={} meta_lsn={meta_lsn} bytes={}",
                 meta.directory_epoch,
@@ -332,6 +367,16 @@ impl PgHnswGraphRead {
                 budget,
             );
             record_hnsw_shared_publish(published);
+        }
+        if mapped_enabled {
+            let published = local_graph.encode_image().is_ok_and(|image_bytes| {
+                publish_mapped_packed_image(
+                    mapped_identity,
+                    &image_bytes,
+                    crate::settings::hnsw_mmap_serving_budget_bytes_from_guc(),
+                )
+            });
+            record_hnsw_mapped_publish(published);
         }
         let graph = HnswPackedGeneration {
             base: PackedGraphStore::Local(Rc::new(local_graph)),
@@ -486,4 +531,3 @@ impl PgHnswGraphRead {
         Some(record)
     }
 }
-

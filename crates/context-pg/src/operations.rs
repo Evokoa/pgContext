@@ -832,7 +832,9 @@ include!("operations/value_helpers.rs");
 /// row describes the calling backend only: how many packed generations it
 /// built, how many queries reused an existing pack, and what the most
 /// recent pack cost in bytes and milliseconds. `delta_segment_records` and
-/// `delta_segment_scans` describe the segmented-write delta region: rows
+/// `mapped_attaches`, `mapped_publishes`, and `mapped_publish_skips` describe
+/// this backend's immutable file-generation activity. `delta_segment_records`
+/// and `delta_segment_scans` describe the segmented-write delta region: rows
 /// absorbed without a graph splice (including VACUUM tombstones for
 /// delta-only rows) and scans that merged delta results with base-graph
 /// candidates.
@@ -853,6 +855,9 @@ pub fn hnsw_serving_stats() -> TableIterator<
         name!(shared_attaches, i64),
         name!(shared_publishes, i64),
         name!(shared_publish_skips, i64),
+        name!(mapped_attaches, i64),
+        name!(mapped_publishes, i64),
+        name!(mapped_publish_skips, i64),
         name!(page_native_fallbacks, i64),
         name!(delta_segment_records, i64),
         name!(delta_segment_scans, i64),
@@ -869,6 +874,9 @@ pub fn hnsw_serving_stats() -> TableIterator<
         saturate(stats.shared_attaches),
         saturate(stats.shared_publishes),
         saturate(stats.shared_publish_skips),
+        saturate(stats.mapped_attaches),
+        saturate(stats.mapped_publishes),
+        saturate(stats.mapped_publish_skips),
         saturate(stats.page_native_fallbacks),
         saturate(stats.delta_segment_records),
         saturate(stats.delta_segment_scans),

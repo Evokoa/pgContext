@@ -6,6 +6,10 @@
 
 use pgrx::prelude::*;
 
+#[allow(
+    unsafe_code,
+    reason = "artifact mmap serving upholds the immutable-generation file contract at its audited adapter boundary"
+)]
 mod artifact_segments;
 mod build_jobs;
 mod catalog;

@@ -130,11 +130,13 @@ Operations, diagnostics, and telemetry:
 - `pgcontext.hnsw_serving_stats()` — this backend's packed-generation
   serving counters: `pack_builds`, `pack_reuses`, `last_pack_bytes`,
   `last_pack_millis`, `total_pack_millis`, `shared_attaches`,
-  `shared_publishes`, `shared_publish_skips`, `page_native_fallbacks`,
+  `shared_publishes`, `shared_publish_skips`, `mapped_attaches`,
+  `mapped_publishes`, `mapped_publish_skips`, `page_native_fallbacks`,
   `delta_segment_records`, `delta_segment_scans`. Local pack/reuse counters describe the calling
   backend only; `shared_*` counters describe this backend's activity
   against the cross-backend shared registry (see
-  `pgcontext.hnsw_shared_serving`);
+  `pgcontext.hnsw_shared_serving`), while `mapped_*` counters describe
+  immutable file-generation serving (see `pgcontext.hnsw_mmap_serving`);
   `page_native_fallbacks` counts queries served from unpacked directory
   reads because no pack was available and
   `pgcontext.hnsw_pack_on_first_use` was off; `delta_segment_records` and

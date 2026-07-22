@@ -8,7 +8,9 @@ insertion descends existing upper layers, explores at most the configured
 `ef_construction` candidate frontier per layer, and retains reciprocal
 neighbor lists bounded by `m`.
 
-Quantized HNSW and mapped HNSW serving are tracked in the [post-V1 roadmap](roadmap.md); metadata and helpers below do not imply those serving paths exist just yet.
+Quantized traversal and mapped HNSW serving are available for pgContext HNSW
+indexes. Approximate candidates are still resolved to live heap tuples by the
+PostgreSQL executor, so MVCC visibility and source ACL/RLS remain authoritative.
 
 `m` is limited to `2..=128`. The lower bound is required because a reciprocal
 graph with more than two nodes cannot remain connected with degree one.
@@ -211,6 +213,8 @@ HNSW tuning uses PostgreSQL GUCs with defaults checked against shared
 | `pgcontext.hnsw_candidate_budget` | `32` | Default candidate budget for filtered or iterative HNSW search. |
 | `pgcontext.hnsw_iterative_expansion_limit` | `10000` | Maximum candidate batch size for iterative HNSW recheck. |
 | `pgcontext.hnsw_recall_threshold` | `0.95` | Default minimum recall target for approximate HNSW health checks. |
+| `pgcontext.hnsw_mmap_serving` | `on` | Publish full-layer packed generations as immutable, physical-index-bound files and attach them before falling back to the shared registry or PostgreSQL pages. Corrupt, stale, missing, or over-budget files fail closed to the fallback ladder. |
+| `pgcontext.hnsw_mmap_serving_budget_mb` | `512` | Maximum encoded bytes for one mapped generation. Publication and attachment above this limit are skipped without failing the query. |
 | `pgcontext.hnsw_shared_serving` | `on` | Publish packed HNSW graph generations to a shared registry so other backends attach instead of rebuilding. |
 | `pgcontext.hnsw_shared_serving_budget_mb` | `512` | Total shared-registry bytes across all indexes; a publish that would exceed this is skipped. |
 | `pgcontext.hnsw_pack_on_first_use` | `on` | When off and no pack is available anywhere, serve queries from unpacked directory reads instead of paying a full pack inline. |

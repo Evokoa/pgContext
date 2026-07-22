@@ -359,7 +359,10 @@ fn load_serving_ready_segment(
     }
 
     let path = artifact_absolute_path(relative_path);
-    let segment = match map_segment_file(&path) {
+    // SAFETY: published artifact generations are immutable. Writers publish a
+    // new inode atomically and retirement only unlinks the old pathname while
+    // reader pins retain its lifetime; neither operation mutates this inode.
+    let segment = match unsafe { map_segment_file(&path) } {
         Ok(segment) => segment,
         Err(SegmentFileError::Io {
             operation: "open",

@@ -91,15 +91,24 @@ pub struct MappedPackedGraphImage {
 impl MappedPackedGraphImage {
     /// Maps and validates a packed HNSW graph segment.
     ///
+    /// # Safety
+    ///
+    /// The caller must guarantee that no process modifies or truncates the
+    /// generation file until this owner is dropped. Atomic replacement or
+    /// unlinking of the pathname is allowed because it does not alter the
+    /// already-open file description.
+    ///
     /// # Errors
     ///
     /// Returns [`MappedPackedGraphError`] for filesystem errors, outer segment
     /// corruption, a wrong segment kind, or packed-image corruption.
-    pub fn open(
+    pub unsafe fn open(
         path: impl AsRef<Path>,
         expected: MappedGraphIdentity,
     ) -> Result<Self, MappedPackedGraphError> {
-        let segment = map_segment_file(path)?;
+        // SAFETY: upheld by this constructor's caller for the full lifetime of
+        // the returned owner.
+        let segment = unsafe { map_segment_file(path)? };
         if segment.header().kind() != SegmentKind::HnswGraph {
             return Err(MappedPackedGraphError::WrongSegmentKind);
         }

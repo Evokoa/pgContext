@@ -2,6 +2,39 @@
 // pg_tests split from `hnsw_am.rs` to satisfy the source-hygiene size
 // target.
 
+fn mapped_am_generation_paths(index_name: &str) -> Vec<std::path::PathBuf> {
+    let index_name = index_name.replace('\'', "''");
+    let index_oid = Spi::get_one::<i64>(&format!(
+        "SELECT '{index_name}'::regclass::oid::bigint"
+    ))
+    .expect("mapped AM index OID lookup should succeed")
+    .expect("mapped AM index should exist");
+    // SAFETY: PostgreSQL initializes these backend globals before pg_tests and
+    // keeps the DataDir C string alive for the backend lifetime.
+    let (database_oid, data_dir) = unsafe {
+        let data_dir = std::ffi::CStr::from_ptr(pg_sys::DataDir)
+            .to_str()
+            .expect("test DataDir should be UTF-8")
+            .to_owned();
+        (pg_sys::MyDatabaseId.to_u32(), data_dir)
+    };
+    let prefix = format!("{database_oid}_{index_oid}_");
+    let directory = std::path::Path::new(&data_dir).join("pgcontext_hnsw_mapped");
+    let mut paths: Vec<_> = std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".pgctxseg"))
+        })
+        .collect();
+    paths.sort();
+    paths
+}
+
 #[pg_test]
 fn hnsw_serving_stats_observe_pack_build_and_reuse() {
     Spi::run(
@@ -47,6 +80,112 @@ fn hnsw_serving_stats_observe_pack_build_and_reuse() {
     assert!(builds >= 1, "expected at least one pack build, saw {builds}");
     assert!(reuses >= 1, "expected at least one pack reuse, saw {reuses}");
     Spi::run("RESET enable_seqscan").expect("seqscan should reset");
+}
+
+#[pg_test]
+fn hnsw_mapped_serving_publishes_attaches_and_matches_exact_oracle() {
+    Spi::run(
+        "CREATE TABLE mapped_am_probe (id bigint PRIMARY KEY, embedding vector(8) NOT NULL);
+         INSERT INTO mapped_am_probe
+         SELECT n,
+                (SELECT '[' || string_agg(((n * 19 + d) % 37)::text, ',') || ']'
+                   FROM generate_series(1, 8) d)::vector
+           FROM generate_series(1, 128) n;
+         CREATE INDEX mapped_am_probe_hnsw ON mapped_am_probe
+         USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_cosine_ops);
+         SET enable_seqscan = off;
+         SET pgcontext.hnsw_shared_serving = off;
+         SET pgcontext.hnsw_ef_search = 256;",
+    )
+    .expect("mapped AM fixture should be created");
+    let ann = "SELECT array_agg(id ORDER BY distance, id)
+                 FROM (
+                     SELECT id, embedding OPERATOR(pgcontext.<=>)
+                                '[1,2,3,4,5,6,7,8]'::vector AS distance
+                       FROM mapped_am_probe
+                      ORDER BY distance, id
+                      LIMIT 12
+                 ) ranked";
+    let first = Spi::get_one::<Vec<i64>>(ann)
+        .expect("mapped AM publication query should succeed")
+        .expect("mapped AM publication query should return ids");
+    Spi::run("SELECT pgcontext.test_clear_hnsw_packed_cache()")
+        .expect("backend packed cache should clear");
+    let mapped = Spi::get_one::<Vec<i64>>(ann)
+        .expect("mapped AM attachment query should succeed")
+        .expect("mapped AM attachment query should return ids");
+    Spi::run("SET enable_indexscan = off; SET enable_bitmapscan = off")
+        .expect("mapped AM exact oracle should disable index scans");
+    let exact = Spi::get_one::<Vec<i64>>(
+        "SELECT array_agg(id ORDER BY distance, id)
+           FROM (
+               SELECT id, embedding OPERATOR(pgcontext.<=>)
+                          '[1,2,3,4,5,6,7,8]'::vector AS distance
+                 FROM mapped_am_probe
+                ORDER BY distance, id
+                LIMIT 12
+           ) ranked",
+    )
+    .expect("mapped AM exact oracle should succeed")
+    .expect("mapped AM exact oracle should return ids");
+    Spi::run("RESET enable_indexscan; RESET enable_bitmapscan")
+        .expect("mapped AM exact oracle settings should reset");
+    assert_eq!(first, exact);
+    assert_eq!(mapped, exact);
+    let initial_paths = mapped_am_generation_paths("mapped_am_probe_hnsw");
+    assert_eq!(initial_paths.len(), 1, "one mapped generation should be live");
+
+    // Drop every in-process owner before corrupting the file. The next scan
+    // must reject the checksum, rebuild from relation pages, and atomically
+    // replace the corrupt cache without failing or changing the exact answer.
+    Spi::run("SELECT pgcontext.test_clear_hnsw_packed_cache()")
+        .expect("mapped owner should drop before corruption");
+    let mut corrupted = std::fs::read(&initial_paths[0])
+        .expect("mapped generation should be readable for corruption test");
+    let last = corrupted
+        .len()
+        .checked_sub(1)
+        .expect("mapped generation should not be empty");
+    corrupted[last] ^= 0x5a;
+    std::fs::write(&initial_paths[0], corrupted)
+        .expect("mapped generation corruption fixture should be written");
+    let after_corruption = Spi::get_one::<Vec<i64>>(ann)
+        .expect("corrupt mapped generation should fall back")
+        .expect("corruption fallback should return ids");
+    assert_eq!(after_corruption, exact);
+
+    // REINDEX changes the physical identity. The old generation must never be
+    // attached, the rebuilt answer remains exact, and successful publication
+    // retires its stale pathname.
+    Spi::run(
+        "REINDEX INDEX mapped_am_probe_hnsw;
+         SELECT pgcontext.test_clear_hnsw_packed_cache();",
+    )
+    .expect("mapped AM index should reindex and clear the backend cache");
+    let after_reindex = Spi::get_one::<Vec<i64>>(ann)
+        .expect("post-REINDEX mapped AM query should succeed")
+        .expect("post-REINDEX mapped AM query should return ids");
+    assert_eq!(after_reindex, exact);
+    let replacement_paths = mapped_am_generation_paths("mapped_am_probe_hnsw");
+    assert_eq!(
+        replacement_paths.len(),
+        1,
+        "successful replacement should retire stale generations"
+    );
+    assert_ne!(replacement_paths, initial_paths);
+    let evidence = Spi::get_one::<bool>(
+        "SELECT mapped_publishes >= 1 AND mapped_attaches >= 1
+           FROM pgcontext.hnsw_serving_stats()",
+    )
+    .expect("mapped AM serving evidence should be readable")
+    .expect("mapped AM serving evidence should exist");
+    assert!(evidence);
+    Spi::run(
+        "RESET pgcontext.hnsw_shared_serving;
+         RESET pgcontext.hnsw_ef_search;
+         RESET enable_seqscan;",
+    )
+    .expect("mapped AM settings should reset");
 }
 
 #[pg_test]

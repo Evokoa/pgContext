@@ -85,7 +85,11 @@ Use `pgcontext.hnsw_serving_stats()` when investigating first-query latency
 cliffs or repeated slow queries after writes: `pack_builds` counts how many
 times this backend rebuilt its packed graph generation (each rebuild costs
 roughly `last_pack_millis`), and `pack_reuses` counts queries served from
-the existing pack. `shared_attaches`, `shared_publishes`, and
+the existing pack. `mapped_attaches`, `mapped_publishes`, and
+`mapped_publish_skips` describe immutable file-backed generations
+(`pgcontext.hnsw_mmap_serving`). Each file is bound to the database, logical
+index, physical relfilenode, directory epoch, and metapage LSN; stale or corrupt
+files fall through without changing query results. `shared_attaches`, `shared_publishes`, and
 `shared_publish_skips` describe activity against the cross-backend shared
 registry (`pgcontext.hnsw_shared_serving`); a backend that attaches instead
 of building skips the pack cost entirely. A packed generation is whole: when

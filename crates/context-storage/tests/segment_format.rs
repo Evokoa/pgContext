@@ -1,5 +1,10 @@
 //! Segment format regression tests.
 
+#![allow(
+    unsafe_code,
+    reason = "real-file mmap tests explicitly uphold the immutable-file contract"
+)]
+
 use std::{
     fs,
     path::PathBuf,
@@ -197,7 +202,9 @@ fn mapped_segment_borrows_the_validated_file_payload() -> SegmentTestResult {
     let path = directory.join("mapped.pgctxseg");
     write_segment_atomic(&path, SegmentKind::HnswGraph, b"mapped-payload")?;
 
-    let mapped = map_segment_file(&path)?;
+    // SAFETY: this test owns the temporary file and does not modify it while
+    // the mapping is live.
+    let mapped = unsafe { map_segment_file(&path)? };
 
     assert_eq!(mapped.header().kind(), SegmentKind::HnswGraph);
     assert_eq!(mapped.payload(), b"mapped-payload");

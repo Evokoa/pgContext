@@ -32,6 +32,24 @@ fn table_search_mmap_hnsw_artifact_rechecks_decoded_candidates() {
 }
 
 #[pg_test]
+fn mmap_hnsw_internal_candidate_helper_rejects_direct_sql_calls() {
+    shared_assert_sql_failure(
+        "SELECT *
+           FROM pgcontext._mmap_hnsw_artifact_candidates(
+                'direct-call-probe',
+                'artifact',
+                '[0,0]'::vector,
+                4096,
+                1,
+                1
+           )",
+        "42501",
+        "pgcontext internal mapped HNSW candidate helper cannot be called directly",
+        "direct mapped HNSW candidate helper call",
+    );
+}
+
+#[pg_test]
 fn source_built_mmap_graph_is_navigable() {
     create_search_collection("m13_mmap_source_built_graph");
     upsert_search_points("m13_mmap_source_built_graph", &["10", "20", "30"]);

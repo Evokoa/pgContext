@@ -1,5 +1,10 @@
 //! Real-file ownership tests for mapped packed graph generations.
 
+#![allow(
+    unsafe_code,
+    reason = "real-file mmap tests explicitly uphold the immutable-file contract"
+)]
+
 use std::{
     fs,
     path::PathBuf,
@@ -79,7 +84,9 @@ fn mapped_packed_graph_owner_keeps_node_borrows_live() -> Result<(), Box<dyn std
     let payload = encode_mapped_packed_graph(IDENTITY, &packed_image()?);
     write_segment_atomic(&file.0, SegmentKind::HnswGraph, &payload)?;
 
-    let mapped = MappedPackedGraphImage::open(&file.0, IDENTITY)?;
+    // SAFETY: this test exclusively owns the file and leaves it immutable for
+    // the mapping lifetime.
+    let mapped = unsafe { MappedPackedGraphImage::open(&file.0, IDENTITY)? };
     let first = mapped
         .view()
         .node(0)
@@ -105,7 +112,7 @@ fn mapped_packed_graph_rejects_invalid_inner_image() -> Result<(), Box<dyn std::
     write_segment_atomic(&file.0, SegmentKind::HnswGraph, &payload)?;
 
     assert!(matches!(
-        MappedPackedGraphImage::open(&file.0, IDENTITY),
+        unsafe { MappedPackedGraphImage::open(&file.0, IDENTITY) },
         Err(MappedPackedGraphError::Graph(_))
     ));
     Ok(())
@@ -123,7 +130,7 @@ fn mapped_packed_graph_rejects_a_different_index_identity() -> Result<(), Box<dy
     };
 
     assert!(matches!(
-        MappedPackedGraphImage::open(&file.0, wrong),
+        unsafe { MappedPackedGraphImage::open(&file.0, wrong) },
         Err(MappedPackedGraphError::IdentityMismatch)
     ));
     Ok(())
