@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -22,6 +22,9 @@ SECRET_PATTERNS = (
     b"-----BEGIN RSA " + b"PRIVATE KEY-----",
     b"-----BEGIN OPENSSH " + b"PRIVATE KEY-----",
 )
+ALLOWED_BINARY_SIGNATURES = {
+    "assets/pgcontext-banner.png": b"\x89PNG\r\n\x1a\n",
+}
 
 
 def fail(message: str) -> None:
@@ -181,7 +184,20 @@ def main() -> None:
                 continue
             contents = package.read(info)
             if b"\0" in contents:
-                fail(f"source archive contains unexpected binary content: {info.filename}")
+                relative = PurePosixPath(info.filename).relative_to(
+                    f"pgContext-{version}"
+                )
+                expected_signature = ALLOWED_BINARY_SIGNATURES.get(relative.as_posix())
+                if expected_signature is None:
+                    fail(
+                        "source archive contains unexpected binary content: "
+                        f"{info.filename}"
+                    )
+                if not contents.startswith(expected_signature):
+                    fail(
+                        "allowlisted source binary has an unexpected signature: "
+                        f"{info.filename}"
+                    )
             if any(pattern in contents for pattern in SECRET_PATTERNS):
                 fail(f"source archive contains private key material: {info.filename}")
 
