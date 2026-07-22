@@ -33,6 +33,7 @@ use std::{
 
 mod delta_segment;
 mod hnsw_graph_payload;
+mod mapped_packed_graph;
 mod mmap_file;
 mod packed_graph_image;
 
@@ -48,6 +49,7 @@ pub use hnsw_graph_payload::{
     QuantizedNeighborIter, decode_hnsw_graph_payload, decode_hnsw_graph_payload_versioned,
     encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
 };
+pub use mapped_packed_graph::{MappedPackedGraphError, MappedPackedGraphImage};
 pub use mmap_file::{MappedSegment, map_segment_file};
 pub use packed_graph_image::{
     AlignedImageBuf, CURRENT_PACKED_GRAPH_IMAGE_VERSION, MIN_READABLE_PACKED_GRAPH_IMAGE_VERSION,
