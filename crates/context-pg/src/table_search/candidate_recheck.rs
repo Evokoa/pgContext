@@ -2,7 +2,10 @@
 
 use context_core::{DistanceMetric, SearchLimit};
 use context_index::{HnswGraph, HnswGraphNodeSnapshot, HnswNodeId, HnswPointId};
-use context_storage::{HnswGraphArtifactRecord, HnswGraphPayloadError, decode_hnsw_graph_payload};
+use context_storage::{
+    HnswGraphArtifactRecord, HnswGraphPayloadError, HnswGraphQuantization,
+    decode_hnsw_graph_payload_versioned,
+};
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 
@@ -273,13 +276,26 @@ pub fn search_mmap_hnsw_artifact(
     // recheck below.
     let payload =
         load_mmap_artifact_payload(collection_name.as_str(), &artifact_name, max_mapped_bytes);
-    let records = decode_hnsw_graph_payload(&payload)
+    let graph_payload = decode_hnsw_graph_payload_versioned(&payload)
         .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
-    let generation_high_water = records
+    if graph_payload.quantization().is_some() && candidate_limit.get() <= limit.get() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            format!(
+                "quantized mmap HNSW candidate_limit {} must exceed final limit {}",
+                candidate_limit.get(),
+                limit.get()
+            ),
+        );
+    }
+    let generation_high_water = graph_payload
+        .records()
         .iter()
         .map(HnswGraphArtifactRecord::point_id)
         .max()
         .unwrap_or_default();
+    let (records, quantization) = graph_payload.into_parts();
+    let records = quantized_navigation_records(records, quantization);
     let mut candidates = mmap_hnsw_candidates(records, &query, metric, candidate_limit.get());
     candidates.extend(mmap_delta_candidates(
         collection.collection_id,
@@ -435,6 +451,27 @@ fn mmap_hnsw_candidates(
         },
     );
     candidates.into_iter().take(candidate_limit).collect()
+}
+
+fn quantized_navigation_records(
+    records: Vec<HnswGraphArtifactRecord>,
+    quantization: Option<HnswGraphQuantization>,
+) -> Vec<HnswGraphArtifactRecord> {
+    let Some(quantization) = quantization else {
+        return records;
+    };
+    records
+        .into_iter()
+        .zip(quantization.codes())
+        .map(|(record, code)| {
+            let (node_id, point_id, _full_precision, neighbors) = record.into_parts();
+            let approximate = quantization
+                .codebook()
+                .reconstruct(code)
+                .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
+            HnswGraphArtifactRecord::new(node_id, point_id, approximate, neighbors)
+        })
+        .collect()
 }
 
 fn mmap_hnsw_graph_candidates(

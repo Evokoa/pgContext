@@ -1,6 +1,7 @@
 //! Named dense-vector search overloads.
 
 use context_core::{CollectionName, VectorName};
+use pgrx::JsonB;
 use pgrx::prelude::*;
 
 use crate::Vector;
@@ -103,7 +104,8 @@ pub(super) fn resolve_registered_vector_by_name(
                     vector_column_name,
                     vector_attnum,
                     hnsw_index_oid,
-                    metric
+                    metric,
+                    quantization_options
                FROM pgcontext._visible_collection_vectors
               WHERE collection_id = $1
                 AND vector_name = $2",
@@ -140,6 +142,12 @@ pub(super) fn resolve_registered_vector_by_name(
                 super::spi_required_column::<String>(&row, 7, "metric"),
                 "vector",
             ),
+            quantization_options: super::spi_required_column::<JsonB>(
+                &row,
+                8,
+                "quantization_options",
+            )
+            .0,
         }
     })
 }

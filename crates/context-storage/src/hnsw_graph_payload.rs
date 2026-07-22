@@ -117,6 +117,12 @@ impl HnswGraphPayload {
     pub fn into_records(self) -> Vec<HnswGraphArtifactRecord> {
         self.records
     }
+
+    /// Consumes the decoded payload into graph records and quantization data.
+    #[must_use]
+    pub fn into_parts(self) -> (Vec<HnswGraphArtifactRecord>, Option<HnswGraphQuantization>) {
+        (self.records, self.quantization)
+    }
 }
 
 /// Stable HNSW graph artifact payload validation error.

@@ -14,7 +14,7 @@ use context_index::{HnswGraph, HnswPointId};
 use context_storage::{
     CURRENT_SEGMENT_FORMAT_VERSION, HnswGraphArtifactRecord, HnswGraphPayloadError, SegmentBytes,
     SegmentError, SegmentFileError, SegmentHeader, SegmentKind, SegmentWriteStage,
-    decode_hnsw_graph_payload, encode_hnsw_graph_payload, encode_segment, load_segment_file,
+    decode_hnsw_graph_payload, encode_hnsw_graph_payload_v2, encode_segment, load_segment_file,
     validate_mmap_segment, write_segment_atomic_with_hook,
 };
 use pgrx::prelude::*;
@@ -59,6 +59,7 @@ fn test_set_artifact_publish_failpoint(name: Option<String>) {
 }
 
 mod diagnostics;
+mod quantization;
 mod serving_readiness;
 
 type ArtifactSegmentResult = (
@@ -267,12 +268,21 @@ pub fn build_mmap_hnsw_artifact(build_job_id: i64) -> Vec<u8> {
             )
         })
         .collect::<Vec<_>>();
-    let payload = encode_hnsw_graph_payload(&records).unwrap_or_else(|error| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
-            format!("source artifact graph is not buildable: {error}"),
-        )
-    });
+    let quantization =
+        quantization::quantize_graph_records(&records, &registered.quantization_options)
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                    format!("source artifact quantization is not buildable: {error}"),
+                )
+            });
+    let payload =
+        encode_hnsw_graph_payload_v2(&records, quantization.as_ref()).unwrap_or_else(|error| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!("source artifact graph is not buildable: {error}"),
+            )
+        });
     encode_artifact_segment("hnsw_graph".to_owned(), payload)
 }
 

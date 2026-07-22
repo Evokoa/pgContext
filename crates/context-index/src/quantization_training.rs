@@ -345,7 +345,13 @@ mod tests {
                 prop_assert!(false, "scalar training returned a non-scalar quantizer");
                 return Ok(());
             };
-            let error_bound = (scalar.max() - scalar.min()) / f32::from(scalar.levels() - 1) / 2.0 + f32::EPSILON * 8.0;
+            let scale_rounding = f32::EPSILON
+                * (scalar.min().abs() + scalar.max().abs() + 1.0)
+                * 4.0;
+            let error_bound = (scalar.max() - scalar.min())
+                / f32::from(scalar.levels() - 1)
+                / 2.0
+                + scale_rounding;
             for (actual, approximate) in values.iter().zip(reconstructed.as_slice()) {
                 prop_assert!((*actual - *approximate).abs() <= error_bound);
             }

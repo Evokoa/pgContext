@@ -9,6 +9,7 @@ mod support;
 use context_core::{CollectionName, DistanceMetric, ScrollCursor, ScrollCursorError, SearchLimit};
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
+use serde_json::Value;
 
 use crate::domain_types::distance_metric_from_catalog;
 use crate::error::{raise_core_error, raise_sql_error};
@@ -34,6 +35,7 @@ pub(crate) struct SearchVector {
     pub(crate) vector_attnum: i16,
     pub(crate) hnsw_index_oid: Option<pg_sys::Oid>,
     pub(crate) metric: DistanceMetric,
+    pub(crate) quantization_options: Value,
 }
 
 #[pg_extern(schema = "pgcontext", name = "search")]

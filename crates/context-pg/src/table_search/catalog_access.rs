@@ -1,3 +1,5 @@
+use pgrx::JsonB;
+
 pub(crate) fn resolve_collection(collection_name: &CollectionName) -> SearchCollection {
     Spi::connect(|client| {
         let rows = match client.select(
@@ -52,7 +54,8 @@ pub(crate) fn resolve_registered_vector(
                     vector_column_name,
                     vector_attnum,
                     hnsw_index_oid,
-                    metric
+                    metric,
+                    quantization_options
                FROM pgcontext._visible_collection_vectors
               WHERE collection_id = $1
               ORDER BY vector_id",
@@ -97,6 +100,7 @@ pub(crate) fn resolve_registered_vector(
                 spi_required_column::<String>(&row, 7, "metric"),
                 "vector",
             ),
+            quantization_options: spi_required_column::<JsonB>(&row, 8, "quantization_options").0,
         }
     })
 }

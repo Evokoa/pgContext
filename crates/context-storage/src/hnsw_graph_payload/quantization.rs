@@ -63,6 +63,47 @@ impl HnswGraphQuantizationCodebook {
             Self::Product { codebooks, .. } => codebooks.len(),
         }
     }
+
+    /// Reconstructs the approximate navigation vector for one persisted code.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HnswGraphPayloadError`] when the code has the wrong length,
+    /// invalid binary padding, or an index outside its scalar/product codebook.
+    pub fn reconstruct(&self, code: &[u8]) -> Result<DenseVector, HnswGraphPayloadError> {
+        validate_quantized_code(self, 0, code)?;
+        let values = match self {
+            Self::Binary { dimensions } => (0..*dimensions)
+                .map(|index| {
+                    if code[index / 8] & (1 << (index % 8)) == 0 {
+                        -1.0
+                    } else {
+                        1.0
+                    }
+                })
+                .collect(),
+            Self::Scalar {
+                minimum,
+                maximum,
+                levels,
+                ..
+            } => {
+                let steps = f32::from(*levels - 1);
+                code.iter()
+                    .map(|value| minimum + ((maximum - minimum) * (f32::from(*value) / steps)))
+                    .collect()
+            }
+            Self::Product { codebooks, .. } => {
+                let mut values = Vec::with_capacity(self.dimensions());
+                for (value, centroids) in code.iter().zip(codebooks) {
+                    values.extend_from_slice(centroids[usize::from(*value)].as_slice());
+                }
+                values
+            }
+        };
+        DenseVector::new(values)
+            .map_err(|error| HnswGraphPayloadError::InvalidQuantization(error.to_string()))
+    }
 }
 
 /// Quantized codes bound to one graph's record ordering.
