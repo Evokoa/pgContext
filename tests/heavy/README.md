@@ -58,6 +58,14 @@ failure.
   and exact-oracle order for dense, halfvec, sparsevec, and bitvec HNSW metrics,
   restarts the pgrx PostgreSQL cluster, and rechecks every metric's index-backed
   order.
+- `mapped_hnsw_lifecycle_cleanup.sh`: proves mapped index generations survive
+  rolled-back DDL and prepared-transaction abort, while committed DROP INDEX,
+  prepared-transaction commit, cascading DROP TABLE, explicit and
+  session-teardown temporary-index drops, and DROP DATABASE are reclaimed. The
+  gate also proves crash-durable markers, bounded/fair retries across fresh
+  backends, and progress past stale publication temps with 33 unresolved
+  prepared drops. It temporarily enables prepared transactions on its isolated
+  pgrx server and restores the normal launch configuration on exit.
 - `pgvector_hnsw_lifecycle.sh`: the bounded V1 dense-metric launch gate; forces
   L2, inner-product, cosine, and L1 index plans through DML, VACUUM, REINDEX,
   restart, and exact-order comparison.
@@ -109,6 +117,7 @@ tests/heavy/backup_restore.sh
 tests/heavy/cross_version_import.sh
 tests/heavy/physical_backup_wal_replay.sh
 tests/heavy/crash_restart_hnsw.sh
+tests/heavy/mapped_hnsw_lifecycle_cleanup.sh
 tests/heavy/hnsw_vacuum.sh
 tests/heavy/concurrent_read_write.sh
 tests/heavy/filtered_ann_recall.sh

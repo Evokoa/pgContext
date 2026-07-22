@@ -98,3 +98,8 @@ hnsw_am/shared_registry.rs|fn|commit_shared_slot|writes a registry slot and the 
 hnsw_am/shared_registry.rs|fn|evict_shared_slot|removes a poisoned registry slot and its byte budget contribution under the header lock
 hnsw_am/shared_registry.rs|fn|lookup_shared_slot|reads a registry slot under the header lock
 hnsw_am/shared_registry.rs|fn|shared_registry_ptr|attaches the fixed-size named DSM segment backing the shared registry header
+hnsw_am/mapped_lifecycle.rs|extern|mapped_graph_object_access_hook|chains PostgreSQL object-drop callbacks and queues copied relation identities
+hnsw_am/mapped_lifecycle.rs|extern|mapped_graph_subxact_callback|promotes or discards queued cleanup identities at subtransaction boundaries
+hnsw_am/mapped_lifecycle.rs|extern|mapped_graph_xact_callback|reclaims exact mapped index directories only after top-level commit
+hnsw_am/mapped_lifecycle.rs|extern|pgcontext_hnsw_mapped_sql_drop|guarded PostgreSQL event-trigger entrypoint over call-bounded FunctionCallInfo
+hnsw_am/mapped_lifecycle.rs|fn|reconcile_mapped_drop_marker|reads PostgreSQL transaction status for a durable drop marker

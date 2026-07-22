@@ -225,6 +225,20 @@ HNSW tuning uses PostgreSQL GUCs with defaults checked against shared
 | `pgcontext.hnsw_compact_on_threshold` | `on` | Whether the insert that fills the delta segment compacts the index in place before appending, draining the segment so later inserts stay on the fast path. That insert pays for a full rebuild, so turn this off if uniform insert latency matters more than sustained throughput and schedule `pgcontext.compact()` yourself. Ignored when the delta region is disabled (`hnsw_delta_segment_limit = 0`) or was never opened. Compaction declines, leaving the insert on the inline path, if the parent-table lock is not immediately available or the rebuilt graph would exceed `maintenance_work_mem`. |
 | `pgcontext.hnsw_compact_on_threshold_max_mb` | `1024` | Largest index an insert may compact by itself, in megabytes of projected vectors (rows x dimensions x 4). Bounds how long a single `INSERT` can block, because compaction runs synchronously on the write path and its cost grows with the graph: on a 100,000-row 384-dimension index (~146MB of vectors) a compaction takes roughly a minute, so the 1GB default admits stalls of several minutes on the largest index it accepts. The default is deliberately permissive so ordinary workloads keep self-maintaining; lower it when bounded write latency matters more than sustained throughput. Above the bound the insert declines and takes the inline path, leaving the rebuild to `pgcontext.compact()` or `REINDEX`. `maintenance_work_mem` applies independently and is often the tighter limit. `0` removes this bound. |
 
+Mapped generations live below the physical database directory in one numeric
+directory per index. PostgreSQL therefore removes them with `DROP DATABASE`;
+committed `DROP INDEX` and cascading `DROP TABLE` reclaim the exact index
+directory after transaction commit, while rolled-back DDL leaves it intact.
+Each drop first publishes a small fsynced transaction marker through a durably
+linked directory hierarchy. Later HNSW scans reconcile one of 16 marker buckets
+and at most 16 entries apiece. Per-bucket pending and retry lanes let terminal
+work drain before unresolved prepared transactions are retried, so a large
+prepared queue or a stale pre-rename temp cannot starve committed cleanup.
+Committed drops are retried after backend crashes or transient filesystem
+errors, and aborted drops preserve the live index generation. Temporary indexes
+use only the backend-local packed cache and never publish a filesystem
+generation.
+
 Set these with `SET LOCAL` inside controlled build or validation sessions, then
 validate approximate paths with `pgcontext.recall_check` before any controlled
 rollout. Do not route production traffic to HNSW until approximate serving is

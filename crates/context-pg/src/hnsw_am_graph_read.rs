@@ -223,6 +223,9 @@ impl PgHnswGraphRead {
         let index_oid = unsafe { (*self.index_relation).rd_id.to_u32() };
         // SAFETY: the relation cache entry remains live for this scan.
         let rel_file_number = unsafe { (*self.index_relation).rd_locator.relNumber.to_u32() };
+        // SAFETY: `MyDatabaseId` is initialized before index scans and remains
+        // stable for this backend.
+        let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
         // A pack built from a different physical relation file is not stale —
         // it is a pack of a *different index* that happens to share the OID.
         // REINDEX swaps the relfilenode, and the fresh build's directory
@@ -245,9 +248,6 @@ impl PgHnswGraphRead {
             return Ok(Some(cached.graph.clone()));
         }
 
-        // SAFETY: `MyDatabaseId` is initialized before index scans and is
-        // stable for this backend.
-        let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
         let mapped_identity = hnsw_mapped_identity(
             database_oid,
             index_oid,
@@ -255,7 +255,18 @@ impl PgHnswGraphRead {
             meta.directory_epoch,
             meta_lsn,
         );
-        let mapped_enabled = crate::settings::hnsw_mmap_serving_enabled_from_guc();
+        // SAFETY: the live relation cache entry owns an initialized pg_class
+        // form for the duration of this scan.
+        let is_temporary = unsafe {
+            u8::try_from((*(*self.index_relation).rd_rel).relpersistence).ok()
+                == Some(pg_sys::RELPERSISTENCE_TEMP)
+        };
+        // Temporary indexes are backend-private and disappear at session
+        // teardown, which has no top-level commit callback. Their local packed
+        // cache already serves repeated scans, so never materialize a mapped
+        // filesystem generation that could outlive the temporary relation.
+        let mapped_enabled =
+            crate::settings::hnsw_mmap_serving_enabled_from_guc() && !is_temporary;
         if mapped_enabled
             && let Some(image) = attach_mapped_packed_image(
                 mapped_identity,

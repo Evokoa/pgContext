@@ -78,6 +78,7 @@ const MAX_HNSW_SCAN_ORDERBYS: usize = 1;
 include!("hnsw_am/sql_contract.rs");
 include!("hnsw_am/shared_registry.rs");
 include!("hnsw_am/mapped_files.rs");
+include!("hnsw_am/mapped_lifecycle.rs");
 
 static HNSW_HANDLER_FINFO: pg_sys::Pg_finfo_record = pg_sys::Pg_finfo_record { api_version: 1 };
 const HNSW_META_MAGIC: u32 = 0x4853_4e57;

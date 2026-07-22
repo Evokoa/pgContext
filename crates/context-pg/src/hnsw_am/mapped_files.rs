@@ -17,16 +17,8 @@ fn hnsw_mapped_identity(
 }
 
 fn hnsw_mapped_generation_path(identity: MappedGraphIdentity) -> Option<std::path::PathBuf> {
-    // SAFETY: PostgreSQL initializes `DataDir` before loading extensions and
-    // retains the NUL-terminated allocation for the backend lifetime.
-    let data_dir = unsafe {
-        if pg_sys::DataDir.is_null() {
-            return None;
-        }
-        CStr::from_ptr(pg_sys::DataDir).to_bytes()
-    };
-    let data_dir = std::str::from_utf8(data_dir).ok()?;
-    Some(std::path::PathBuf::from(data_dir).join("pgcontext_hnsw_mapped").join(format!(
+    let directory = hnsw_mapped_index_directory(identity.database_oid, identity.index_oid)?;
+    Some(directory.join(format!(
         "{}_{}_{}_{}_{}.pgctxseg",
         identity.database_oid,
         identity.index_oid,
@@ -34,6 +26,51 @@ fn hnsw_mapped_generation_path(identity: MappedGraphIdentity) -> Option<std::pat
         identity.directory_epoch,
         identity.meta_lsn
     )))
+}
+
+fn hnsw_mapped_index_directory(database_oid: u32, index_oid: u32) -> Option<std::path::PathBuf> {
+    hnsw_mapped_database_directory(database_oid).map(|directory| directory.join(index_oid.to_string()))
+}
+
+fn hnsw_mapped_database_directory(database_oid: u32) -> Option<std::path::PathBuf> {
+    // A generation is meaningful only in the connected database. Keeping the
+    // files below PostgreSQL's physical database directory makes DROP DATABASE
+    // reclaim them with the database itself, including non-default tablespaces.
+    // SAFETY: PostgreSQL initializes these globals before loading extensions.
+    // `GetDatabasePath` returns a palloc-owned NUL-terminated path for the
+    // current database/tablespace pair; the bytes are copied before `pfree`.
+    let database_path = unsafe {
+        if pg_sys::MyDatabaseId.to_u32() != database_oid {
+            return None;
+        }
+        let path = pg_sys::GetDatabasePath(pg_sys::MyDatabaseId, pg_sys::MyDatabaseTableSpace);
+        if path.is_null() {
+            return None;
+        }
+        let bytes = CStr::from_ptr(path).to_bytes().to_vec();
+        pg_sys::pfree(path.cast());
+        std::str::from_utf8(&bytes).ok().map(std::path::PathBuf::from)?
+    };
+    let database_path = if database_path.is_absolute() {
+        database_path
+    } else {
+        postgres_data_directory()?.join(database_path)
+    };
+    Some(database_path.join("pgcontext_hnsw_mapped"))
+}
+
+fn postgres_data_directory() -> Option<std::path::PathBuf> {
+    // SAFETY: PostgreSQL retains the initialized DataDir allocation for the
+    // backend lifetime; the path bytes are copied into an owned PathBuf.
+    unsafe {
+        if pg_sys::DataDir.is_null() {
+            return None;
+        }
+        let bytes = CStr::from_ptr(pg_sys::DataDir).to_bytes();
+        std::str::from_utf8(bytes)
+            .ok()
+            .map(std::path::PathBuf::from)
+    }
 }
 
 fn parse_hnsw_mapped_generation_name(name: &str) -> Option<MappedGraphIdentity> {
@@ -155,4 +192,29 @@ fn publish_mapped_packed_image(
             false
         }
     }
+}
+
+#[cfg(feature = "pg_test")]
+pub(crate) fn mapped_generation_paths_for_test(index_oid: u32) -> Vec<std::path::PathBuf> {
+    // SAFETY: PostgreSQL initializes MyDatabaseId before any pg_test executes.
+    let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
+    let Some(directory) = hnsw_mapped_index_directory(database_oid, index_oid) else {
+        return Vec::new();
+    };
+    let mut paths = std::fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .and_then(parse_hnsw_mapped_generation_name)
+                .is_some_and(|identity| {
+                    identity.database_oid == database_oid && identity.index_oid == index_oid
+                })
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
 }

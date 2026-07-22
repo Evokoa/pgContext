@@ -5,7 +5,7 @@ use super::{
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 253;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 254;
 const SQL_CONTRACT_OBJECTS_LEN: usize =
     CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
@@ -891,6 +891,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         "index_relation regclass, query vector, allowed_heap_tids anyarray, \"limit\" integer",
         SqlLifecycle::Internal,
     ),
+    SqlContractObject::function("_mapped_hnsw_sql_drop", "", SqlLifecycle::Internal),
     SqlContractObject::function("_l1_distance_fast", "vector, vector", SqlLifecycle::Internal),
     SqlContractObject::function("_l2_distance_fast", "vector, vector", SqlLifecycle::Internal),
     SqlContractObject::function("_l2_distance_fast8", "vector, vector", SqlLifecycle::Internal),

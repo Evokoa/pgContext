@@ -68,6 +68,7 @@ pub mod pgcontext {
 #[pg_guard]
 pub extern "C-unwind" fn _PG_init() {
     settings::init_gucs();
+    hnsw_am::init_mapped_graph_lifecycle_hooks();
 }
 
 #[cfg(test)]

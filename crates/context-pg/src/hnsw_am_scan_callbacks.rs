@@ -143,6 +143,11 @@ fn hnsw_begin_scan_safe(
     nkeys: std::ffi::c_int,
     norderbys: std::ffi::c_int,
 ) -> pg_sys::IndexScanDesc {
+    // SAFETY: PostgreSQL initializes `MyDatabaseId` before invoking an index
+    // AM. Reconcile before allocating state so every HNSW scan makes bounded
+    // progress, including scans that later reuse backend-local graph state.
+    let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
+    reconcile_pending_mapped_drops(database_oid);
     let _key_count = checked_scan_count(nkeys, MAX_HNSW_SCAN_KEYS, "scan keys");
     let orderby_count = checked_scan_count(norderbys, MAX_HNSW_SCAN_ORDERBYS, "scan order-bys");
     // SAFETY: PostgreSQL passes a valid index relation and scan key counts.

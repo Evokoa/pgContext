@@ -9,30 +9,9 @@ fn mapped_am_generation_paths(index_name: &str) -> Vec<std::path::PathBuf> {
     ))
     .expect("mapped AM index OID lookup should succeed")
     .expect("mapped AM index should exist");
-    // SAFETY: PostgreSQL initializes these backend globals before pg_tests and
-    // keeps the DataDir C string alive for the backend lifetime.
-    let (database_oid, data_dir) = unsafe {
-        let data_dir = std::ffi::CStr::from_ptr(pg_sys::DataDir)
-            .to_str()
-            .expect("test DataDir should be UTF-8")
-            .to_owned();
-        (pg_sys::MyDatabaseId.to_u32(), data_dir)
-    };
-    let prefix = format!("{database_oid}_{index_oid}_");
-    let directory = std::path::Path::new(&data_dir).join("pgcontext_hnsw_mapped");
-    let mut paths: Vec<_> = std::fs::read_dir(directory)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".pgctxseg"))
-        })
-        .collect();
-    paths.sort();
-    paths
+    crate::hnsw_am::mapped_generation_paths_for_test(
+        u32::try_from(index_oid).expect("mapped AM index OID should fit u32"),
+    )
 }
 
 #[pg_test]
