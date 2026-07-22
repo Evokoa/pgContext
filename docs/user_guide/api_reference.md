@@ -453,6 +453,17 @@ source columns and stores per-vector sparse storage/index/status metadata:
   partitions candidate token vectors by point, scores each point with exact
   MaxSim inner product, enforces a comparison budget, and returns final rerank
   order with deterministic tie breaks.
+- `pgcontext.register_late_interaction(collection text, source_table text, token_source text)`
+  binds a collection's source-table `vector[]` column, materializes one private
+  pgContext token row per array element under invoker ACL/RLS, installs a
+  same-transaction source-DML capture trigger, and builds a collection-scoped
+  inner-product HNSW index. An empty source is registered as `building` until a
+  repair can infer dimensions and publish the index.
+- `pgcontext.repair_late_interaction(collection text, batch_size integer)`
+  atomically replaces the derived token rows in bounded source-scan batches,
+  refreshes restored table bindings, reinstalls the capture trigger, and
+  rebuilds the HNSW index. A failed statement or savepoint rolls the previous
+  token generation and index back intact.
 - `pgcontext.search_late_interaction(collection text, query_vectors vector[], vector_column text, limit integer)`
   exact-scores active collection points from a table-backed `vector[]` source
   column with MaxSim and returns final SQL order with ACL/deleted-point checks.

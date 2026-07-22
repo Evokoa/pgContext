@@ -410,6 +410,83 @@ BEGIN
 END;
 $$;
 
+CREATE FUNCTION pgcontext._prepare_late_interaction_repair(
+    p_collection_id bigint,
+    p_source_table_oid oid,
+    p_token_attnum int2
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    registration pgcontext._collection_late_interaction%ROWTYPE;
+    trigger_name text;
+    index_name text;
+BEGIN
+    SELECT registrations.*
+      INTO registration
+      FROM pgcontext._collection_late_interaction AS registrations
+      JOIN pgcontext._collections AS collections USING (collection_id)
+      JOIN pg_catalog.pg_class AS source_class
+        ON source_class.oid = p_source_table_oid
+      JOIN pg_catalog.pg_namespace AS source_namespace
+        ON source_namespace.oid = source_class.relnamespace
+      JOIN pg_catalog.pg_attribute AS token_attribute
+        ON token_attribute.attrelid = source_class.oid
+       AND token_attribute.attname = registrations.token_column_name
+       AND token_attribute.attnum = p_token_attnum
+       AND token_attribute.attnum > 0
+       AND NOT token_attribute.attisdropped
+     WHERE registrations.collection_id = p_collection_id
+       AND collections.source_table_oid = p_source_table_oid
+       AND pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+       AND source_namespace.nspname = registrations.source_schema_name
+       AND source_class.relname = registrations.source_table_name
+       AND token_attribute.atttypid = 'public.vector[]'::pg_catalog.regtype;
+    IF NOT FOUND OR NOT pg_catalog.has_table_privilege(
+        SESSION_USER,
+        p_source_table_oid,
+        'SELECT'
+    ) THEN
+        RAISE EXCEPTION 'invalid or unauthorized late-interaction repair for collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    trigger_name := pg_catalog.format('pgcontext_late_interaction_%s', p_collection_id);
+    EXECUTE pg_catalog.format(
+        'DROP TRIGGER IF EXISTS %I ON %I.%I',
+        trigger_name,
+        registration.source_schema_name,
+        registration.source_table_name
+    );
+    index_name := pg_catalog.format('pgcontext_late_interaction_%s_hnsw', p_collection_id);
+    EXECUTE pg_catalog.format('DROP INDEX IF EXISTS pgcontext.%I', index_name);
+
+    DELETE FROM pgcontext._collection_late_interaction_tokens
+     WHERE collection_id = p_collection_id;
+    UPDATE pgcontext._collection_late_interaction
+       SET source_table_oid = p_source_table_oid,
+           token_attnum = p_token_attnum,
+           dimensions = NULL,
+           hnsw_index_oid = NULL,
+           status = 'building',
+           updated_at = pg_catalog.now()
+     WHERE collection_id = p_collection_id;
+
+    EXECUTE pg_catalog.format(
+        'CREATE TRIGGER %I AFTER INSERT OR UPDATE OF id, %I OR DELETE ON %I.%I '
+        'FOR EACH ROW EXECUTE FUNCTION pgcontext._capture_late_interaction_tokens(%L)',
+        trigger_name,
+        registration.token_column_name,
+        registration.source_schema_name,
+        registration.source_table_name,
+        p_collection_id::text
+    );
+END;
+$$;
+
 CREATE FUNCTION pgcontext._cleanup_late_interaction_registration()
 RETURNS trigger
 LANGUAGE plpgsql

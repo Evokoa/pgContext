@@ -286,6 +286,140 @@ fn dropping_owned_late_interaction_collection_removes_dynamic_objects() {
     assert!(!source_trigger_exists);
 }
 
+#[pg_test]
+fn repair_late_interaction_rebuilds_tokens_and_hnsw_in_bounded_batches() {
+    create_owned_late_interaction_fixture("m14_owned_repair");
+    register_owned_late_interaction("m14_owned_repair");
+    let previous_index = owned_late_interaction_index_oid("m14_owned_repair");
+    Spi::run(
+        "DELETE FROM pgcontext._collection_late_interaction_tokens AS tokens
+          USING pgcontext._collection_points AS points,
+                pgcontext._collections AS collections
+          WHERE tokens.collection_id = points.collection_id
+            AND tokens.point_id = points.point_id
+            AND points.collection_id = collections.collection_id
+            AND collections.collection_name = 'm14_owned_repair'
+            AND points.source_key = '1'",
+    )
+    .expect("owned token corruption fixture should be created");
+    assert_eq!(owned_token_count("m14_owned_repair", "1"), 0);
+
+    let summary = Spi::get_one::<String>(
+        "SELECT pg_catalog.concat_ws(
+             '|',
+             collection,
+             batch_count::text,
+             point_count::text,
+             token_count::text,
+             dimensions::text,
+             status
+         )
+           FROM pgcontext.repair_late_interaction('m14_owned_repair', 1)",
+    )
+    .expect("owned late-interaction repair should succeed")
+    .expect("owned late-interaction repair should return a summary");
+    assert_eq!(summary, "m14_owned_repair|2|2|4|2|ready");
+    assert_eq!(owned_token_count("m14_owned_repair", "1"), 2);
+    let rebuilt_index = owned_late_interaction_index_oid("m14_owned_repair");
+    assert_ne!(rebuilt_index, previous_index);
+}
+
+#[pg_test]
+fn repair_late_interaction_promotes_an_empty_registration_after_source_insert() {
+    Spi::run(
+        "CREATE TABLE public.m14_owned_empty_repair (
+             id bigint PRIMARY KEY,
+             token_vectors vector[] NOT NULL
+         );
+         SELECT pgcontext.create_collection(
+             'm14_owned_empty_repair',
+             'public.m14_owned_empty_repair'
+         );",
+    )
+    .expect("empty owned late-interaction fixture should be created");
+    let initial_status = Spi::get_one::<String>(
+        "SELECT status
+           FROM pgcontext.register_late_interaction(
+               'm14_owned_empty_repair',
+               'public.m14_owned_empty_repair',
+               'token_vectors'
+           )",
+    )
+    .expect("empty owned late-interaction registration should succeed")
+    .expect("empty owned late-interaction registration should return status");
+    assert_eq!(initial_status, "building");
+
+    Spi::run(
+        "INSERT INTO public.m14_owned_empty_repair
+         VALUES (1, ARRAY['[1,0]'::vector, '[0,1]'::vector])",
+    )
+    .expect("first source insert should be synchronously captured");
+    let building_state = Spi::get_one::<String>(
+        "SELECT pg_catalog.concat_ws('|', status, dimensions::text, hnsw_index_oid::text)
+           FROM pgcontext._collection_late_interaction AS registrations
+           JOIN pgcontext._collections AS collections USING (collection_id)
+          WHERE collections.collection_name = 'm14_owned_empty_repair'",
+    )
+    .expect("building registration query should succeed")
+    .expect("building registration should exist");
+    assert_eq!(building_state, "building|2");
+
+    let repaired_status = Spi::get_one::<String>(
+        "SELECT status
+           FROM pgcontext.repair_late_interaction('m14_owned_empty_repair', 10)",
+    )
+    .expect("empty owned late-interaction repair should succeed")
+    .expect("empty owned late-interaction repair should return status");
+    assert_eq!(repaired_status, "ready");
+    assert_ne!(
+        owned_late_interaction_index_oid("m14_owned_empty_repair"),
+        pg_sys::InvalidOid
+    );
+}
+
+#[pg_test]
+fn rolled_back_late_interaction_repair_preserves_previous_generation() {
+    create_owned_late_interaction_fixture("m14_owned_repair_rollback");
+    register_owned_late_interaction("m14_owned_repair_rollback");
+    Spi::run(
+        "DELETE FROM pgcontext._collection_late_interaction_tokens
+          WHERE token_id = (
+              SELECT min(tokens.token_id)
+                FROM pgcontext._collection_late_interaction_tokens AS tokens
+                JOIN pgcontext._collections AS collections USING (collection_id)
+               WHERE collections.collection_name = 'm14_owned_repair_rollback'
+          )",
+    )
+    .expect("repair rollback fixture should remove one token");
+    let previous_index = owned_late_interaction_index_oid("m14_owned_repair_rollback");
+    let previous_token_count = owned_collection_token_count("m14_owned_repair_rollback");
+
+    Spi::run(
+        "DO $$
+         BEGIN
+             BEGIN
+                 PERFORM pgcontext.repair_late_interaction(
+                     'm14_owned_repair_rollback',
+                     1
+                 );
+                 RAISE EXCEPTION 'force repair rollback';
+             EXCEPTION WHEN others THEN
+                 NULL;
+             END;
+         END $$;",
+    )
+    .expect("late-interaction repair savepoint should roll back cleanly");
+
+    assert_eq!(
+        owned_collection_token_count("m14_owned_repair_rollback"),
+        previous_token_count
+    );
+    assert_eq!(
+        owned_late_interaction_index_oid("m14_owned_repair_rollback"),
+        previous_index
+    );
+}
+
 fn create_owned_late_interaction_fixture(collection_name: &str) {
     Spi::run(&format!(
         "CREATE TABLE public.{collection_name} (
@@ -327,4 +461,28 @@ fn owned_token_count(collection_name: &str, source_key: &str) -> i64 {
     )
     .expect("owned token count query should succeed")
     .expect("owned token count should not be null")
+}
+
+fn owned_collection_token_count(collection_name: &str) -> i64 {
+    Spi::get_one_with_args::<i64>(
+        "SELECT pg_catalog.count(*)::bigint
+           FROM pgcontext._collection_late_interaction_tokens AS tokens
+           JOIN pgcontext._collections AS collections USING (collection_id)
+          WHERE collections.collection_name = $1",
+        &[collection_name.into()],
+    )
+    .expect("owned collection token count query should succeed")
+    .expect("owned collection token count should not be null")
+}
+
+fn owned_late_interaction_index_oid(collection_name: &str) -> pg_sys::Oid {
+    Spi::get_one_with_args::<pg_sys::Oid>(
+        "SELECT registrations.hnsw_index_oid
+           FROM pgcontext._collection_late_interaction AS registrations
+           JOIN pgcontext._collections AS collections USING (collection_id)
+          WHERE collections.collection_name = $1",
+        &[collection_name.into()],
+    )
+    .expect("owned late-interaction index oid query should succeed")
+    .expect("owned late-interaction index oid should not be null")
 }

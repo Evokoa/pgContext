@@ -28,6 +28,14 @@ struct SourceTokenRow {
     token_vectors: Vec<Vector>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct MaterializationSummary {
+    dimensions: Option<i32>,
+    batch_count: i64,
+    point_count: i64,
+    token_count: i64,
+}
+
 /// Registers and materializes an internally maintained late-interaction source.
 ///
 /// The collection must already be bound to `source_table`. `token_source` must
@@ -66,8 +74,8 @@ pub fn register_late_interaction(
     reject_existing_registration(source.collection_id, &collection);
 
     begin_registration(&source);
-    let (dimensions, point_count, token_count) = materialize_source_tokens(&source);
-    let status = match dimensions {
+    let summary = materialize_source_tokens(&source, REGISTRATION_BATCH_SIZE);
+    let status = match summary.dimensions {
         Some(dimensions) => {
             finish_registration(source.collection_id, dimensions);
             "ready"
@@ -79,9 +87,60 @@ pub fn register_late_interaction(
         collection.as_str().to_owned(),
         format!("{}.{}", source.schema_name, source.table_name),
         source.token_column_name,
-        dimensions,
-        point_count,
-        token_count,
+        summary.dimensions,
+        summary.point_count,
+        summary.token_count,
+        status.to_owned(),
+    ))
+}
+
+/// Rebuilds owned late-interaction tokens and their collection-scoped HNSW index.
+///
+/// The repair holds the source-table trigger lock for the surrounding
+/// transaction, clears the derived rows, rescans the source under invoker ACLs
+/// and RLS in bounded batches, then publishes a ready index atomically.
+#[pg_extern(schema = "pgcontext")]
+#[search_path(pg_catalog, pgcontext, public)]
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx requires inline name!() table shapes for SQL generation"
+)]
+pub fn repair_late_interaction(
+    collection: String,
+    batch_size: i32,
+) -> TableIterator<
+    'static,
+    (
+        name!(collection, String),
+        name!(batch_count, i64),
+        name!(point_count, i64),
+        name!(token_count, i64),
+        name!(dimensions, Option<i32>),
+        name!(status, String),
+    ),
+> {
+    let collection = collection_name_from_sql(collection);
+    let batch_size = repair_batch_size_from_sql(batch_size);
+    let source = resolve_repair_source(&collection);
+    require_registration_owner(&source, &collection);
+    require_registration_source_select(&source);
+    refresh_repair_source_binding(source.collection_id);
+    prepare_repair(&source);
+    let summary = materialize_source_tokens(&source, batch_size);
+    let status = match summary.dimensions {
+        Some(dimensions) => {
+            finish_registration(source.collection_id, dimensions);
+            "ready"
+        }
+        None => "building",
+    };
+
+    TableIterator::once((
+        collection.as_str().to_owned(),
+        summary.batch_count,
+        summary.point_count,
+        summary.token_count,
+        summary.dimensions,
         status.to_owned(),
     ))
 }
@@ -207,6 +266,107 @@ fn resolve_registration_source(
     })
 }
 
+fn resolve_repair_source(collection: &CollectionName) -> LateInteractionRegistrationSource {
+    Spi::connect(|client| {
+        let rows = client
+            .select(
+                "SELECT acl.collection_id,
+                        acl.owner_role,
+                        source_class.oid,
+                        registrations.source_schema_name,
+                        registrations.source_table_name,
+                        registrations.token_column_name,
+                        token_attribute.attnum,
+                        token_attribute.atttypid = 'public.vector[]'::regtype AS token_type_valid,
+                        token_attribute.attnotnull,
+                        id_attribute.attname IS NOT NULL AS id_exists
+                   FROM pgcontext._collection_acl AS acl
+                   JOIN pgcontext._visible_collection_late_interaction AS registrations
+                     USING (collection_id)
+                   JOIN pg_catalog.pg_namespace AS source_namespace
+                     ON source_namespace.nspname = registrations.source_schema_name
+                   JOIN pg_catalog.pg_class AS source_class
+                     ON source_class.relnamespace = source_namespace.oid
+                    AND source_class.relname = registrations.source_table_name
+                    AND source_class.relkind IN ('r', 'p')
+                   LEFT JOIN pg_catalog.pg_attribute AS token_attribute
+                     ON token_attribute.attrelid = source_class.oid
+                    AND token_attribute.attname = registrations.token_column_name
+                    AND token_attribute.attnum > 0
+                    AND NOT token_attribute.attisdropped
+                   LEFT JOIN pg_catalog.pg_attribute AS id_attribute
+                     ON id_attribute.attrelid = source_class.oid
+                    AND id_attribute.attname = 'id'
+                    AND id_attribute.attnum > 0
+                    AND NOT id_attribute.attisdropped
+                  WHERE acl.collection_name = $1",
+                Some(1),
+                &[collection.as_str().into()],
+            )
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    format!("failed to resolve late-interaction repair source: {error}"),
+                )
+            });
+        if rows.is_empty() {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
+                format!(
+                    "late-interaction registration does not exist or its source table drifted: {}",
+                    collection.as_str()
+                ),
+            );
+        }
+        let row = rows.first();
+        let schema_name = spi_required_column::<String>(&row, 4, "source_schema_name");
+        let table_name = spi_required_column::<String>(&row, 5, "source_table_name");
+        let token_column_name = spi_required_column::<String>(&row, 6, "token_column_name");
+        let token_attnum = spi_optional_column::<i16>(&row, 7).unwrap_or_else(|| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_UNDEFINED_COLUMN,
+                format!(
+                    "late-interaction token source column does not exist: {schema_name}.{table_name}.{token_column_name}"
+                ),
+            )
+        });
+        if spi_optional_column::<bool>(&row, 8) != Some(true) {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                format!(
+                    "late-interaction token source must have type vector[]: {schema_name}.{table_name}.{token_column_name}"
+                ),
+            );
+        }
+        if spi_optional_column::<bool>(&row, 9) != Some(true) {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!(
+                    "late-interaction token source must be NOT NULL: {schema_name}.{table_name}.{token_column_name}"
+                ),
+            );
+        }
+        if !spi_required_column::<bool>(&row, 10, "source_id_exists") {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_UNDEFINED_COLUMN,
+                format!(
+                    "late-interaction source key column does not exist: {schema_name}.{table_name}.id"
+                ),
+            );
+        }
+
+        LateInteractionRegistrationSource {
+            collection_id: spi_required_column(&row, 1, "collection_id"),
+            owner_role: spi_required_column(&row, 2, "owner_role"),
+            table_oid: spi_required_column(&row, 3, "source_table_oid"),
+            schema_name,
+            table_name,
+            token_column_name,
+            token_attnum,
+        }
+    })
+}
+
 fn require_registration_owner(
     source: &LateInteractionRegistrationSource,
     collection: &CollectionName,
@@ -305,7 +465,8 @@ fn begin_registration(source: &LateInteractionRegistrationSource) {
 
 fn materialize_source_tokens(
     source: &LateInteractionRegistrationSource,
-) -> (Option<i32>, i64, i64) {
+    batch_size: i64,
+) -> MaterializationSummary {
     let table_name = quote_qualified_identifier(&source.schema_name, &source.table_name);
     let token_column = quote_identifier(&source.token_column_name);
     let sql = format!(
@@ -319,12 +480,19 @@ fn materialize_source_tokens(
     let mut dimensions = None;
     let mut point_count = 0_i64;
     let mut token_count = 0_i64;
+    let mut batch_count = 0_i64;
 
     loop {
-        let batch = load_source_token_batch(&sql, offset);
+        let batch = load_source_token_batch(&sql, offset, batch_size);
         if batch.is_empty() {
             break;
         }
+        batch_count = batch_count.checked_add(1).unwrap_or_else(|| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+                "late-interaction batch count overflow",
+            )
+        });
         for row in batch {
             let row_dimensions = validate_source_token_row(&row);
             match dimensions {
@@ -361,13 +529,18 @@ fn materialize_source_tokens(
         offset = point_count;
     }
 
-    (dimensions, point_count, token_count)
+    MaterializationSummary {
+        dimensions,
+        batch_count,
+        point_count,
+        token_count,
+    }
 }
 
-fn load_source_token_batch(sql: &str, offset: i64) -> Vec<SourceTokenRow> {
+fn load_source_token_batch(sql: &str, offset: i64, batch_size: i64) -> Vec<SourceTokenRow> {
     Spi::connect(|client| {
         let rows = client
-            .select(sql, None, &[REGISTRATION_BATCH_SIZE.into(), offset.into()])
+            .select(sql, None, &[batch_size.into(), offset.into()])
             .unwrap_or_else(|error| {
                 raise_sql_error(
                     PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
@@ -462,6 +635,46 @@ fn finish_registration(collection_id: i64, dimensions: i32) {
             format!("failed to finalize late-interaction registration: {error}"),
         )
     });
+}
+
+fn refresh_repair_source_binding(collection_id: i64) {
+    Spi::run_with_args(
+        "SELECT pgcontext._refresh_collection_source_table($1)",
+        &[collection_id.into()],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to refresh late-interaction source binding: {error}"),
+        )
+    });
+}
+
+fn prepare_repair(source: &LateInteractionRegistrationSource) {
+    Spi::run_with_args(
+        "SELECT pgcontext._prepare_late_interaction_repair($1, $2, $3)",
+        &[
+            source.collection_id.into(),
+            source.table_oid.into(),
+            source.token_attnum.into(),
+        ],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to prepare late-interaction repair: {error}"),
+        )
+    });
+}
+
+fn repair_batch_size_from_sql(batch_size: i32) -> i64 {
+    if !(1..=10_000).contains(&batch_size) {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            format!("late-interaction repair batch size must be between 1 and 10000: {batch_size}"),
+        );
+    }
+    i64::from(batch_size)
 }
 
 fn collection_name_from_sql(value: String) -> CollectionName {

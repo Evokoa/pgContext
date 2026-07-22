@@ -5,7 +5,7 @@ use super::{
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 247;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 249;
 const SQL_CONTRACT_OBJECTS_LEN: usize =
     CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
@@ -63,6 +63,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
+        "_prepare_late_interaction_repair",
+        "p_collection_id bigint, p_source_table_oid oid, p_token_attnum smallint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
         "_cleanup_late_interaction_registration",
         "",
         SqlLifecycle::Internal,
@@ -75,6 +80,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "register_late_interaction",
         "collection text, source_table text, token_source text",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "repair_late_interaction",
+        "collection text, batch_size integer",
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(
