@@ -55,7 +55,7 @@ struct BulkDeleteProgress {
 /// `invalid_parameter_value` when the collection has no source table or a
 /// source key is empty/too large, and `internal_error` for unexpected catalog
 /// failures.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -103,7 +103,7 @@ pub fn upsert_points(
 /// `undefined_object` when the collection does not exist,
 /// `invalid_parameter_value` when a source key is empty/too large, and
 /// `internal_error` for unexpected catalog failures.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -134,7 +134,7 @@ pub fn delete_points(
 ///
 /// Raises the same collection and source-key errors as [`upsert_points`], and
 /// `invalid_parameter_value` when `batch_size` is not positive.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -186,7 +186,7 @@ pub fn bulk_upsert_points(
 ///
 /// Raises the same collection and source-key errors as [`delete_points`], and
 /// `invalid_parameter_value` when `batch_size` is not positive.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -235,7 +235,7 @@ pub fn bulk_delete_points(
 /// Raises the same collection errors as [`upsert_points`], `insufficient_privilege`
 /// when the session user cannot `SELECT` from the source table, and
 /// `invalid_parameter_value` when `batch_size` is not positive.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,

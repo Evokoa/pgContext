@@ -37,7 +37,7 @@ struct QueryStatDetail {
 /// Raises `undefined_object` for missing collections, `insufficient_privilege`
 /// for non-owner callers, and `invalid_parameter_value` for invalid counters,
 /// latency, cohort, or query kind.
-#[pg_extern(schema = "pgcontext", name = "record_query_stat", security_definer)]
+#[pg_extern(name = "record_query_stat", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn record_query_stat(
     collection: String,
@@ -87,7 +87,7 @@ pub fn record_query_stat(
 /// Raises `undefined_object` for missing collections, `insufficient_privilege`
 /// for non-owner callers, and `invalid_parameter_value` for invalid counters,
 /// recall values, latency, cohort, or query kind.
-#[pg_extern(schema = "pgcontext", name = "record_query_stat", security_definer)]
+#[pg_extern(name = "record_query_stat", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::too_many_arguments,
@@ -145,7 +145,7 @@ pub fn record_query_stat_detailed(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "query_cohort_stats")]
+#[pg_extern(name = "query_cohort_stats")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_cohort_stats() -> TableIterator<
     'static,

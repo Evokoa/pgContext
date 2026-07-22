@@ -133,7 +133,7 @@ pub(crate) fn validate_search_drift(collection_id: i64, registered_vector: &mut 
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.vector'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.vector'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists
                FROM pg_catalog.pg_class AS class
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace

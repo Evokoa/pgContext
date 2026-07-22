@@ -49,11 +49,7 @@ struct ArtifactReaderPin {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "artifact_segment_serving_readiness",
-    security_definer
-)]
+#[pg_extern(name = "artifact_segment_serving_readiness", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn artifact_segment_serving_readiness(
     collection: String,
@@ -84,11 +80,7 @@ pub fn artifact_segment_serving_readiness(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "artifact_segment_mmap_payload",
-    security_definer
-)]
+#[pg_extern(name = "artifact_segment_mmap_payload", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn artifact_segment_mmap_payload(
     collection: String,

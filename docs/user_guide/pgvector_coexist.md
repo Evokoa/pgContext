@@ -1,114 +1,70 @@
-# Trying pgContext on an Existing pgvector Database
+# Using pgContext Alongside pgvector
 
-pgContext can be installed alongside pgvector and can index existing
-`vector` columns directly — no data movement, no schema changes, no
-downtime. This page covers coexist mode: what works, what to expect, and
-how to migrate when you are ready.
+pgContext and pgvector can be installed in either order. Their SQL types are
+separate extension-owned objects:
 
-## Install order matters
+- pgvector owns `public.vector`, `public.halfvec`, and `public.sparsevec`;
+- pgContext owns `pgcontext.vector`, `pgcontext.halfvec`,
+  `pgcontext.sparsevec`, and `pgcontext.bitvec`.
 
-Install pgvector first, pgContext second:
+The type OIDs are intentionally distinct. The main `pgcontext` extension has no
+catalog dependency on the `vector` extension, so installing or dropping
+pgvector does not remove or disable canonical pgContext objects.
 
-```sql
-CREATE EXTENSION vector;     -- already present on a pgvector database
-CREATE EXTENSION pgcontext;  -- detects pgvector and binds to its types
-```
-
-When pgvector is present, pgContext skips creating its own `vector`,
-`halfvec`, and `sparsevec` types and instead binds its operators, index
-operator classes, and functions to pgvector's types. The two vector
-representations are byte-for-byte identical, so there is no conversion
-anywhere on the query path.
-
-If pgContext was installed first, its own types occupy the public type
-names and `CREATE EXTENSION vector` will fail. Reaching coexist mode
-then requires reinstalling in the right order (`DROP EXTENSION
-pgcontext`, install pgvector, reinstall pgContext);
-`pgcontext.enable_pgvector_binding()` explains the same steps in-band.
-
-## Indexing an existing pgvector column
+> **Checkpoint status:** the canonical main-extension boundary is implemented.
+> The `pgcontext_pgvector` companion named below is the next compatibility
+> checkpoint and is not included in the standalone `pgcontext` artifact yet.
 
 ```sql
-CREATE INDEX ON items USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_cosine_ops);
+CREATE EXTENSION vector;
+CREATE EXTENSION pgcontext;
 ```
 
-The pgvector index (if any) and the pgContext index coexist on the same
-column; PostgreSQL's planner picks one per query. Available operator
-classes: `pgcontext.vector_hnsw_ops` (L2),
-`pgcontext.vector_hnsw_cosine_ops`, `pgcontext.vector_hnsw_ip_ops`,
-`pgcontext.vector_hnsw_l1_ops`.
+The reverse order is valid as well.
 
-The registered-collection API works over pgvector columns the same way:
-`pgcontext.create_collection` / `register_vector` accept them directly.
+## Existing pgvector columns
 
-## The advisory notice
+The main extension does not pretend that a pgvector-owned column has a
+pgContext-owned type. Direct HNSW service over an existing `public.vector` or
+`public.halfvec` column requires the separately installed
+`pgcontext_pgvector` companion extension. That privileged bridge owns only the
+certified binary casts and pgvector-operator-bound opclasses; it keeps the main
+extension's dependency boundary clean.
 
-The first time a backend builds or scans a pgContext index over a
-pgvector-typed column, it emits one `NOTICE` recommending
-`pgcontext.migration_report()`. Results are always complete — the notice
-is guidance, never a gate. Disable it with:
+Until the bridge is installed, `pgcontext.migration_report()` remains available
+as a read-only inventory. It discovers pgvector columns and indexes by extension
+ownership, reports arrays and dependency blockers, and detects both HNSW and
+IVFFlat. `pgcontext.adopt_pgvector(..., dry_run => true)` may be used to inspect
+the proposed bridge opclasses and preserved HNSW options. Executing the plan
+fails closed unless `pgcontext_pgvector` is installed.
+
+## Canonical pgContext columns
+
+New pgContext-owned columns should name the type explicitly:
 
 ```sql
-SET pgcontext.pgvector_compat_warnings = off;
+CREATE TABLE items (
+    id bigint PRIMARY KEY,
+    embedding pgcontext.vector(768) NOT NULL
+);
+
+CREATE INDEX items_embedding_hnsw
+    ON items USING pgcontext_hnsw
+       (embedding pgcontext.vector_hnsw_cosine_ops);
 ```
 
-## Migration tooling
+These columns remain usable after `DROP EXTENSION vector`. Do not use
+`DROP EXTENSION vector CASCADE` as a migration mechanism for pgvector-owned
+application columns; use the inventory and ownership-conversion workflow.
 
-- **`pgcontext.migration_report()`** — read-only inventory: every
-  pgvector-typed scalar or array column, its exact representation,
-  dimensions, existing pgvector and pgContext indexes, conversion readiness,
-  explicit dependency blockers, and the suggested `CREATE INDEX` command.
-  The first conversion profile is deliberately narrow: scalar `vector` and
-  `halfvec` columns without defaults, generated expressions, partitions,
-  dependent views, or complex indexes.
-- **`pgcontext.adopt_pgvector(target => NULL, dry_run => true,
-  drop_old => false)`** — migrates pgvector `hnsw`/`ivfflat` indexes to
-  `pgcontext_hnsw` equivalents with the matching metric. The default is
-  a dry run that only prints the commands; pass `dry_run => false` to
-  execute. The planner refuses expression, partial, multicolumn, INCLUDE,
-  partitioned, invalid, counterfeit-opclass, and untranslatable IVFFlat
-  shapes. It preserves supported HNSW build options and tablespace.
-  `drop_old => true` validates the replacement against the exact oracle and
-  requires `recall_at_10 >= 0.99` before dropping the pgvector index; failure
-  aborts the transaction and leaves the source index intact. Index creation
-  inside the function uses plain
-  `CREATE INDEX` (it cannot run `CONCURRENTLY`); on busy tables, prefer
-  taking the dry-run commands and running them yourself with
-  `CREATE INDEX CONCURRENTLY`.
+## Conversion boundary
 
-Column types are never changed by these tools: in coexist mode your
-data stays in pgvector's types, and dropping the pgvector extension is
-not yet possible. The ownership-conversion workflow is a separate, staged
-operation; do not use `DROP EXTENSION vector CASCADE` as a conversion tool.
+Dense `vector` and `halfvec` layouts are byte-certified. `sparsevec` ownership
+conversion remains fail-closed because pgContext's sparse representation is not
+pgvector's packed layout. PostgreSQL exposes prepared statements only for the
+current backend, so drain or recycle application sessions at a type-ownership
+cutover.
 
-## Comparing indexes side by side
-
-`pgcontext.compare_indexes(table_name, column_name, queries => 20)`
-measures every ANN index on a column — pgvector `hnsw`/`ivfflat` and
-`pgcontext_hnsw` alike — using sampled stored vectors as queries. For
-each reachable operator family it times the planner-chosen index scan
-and scores top-10 recall against an exact sequential-scan oracle with
-the same operator, returning one row per index:
-`(index_name, access_method, operator, p50_ms, p95_ms, recall_at_10)`.
-Indexes the planner never chose (for example one shadowed by a cheaper
-index of the same operator family) report NULL measurements. The
-function is read-only; expect it to run `2 x queries` statements per
-measured family.
-
-## Current limitations
-
-- `vector` and `halfvec` columns are fully supported: pgContext's
-  storage for both is byte-for-byte pgvector's layout (halfvec elements
-  are true IEEE 754 binary16, canonicalized with round-to-nearest-even
-  on input exactly as pgvector does). `sparsevec` columns are not yet
-  served in coexist mode: pgContext operations over them fail with an
-  error rather than producing results (that representation has not yet
-  been certified byte-compatible).
-- Restoring a dump of a coexist database requires pgvector to be created
-  before pgContext, which matches the order `pg_dump` preserves.
-- PostgreSQL exposes prepared statements only for the current backend, so no
-  extension can inventory every client session's prepared SQL. Drain or
-  recycle application sessions at the ownership cutover.
-- `DROP EXTENSION vector CASCADE` in coexist mode also drops the
-  pgContext objects bound to pgvector's types. Run
-  `pgcontext.migration_report()` first and migrate deliberately instead.
+IVFFlat remains an inventory-and-plan input, not a pgContext access method. A
+supported conversion rebuilds it as HNSW after validation rather than claiming
+an in-place IVFFlat implementation.

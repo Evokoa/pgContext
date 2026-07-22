@@ -54,7 +54,7 @@ struct MaterializationSummary {
 /// SECURITY INVOKER function, so ordinary table ACLs and RLS apply to the
 /// initial materialization. Catalog writes and trigger installation are routed
 /// through narrowly validated SECURITY DEFINER helpers.
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::type_complexity,
@@ -110,7 +110,7 @@ pub fn register_late_interaction(
 /// The repair holds the source-table trigger lock for the surrounding
 /// transaction, clears the derived rows, rescans the source under invoker ACLs
 /// and RLS in bounded batches, then publishes a ready index atomically.
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::type_complexity,
@@ -172,7 +172,7 @@ fn resolve_registration_source(
                         source_namespace.nspname::text,
                         source_class.relname::text,
                         token_attribute.attnum,
-                        token_attribute.atttypid = 'public.vector[]'::regtype AS token_type_valid,
+                        token_attribute.atttypid = 'pgcontext.vector[]'::regtype AS token_type_valid,
                         token_attribute.attnotnull,
                         id_attribute.attname IS NOT NULL AS id_exists,
                         id_attribute.attnotnull AND EXISTS (
@@ -316,7 +316,7 @@ fn resolve_repair_source(collection: &CollectionName) -> LateInteractionRegistra
                         registrations.source_table_name,
                         registrations.token_column_name,
                         token_attribute.attnum,
-                        token_attribute.atttypid = 'public.vector[]'::regtype AS token_type_valid,
+                        token_attribute.atttypid = 'pgcontext.vector[]'::regtype AS token_type_valid,
                         token_attribute.attnotnull,
                         id_attribute.attname IS NOT NULL AS id_exists,
                         id_attribute.attnotnull AND EXISTS (

@@ -93,7 +93,7 @@ SELECT extname, extversion FROM pg_extension WHERE extname = 'pgcontext';
 -- 2. End-to-end: create a table, index it, run an ANN query.
 CREATE TABLE IF NOT EXISTS agent_smoke (
     id        text PRIMARY KEY,
-    embedding vector(3) NOT NULL
+    embedding pgcontext.vector(3) NOT NULL
 );
 INSERT INTO agent_smoke VALUES
     ('a', '[1,0,0]'), ('b', '[0.9,0.1,0]'), ('c', '[0,1,0]')
@@ -104,7 +104,7 @@ CREATE INDEX IF NOT EXISTS agent_smoke_hnsw
 
 SELECT id
 FROM agent_smoke
-ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector
+ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector
 LIMIT 1;
 SQL
 ```

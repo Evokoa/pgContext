@@ -37,11 +37,7 @@ struct ModelVersionRow {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "register_model_version",
-    security_definer
-)]
+#[pg_extern(name = "register_model_version", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn register_model_version(
     collection: String,
@@ -89,7 +85,7 @@ pub fn register_model_version(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "model_versions")]
+#[pg_extern(name = "model_versions")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn model_versions() -> TableIterator<
     'static,

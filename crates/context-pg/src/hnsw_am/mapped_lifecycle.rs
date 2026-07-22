@@ -47,7 +47,7 @@ CREATE EVENT TRIGGER pgcontext_mapped_hnsw_sql_drop
     EXECUTE FUNCTION pgcontext._mapped_hnsw_sql_drop();
 "#,
     name = "mapped_hnsw_lifecycle_event_trigger",
-    requires = [pgcontext]
+    requires = ["pgcontext_bootstrap"]
 );
 
 pub(crate) fn init_mapped_graph_lifecycle_hooks() {

@@ -169,7 +169,7 @@ datetime ranges, `is_null` / `is_empty`:
 ```sql
 SELECT source_key, score
 FROM pgcontext.search(
-    'docs', '[ ... ]'::vector,
+    'docs', '[ ... ]'::pgcontext.vector,
     '{
        "must":     [{"key": "tenant_id", "match": "acme"},
                     {"key": "price", "range": {"gte": 10, "lt": 20}}],
@@ -302,7 +302,7 @@ CREATE EXTENSION pgcontext;
 
 CREATE TABLE docs (
     id text PRIMARY KEY,
-    embedding vector(3) NOT NULL,
+    embedding pgcontext.vector(3) NOT NULL,
     category text NOT NULL,
     metadata jsonb NOT NULL
 );
@@ -319,7 +319,7 @@ SELECT pgcontext.upsert_points('docs', ARRAY['postgres', 'rust', 'vectors']);
 
 SELECT source_key, score
 FROM pgcontext.search(
-    'docs', '[1,0,0]'::vector,
+    'docs', '[1,0,0]'::pgcontext.vector,
     '{"must":[{"key":"category","match":"database"}]}'::jsonb,
     3
 );
@@ -329,9 +329,9 @@ ON docs USING pgcontext_hnsw (
     embedding pgcontext.vector_hnsw_cosine_ops
 );
 
-SELECT id, embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector AS distance
+SELECT id, embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector AS distance
 FROM docs
-ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector
+ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector
 LIMIT 3;
 ```
 

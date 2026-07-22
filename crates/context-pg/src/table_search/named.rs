@@ -13,7 +13,7 @@ use super::{
     search_registered_table, search_registered_table_filtered, validate_search_drift,
 };
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection_named_vector(
     collection: String,
@@ -47,7 +47,7 @@ pub fn search_collection_named_vector(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection_named_vector_filtered(
     collection: String,

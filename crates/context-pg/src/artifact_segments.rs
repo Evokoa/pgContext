@@ -41,7 +41,7 @@ fn artifact_publish_failpoint(stage: u8, label: &'static str) {
 }
 
 #[cfg(feature = "pg_test")]
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 fn test_set_artifact_publish_failpoint(name: Option<String>) {
     let stage = match name.as_deref() {
         None => 0,
@@ -171,7 +171,7 @@ impl From<SegmentKind> for ArtifactSegmentKind {
 }
 
 /// Encodes a rebuildable segment artifact with the storage header and checksum.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn encode_artifact_segment(kind: String, payload: Vec<u8>) -> Vec<u8> {
     let kind = ArtifactSegmentKind::from_sql(&kind);
     match encode_segment(kind.storage_kind(), &payload) {
@@ -181,7 +181,7 @@ pub fn encode_artifact_segment(kind: String, payload: Vec<u8>) -> Vec<u8> {
 }
 
 /// Builds a deterministic mmap graph artifact from visible source rows.
-#[pg_extern(schema = "pgcontext", volatile)]
+#[pg_extern(volatile)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn build_mmap_hnsw_artifact(build_job_id: i64) -> Vec<u8> {
     let job = resolve_visible_mmap_build_job(build_job_id);
@@ -283,7 +283,7 @@ pub fn build_mmap_hnsw_artifact(build_job_id: i64) -> Vec<u8> {
 }
 
 /// Validates a rebuildable segment artifact without copying its payload bytes.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn validate_artifact_segment(
     segment: Vec<u8>,
 ) -> TableIterator<
@@ -313,7 +313,7 @@ pub fn validate_artifact_segment(
 }
 
 /// Validates a rebuildable HNSW graph artifact segment and its portable payload.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn validate_hnsw_graph_artifact(
     segment: Vec<u8>,
 ) -> TableIterator<
@@ -370,7 +370,7 @@ pub fn validate_hnsw_graph_artifact(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn publish_artifact_segment(
     build_job_id: i64,
@@ -407,7 +407,7 @@ pub fn publish_artifact_segment(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", security_definer, volatile)]
+#[pg_extern(security_definer, volatile)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn publish_artifact_segment_file(
     build_job_id: i64,
@@ -558,7 +558,7 @@ fn replay_build_delta_tail(build_job_id: i64) {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "artifact_segments", security_definer)]
+#[pg_extern(name = "artifact_segments", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn list_artifact_segments(
     collection: String,
@@ -590,11 +590,7 @@ pub fn list_artifact_segments(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "artifact_segment_memory",
-    security_definer
-)]
+#[pg_extern(name = "artifact_segment_memory", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn artifact_segment_memory(
     collection: String,
@@ -622,11 +618,7 @@ pub fn artifact_segment_memory(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "retire_artifact_segment",
-    security_definer
-)]
+#[pg_extern(name = "retire_artifact_segment", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn retire_artifact_segment(
     artifact_id: i64,
@@ -671,12 +663,7 @@ pub fn retire_artifact_segment(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "cleanup_artifact_segments",
-    security_definer,
-    volatile
-)]
+#[pg_extern(name = "cleanup_artifact_segments", security_definer, volatile)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn cleanup_artifact_segments(
     collection: String,
@@ -721,11 +708,7 @@ pub fn cleanup_artifact_segments(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "artifact_segment_diagnostics",
-    security_definer
-)]
+#[pg_extern(name = "artifact_segment_diagnostics", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn artifact_segment_diagnostics(
     collection: String,

@@ -5,7 +5,7 @@ use super::{
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 259;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 267;
 const SQL_CONTRACT_OBJECTS_LEN: usize =
     CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
@@ -42,6 +42,14 @@ const fn build_sql_contract_objects() -> [SqlContractObject; SQL_CONTRACT_OBJECT
 
 #[rustfmt::skip]
 const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_OBJECTS_LEN] = &[
+    SqlContractObject::function("bitvec_in", "input cstring", SqlLifecycle::Internal),
+    SqlContractObject::function("bitvec_out", "input bitvec", SqlLifecycle::Internal),
+    SqlContractObject::function("halfvec_in", "input cstring", SqlLifecycle::Internal),
+    SqlContractObject::function("halfvec_out", "input halfvec", SqlLifecycle::Internal),
+    SqlContractObject::function("sparsevec_in", "input cstring", SqlLifecycle::Internal),
+    SqlContractObject::function("sparsevec_out", "input sparsevec", SqlLifecycle::Internal),
+    SqlContractObject::function("vector_in", "input cstring", SqlLifecycle::Internal),
+    SqlContractObject::function("vector_out", "input vector", SqlLifecycle::Internal),
     SqlContractObject::function(
         "_mmap_hnsw_artifact_candidates",
         "collection text, artifact_name text, vector vector, max_mapped_bytes bigint, candidate_limit integer, \"limit\" integer",
@@ -515,7 +523,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function(
         "record_query_stat",
-        "collection text, cohort text, query_kind text, result_count bigint, candidates_considered bigint, rows_rechecked bigint, rows_pruned bigint, recall_threshold double precision, recall_achieved double precision, latency_ms double precision, lifecycle_state pgcontext.querylifecyclestate",
+        "collection text, cohort text, query_kind text, result_count bigint, candidates_considered bigint, rows_rechecked bigint, rows_pruned bigint, recall_threshold double precision, recall_achieved double precision, latency_ms double precision, lifecycle_state querylifecyclestate",
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(

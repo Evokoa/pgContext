@@ -14,7 +14,7 @@ use crate::vector::Vector;
 use crate::vector_variants::BitVec;
 
 /// Converts a dense vector to a binary sign-code bit vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn binary_quantize(vector: Vector) -> BitVec {
     let vector = vector_to_core(vector);
     match index_binary_quantize(&vector) {
@@ -24,7 +24,7 @@ pub fn binary_quantize(vector: Vector) -> BitVec {
 }
 
 /// Quantizes a dense vector to scalar byte codes.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn scalar_quantize(vector: Vector, min: f32, max: f32, levels: i32) -> Vec<u8> {
     let vector = vector_to_core(vector);
     let quantizer = scalar_quantizer_from_sql(min, max, levels);
@@ -36,7 +36,7 @@ pub fn scalar_quantize(vector: Vector, min: f32, max: f32, levels: i32) -> Vec<u
 }
 
 /// Reconstructs a dense vector from scalar byte codes.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn scalar_reconstruct(codes: Vec<u8>, min: f32, max: f32, levels: i32) -> Vector {
     let quantizer = scalar_quantizer_from_sql(min, max, levels);
     let codes = match ScalarQuantizedVector::new(codes) {
@@ -51,7 +51,7 @@ pub fn scalar_reconstruct(codes: Vec<u8>, min: f32, max: f32, levels: i32) -> Ve
 }
 
 /// Quantizes a dense vector using JSONB product-quantization codebooks.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn product_quantize(vector: Vector, subvector_dimensions: i32, codebooks: JsonB) -> Vec<u8> {
     let vector = vector_to_core(vector);
     let quantizer = product_quantizer_from_sql(subvector_dimensions, codebooks);
@@ -63,7 +63,7 @@ pub fn product_quantize(vector: Vector, subvector_dimensions: i32, codebooks: Js
 }
 
 /// Reconstructs a dense vector from product byte codes and JSONB codebooks.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn product_reconstruct(codes: Vec<u8>, subvector_dimensions: i32, codebooks: JsonB) -> Vector {
     let quantizer = product_quantizer_from_sql(subvector_dimensions, codebooks);
     let codes = match ProductQuantizedVector::new(codes) {

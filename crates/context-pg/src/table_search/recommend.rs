@@ -15,7 +15,7 @@ use super::{
     table_search_rows_from_spi, validate_search_drift,
 };
 
-#[pg_extern(schema = "pgcontext", name = "recommend")]
+#[pg_extern(name = "recommend")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn recommend_collection_from_points(
     collection: String,
@@ -49,7 +49,7 @@ pub fn recommend_collection_from_points(
     ))
 }
 
-#[pg_extern(schema = "pgcontext", name = "recommend")]
+#[pg_extern(name = "recommend")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn recommend_collection_from_vectors(
     collection: String,
@@ -76,7 +76,7 @@ pub fn recommend_collection_from_vectors(
     ))
 }
 
-#[pg_extern(schema = "pgcontext", name = "discover")]
+#[pg_extern(name = "discover")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn discover_collection(
     collection: String,
@@ -93,7 +93,7 @@ pub fn discover_collection(
     discover_or_explore_collection(collection, context_point_ids, limit)
 }
 
-#[pg_extern(schema = "pgcontext", name = "explore")]
+#[pg_extern(name = "explore")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn explore_collection(
     collection: String,

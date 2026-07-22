@@ -1,4 +1,4 @@
-//! SQL-facing vector types and functions.
+// SQL-facing vector types and functions.
 
 use core::{cmp::Ordering, ffi::CStr, mem::size_of};
 
@@ -296,7 +296,7 @@ CREATE AGGREGATE pgcontext.avg(vector) (
 );
 
 /// Converts a PostgreSQL `real[]` array into a dense vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_from_real_array(values: Vec<f32>) -> Vector {
     match DenseVector::new(values) {
         Ok(vector) => Vector::from_dense(vector),
@@ -305,7 +305,7 @@ pub fn vector_from_real_array(values: Vec<f32>) -> Vector {
 }
 
 /// Converts a PostgreSQL `integer[]` array into a dense vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_from_integer_array(values: Vec<i32>) -> Vector {
     let values = exact_f32_values_from_i32(values).unwrap_or_else(|| {
         raise_sql_error(
@@ -317,7 +317,7 @@ pub fn vector_from_integer_array(values: Vec<i32>) -> Vector {
 }
 
 /// Converts a PostgreSQL `double precision[]` array into a dense vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_from_double_array(values: Vec<f64>) -> Vector {
     let values = exact_f32_values_from_f64(values).unwrap_or_else(|| {
         raise_sql_error(
@@ -329,7 +329,7 @@ pub fn vector_from_double_array(values: Vec<f64>) -> Vector {
 }
 
 /// Converts a dense vector into a PostgreSQL `real[]` array.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_to_real_array(vector: Vector) -> Vec<f32> {
     match vector.to_dense() {
         Ok(vector) => vector.as_slice().to_vec(),
@@ -366,7 +366,7 @@ fn exact_f32_values_from_f64(values: Vec<f64>) -> Option<Vec<f32>> {
 }
 
 /// Accumulates one dense vector into the aggregate state.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_sum_transition(state: Option<Vec<f32>>, value: Option<Vector>) -> Option<Vec<f32>> {
     let Some(value) = value else {
         return state;
@@ -407,19 +407,19 @@ pub fn vector_sum_transition(state: Option<Vec<f32>>, value: Option<Vector>) -> 
 }
 
 /// Finalizes dense vector sum aggregates.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_sum_final(state: Vec<f32>) -> Vector {
     vector_from_aggregate_state(state, AggregateFinal::Sum)
 }
 
 /// Finalizes dense vector average aggregates.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_avg_final(state: Vec<f32>) -> Vector {
     vector_from_aggregate_state(state, AggregateFinal::Average)
 }
 
 /// Compares dense vectors for btree ordering.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_cmp(left: Vector, right: Vector) -> i32 {
     match compare_vectors(left, right) {
         Ordering::Less => -1,
@@ -429,37 +429,37 @@ pub fn vector_cmp(left: Vector, right: Vector) -> i32 {
 }
 
 /// Returns whether the left vector is less than the right vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_lt(left: Vector, right: Vector) -> bool {
     compare_vectors(left, right).is_lt()
 }
 
 /// Returns whether the left vector is less than or equal to the right vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_le(left: Vector, right: Vector) -> bool {
     compare_vectors(left, right).is_le()
 }
 
 /// Returns whether two vectors have identical dense values.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_eq(left: Vector, right: Vector) -> bool {
     compare_vectors(left, right).is_eq()
 }
 
 /// Returns whether two vectors have different dense values.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_ne(left: Vector, right: Vector) -> bool {
     !compare_vectors(left, right).is_eq()
 }
 
 /// Returns whether the left vector is greater than or equal to the right vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_ge(left: Vector, right: Vector) -> bool {
     compare_vectors(left, right).is_ge()
 }
 
 /// Returns whether the left vector is greater than the right vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn vector_gt(left: Vector, right: Vector) -> bool {
     compare_vectors(left, right).is_gt()
 }
@@ -520,7 +520,7 @@ fn vector_from_aggregate_state(mut state: Vec<f32>, aggregate: AggregateFinal) -
 }
 
 /// Returns the number of dimensions in a dense vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 #[must_use]
 pub fn vector_dims(vector: Vector) -> i32 {
     match vector.to_dense() {
@@ -536,31 +536,31 @@ pub fn vector_dims(vector: Vector) -> i32 {
 }
 
 /// Returns L2 distance between two dense vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn l2_distance(left: Vector, right: Vector) -> f32 {
     distance(left, right, DistanceMetric::L2)
 }
 
 /// Returns inner product between two dense vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn inner_product(left: Vector, right: Vector) -> f32 {
     distance(left, right, DistanceMetric::InnerProduct)
 }
 
 /// Returns negative inner product for pgvector-compatible ascending sort order.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn negative_inner_product(left: Vector, right: Vector) -> f32 {
     -distance(left, right, DistanceMetric::InnerProduct)
 }
 
 /// Returns cosine distance between two dense vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn cosine_distance(left: Vector, right: Vector) -> f32 {
     distance(left, right, DistanceMetric::Cosine)
 }
 
 /// Returns L1 distance between two dense vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn l1_distance(left: Vector, right: Vector) -> f32 {
     distance(left, right, DistanceMetric::L1)
 }
@@ -569,7 +569,7 @@ pub fn l1_distance(left: Vector, right: Vector) -> f32 {
 ///
 /// The `point_ids` and `vectors` arrays describe the candidate set. Results are
 /// sorted by ascending metric score and then by ascending point id.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn search(
     query: Vector,
     point_ids: Vec<i64>,
@@ -608,7 +608,7 @@ pub fn search(
 ///
 /// Candidate order is treated only as ANN input. Results are sorted by exact
 /// metric score against `original_vectors` and then by ascending point id.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn rerank_quantized_candidates(
     query: Vector,
     point_ids: Vec<i64>,
@@ -652,7 +652,7 @@ pub fn rerank_quantized_candidates(
 /// `candidate_vectors.len()`. Scores are the sum, over each query vector, of
 /// the best inner product against that point's candidate vectors. Higher scores
 /// rank first; ties use ascending point id.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn rerank_late_interaction(
     query_vectors: Vec<Vector>,
     point_ids: Vec<i64>,

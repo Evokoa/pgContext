@@ -1,13 +1,11 @@
-//! pgvector coexist-mode surface: migration inventory, index adoption,
-//! and the once-per-backend advisory nudge.
+//! pgvector migration inventory, index-adoption planning, comparison tools,
+//! and the once-per-backend bridge advisory.
 //!
-//! Coexist mode (pgvector installed first, pgContext second) serves
-//! pgvector-typed columns natively: the SQL artifact skips creating our
-//! colliding type/cast/typmod objects and every pgContext opclass and
-//! function binds to pgvector's identically-laid-out types by name
-//! resolution. Everything here is guidance and tooling on top of that —
-//! results over pgvector columns are always complete; nothing in this
-//! module gates or degrades a query.
+//! The main extension owns canonical vector types in `pgcontext` and has no
+//! dependency on pgvector. Direct service over pgvector-owned columns belongs
+//! to the separately installed, certified `pgcontext_pgvector` bridge. The
+//! inventory remains useful without that bridge because it discovers objects
+//! by extension ownership rather than by unqualified type names.
 
 #![allow(
     unsafe_code,
@@ -97,16 +95,28 @@ pub(crate) fn nudge_pgvector_compat(index_relation: pg_sys::Relation) {
 
 fn map_pgvector_opclass(opclass: &str) -> Option<&'static str> {
     match opclass {
-        "vector_l2_ops" => Some("pgcontext.vector_hnsw_ops"),
-        "vector_cosine_ops" => Some("pgcontext.vector_hnsw_cosine_ops"),
-        "vector_ip_ops" => Some("pgcontext.vector_hnsw_ip_ops"),
-        "vector_l1_ops" => Some("pgcontext.vector_hnsw_l1_ops"),
-        "halfvec_l2_ops" => Some("pgcontext.halfvec_hnsw_ops"),
-        "halfvec_ip_ops" => Some("pgcontext.halfvec_hnsw_ip_ops"),
-        "halfvec_cosine_ops" => Some("pgcontext.halfvec_hnsw_cosine_ops"),
-        "halfvec_l1_ops" => Some("pgcontext.halfvec_hnsw_l1_ops"),
+        "vector_l2_ops" => Some("pgcontext.vector_hnsw_pgvector_l2_ops"),
+        "vector_cosine_ops" => Some("pgcontext.vector_hnsw_pgvector_cosine_ops"),
+        "vector_ip_ops" => Some("pgcontext.vector_hnsw_pgvector_ip_ops"),
+        "vector_l1_ops" => Some("pgcontext.vector_hnsw_pgvector_l1_ops"),
+        "halfvec_l2_ops" => Some("pgcontext.halfvec_hnsw_pgvector_l2_ops"),
+        "halfvec_ip_ops" => Some("pgcontext.halfvec_hnsw_pgvector_ip_ops"),
+        "halfvec_cosine_ops" => Some("pgcontext.halfvec_hnsw_pgvector_cosine_ops"),
+        "halfvec_l1_ops" => Some("pgcontext.halfvec_hnsw_pgvector_l1_ops"),
         _ => None,
     }
+}
+
+fn pgvector_bridge_installed() -> bool {
+    Spi::get_one::<bool>(
+        "SELECT EXISTS (
+             SELECT 1
+               FROM pg_catalog.pg_extension
+              WHERE extname = 'pgcontext_pgvector'
+         )",
+    )
+    .unwrap_or(Some(false))
+    .unwrap_or(false)
 }
 
 const MIGRATION_REPORT_SQL: &str = r"
@@ -241,7 +251,7 @@ SELECT vc.schema_name::text,
     clippy::type_complexity,
     reason = "pgrx column naming requires the name! tuple inline in the signature"
 )]
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 fn migration_report() -> TableIterator<
     'static,
@@ -396,9 +406,10 @@ SELECT n.nspname::text AS schema_name,
 /// Migrates pgvector `hnsw`/`ivfflat` indexes to `pgcontext_hnsw`
 /// equivalents. `dry_run` (the default) only reports the commands;
 /// `drop_old` additionally drops each pgvector index after its
-/// replacement builds. Column types are untouched — in coexist mode the
-/// data stays in pgvector's types by design.
-#[pg_extern(schema = "pgcontext")]
+/// replacement builds. Column types are untouched. Executable replacement
+/// commands require the separately installed pgvector bridge; ownership
+/// conversion is a distinct workflow.
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 fn adopt_pgvector(
     target: default!(Option<PgRelation>, "NULL"),
@@ -413,6 +424,14 @@ fn adopt_pgvector(
         name!(executed, bool),
     ),
 > {
+    if !dry_run && !pgvector_bridge_installed() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+            "executing a pgvector index-adoption plan requires the certified \
+             pgcontext_pgvector companion extension; install it after both \
+             pgcontext and vector, or keep dry_run => true",
+        );
+    }
     let target_oid: Option<pg_sys::Oid> = target.as_ref().map(|relation| relation.oid());
     let plans = Spi::connect(|client| {
         let table = client
@@ -612,19 +631,16 @@ fn adopt_pgvector(
     TableIterator::new(rows)
 }
 
-/// Explains how to reach coexist mode when pgvector was installed AFTER
-/// pgContext (our types already occupy the public names, so a live
-/// rebind is not possible).
-#[pg_extern(schema = "pgcontext")]
+/// Explains how to enable direct service over pgvector-owned columns.
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 fn enable_pgvector_binding() {
     raise_sql_error(
         PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-        "pgContext was installed before pgvector, so pgContext's own vector \
-         types occupy the public type names and cannot be rebound in place. \
-         To run in coexist mode, install pgvector first and pgContext second \
-         (DROP EXTENSION pgcontext, CREATE EXTENSION vector, CREATE EXTENSION \
-         pgcontext). pgContext indexes and collections must then be recreated.",
+        "pgContext and pgvector can be installed in either order because their \
+         vector types have distinct schemas. Direct pgContext indexing of a \
+         pgvector-owned column requires the certified pgcontext_pgvector \
+         companion extension; install it after both pgcontext and vector.",
     )
 }
 
@@ -699,7 +715,7 @@ fn compare_explain_index_name(explain_json: &str) -> Option<String> {
     clippy::type_complexity,
     reason = "pgrx column naming requires the name! tuple inline in the signature"
 )]
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 fn compare_indexes(
     table_name: String,

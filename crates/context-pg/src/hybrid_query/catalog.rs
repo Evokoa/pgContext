@@ -179,7 +179,7 @@ pub(super) fn validate_query_vector_drift(collection_id: i64, registered_vector:
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.vector'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.vector'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists
                FROM pg_catalog.pg_class AS class
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
@@ -271,7 +271,7 @@ pub(super) fn validate_query_drift(
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.vector'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.vector'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists,
                     text_attribute.attname IS NOT NULL AS text_exists
                FROM pg_catalog.pg_class AS class
@@ -380,7 +380,7 @@ pub(super) fn validate_sparse_query_drift(
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.sparsevec'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.sparsevec'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists
                FROM pg_catalog.pg_class AS class
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace

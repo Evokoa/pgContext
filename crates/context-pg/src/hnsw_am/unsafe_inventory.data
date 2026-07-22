@@ -33,7 +33,7 @@ hnsw_am.rs|fn|hnsw_compaction_table_oid|reads a live index relation's catalog fo
 hnsw_am.rs|fn|hnsw_compact_on_threshold|compacts a live index relation from the insert path once its delta segment fills
 hnsw_am.rs|fn|hnsw_operator_namespace|reads and releases a PostgreSQL syscache tuple
 hnsw_am.rs|fn|hnsw_orderby_query|reads a live PostgreSQL scan descriptor and key
-hnsw_am.rs|fn|hnsw_public_type_oid|calls PostgreSQL catalog lookup with a C string
+hnsw_am.rs|fn|hnsw_pgcontext_type_oid|calls PostgreSQL catalog lookup with a C string
 hnsw_am.rs|fn|hnsw_query_from_orderby_datum|decodes a PostgreSQL scan-key datum
 hnsw_am.rs|fn|hnsw_scan_candidates|reads a live index relation and PostgreSQL pages
 hnsw_am.rs|fn|hnsw_scan_state_ptr|dereferences the AM-owned scan-state slot

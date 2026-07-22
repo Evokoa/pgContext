@@ -56,7 +56,7 @@ struct RegisteredVector {
 ///
 /// Raises `invalid_parameter_value` when `collection_name` is not a valid pgContext
 /// collection name and `duplicate_object` when the collection already exists.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -87,7 +87,7 @@ pub fn create_collection(
 /// Raises `invalid_parameter_value` when identifiers are not valid, `undefined_table` when
 /// the source table cannot be resolved, and `duplicate_object` when the
 /// collection already exists.
-#[pg_extern(schema = "pgcontext", name = "create_collection", security_definer)]
+#[pg_extern(name = "create_collection", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -118,7 +118,7 @@ pub fn create_collection_for_table(
 ///
 /// Raises `invalid_parameter_value` when `collection_name` is not valid and
 /// `undefined_object` when no matching collection exists.
-#[pg_extern(schema = "pgcontext", stable, security_definer)]
+#[pg_extern(stable, security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -160,7 +160,7 @@ pub fn collection_info(
 /// collections, `undefined_column` for missing columns, `datatype_mismatch` for
 /// non-vector columns, `invalid_parameter_value` for invalid dimensions, and
 /// `duplicate_object` when a vector name or column is already registered.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn register_vector(
     collection_name: String,
@@ -234,7 +234,7 @@ pub fn register_vector(
 }
 
 /// Registers a source-table column as a filter and facet field.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn register_filter_column(
     collection_name: String,
@@ -298,7 +298,7 @@ pub fn register_filter_column(
 /// # Errors
 ///
 /// Raises `invalid_parameter_value` when `collection_name` is not valid.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn drop_collection(collection_name: String) -> bool {
     let collection_name = collection_name_from_sql(collection_name);
@@ -442,7 +442,7 @@ fn resolve_vector_column(
         let rows = match client.select(
             "SELECT attribute.attnum,
                     attribute.attname::text,
-                    attribute.atttypid = 'public.vector'::regtype AS is_vector,
+                    attribute.atttypid = 'pgcontext.vector'::regtype AS is_vector,
                     pg_catalog.format_type(attribute.atttypid, attribute.atttypmod)
                FROM pg_catalog.pg_attribute AS attribute
               WHERE attribute.attrelid = $1

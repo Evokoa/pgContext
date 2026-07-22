@@ -40,7 +40,7 @@ enum PayloadColumnType {
 }
 
 /// Merges registered payload keys into source-table payload columns.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn set_payload(
     collection_name: String,
@@ -76,7 +76,7 @@ pub fn set_payload(
 }
 
 /// Deletes registered payload keys from source-table payload columns.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn delete_payload(
     collection_name: String,
@@ -102,7 +102,7 @@ pub fn delete_payload(
 }
 
 /// Clears all registered payload fields from source-table payload columns.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn clear_payload(
     collection_name: String,

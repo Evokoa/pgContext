@@ -65,7 +65,7 @@ DECLARE
     selected_record record;
     current_source_key text;
     previous_source_key text;
-    token_vectors public.vector[];
+    token_vectors pgcontext.vector[];
     point bigint;
     minimum_dimensions int4;
     maximum_dimensions int4;
@@ -122,7 +122,7 @@ BEGIN
     END IF;
 
     EXECUTE pg_catalog.format(
-        'SELECT ($1).%I::public.vector[] AS token_vectors',
+        'SELECT ($1).%I::pgcontext.vector[] AS token_vectors',
         registration.token_column_name
     )
     INTO selected_record
@@ -249,7 +249,7 @@ BEGIN
            AND source_namespace.nspname = p_source_schema_name
            AND source_class.relname = p_source_table_name
            AND source_class.relkind = 'r'
-           AND token_attribute.atttypid = 'public.vector[]'::pg_catalog.regtype
+           AND token_attribute.atttypid = 'pgcontext.vector[]'::pg_catalog.regtype
     ) THEN
         RAISE EXCEPTION 'invalid or unauthorized late-interaction registration for collection %', p_collection_id
             USING ERRCODE = '42501';
@@ -306,7 +306,7 @@ DECLARE
     minimum_dimensions int4;
     maximum_dimensions int4;
     replacement_token_count bigint;
-    token_vectors public.vector[];
+    token_vectors pgcontext.vector[];
     loaded_row_count bigint;
 BEGIN
     SELECT registrations.*
@@ -330,7 +330,7 @@ BEGIN
     END IF;
 
     EXECUTE pg_catalog.format(
-        'SELECT source.%I::public.vector[]
+        'SELECT source.%I::pgcontext.vector[]
            FROM %I.%I AS source
           WHERE source.id::text = $1
           LIMIT 1',
@@ -433,7 +433,7 @@ BEGIN
     index_name := pg_catalog.format('pgcontext_late_interaction_%s_hnsw', p_collection_id);
     EXECUTE pg_catalog.format(
         'CREATE INDEX %I ON pgcontext._collection_late_interaction_tokens '
-        'USING pgcontext_hnsw ((token_vector::public.vector(%s)) pgcontext.vector_hnsw_ip_ops) '
+        'USING pgcontext_hnsw ((token_vector::pgcontext.vector(%s)) pgcontext.vector_hnsw_ip_ops) '
         'WHERE collection_id = %s',
         index_name,
         p_dimensions,
@@ -517,7 +517,7 @@ BEGIN
            'g'
        ) IN (
            pg_catalog.format('token_vector::vector%s', registrations.dimensions),
-           pg_catalog.format('token_vector::public.vector%s', registrations.dimensions)
+           pg_catalog.format('token_vector::pgcontext.vector%s', registrations.dimensions)
        );
     IF NOT FOUND THEN
         RAISE EXCEPTION 'late-interaction ANN generation is not ready or is unauthorized for collection %', p_collection_id
@@ -537,7 +537,7 @@ BEGIN
             'SELECT tokens.point_id
                FROM pgcontext._collection_late_interaction_tokens AS tokens
               WHERE tokens.collection_id = $1
-              ORDER BY (tokens.token_vector::public.vector(%s)) OPERATOR(pgcontext.<#>) $2
+              ORDER BY (tokens.token_vector::pgcontext.vector(%s)) OPERATOR(pgcontext.<#>) $2
               LIMIT $3',
             registration.dimensions
         ) USING p_collection_id, p_query, p_limit;
@@ -584,7 +584,7 @@ BEGIN
        AND source_namespace.nspname = registrations.source_schema_name
        AND source_class.relname = registrations.source_table_name
        AND source_class.relkind = 'r'
-       AND token_attribute.atttypid = 'public.vector[]'::pg_catalog.regtype;
+       AND token_attribute.atttypid = 'pgcontext.vector[]'::pg_catalog.regtype;
     IF NOT FOUND OR NOT pg_catalog.has_table_privilege(
         SESSION_USER,
         p_source_table_oid,

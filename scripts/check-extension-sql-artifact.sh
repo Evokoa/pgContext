@@ -52,7 +52,7 @@ validate_variant_hnsw_opclasses() {
 
   matches="$(
     grep -En \
-      'CREATE[[:space:]]+OPERATOR[[:space:]]+CLASS[[:space:]]+([^[:space:]]+\.)?bitvec_hnsw_ops\b|DEFAULT[[:space:]]+FOR[[:space:]]+TYPE[[:space:]]+(public\.)?bitvec[[:space:]]+USING[[:space:]]+pgcontext_hnsw' \
+      'CREATE[[:space:]]+OPERATOR[[:space:]]+CLASS[[:space:]]+([^[:space:]]+\.)?bitvec_hnsw_ops\b|DEFAULT[[:space:]]+FOR[[:space:]]+TYPE[[:space:]]+(pgcontext\.)?bitvec[[:space:]]+USING[[:space:]]+pgcontext_hnsw' \
       "${input}" || true
   )"
   if [[ -n "${matches}" ]]; then
@@ -70,7 +70,7 @@ my $path = shift @ARGV;
 open my $fh, '<', $path or die "cannot read $path: $!\n";
 local $/;
 my $sql = <$fh>;
-exit 0 unless $sql =~ /CREATE\s+ACCESS\s+METHOD\s+pgcontext_hnsw\b/is;
+exit 0 unless $sql =~ /CREATE\s+OPERATOR\s+CLASS\s+(?:\S+\.)?(?:halfvec|sparsevec|bitvec)_hnsw/is;
 
 my @specs = (
     ['halfvec_hnsw_ops', 'halfvec', 'default', '<->', 'float_ops', 'halfvec_l2_distance'],
@@ -96,10 +96,10 @@ for my $spec (@specs) {
         : $block !~ /DEFAULT\s+FOR\s+TYPE/is;
     die "invalid $name opclass contract\n" unless
         $default_ok
-        && $block =~ /FOR\s+TYPE\s+public\.\Q$type\E\s+USING\s+pgcontext_hnsw/is
-        && $block =~ /OPERATOR\s+1\s+pgcontext\.\Q$operator\E\s*\(public\.\Q$type\E,\s*public\.\Q$type\E\)\s+FOR\s+ORDER\s+BY\s+pg_catalog\.\Q$order\E/is
-        && $block =~ /FUNCTION\s+1\s+pgcontext\.\Q$function\E\s*\(public\.\Q$type\E,\s*public\.\Q$type\E\)/is
-        && $block =~ /STORAGE\s+public\.vector/is;
+        && $block =~ /FOR\s+TYPE\s+pgcontext\.\Q$type\E\s+USING\s+pgcontext_hnsw/is
+        && $block =~ /OPERATOR\s+1\s+pgcontext\.\Q$operator\E\s*\(pgcontext\.\Q$type\E,\s*pgcontext\.\Q$type\E\)\s+FOR\s+ORDER\s+BY\s+pg_catalog\.\Q$order\E/is
+        && $block =~ /FUNCTION\s+1\s+pgcontext\.\Q$function\E\s*\(pgcontext\.\Q$type\E,\s*pgcontext\.\Q$type\E\)/is
+        && $block =~ /STORAGE\s+pgcontext\.vector/is;
 }
 PERL
   then
@@ -172,11 +172,6 @@ actual="${tmp_dir}/actual.normalized.sql"
   cd "${REPO_ROOT}"
   cargo pgrx schema -p context-pg "pg${pg_major}" --out "${generated}"
 )
-# The committed artifact carries the pgvector-coexist guards; apply the same
-# transform to the fresh pgrx output before diffing so the two paths can
-# never diverge. (Regeneration flow: cargo pgrx schema ... --out sql/... &&
-# python3 scripts/transform-sql-artifact-coexist.py sql/...)
-python3 "${REPO_ROOT}/scripts/transform-sql-artifact-coexist.py" "${generated}"
 validate_variant_hnsw_opclasses "${generated}" "generated"
 
 normalize_sql "${artifact_path}" "${expected}"

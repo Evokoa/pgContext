@@ -51,7 +51,7 @@ struct OwnedLateInteractionAnnSource {
 /// the collection-scoped HNSW index, so callers only provide the query and
 /// budgets. Candidate generation is approximate; final MaxSim scoring hydrates
 /// the source table as the invoker and therefore preserves ACL, RLS, and MVCC.
-#[pg_extern(schema = "pgcontext", name = "search_late_interaction_ann")]
+#[pg_extern(name = "search_late_interaction_ann")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_owned_late_interaction_ann(
     collection: String,
@@ -131,7 +131,7 @@ pub fn search_owned_late_interaction_ann(
 }
 
 /// Explains the pgContext-owned late-interaction ANN candidate path.
-#[pg_extern(schema = "pgcontext", name = "explain_late_interaction_ann")]
+#[pg_extern(name = "explain_late_interaction_ann")]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::type_complexity,
@@ -271,13 +271,13 @@ fn resolve_owned_late_interaction_ann_source(collection_id: i64) -> OwnedLateInt
                                     registrations.dimensions
                                 ),
                                 pg_catalog.format(
-                                    'token_vector::public.vector%s',
+                                    'token_vector::pgcontext.vector%s',
                                     registrations.dimensions
                                 )
                             ) AS ready,
                         registrations.source_table_oid = collections.source_table_oid
                             AND token_attribute.attnum = registrations.token_attnum
-                            AND token_attribute.atttypid = 'public.vector[]'::regtype
+                            AND token_attribute.atttypid = 'pgcontext.vector[]'::regtype
                             AND token_attribute.attnotnull AS source_binding_valid
                    FROM pgcontext._visible_collection_late_interaction AS registrations
                    JOIN pgcontext._visible_collections AS collections USING (collection_id)
@@ -559,7 +559,7 @@ fn search_late_interaction_candidate_points(
 /// The token table supplies approximate candidate source keys using a
 /// `pgcontext_hnsw` index over one token vector per row. Final ordering still
 /// hydrates the authoritative collection source table and applies exact MaxSim.
-#[pg_extern(schema = "pgcontext", name = "search_late_interaction_ann")]
+#[pg_extern(name = "search_late_interaction_ann")]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::too_many_arguments,
@@ -651,7 +651,7 @@ pub fn search_legacy_late_interaction_ann(
 }
 
 /// Explains experimental ANN candidate generation for late interaction.
-#[pg_extern(schema = "pgcontext", name = "explain_late_interaction_ann")]
+#[pg_extern(name = "explain_late_interaction_ann")]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::too_many_arguments,
@@ -915,7 +915,7 @@ fn resolve_late_interaction_ann_source(
                     source_attribute.attname IS NOT NULL AS source_key_exists,
                     source_attribute.attnotnull AS source_key_not_null,
                     vector_attribute.attname IS NOT NULL AS vector_exists,
-                    vector_attribute.atttypid = 'public.vector'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.vector'::regtype AS vector_is_valid,
                     vector_attribute.atttypmod AS vector_typmod,
                     vector_attribute.attnotnull AS vector_not_null,
                     EXISTS (

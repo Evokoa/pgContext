@@ -18,7 +18,7 @@ struct ExistingAlias {
 }
 
 /// Creates or retargets a collection alias.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn create_collection_alias(
     alias_name: String,
@@ -53,7 +53,7 @@ pub fn create_collection_alias(
 }
 
 /// Lists collection aliases visible to the session user.
-#[pg_extern(schema = "pgcontext", stable, security_definer)]
+#[pg_extern(stable, security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn collection_aliases()
 -> TableIterator<'static, (name!(alias_name, String), name!(collection_name, String))> {
@@ -107,7 +107,7 @@ pub fn collection_aliases()
 }
 
 /// Drops a collection alias.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn drop_collection_alias(alias_name: String) -> bool {
     let alias_name = collection_name_from_sql(alias_name);

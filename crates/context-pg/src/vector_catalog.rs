@@ -57,7 +57,7 @@ struct SparseVectorMetadata {
     status: VectorStatus,
 }
 /// Lists registered dense-vector metadata.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -97,7 +97,7 @@ pub fn collection_vectors(
 /// file-materialized artifacts for the collection rebuild-required in the same
 /// transaction. A later artifact can become serving-ready only when its build
 /// job captured the current revision.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -158,7 +158,7 @@ pub fn configure_vector(
 }
 
 /// Binds a registered dense vector to its validated PostgreSQL HNSW index.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn attach_hnsw_index(collection_name: String, vector_name: String, index_name: String) {
     let collection_name = collection_name_from_sql(collection_name);
@@ -199,7 +199,7 @@ pub fn attach_hnsw_index(collection_name: String, vector_name: String, index_nam
 }
 
 /// Binds a registered sparse vector to its validated PostgreSQL HNSW index.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn attach_sparse_hnsw_index(collection_name: String, vector_name: String, index_name: String) {
     let collection_name = collection_name_from_sql(collection_name);
@@ -238,7 +238,7 @@ pub fn attach_sparse_hnsw_index(collection_name: String, vector_name: String, in
             AND access_method.amname = 'pgcontext_hnsw'
             AND index_def.indkey[0] = vectors.vector_attnum
             AND operator_namespace.nspname = 'pgcontext'
-            AND operator_class.opcintype = 'public.sparsevec'::pg_catalog.regtype
+            AND operator_class.opcintype = 'pgcontext.sparsevec'::pg_catalog.regtype
             AND operator_class.opcname = CASE vectors.metric
                     WHEN 'l2' THEN 'sparsevec_hnsw_ops'
                     WHEN 'inner_product' THEN 'sparsevec_hnsw_ip_ops'
@@ -270,7 +270,7 @@ pub fn attach_sparse_hnsw_index(collection_name: String, vector_name: String, in
 }
 
 /// Registers a table-backed sparse vector column.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -339,7 +339,7 @@ pub fn register_sparse_vector(
 }
 
 /// Lists registered sparse-vector metadata.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,
@@ -374,7 +374,7 @@ pub fn collection_sparse_vectors(
 }
 
 /// Updates sparse-vector storage, index, and lifecycle metadata.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,

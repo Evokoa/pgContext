@@ -36,7 +36,7 @@ pub(super) struct LateInteractionCollection {
 /// `vector_column`. Scores use MaxSim: for every query vector, take the maximum
 /// inner product against that row's candidate vectors, then sum those maxima.
 /// Results order by descending score and ascending point ID.
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_late_interaction(
     collection: String,
@@ -76,7 +76,7 @@ pub fn search_late_interaction(
 /// reports the active point count, active candidate vector count, projected
 /// MaxSim comparisons, and the comparison budget before the query loads any
 /// candidate vectors.
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::type_complexity,
@@ -376,7 +376,7 @@ pub(super) fn validate_late_interaction_drift(
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.vector[]'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.vector[]'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists
                FROM pg_catalog.pg_class AS class
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace

@@ -30,7 +30,7 @@
     },
     {
       "path": "playground/demo.sql",
-      "sha256": "7bdb370ff00265fa7d303fd2ab176ebbd7cd946ab636294f164a17f292e1c39a"
+      "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
   "navigation_sha256": "89ef0a7a896d5e1fc7bb4deec236170b700b13c9fb79e003c69c1377824e4590",
@@ -373,7 +373,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "b6f69839f9a9285544f8f071bb70601e137d3979d4302d37a3edb232c53c373a"
+      "sha256": "094bfb1bce5417443bc962fcc36fcc8dcf1c0f8e848d95d95bfb0cbadcc750d8"
     },
     {
       "links": [],
@@ -385,7 +385,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/collections.md",
-      "sha256": "eb1f44cef110392edbb923e2ec44b1424a27a7a5e59427722905b5f0ca9fed49"
+      "sha256": "7a4c2fa3b93c83bf1419bc9544b6395160be8e8729562d90f93d6d4ce90d4206"
     },
     {
       "links": [
@@ -408,14 +408,14 @@
     {
       "links": [],
       "path": "user_guide/hybrid_retrieval.md",
-      "sha256": "729ed0adc80971c6963fe8825ba16563739097a3ca6e5ad135883ed530a8290e"
+      "sha256": "57e08fb3998c901c028cb83554f6d162d302664ae1b16820f82818025fa93ba4"
     },
     {
       "links": [
         "pgvector_coexist.md"
       ],
       "path": "user_guide/indexes.md",
-      "sha256": "85a8ef352224827ab287e8d1a2d858df9d32ac2cc97b7713bfb4573c67c5ba2a"
+      "sha256": "58959a5013a3522c0b9297653b15b3291639e564f8a426a0d2474d44492bffea"
     },
     {
       "links": [
@@ -450,7 +450,7 @@
     {
       "links": [],
       "path": "user_guide/multi_tenancy.md",
-      "sha256": "3de3aff9eb31db004436b5c9ea77e48a94144ca41a9dcd37955a9be4f8fa1cf2"
+      "sha256": "c7970e5cea0823bd28285f45485397e6c586bbe1be1252898c6c690c160aa1d7"
     },
     {
       "links": [
@@ -471,14 +471,14 @@
     {
       "links": [],
       "path": "user_guide/pgvector_coexist.md",
-      "sha256": "51899a4da2d018286e3ef9f6cf4f7c9614b44bbb941727f43ff29f0329894f00"
+      "sha256": "0828d3972fbb10ef93d80b5966dab481303f390be9d688b1bbf8308dbe98ef93"
     },
     {
       "links": [
         "pgvector_coexist.md"
       ],
       "path": "user_guide/pgvector_migration.md",
-      "sha256": "3587ca24ce7fdaa7c556ec0020c63662c05174323d21c21994eaa1c2339abfb0"
+      "sha256": "e6349477c0d209ca451871cf9005430bdc238c7289035daeecea679ab7d242b2"
     },
     {
       "links": [
@@ -493,7 +493,7 @@
         "playground.md"
       ],
       "path": "user_guide/quickstart.md",
-      "sha256": "b6d83b5c470bd4acf1ebaac2d145fce79c565dab42c07125fdcf18a83797b6b2"
+      "sha256": "fcd2388ef58c4d21720112797ea4fab4e72cbfd798e70ac84a58fa68d6ca5716"
     },
     {
       "links": [
@@ -551,7 +551,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "3147d99deb7358aa603c147e6aa7ab7c81dd4664297bc3e13a669a81976c8461"
+      "sha256": "1f56b54bcc87139cca9e086f1dd991eeb34ac21d54c392dba5675a81c58b2be6"
     },
     {
       "links": [],
@@ -575,7 +575,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/vector_search.md",
-      "sha256": "84a3f2140d23fe919a401c926035efbe52197d3a62ae43ebb812853d8f155b8b"
+      "sha256": "fd2593e1def2ac394cba4c41c1aef81e46b6c6375674d2d046282e2264fd5468"
     }
   ],
   "public_files": [
@@ -653,7 +653,7 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "f1a1dc14fabb5bc07863aff184cf08ca015ab27e9571097c6db7ae81ebd93784"
+      "sha256": "ba454ebf676e3698fb66a01fa1d216205ce7fae4b2f386e4af0662dafe400136"
     },
     {
       "links": [],

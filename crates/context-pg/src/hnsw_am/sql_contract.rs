@@ -9,8 +9,8 @@ AS 'MODULE_PATHNAME', 'pgcontext_hnsw_handler'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
 CREATE OPERATOR pgcontext.<-> (
-    LEFTARG = public.vector,
-    RIGHTARG = public.vector,
+    LEFTARG = pgcontext.vector,
+    RIGHTARG = pgcontext.vector,
     FUNCTION = pgcontext._l2_distance_fast8,
     COMMUTATOR = OPERATOR(pgcontext.<->)
 );
@@ -20,110 +20,110 @@ CREATE ACCESS METHOD pgcontext_hnsw
     HANDLER pgcontext.hnsw_handler;
 
 CREATE OPERATOR CLASS pgcontext.vector_hnsw_ops
-    DEFAULT FOR TYPE public.vector USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<-> (public.vector, public.vector) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.hnsw_l2_distance(public.vector, public.vector);
+    DEFAULT FOR TYPE pgcontext.vector USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<-> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.hnsw_l2_distance(pgcontext.vector, pgcontext.vector);
 
 CREATE OPERATOR CLASS pgcontext.vector_hnsw_ip_ops
-    FOR TYPE public.vector USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<#> (public.vector, public.vector) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.negative_inner_product(public.vector, public.vector);
+    FOR TYPE pgcontext.vector USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<#> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.negative_inner_product(pgcontext.vector, pgcontext.vector);
 
 CREATE OPERATOR CLASS pgcontext.vector_hnsw_cosine_ops
-    FOR TYPE public.vector USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<=> (public.vector, public.vector) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.cosine_distance(public.vector, public.vector);
+    FOR TYPE pgcontext.vector USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<=> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.cosine_distance(pgcontext.vector, pgcontext.vector);
 
 CREATE OPERATOR CLASS pgcontext.vector_hnsw_l1_ops
-    FOR TYPE public.vector USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<+> (public.vector, public.vector) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.l1_distance(public.vector, public.vector);
+    FOR TYPE pgcontext.vector USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<+> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.l1_distance(pgcontext.vector, pgcontext.vector);
 
 CREATE OPERATOR pgcontext.<-> (
-    LEFTARG = public.halfvec,
-    RIGHTARG = public.halfvec,
+    LEFTARG = pgcontext.halfvec,
+    RIGHTARG = pgcontext.halfvec,
     FUNCTION = pgcontext.halfvec_l2_distance,
     COMMUTATOR = OPERATOR(pgcontext.<->)
 );
 
 CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_ops
-    DEFAULT FOR TYPE public.halfvec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<-> (public.halfvec, public.halfvec) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.halfvec_l2_distance(public.halfvec, public.halfvec),
-    STORAGE public.vector;
+    DEFAULT FOR TYPE pgcontext.halfvec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<-> (pgcontext.halfvec, pgcontext.halfvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.halfvec_l2_distance(pgcontext.halfvec, pgcontext.halfvec),
+    STORAGE pgcontext.vector;
 
 CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_ip_ops
-    FOR TYPE public.halfvec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<#> (public.halfvec, public.halfvec) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.halfvec_negative_inner_product(public.halfvec, public.halfvec),
-    STORAGE public.vector;
+    FOR TYPE pgcontext.halfvec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<#> (pgcontext.halfvec, pgcontext.halfvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.halfvec_negative_inner_product(pgcontext.halfvec, pgcontext.halfvec),
+    STORAGE pgcontext.vector;
 
 CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_cosine_ops
-    FOR TYPE public.halfvec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<=> (public.halfvec, public.halfvec) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.halfvec_cosine_distance(public.halfvec, public.halfvec),
-    STORAGE public.vector;
+    FOR TYPE pgcontext.halfvec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<=> (pgcontext.halfvec, pgcontext.halfvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.halfvec_cosine_distance(pgcontext.halfvec, pgcontext.halfvec),
+    STORAGE pgcontext.vector;
 
 CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_l1_ops
-    FOR TYPE public.halfvec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<+> (public.halfvec, public.halfvec) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.halfvec_l1_distance(public.halfvec, public.halfvec),
-    STORAGE public.vector;
+    FOR TYPE pgcontext.halfvec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<+> (pgcontext.halfvec, pgcontext.halfvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.halfvec_l1_distance(pgcontext.halfvec, pgcontext.halfvec),
+    STORAGE pgcontext.vector;
 
 CREATE OPERATOR pgcontext.<-> (
-    LEFTARG = public.sparsevec,
-    RIGHTARG = public.sparsevec,
+    LEFTARG = pgcontext.sparsevec,
+    RIGHTARG = pgcontext.sparsevec,
     FUNCTION = pgcontext.sparsevec_l2_distance,
     COMMUTATOR = OPERATOR(pgcontext.<->)
 );
 
 CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_ops
-    DEFAULT FOR TYPE public.sparsevec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<-> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.sparsevec_l2_distance(public.sparsevec, public.sparsevec),
-    STORAGE public.vector;
+    DEFAULT FOR TYPE pgcontext.sparsevec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<-> (pgcontext.sparsevec, pgcontext.sparsevec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.sparsevec_l2_distance(pgcontext.sparsevec, pgcontext.sparsevec),
+    STORAGE pgcontext.vector;
 
 CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_ip_ops
-    FOR TYPE public.sparsevec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<#> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.sparsevec_negative_inner_product(public.sparsevec, public.sparsevec),
-    STORAGE public.vector;
+    FOR TYPE pgcontext.sparsevec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<#> (pgcontext.sparsevec, pgcontext.sparsevec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.sparsevec_negative_inner_product(pgcontext.sparsevec, pgcontext.sparsevec),
+    STORAGE pgcontext.vector;
 
 CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_cosine_ops
-    FOR TYPE public.sparsevec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<=> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.sparsevec_cosine_distance(public.sparsevec, public.sparsevec),
-    STORAGE public.vector;
+    FOR TYPE pgcontext.sparsevec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<=> (pgcontext.sparsevec, pgcontext.sparsevec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.sparsevec_cosine_distance(pgcontext.sparsevec, pgcontext.sparsevec),
+    STORAGE pgcontext.vector;
 
 CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_l1_ops
-    FOR TYPE public.sparsevec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<+> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.sparsevec_l1_distance(public.sparsevec, public.sparsevec),
-    STORAGE public.vector;
+    FOR TYPE pgcontext.sparsevec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<+> (pgcontext.sparsevec, pgcontext.sparsevec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.sparsevec_l1_distance(pgcontext.sparsevec, pgcontext.sparsevec),
+    STORAGE pgcontext.vector;
 
 CREATE OPERATOR pgcontext.<~> (
-    LEFTARG = public.bitvec,
-    RIGHTARG = public.bitvec,
+    LEFTARG = pgcontext.bitvec,
+    RIGHTARG = pgcontext.bitvec,
     FUNCTION = pgcontext.bitvec_hamming_distance,
     COMMUTATOR = OPERATOR(pgcontext.<~>)
 );
 
 CREATE OPERATOR CLASS pgcontext.bitvec_hnsw_hamming_ops
-    FOR TYPE public.bitvec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<~> (public.bitvec, public.bitvec) FOR ORDER BY pg_catalog.integer_ops,
-    FUNCTION 1 pgcontext.bitvec_hamming_distance(public.bitvec, public.bitvec),
-    STORAGE public.vector;
+    FOR TYPE pgcontext.bitvec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<~> (pgcontext.bitvec, pgcontext.bitvec) FOR ORDER BY pg_catalog.integer_ops,
+    FUNCTION 1 pgcontext.bitvec_hamming_distance(pgcontext.bitvec, pgcontext.bitvec),
+    STORAGE pgcontext.vector;
 
 CREATE OPERATOR CLASS pgcontext.bitvec_hnsw_jaccard_ops
-    FOR TYPE public.bitvec USING pgcontext_hnsw AS
-    OPERATOR 1 pgcontext.<%> (public.bitvec, public.bitvec) FOR ORDER BY pg_catalog.float_ops,
-    FUNCTION 1 pgcontext.bitvec_jaccard_distance(public.bitvec, public.bitvec),
-    STORAGE public.vector;
+    FOR TYPE pgcontext.bitvec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<%> (pgcontext.bitvec, pgcontext.bitvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.bitvec_jaccard_distance(pgcontext.bitvec, pgcontext.bitvec),
+    STORAGE pgcontext.vector;
 
 "#,
     name = "create_hnsw_access_method",
     requires = [
-        pgcontext,
+        "pgcontext_bootstrap",
         Vector,
         HalfVec,
         SparseVec,

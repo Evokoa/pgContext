@@ -96,7 +96,7 @@ fn source_built_mmap_graph_is_navigable() {
            FROM pgcontext.search_mmap_hnsw_artifact(
                 'm13_mmap_source_built_graph',
                 'source-built',
-                '[0,0]'::public.vector,
+                '[0,0]'::pgcontext.vector,
                 65536,
                 4,
                 2
@@ -165,7 +165,7 @@ fn quantized_source_built_graphs_use_v2_and_exact_source_rerank() {
                FROM pgcontext.search_mmap_hnsw_artifact(
                     '{collection}',
                     'quantized',
-                    '[0,0]'::public.vector,
+                    '[0,0]'::pgcontext.vector,
                     65536,
                     3,
                     2
@@ -183,7 +183,7 @@ fn quantized_source_built_graphs_use_v2_and_exact_source_rerank() {
                        FROM pgcontext.search_mmap_hnsw_artifact(
                             '{collection}',
                             'quantized',
-                            '[0,0]'::public.vector,
+                            '[0,0]'::pgcontext.vector,
                             65536,
                             2,
                             2

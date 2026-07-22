@@ -254,7 +254,7 @@ fn graph_node_count(snapshots: &[HnswGraphNodeSnapshot]) -> u64 {
 ///
 /// The superseded pages are left in place — compaction reclaims write
 /// throughput, not disk. Use `REINDEX` to shrink the relation on disk.
-#[pg_extern(schema = "pgcontext", name = "compact")]
+#[pg_extern(name = "compact")]
 #[search_path(pg_catalog, pgcontext, public)]
 fn hnsw_compact(
     index: PgRelation,

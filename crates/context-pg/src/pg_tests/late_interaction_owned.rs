@@ -63,10 +63,13 @@ fn owned_late_interaction_catalog_has_private_storage_and_public_visibility_view
 #[pg_test]
 fn owned_late_interaction_catalog_is_extension_configuration_data() {
     let dumped_relations = Spi::get_one::<Vec<String>>(
-        "SELECT pg_catalog.array_agg(class.oid::regclass::text ORDER BY class.relname)
+        "SELECT pg_catalog.array_agg(
+                    pg_catalog.format('%I.%I', namespace.nspname, class.relname)
+                    ORDER BY class.relname)
            FROM pg_catalog.pg_extension AS extension
            JOIN unnest(extension.extconfig) AS configured(oid) ON true
            JOIN pg_catalog.pg_class AS class ON class.oid = configured.oid
+           JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
           WHERE extension.extname = 'pgcontext'
             AND class.relname IN (
                 '_collection_late_interaction',
@@ -676,7 +679,7 @@ fn owned_late_interaction_ann_rejects_a_misbound_hnsw_generation() {
         "CREATE INDEX m14_owned_wrong_generation
              ON pgcontext._collection_late_interaction_tokens
              USING pgcontext_hnsw (
-                 (token_vector::public.vector(2)) pgcontext.vector_hnsw_ip_ops
+                 (token_vector::pgcontext.vector(2)) pgcontext.vector_hnsw_ip_ops
              )
              WHERE collection_id = {};
          UPDATE pgcontext._collection_late_interaction

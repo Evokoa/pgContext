@@ -317,6 +317,7 @@ def render_single_test_sql(test: PgTest) -> str:
     return f"""\\set ON_ERROR_STOP on
 \\set VERBOSITY terse
 BEGIN;
+SET LOCAL search_path = public, pgcontext;
 SELECT tests."{test.function_name}"();
 ROLLBACK;
 """

@@ -186,7 +186,7 @@ fn hnsw_physical_failpoint(stage: u8, label: &'static str) {
 }
 
 #[cfg(feature = "pg_test")]
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 fn test_set_hnsw_physical_failpoint(name: Option<String>) {
     let failpoint = match name.as_deref() {
         None => None,
@@ -216,13 +216,13 @@ fn test_set_hnsw_physical_failpoint(name: Option<String>) {
 }
 
 #[cfg(feature = "pg_test")]
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 fn test_clear_hnsw_packed_cache() {
     HNSW_PACKED_GRAPH_CACHE.with(|cache| cache.borrow_mut().clear());
 }
 
 /// Returns L2 distance as `float8` for HNSW order-by operators.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn hnsw_l2_distance(left: Vector, right: Vector) -> f64 {
     let left = match left.to_dense() {
         Ok(vector) => vector,
@@ -470,7 +470,7 @@ pub(crate) fn record_hnsw_exact_scan(candidates: usize) {
     });
 }
 
-#[pg_extern(schema = "pgcontext", name = "hnsw_last_scan_work")]
+#[pg_extern(name = "hnsw_last_scan_work")]
 #[search_path(pg_catalog, pgcontext, public)]
 fn hnsw_last_scan_work() -> TableIterator<
     'static,
@@ -505,7 +505,7 @@ fn try_scan_counter_to_sql(value: usize) -> Result<i64, usize> {
     i64::try_from(value).map_err(|_| value)
 }
 
-#[pg_extern(schema = "pgcontext", name = "_hnsw_candidates")]
+#[pg_extern(name = "_hnsw_candidates")]
 #[search_path(pg_catalog, pgcontext, public)]
 fn hnsw_candidates(
     index_relation: PgRelation,
@@ -535,7 +535,7 @@ fn hnsw_candidates(
     }))
 }
 
-#[pg_extern(schema = "pgcontext", name = "_hnsw_sparse_candidates")]
+#[pg_extern(name = "_hnsw_sparse_candidates")]
 #[search_path(pg_catalog, pgcontext, public)]
 fn hnsw_sparse_candidates(
     index_relation: PgRelation,
@@ -561,7 +561,7 @@ fn hnsw_sparse_candidates(
     }))
 }
 
-#[pg_extern(schema = "pgcontext", name = "_hnsw_masked_candidates")]
+#[pg_extern(name = "_hnsw_masked_candidates")]
 #[search_path(pg_catalog, pgcontext, public)]
 fn hnsw_masked_candidates(
     index_relation: PgRelation,
@@ -605,7 +605,7 @@ fn hnsw_masked_candidates(
     }))
 }
 
-#[pg_extern(schema = "pgcontext", name = "_hnsw_sparse_masked_candidates")]
+#[pg_extern(name = "_hnsw_sparse_masked_candidates")]
 #[search_path(pg_catalog, pgcontext, public)]
 fn hnsw_sparse_masked_candidates(
     index_relation: PgRelation,

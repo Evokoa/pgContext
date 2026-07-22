@@ -401,9 +401,9 @@ fn pgvector_hnsw_error_contract_pins_dense_metric_failures() {
 
     Spi::run(
         "CREATE OPERATOR CLASS pgvector_hnsw_error_wrong_metric_ops
-             FOR TYPE public.vector USING pgcontext_hnsw AS
-             OPERATOR 1 pgcontext.<#> (public.vector, public.vector) FOR ORDER BY pg_catalog.float_ops,
-             FUNCTION 1 pgcontext.inner_product(public.vector, public.vector)",
+             FOR TYPE pgcontext.vector USING pgcontext_hnsw AS
+             OPERATOR 1 pgcontext.<#> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+             FUNCTION 1 pgcontext.inner_product(pgcontext.vector, pgcontext.vector)",
     )
     .expect("wrong-metric opclass fixture should be created");
     assert_vector_compat_ddl_failure(

@@ -580,5 +580,5 @@ SELECT pg_catalog.pg_extension_config_dump('pgcontext._build_deltas', '');
 SELECT pg_catalog.pg_extension_config_dump('pgcontext._artifact_segments', '');
 "#,
     name = "create_catalog_tables",
-    requires = [pgcontext]
+    requires = ["pgcontext_bootstrap"]
 );

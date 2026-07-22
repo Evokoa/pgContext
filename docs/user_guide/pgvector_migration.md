@@ -1,10 +1,12 @@
 # Migrating from pgvector
 
 pgContext supports an incremental coexistence workflow for existing pgvector
-databases. Install pgvector first and pgContext second, keep the existing
-pgvector column, and build a `pgcontext_hnsw` index over it. Dense `vector` and
-`halfvec` layouts are byte-certified; `sparsevec` ownership conversion remains
-fail-closed because its physical layouts differ. See
+databases. The two main extensions can be installed in either order because
+pgvector owns `public.*` types while pgContext owns canonical `pgcontext.*`
+types. Keep an existing pgvector column in place and install the certified
+`pgcontext_pgvector` companion bridge before building a `pgcontext_hnsw` index
+over it. Dense `vector` and `halfvec` layouts are byte-certified; `sparsevec`
+ownership conversion remains fail-closed because its physical layouts differ. See
 [Trying pgContext on an Existing pgvector Database](pgvector_coexist.md) for
 the live workflow and inventory tools.
 
@@ -31,7 +33,7 @@ columns reject mismatches with SQLSTATE `22023`. Intentional differences are
 documented with tests.
 
 An existing column owned by the pgvector extension can be indexed and
-registered directly in coexist mode. Run `pgcontext.migration_report()` first:
+registered through the companion bridge. Run `pgcontext.migration_report()` first:
 it verifies the type owner and reports defaults, arrays, generated columns,
 partitions, dependent views, and complex indexes that must be handled before an
 ownership cutover. Index adoption never changes the column type.

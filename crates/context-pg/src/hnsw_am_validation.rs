@@ -69,10 +69,10 @@ unsafe fn hnsw_dense_from_datum(
     // active PostgreSQL backend catalog.
     let (vector_oid, halfvec_oid, sparsevec_oid, bitvec_oid) = unsafe {
         (
-            hnsw_public_type_oid(c"vector"),
-            hnsw_public_type_oid(c"halfvec"),
-            hnsw_public_type_oid(c"sparsevec"),
-            hnsw_public_type_oid(c"bitvec"),
+            hnsw_pgcontext_type_oid(c"vector"),
+            hnsw_pgcontext_type_oid(c"halfvec"),
+            hnsw_pgcontext_type_oid(c"sparsevec"),
+            hnsw_pgcontext_type_oid(c"bitvec"),
         )
     };
 
@@ -117,10 +117,10 @@ unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric
     // active PostgreSQL backend catalog.
     let (vector_oid, halfvec_oid, sparsevec_oid, bitvec_oid) = unsafe {
         (
-            hnsw_public_type_oid(c"vector"),
-            hnsw_public_type_oid(c"halfvec"),
-            hnsw_public_type_oid(c"sparsevec"),
-            hnsw_public_type_oid(c"bitvec"),
+            hnsw_pgcontext_type_oid(c"vector"),
+            hnsw_pgcontext_type_oid(c"halfvec"),
+            hnsw_pgcontext_type_oid(c"sparsevec"),
+            hnsw_pgcontext_type_oid(c"bitvec"),
         )
     };
     if type_oid == vector_oid {
@@ -361,14 +361,14 @@ unsafe fn hnsw_operator_namespace(operator_oid: pg_sys::Oid) -> pg_sys::Oid {
     operator_namespace
 }
 
-unsafe fn hnsw_public_type_oid(type_name: &'static CStr) -> pg_sys::Oid {
-    // SAFETY: `public` is a static null-terminated string and PostgreSQL owns
+unsafe fn hnsw_pgcontext_type_oid(type_name: &'static CStr) -> pg_sys::Oid {
+    // SAFETY: `pgcontext` is a static null-terminated string and PostgreSQL owns
     // namespace catalog lookups for the duration of this callback.
-    let public_namespace = unsafe { pg_sys::get_namespace_oid(c"public".as_ptr(), false) };
-    if public_namespace == pg_sys::InvalidOid {
+    let pgcontext_namespace = unsafe { pg_sys::get_namespace_oid(c"pgcontext".as_ptr(), false) };
+    if pgcontext_namespace == pg_sys::InvalidOid {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            "public schema is not available for pgContext vector type lookup",
+            "pgcontext schema is not available for pgContext vector type lookup",
         );
     }
 
@@ -385,14 +385,14 @@ unsafe fn hnsw_public_type_oid(type_name: &'static CStr) -> pg_sys::Oid {
             "pg_type OID attribute number is out of range",
         ),
     };
-    // SAFETY: The cache key uses an initialized NameData and live public
+    // SAFETY: The cache key uses an initialized NameData and live pgcontext
     // namespace OID; PostgreSQL owns the returned catalog datum.
     let type_oid = unsafe {
         pg_sys::GetSysCacheOid(
             pg_sys::SysCacheIdentifier::TYPENAMENSP.cast_signed(),
             type_oid_attribute,
             pg_sys::NameGetDatum(&name),
-            pg_sys::ObjectIdGetDatum(public_namespace),
+            pg_sys::ObjectIdGetDatum(pgcontext_namespace),
             pg_sys::Datum::from(0),
             pg_sys::Datum::from(0),
         )

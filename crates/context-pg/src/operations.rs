@@ -89,7 +89,7 @@ struct VacuumAdviceRow {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "index_status")]
+#[pg_extern(name = "index_status")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn index_status(
     index_name: String,
@@ -135,7 +135,7 @@ pub fn index_status(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "index_diagnostics")]
+#[pg_extern(name = "index_diagnostics")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn index_diagnostics(
     index_name: String,
@@ -185,7 +185,7 @@ pub fn index_diagnostics(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "estimate_index_memory")]
+#[pg_extern(name = "estimate_index_memory")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn estimate_index_memory(
     index_name: String,
@@ -238,7 +238,7 @@ pub fn estimate_index_memory(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "optimization_status")]
+#[pg_extern(name = "optimization_status")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn optimization_status(
     collection: String,
@@ -288,7 +288,7 @@ pub fn optimization_status(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "vacuum_advice")]
+#[pg_extern(name = "vacuum_advice")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn vacuum_advice(
     index_name: String,
@@ -337,7 +337,7 @@ pub fn vacuum_advice(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "recall_check")]
+#[pg_extern(name = "recall_check")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn recall_check(
     exact_point_ids: Vec<i64>,
@@ -842,7 +842,7 @@ include!("operations/value_helpers.rs");
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "hnsw_serving_stats")]
+#[pg_extern(name = "hnsw_serving_stats")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn hnsw_serving_stats() -> TableIterator<
     'static,
@@ -893,7 +893,7 @@ pub fn hnsw_serving_stats() -> TableIterator<
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "hnsw_build_stats")]
+#[pg_extern(name = "hnsw_build_stats")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn hnsw_build_stats() -> TableIterator<
     'static,

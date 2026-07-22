@@ -38,7 +38,7 @@ pub(crate) struct SearchVector {
     pub(crate) quantization_options: Value,
 }
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection(
     collection: String,
@@ -70,7 +70,7 @@ pub fn search_collection(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection_filtered(
     collection: String,
@@ -112,7 +112,7 @@ pub fn search_collection_filtered(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "scroll")]
+#[pg_extern(name = "scroll")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn scroll_collection(
     collection: String,
@@ -141,13 +141,13 @@ pub fn scroll_collection(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "count")]
+#[pg_extern(name = "count")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn count_collection(collection: String) -> i64 {
     count_collection_filtered(collection, None)
 }
 
-#[pg_extern(schema = "pgcontext", name = "count")]
+#[pg_extern(name = "count")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn count_collection_filtered(collection: String, filter: Option<String>) -> i64 {
     let collection_name = collection_name_from_sql(collection);
@@ -163,7 +163,7 @@ pub fn count_collection_filtered(collection: String, filter: Option<String>) -> 
     count_registered_table(collection.collection_id, &registered_vector, filter_plan)
 }
 
-#[pg_extern(schema = "pgcontext", name = "facet")]
+#[pg_extern(name = "facet")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn facet_collection(
     collection: String,

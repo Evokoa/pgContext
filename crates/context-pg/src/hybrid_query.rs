@@ -67,7 +67,7 @@ struct SparseQueryVector {
 /// `insufficient_privilege` when the caller does not own the collection or
 /// lacks source-table `SELECT`, and `invalid_parameter_value` when `limit` is
 /// invalid.
-#[pg_extern(schema = "pgcontext", name = "query")]
+#[pg_extern(name = "query")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_collection(
     collection: String,
@@ -119,7 +119,7 @@ pub fn query_collection(
 /// branch uses a registered sparse vector and exact sparse scoring. Branches
 /// are fused with reciprocal rank fusion and returned in deterministic fused
 /// score order.
-#[pg_extern(schema = "pgcontext", name = "query")]
+#[pg_extern(name = "query")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_collection_dense_sparse(
     collection: String,
@@ -174,7 +174,7 @@ pub fn query_collection_dense_sparse(
 ///
 /// Raises the same catalog, drift, ownership, and source-table privilege errors
 /// as [`query_collection`].
-#[pg_extern(schema = "pgcontext", name = "explain")]
+#[pg_extern(name = "explain")]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::type_complexity,

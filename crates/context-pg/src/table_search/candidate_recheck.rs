@@ -61,7 +61,7 @@ fn consume_mmap_candidate_helper_capability() {
     }
 }
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection_candidates(
     collection: String,
@@ -109,7 +109,7 @@ pub fn search_collection_candidates(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection_named_vector_candidates(
     collection: String,
@@ -159,7 +159,7 @@ pub fn search_collection_named_vector_candidates(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection_filtered_candidates(
     collection: String,
@@ -210,7 +210,7 @@ pub fn search_collection_filtered_candidates(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection_named_vector_filtered_candidates(
     collection: String,
@@ -263,7 +263,7 @@ pub fn search_collection_named_vector_filtered_candidates(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_mmap_hnsw_artifact(
     collection: String,
@@ -407,11 +407,7 @@ fn recheck_candidate_points(
     })
 }
 
-#[pg_extern(
-    schema = "pgcontext",
-    name = "_mmap_hnsw_artifact_candidates",
-    security_definer
-)]
+#[pg_extern(name = "_mmap_hnsw_artifact_candidates", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 fn mmap_hnsw_artifact_candidates_internal(
     collection: String,

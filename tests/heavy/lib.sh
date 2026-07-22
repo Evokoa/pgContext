@@ -26,7 +26,10 @@ psql_postgres() {
 }
 
 psql_db() {
-    psql -h "${PGHOST}" -p "${PGPORT}" -d "${DBNAME}" -v ON_ERROR_STOP=1 "$@"
+    # Omit pg_catalog so PostgreSQL searches it implicitly before these
+    # explicit schemas while keeping public as the CREATE target.
+    PGOPTIONS="${PGOPTIONS:-} -c search_path=public,pgcontext" \
+        psql -h "${PGHOST}" -p "${PGPORT}" -d "${DBNAME}" -v ON_ERROR_STOP=1 "$@"
 }
 
 start_and_install_extension() {

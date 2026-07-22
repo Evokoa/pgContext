@@ -3,16 +3,16 @@ CREATE EXTENSION IF NOT EXISTS pgcontext;
 DROP TABLE IF EXISTS public.example_filter_docs;
 CREATE TABLE public.example_filter_docs (
     id bigint PRIMARY KEY,
-    embedding vector NOT NULL,
+    embedding pgcontext.vector NOT NULL,
     tenant_id text NOT NULL,
     status text,
     metadata jsonb NOT NULL
 );
 
 INSERT INTO public.example_filter_docs (id, embedding, tenant_id, status, metadata) VALUES
-    (10, '[1,0]'::vector, 'acme', 'published', '{"topic":"postgres","tier":"gold"}'),
-    (20, '[2,0]'::vector, 'acme', 'draft', '{"topic":"rust","tier":"gold"}'),
-    (30, '[0,2]'::vector, 'other', 'published', '{"topic":"postgres","tier":"silver"}');
+    (10, '[1,0]'::pgcontext.vector, 'acme', 'published', '{"topic":"postgres","tier":"gold"}'),
+    (20, '[2,0]'::pgcontext.vector, 'acme', 'draft', '{"topic":"rust","tier":"gold"}'),
+    (30, '[0,2]'::pgcontext.vector, 'other', 'published', '{"topic":"postgres","tier":"silver"}');
 
 SELECT pgcontext.create_collection('example_filter_docs', 'public.example_filter_docs');
 SELECT pgcontext.register_vector('example_filter_docs', 'embedding', 'embedding', 2, 'l2');
@@ -24,7 +24,7 @@ SELECT pgcontext.bulk_upsert_points('example_filter_docs', ARRAY['10', '20', '30
 SELECT source_key, score
 FROM pgcontext.search(
     'example_filter_docs',
-    '[0,0]'::vector,
+    '[0,0]'::pgcontext.vector,
     '{"must":[{"key":"tenant_id","match":"acme"},{"key":"topic","match":"postgres"}]}',
     10
 );
@@ -38,7 +38,7 @@ SELECT value, count
 FROM pgcontext.facet('example_filter_docs', 'topic', NULL, 10);
 
 SELECT group_value, source_key, score
-FROM pgcontext.grouped_search('example_filter_docs', '[0,0]'::vector, 'tenant_id', 1, 10);
+FROM pgcontext.grouped_search('example_filter_docs', '[0,0]'::pgcontext.vector, 'tenant_id', 1, 10);
 
 SELECT source_key, updated
 FROM pgcontext.set_payload(

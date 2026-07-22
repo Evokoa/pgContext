@@ -3,14 +3,14 @@ CREATE EXTENSION IF NOT EXISTS pgcontext;
 DROP TABLE IF EXISTS public.example_named_vectors;
 CREATE TABLE public.example_named_vectors (
     id bigint PRIMARY KEY,
-    title_embedding vector NOT NULL,
-    body_embedding vector NOT NULL,
-    sparse_terms sparsevec
+    title_embedding pgcontext.vector NOT NULL,
+    body_embedding pgcontext.vector NOT NULL,
+    sparse_terms pgcontext.sparsevec
 );
 
 INSERT INTO public.example_named_vectors (id, title_embedding, body_embedding, sparse_terms) VALUES
-    (1, '[1,0,0]'::vector, '[0.9,0.1,0]'::vector, pgcontext.sparsevec('{1:0.8,3:0.2}/10')),
-    (2, '[0,1,0]'::vector, '[0.1,0.8,0.1]'::vector, pgcontext.sparsevec('{2:0.7,4:0.4}/10'));
+    (1, '[1,0,0]'::pgcontext.vector, '[0.9,0.1,0]'::pgcontext.vector, pgcontext.sparsevec('{1:0.8,3:0.2}/10')),
+    (2, '[0,1,0]'::pgcontext.vector, '[0.1,0.8,0.1]'::pgcontext.vector, pgcontext.sparsevec('{2:0.7,4:0.4}/10'));
 
 SELECT pgcontext.create_collection('example_named_vectors', 'public.example_named_vectors');
 
@@ -28,7 +28,7 @@ SELECT pgcontext.configure_sparse_vector(
 SELECT pgcontext.upsert_points('example_named_vectors', ARRAY['1', '2']);
 
 SELECT source_key, score
-FROM pgcontext.search('example_named_vectors', 'title', '[1,0,0]'::vector, 2);
+FROM pgcontext.search('example_named_vectors', 'title', '[1,0,0]'::pgcontext.vector, 2);
 
 SELECT source_key, score
 FROM pgcontext.search_sparse(
@@ -41,7 +41,7 @@ FROM pgcontext.search_sparse(
 SELECT source_key, score
 FROM pgcontext.query(
     'example_named_vectors',
-    '[1,0,0]'::vector,
+    '[1,0,0]'::pgcontext.vector,
     'lexical',
     pgcontext.sparsevec('{1:1}/10'),
     2
@@ -50,4 +50,4 @@ FROM pgcontext.query(
 SELECT pgcontext.register_vector('example_named_vectors', 'body', 'body_embedding', 3, 'cosine');
 
 SELECT source_key, score
-FROM pgcontext.search('example_named_vectors', 'body', '[1,0,0]'::vector, 2);
+FROM pgcontext.search('example_named_vectors', 'body', '[1,0,0]'::pgcontext.vector, 2);

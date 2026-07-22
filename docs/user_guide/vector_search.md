@@ -181,10 +181,10 @@ also rejects zero-magnitude vectors because the result is undefined.
 The SQL facade exposes named functions:
 
 ```sql
-SELECT pgcontext.l2_distance('[1,2,3]'::vector, '[1,2,5]'::vector);
-SELECT pgcontext.inner_product('[1,2,3]'::vector, '[4,5,6]'::vector);
-SELECT pgcontext.cosine_distance('[1,0]'::vector, '[0,1]'::vector);
-SELECT pgcontext.l1_distance('[1,2,3]'::vector, '[2,4,6]'::vector);
+SELECT pgcontext.l2_distance('[1,2,3]'::pgcontext.vector, '[1,2,5]'::pgcontext.vector);
+SELECT pgcontext.inner_product('[1,2,3]'::pgcontext.vector, '[4,5,6]'::pgcontext.vector);
+SELECT pgcontext.cosine_distance('[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector);
+SELECT pgcontext.l1_distance('[1,2,3]'::pgcontext.vector, '[2,4,6]'::pgcontext.vector);
 ```
 
 pgContext's dense-vector surface is pgvector-compatible. It covers text
@@ -224,12 +224,12 @@ vectors, a metric name, and a result limit:
 ```sql
 SELECT point_id, score
 FROM pgcontext.search(
-  '[0,0]'::vector,
+  '[0,0]'::pgcontext.vector,
   ARRAY[30, 10, 20]::bigint[],
   ARRAY[
-    '[2,0]'::vector,
-    '[1,0]'::vector,
-    '[0,1]'::vector
+    '[2,0]'::pgcontext.vector,
+    '[1,0]'::pgcontext.vector,
+    '[0,1]'::pgcontext.vector
   ],
   'l2',
   2
@@ -279,7 +279,7 @@ are fused with reciprocal-rank fusion:
 SELECT point_id, source_key, score
 FROM pgcontext.query(
   'docs',
-  '[0.1,0.2,0.3]'::vector,
+  '[0.1,0.2,0.3]'::pgcontext.vector,
   'lexical',
   pgcontext.sparsevec('{1:1,9:0.5}/4096'),
   10
@@ -299,8 +299,8 @@ FROM pgcontext.recommend('docs', ARRAY[101, 205], ARRAY[309], 10);
 SELECT point_id, source_key, score
 FROM pgcontext.recommend(
   'docs',
-  ARRAY['[0.1,0.2,0.3]'::vector],
-  ARRAY[]::vector[],
+  ARRAY['[0.1,0.2,0.3]'::pgcontext.vector],
+  ARRAY[]::pgcontext.vector[],
   10
 );
 ```
@@ -322,7 +322,7 @@ inspect, or translate without relying on internal catalog tables:
 ```sql
 SELECT pgcontext.query_rerank(
   pgcontext.query_prefetch(ARRAY[
-    pgcontext.query_weight(pgcontext.query_nearest('[0,0,0]'::vector, 50), 0.7),
+    pgcontext.query_weight(pgcontext.query_nearest('[0,0,0]'::pgcontext.vector, 50), 0.7),
     pgcontext.query_score_threshold(
       pgcontext.query_recommend(ARRAY[101], ARRAY[309], 20),
       0.0,
@@ -352,9 +352,9 @@ ascending point ID.
 ```sql
 SELECT point_id, score
 FROM pgcontext.rerank_late_interaction(
-  ARRAY['[1,0]'::vector, '[0,1]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector],
   ARRAY[10, 20]::bigint[],
-  ARRAY['[1,0]'::vector, '[0,1]'::vector, '[0.8,0.1]'::vector, '[0.1,0.7]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector, '[0.8,0.1]'::pgcontext.vector, '[0.1,0.7]'::pgcontext.vector],
   ARRAY[0, 2, 4]::integer[],
   2
 );
@@ -370,7 +370,7 @@ comparison budget.
 SELECT point_id, source_key, score
 FROM pgcontext.search_late_interaction(
   'docs',
-  ARRAY['[1,0]'::vector, '[0,1]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector],
   'token_vectors',
   10
 );
@@ -385,7 +385,7 @@ multi-vector serving readiness:
 SELECT stage, strategy, status, estimated_candidates, candidate_budget
 FROM pgcontext.explain_late_interaction(
   'docs',
-  ARRAY['[1,0]'::vector, '[0,1]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector],
   'token_vectors'
 );
 ```
@@ -405,7 +405,7 @@ source table and applies exact MaxSim for final scores:
 ```sql
 CREATE TABLE doc_tokens (
   source_key text NOT NULL,
-  token_embedding vector(2) NOT NULL
+  token_embedding pgcontext.vector(2) NOT NULL
 );
 
 CREATE INDEX doc_tokens_embedding_idx
@@ -414,7 +414,7 @@ CREATE INDEX doc_tokens_embedding_idx
 SELECT point_id, source_key, score
 FROM pgcontext.search_late_interaction_ann(
   'docs',
-  ARRAY['[1,0]'::vector, '[0,1]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector],
   'token_vectors',
   'public.doc_tokens',
   'source_key',

@@ -16,7 +16,7 @@ use crate::vector_variants::SparseVec;
 /// sorted by ascending metric score and then by ascending point id. For
 /// `inner_product`, scores are negative inner product values so larger dot
 /// products rank first under PostgreSQL's ascending distance convention.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn search_sparse(
     query: SparseVec,
     point_ids: Vec<i64>,
@@ -51,7 +51,7 @@ pub fn search_sparse(
 }
 
 /// Explains actual named sparse candidate and exact-recheck work.
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn explain_sparse(
     collection: String,
@@ -112,7 +112,7 @@ pub fn explain_sparse(
 }
 
 /// Returns ANN candidates with exact top-k reranking for a registered sparse vector.
-#[pg_extern(schema = "pgcontext", name = "search_sparse")]
+#[pg_extern(name = "search_sparse")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_sparse_collection(
     collection: String,
@@ -156,7 +156,7 @@ pub fn search_sparse_collection(
 }
 
 /// Returns top-k named sparse results restricted by a registered filter.
-#[pg_extern(schema = "pgcontext", name = "search_sparse")]
+#[pg_extern(name = "search_sparse")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_sparse_collection_filtered(
     collection: String,
@@ -358,7 +358,7 @@ fn validate_sparse_vector_drift(
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.sparsevec'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.sparsevec'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists
                FROM pg_catalog.pg_class AS class
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
@@ -472,7 +472,7 @@ pub(crate) fn resolve_sparse_hnsw_index(
             AND index_def.indkey[0] = $3
             AND access_method.amname = 'pgcontext_hnsw'
             AND operator_namespace.nspname = 'pgcontext'
-            AND operator_class.opcintype = 'public.sparsevec'::pg_catalog.regtype
+            AND operator_class.opcintype = 'pgcontext.sparsevec'::pg_catalog.regtype
             AND operator_class.opcname = $4",
         &[
             index_name.into(),

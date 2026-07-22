@@ -36,8 +36,16 @@ BEGIN
         RAISE EXCEPTION 'user-owned source table did not survive extension drop';
     END IF;
 
-    IF pg_catalog.to_regnamespace('pgcontext') IS NOT NULL THEN
-        RAISE EXCEPTION 'pgcontext schema still exists after extension drop';
+    IF pg_catalog.to_regnamespace('pgcontext') IS NULL THEN
+        RAISE EXCEPTION 'fixed pgcontext schema was unexpectedly removed';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_extension
+         WHERE extname = 'pgcontext'
+    ) THEN
+        RAISE EXCEPTION 'pgcontext extension registration survived extension drop';
     END IF;
 END
 $$;

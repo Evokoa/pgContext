@@ -68,6 +68,91 @@ fn sql_enums_are_owned_by_the_trusted_extension_schema() {
 }
 
 #[pg_test]
+fn vector_types_are_canonical_extension_owned_objects() {
+    let canonical = security_count(
+        "SELECT count(*)::bigint
+           FROM pg_catalog.pg_type AS type
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = type.typnamespace
+           JOIN pg_catalog.pg_depend AS dependency
+             ON dependency.classid = 'pg_catalog.pg_type'::pg_catalog.regclass
+            AND dependency.objid = type.oid
+            AND dependency.deptype = 'e'
+           JOIN pg_catalog.pg_extension AS extension
+             ON extension.oid = dependency.refobjid
+          WHERE namespace.nspname = 'pgcontext'
+            AND type.typname = ANY (ARRAY['vector', 'halfvec', 'sparsevec', 'bitvec'])
+            AND extension.extname = 'pgcontext'",
+    );
+    let misplaced = security_count(
+        "SELECT count(*)::bigint
+           FROM pg_catalog.pg_type AS type
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = type.typnamespace
+           JOIN pg_catalog.pg_depend AS dependency
+             ON dependency.classid = 'pg_catalog.pg_type'::pg_catalog.regclass
+            AND dependency.objid = type.oid
+            AND dependency.deptype = 'e'
+           JOIN pg_catalog.pg_extension AS extension
+             ON extension.oid = dependency.refobjid
+          WHERE namespace.nspname <> 'pgcontext'
+            AND type.typname = ANY (ARRAY['vector', 'halfvec', 'sparsevec', 'bitvec'])
+            AND extension.extname = 'pgcontext'",
+    );
+
+    assert_eq!(canonical, 4);
+    assert_eq!(misplaced, 0);
+}
+
+#[pg_test]
+fn canonical_vector_type_families_bind_only_pgcontext_objects() {
+    let complete_families = security_count(
+        "SELECT count(*)::bigint
+           FROM pg_catalog.pg_type AS base_type
+           JOIN pg_catalog.pg_namespace AS base_namespace
+             ON base_namespace.oid = base_type.typnamespace
+           JOIN pg_catalog.pg_type AS array_type
+             ON array_type.oid = base_type.typarray
+            AND array_type.typelem = base_type.oid
+            AND array_type.typnamespace = base_type.typnamespace
+           JOIN pg_catalog.pg_proc AS input_function
+             ON input_function.oid = base_type.typinput
+            AND input_function.pronamespace = base_type.typnamespace
+           JOIN pg_catalog.pg_proc AS output_function
+             ON output_function.oid = base_type.typoutput
+            AND output_function.pronamespace = base_type.typnamespace
+           JOIN pg_catalog.pg_proc AS typmod_input
+             ON typmod_input.oid = base_type.typmodin
+            AND typmod_input.pronamespace = base_type.typnamespace
+           JOIN pg_catalog.pg_proc AS typmod_output
+             ON typmod_output.oid = base_type.typmodout
+            AND typmod_output.pronamespace = base_type.typnamespace
+          WHERE base_namespace.nspname = 'pgcontext'
+            AND base_type.typname = ANY (ARRAY['vector', 'halfvec', 'sparsevec', 'bitvec'])
+            AND EXISTS (
+                SELECT 1
+                  FROM pg_catalog.pg_opclass AS operator_class
+                  JOIN pg_catalog.pg_am AS access_method
+                    ON access_method.oid = operator_class.opcmethod
+                 WHERE operator_class.opcintype = base_type.oid
+                   AND operator_class.opcnamespace = base_type.typnamespace
+                   AND access_method.amname = 'btree'
+            )
+            AND EXISTS (
+                SELECT 1
+                  FROM pg_catalog.pg_opclass AS operator_class
+                  JOIN pg_catalog.pg_am AS access_method
+                    ON access_method.oid = operator_class.opcmethod
+                 WHERE operator_class.opcintype = base_type.oid
+                   AND operator_class.opcnamespace = base_type.typnamespace
+                   AND access_method.amname = 'pgcontext_hnsw'
+            )",
+    );
+
+    assert_eq!(complete_families, 4);
+}
+
+#[pg_test]
 fn security_definer_collection_create_ignores_hostile_search_path() {
     Spi::run("CREATE SCHEMA msec_shadow").expect("shadow schema should be created");
     Spi::run("CREATE TABLE msec_shadow._collections (collection_name text)")

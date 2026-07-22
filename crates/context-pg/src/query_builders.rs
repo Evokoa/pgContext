@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use crate::error::raise_query_error;
 use crate::vector::Vector;
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_nearest(vector: Vector, limit: i32) -> JsonB {
     JsonB(json!({
@@ -18,7 +18,7 @@ pub fn query_nearest(vector: Vector, limit: i32) -> JsonB {
     }))
 }
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_recommend(
     positive_point_ids: Vec<i64>,
@@ -37,7 +37,7 @@ pub fn query_recommend(
     }))
 }
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_discover(context_point_ids: Vec<i64>, limit: i32) -> JsonB {
     validate_or_raise(QueryPlanValidator::discover_point_ids(&context_point_ids));
@@ -48,7 +48,7 @@ pub fn query_discover(context_point_ids: Vec<i64>, limit: i32) -> JsonB {
     }))
 }
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_lookup(point_ids: Vec<i64>) -> JsonB {
     validate_or_raise(QueryPlanValidator::lookup_point_ids(&point_ids));
@@ -58,7 +58,7 @@ pub fn query_lookup(point_ids: Vec<i64>) -> JsonB {
     }))
 }
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_prefetch(branches: Vec<JsonB>) -> JsonB {
     validate_or_raise(QueryPlanValidator::prefetch_branches(branches.len()));
@@ -68,7 +68,7 @@ pub fn query_prefetch(branches: Vec<JsonB>) -> JsonB {
     }))
 }
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_weight(branch: JsonB, weight: f64) -> JsonB {
     validate_or_raise(QueryPlanValidator::weight(weight));
@@ -79,7 +79,7 @@ pub fn query_weight(branch: JsonB, weight: f64) -> JsonB {
     }))
 }
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_score_threshold(
     branch: JsonB,
@@ -95,7 +95,7 @@ pub fn query_score_threshold(
     }))
 }
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_formula(branch: JsonB, formula: String) -> JsonB {
     let formula = match Formula::new(formula) {
@@ -109,7 +109,7 @@ pub fn query_formula(branch: JsonB, formula: String) -> JsonB {
     }))
 }
 
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_rerank(branch: JsonB, limit: i32) -> JsonB {
     JsonB(json!({

@@ -29,7 +29,7 @@ full-text branch over one source-table column:
 SELECT point_id, source_key, score
 FROM pgcontext.query(
   'docs',
-  '[0,0]'::vector,
+  '[0,0]'::pgcontext.vector,
   'database internals',
   'body',
   10

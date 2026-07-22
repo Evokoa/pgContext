@@ -223,7 +223,9 @@ for semantics and caveats):
   DEFAULT true, drop_old bool DEFAULT false)` returns
   `(index_name text, action text, command text, executed bool)` rows;
   migrates pgvector `hnsw`/`ivfflat` indexes to `pgcontext_hnsw`
-  equivalents. Dry-run by default. Only extension-owned, usable, plain
+  equivalents through the `pgcontext_pgvector` companion bridge. Dry-run by
+  default; execution fails closed when the bridge is absent. Only
+  extension-owned, usable, plain
   single-column indexes are accepted. HNSW build options and tablespace are
   preserved. If `drop_old` is requested, the replacement must first pass an
   exact-oracle recall gate; a failure aborts the transaction without dropping
@@ -235,8 +237,8 @@ for semantics and caveats):
   vectors against an exact same-operator oracle; indexes the planner
   never chose report NULL measurements. Read-only.
 - `pgcontext.enable_pgvector_binding()` always raises
-  `feature_not_supported` with reinstall-order guidance (coexist mode
-  requires pgvector to be installed before pgContext).
+  `feature_not_supported` with companion-bridge guidance. pgContext and
+  pgvector themselves can be installed in either order.
 
 Index maintenance:
 

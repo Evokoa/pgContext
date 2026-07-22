@@ -44,7 +44,6 @@ mod settings;
 mod sparse_search;
 mod table_search;
 mod telemetry;
-mod vector;
 mod vector_catalog;
 #[allow(
     unsafe_code,
@@ -54,15 +53,63 @@ mod vector_datum;
 mod vector_metadata_validation;
 mod vector_variant_ordering;
 mod vector_variant_typmods;
-mod vector_variants;
 
 ::pgrx::pg_module_magic!(name, version);
 
-/// The public SQL schema for pgContext types and functions.
-#[pg_schema]
+/// Rust namespace for SQL entities installed into the fixed `pgcontext` schema.
 pub mod pgcontext {
     include!("sql_enums.rs");
+
+    pub(crate) mod vector {
+        include!("vector.rs");
+    }
+
+    pub(crate) mod vector_variants {
+        include!("vector_variants.rs");
+    }
 }
+
+pub(crate) use pgcontext::{vector, vector_variants};
+
+// The control file creates and selects the fixed `pgcontext` schema before
+// this SQL graph runs. Refuse a pre-existing foreign-owned or delegated-CREATE
+// schema: security-definer functions place this namespace on trusted paths.
+pgrx::extension_sql!(
+    r#"
+DO $pgcontext_schema_guard$
+DECLARE
+    target_owner oid;
+    delegated_create boolean;
+BEGIN
+    SELECT namespace.nspowner,
+           EXISTS (
+               SELECT 1
+                 FROM pg_catalog.aclexplode(
+                          coalesce(
+                              namespace.nspacl,
+                              pg_catalog.acldefault('n', namespace.nspowner)
+                          )
+                      ) AS privilege
+                WHERE privilege.privilege_type = 'CREATE'
+                  AND privilege.grantee <> namespace.nspowner
+           )
+      INTO target_owner, delegated_create
+      FROM pg_catalog.pg_namespace AS namespace
+     WHERE namespace.nspname = 'pgcontext';
+
+    IF target_owner IS DISTINCT FROM CURRENT_USER::pg_catalog.regrole::oid THEN
+        RAISE EXCEPTION 'pgcontext schema must be owned by the extension installer'
+            USING ERRCODE = '42501';
+    END IF;
+    IF delegated_create THEN
+        RAISE EXCEPTION 'pgcontext schema must not delegate CREATE privilege'
+            USING ERRCODE = '42501';
+    END IF;
+END
+$pgcontext_schema_guard$;
+"#,
+    name = "pgcontext_bootstrap"
+);
 
 /// Registers pgContext custom PostgreSQL settings when the extension loads.
 #[pg_guard]
