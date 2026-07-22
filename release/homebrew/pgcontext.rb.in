@@ -31,6 +31,10 @@ class Pgcontext < Formula
            "--features", "pg17"
 
     staged_prefix = package_dir/HOMEBREW_PREFIX.to_s.delete_prefix("/")
+    extension_dir = staged_prefix/"share/#{postgresql.name}/extension"
+    extension_dir.install "pgcontext_pgvector.control"
+    extension_dir.install "sql/pgcontext_pgvector--#{version}.sql"
+
     (lib/postgresql.name).install Dir[staged_prefix/"lib/#{postgresql.name}/*"]
     (share/postgresql.name/"extension").install \
       Dir[staged_prefix/"share/#{postgresql.name}/extension/*"]
@@ -58,7 +62,7 @@ class Pgcontext < Formula
       actual_version = shell_output("#{psql} -p #{port} -d postgres -Atc \"#{version_sql}\"").strip
       assert_equal version.to_s, actual_version
 
-      distance_sql = "SELECT '[1,2]'::vector OPERATOR(pgcontext.<->) '[2,2]'::vector"
+      distance_sql = "SELECT '[1,2]'::pgcontext.vector OPERATOR(pgcontext.<->) '[2,2]'::pgcontext.vector"
       distance = shell_output("#{psql} -p #{port} -d postgres -Atc \"#{distance_sql}\"").strip
       assert_equal "1", distance
     ensure

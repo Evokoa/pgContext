@@ -12,6 +12,11 @@
       "file": "pgcontext.control",
       "version": "0.1.0",
       "docfile": "README.md"
+    },
+    "pgcontext_pgvector": {
+      "file": "pgcontext_pgvector.control",
+      "version": "0.1.0",
+      "docfile": "docs/user_guide/pgvector_coexist.md"
     }
   },
   "resources": {

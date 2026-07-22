@@ -81,16 +81,16 @@ if ! docker exec -i "${name}" psql -U postgres -d pgcontext -v ON_ERROR_STOP=1 \
 fi
 
 filtered="$({ docker exec "${name}" psql -U postgres -d pgcontext -Atv ON_ERROR_STOP=1 -c \
-  "SELECT string_agg(source_key, ',' ORDER BY score) FROM pgcontext.search('playground_docs', '[1,0,0]'::vector, '{\"must\":[{\"key\":\"category\",\"match\":\"database\"}]}', 4);"; } 2>/dev/null)"
+  "SELECT string_agg(source_key, ',' ORDER BY score) FROM pgcontext.search('playground_docs', '[1,0,0]'::pgcontext.vector, '{\"must\":[{\"key\":\"category\",\"match\":\"database\"}]}', 4);"; } 2>/dev/null)"
 [[ "${filtered}" == "postgres,vectors" ]] || \
   die "metadata-filter result mismatch: ${filtered}"
 
 ordered="$({ docker exec "${name}" psql -U postgres -d pgcontext -Atv ON_ERROR_STOP=1 -c \
-  "SET enable_seqscan=off; SELECT string_agg(id, ',' ORDER BY distance) FROM (SELECT id, embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector AS distance FROM public.pgcontext_playground_docs ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector LIMIT 3) ranked;"; } 2>/dev/null)"
+  "SET enable_seqscan=off; SELECT string_agg(id, ',' ORDER BY distance) FROM (SELECT id, embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector AS distance FROM public.pgcontext_playground_docs ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector LIMIT 3) ranked;"; } 2>/dev/null)"
 [[ "${ordered##*$'\n'}" == "postgres,rust,vectors" ]] || \
   die "HNSW ordering mismatch: ${ordered##*$'\n'}"
 
 plan="$({ docker exec "${name}" psql -U postgres -d pgcontext -Atv ON_ERROR_STOP=1 -c \
-  "SET enable_seqscan=off; EXPLAIN (COSTS OFF) SELECT id FROM public.pgcontext_playground_docs ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector LIMIT 3;"; } 2>/dev/null)"
+  "SET enable_seqscan=off; EXPLAIN (COSTS OFF) SELECT id FROM public.pgcontext_playground_docs ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector LIMIT 3;"; } 2>/dev/null)"
 grep -qF 'Index Scan using pgcontext_playground_docs_hnsw' <<<"${plan}" || \
   die "query plan did not use the packaged HNSW index"

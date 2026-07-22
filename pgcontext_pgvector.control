@@ -1,0 +1,5 @@
+comment = 'Certified pgvector compatibility bridge for pgContext HNSW'
+default_version = '0.1.0'
+requires = 'pgcontext, vector'
+relocatable = false
+superuser = true

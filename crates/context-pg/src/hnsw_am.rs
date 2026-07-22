@@ -437,6 +437,7 @@ impl HnswBuildState {
 #[derive(Default)]
 struct HnswScanState {
     prepared: bool,
+    orderby_contract: Option<HnswOrderByContract>,
     position: usize,
     candidate_limit: usize,
     candidates: Vec<HnswScanCandidate>,
@@ -861,7 +862,7 @@ impl VisibleHeapTidResolver {
         if !found {
             return None;
         }
-        // Under an MVCC statement snapshot there is at most one visible member
+        // SAFETY: Under an MVCC statement snapshot there is at most one visible member
         // of a HOT chain. The table AM stores that member's physical TID here.
         Some(item_pointer_to_u64(unsafe { (*self.slot).tts_tid }))
     }
@@ -934,6 +935,7 @@ fn raise_invalid_heap_tid(value: &str) -> ! {
 impl HnswScanState {
     fn reset(&mut self) {
         self.prepared = false;
+        self.orderby_contract = None;
         self.position = 0;
         self.candidate_limit = 0;
         self.candidates.clear();
@@ -964,6 +966,12 @@ enum HnswScoreMetric {
     L1,
     BitHamming,
     BitJaccard,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HnswOrderByContract {
+    metric: HnswScoreMetric,
+    pgvector_binding: bool,
 }
 
 impl HnswScoreMetric {
@@ -1148,9 +1156,18 @@ unsafe fn prepare_hnsw_scan(scan: pg_sys::IndexScanDesc, state: &mut HnswScanSta
     let query = unsafe { hnsw_orderby_query(scan) };
     // SAFETY: The scan descriptor owns a valid index relation for the duration
     // of the AM callback.
-    let outcome = unsafe { hnsw_scan_candidates((*scan).indexRelation, query.as_ref(), None) };
+    let orderby_contract = unsafe { hnsw_orderby_contract((*scan).indexRelation) };
+    let outcome = unsafe {
+        hnsw_scan_candidates_with_metric(
+            (*scan).indexRelation,
+            query.as_ref(),
+            None,
+            orderby_contract.metric,
+        )
+    };
 
     state.prepared = true;
+    state.orderby_contract = Some(orderby_contract);
     state.position = 0;
     state.candidates = outcome.candidates;
     state.candidate_limit = outcome.requested_limit;
@@ -1172,6 +1189,17 @@ unsafe fn hnsw_scan_candidates(
     // callback, and the first opclass input type is authoritative for this
     // single-column AM.
     let metric = unsafe { hnsw_score_metric(index_relation) };
+    // SAFETY: The same validated live relation and owned query are forwarded
+    // with the metric certified immediately above.
+    unsafe { hnsw_scan_candidates_with_metric(index_relation, query, requested_limit, metric) }
+}
+
+unsafe fn hnsw_scan_candidates_with_metric(
+    index_relation: pg_sys::Relation,
+    query: Option<&DenseVector>,
+    requested_limit: Option<usize>,
+    metric: HnswScoreMetric,
+) -> HnswScanCandidates {
     if let Some(query) = query {
         // SAFETY: The versioned metapage binds this opclass metric to the
         // persisted graph's construction configuration.

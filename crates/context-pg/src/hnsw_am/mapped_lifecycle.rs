@@ -77,7 +77,7 @@ fn queue_mapped_index_drop(index_oid: pg_sys::Oid) -> std::io::Result<()> {
     if !directory.is_dir() {
         return Ok(());
     }
-    // Assigning the top-level XID lets a later backend distinguish a prepared
+    // SAFETY: Assigning the top-level XID lets a later backend distinguish a prepared
     // drop from a committed or aborted one after this backend exits.
     let pending = unsafe {
         PendingMappedIndexDrop {

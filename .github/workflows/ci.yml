@@ -142,9 +142,11 @@ jobs:
           cargo pgrx install --sudo \
             --pg-config /usr/lib/postgresql/17/bin/pg_config \
             --no-default-features --features pg17 --release
+          sudo scripts/install-pgvector-bridge.sh /usr/lib/postgresql/17/bin/pg_config
       - name: Coexist verification
         run: |
           PGCONTEXT_COEXIST_PSQL="sudo -u postgres psql" scripts/check-pgvector-coexist.sh
+          PGCONTEXT_BRIDGE_PSQL="sudo -u postgres psql" scripts/check-pgvector-bridge.sh
 
   benchmark-harness:
     name: Benchmark harness unit tests

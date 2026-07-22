@@ -742,6 +742,19 @@ fn pgvector_variant_btree_ordering_cases() {
 
 #[pg_test]
 fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
+    let builtin_validation = Spi::get_two::<i64, bool>(
+        "SELECT count(*), bool_and(pg_catalog.amvalidate(opclass.oid))
+           FROM pg_catalog.pg_opclass AS opclass
+           JOIN pg_catalog.pg_am AS access_method
+             ON access_method.oid = opclass.opcmethod
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = opclass.opcnamespace
+          WHERE access_method.amname = 'pgcontext_hnsw'
+            AND namespace.nspname = 'pgcontext'",
+    )
+    .expect("built-in HNSW opclass validation query failed");
+    assert_eq!(builtin_validation, (Some(14), Some(true)));
+
     Spi::run(
         "CREATE TEMP TABLE pgcontext_variant_hnsw_items (
             id integer PRIMARY KEY,
@@ -1302,12 +1315,21 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
             STORAGE pgcontext.vector",
     )
     .expect("bad halfvec cosine-operator HNSW opclass fixture creation failed");
+    assert_eq!(
+        Spi::get_one::<bool>(
+            "SELECT pg_catalog.amvalidate(opclass.oid)
+               FROM pg_catalog.pg_opclass AS opclass
+              WHERE opclass.opcname = 'pgcontext_variant_halfvec_hnsw_bad_cosine_operator_ops'",
+        )
+        .expect("bad custom HNSW opclass validation query failed"),
+        Some(false),
+    );
     assert_vector_compat_ddl_failure(
         "CREATE INDEX pgcontext_variant_hnsw_bad_half_cosine_operator_idx
             ON pgcontext_variant_hnsw_items
          USING pgcontext_hnsw (half_value pgcontext_variant_halfvec_hnsw_bad_cosine_operator_ops)",
         "42P17",
-        "HNSW opclass must use pgcontext.<->",
+        "HNSW opclass must use certified pgcontext.<->",
         "halfvec HNSW unsupported strategy operator",
     );
     Spi::run(
@@ -1323,7 +1345,7 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
             ON pgcontext_variant_hnsw_items
          USING pgcontext_hnsw (sparse_value pgcontext_variant_sparsevec_hnsw_bad_cosine_operator_ops)",
         "42P17",
-        "HNSW opclass must use pgcontext.<->",
+        "HNSW opclass must use certified pgcontext.<->",
         "sparsevec HNSW unsupported strategy operator",
     );
     Spi::run(
@@ -1334,6 +1356,15 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
             STORAGE pgcontext.vector",
     )
     .expect("bitvec Jaccard HNSW opclass fixture creation failed");
+    assert_eq!(
+        Spi::get_one::<bool>(
+            "SELECT pg_catalog.amvalidate(opclass.oid)
+               FROM pg_catalog.pg_opclass AS opclass
+              WHERE opclass.opcname = 'pgcontext_variant_bitvec_hnsw_bad_jaccard_ops'",
+        )
+        .expect("valid custom HNSW opclass validation query failed"),
+        Some(true),
+    );
     Spi::run(
         "CREATE INDEX pgcontext_variant_hnsw_jaccard_idx
             ON pgcontext_variant_hnsw_items
@@ -1368,7 +1399,7 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
             ON pgcontext_variant_hnsw_items
          USING pgcontext_hnsw (bit_value pgcontext_variant_bitvec_hnsw_bad_jaccard_operator_ops)",
         "42P17",
-        "HNSW opclass must use pgcontext.<~>",
+        "HNSW opclass must use certified pgcontext.<~>",
         "bitvec HNSW unsupported strategy operator",
     );
 

@@ -1012,18 +1012,6 @@ CREATE TYPE BitVec (
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:293
--- pgcontext::vector_variant_ordering::bitvec_ge
-CREATE  FUNCTION "bitvec_ge"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_ge_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:589
 -- pgcontext::pgcontext::vector_variants::bitvec
 CREATE  FUNCTION "bitvec"(
@@ -1035,15 +1023,74 @@ AS 'MODULE_PATHNAME', 'bitvec_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:273
--- pgcontext::vector_variant_ordering::bitvec_lt
-CREATE  FUNCTION "bitvec_lt"(
+-- crates/context-pg/src/vector_variant_ordering.rs:298
+-- pgcontext::vector_variant_ordering::bitvec_gt
+CREATE  FUNCTION "bitvec_gt"(
 	"left" BitVec, /* BitVec */
 	"right" BitVec /* BitVec */
 ) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_lt_wrapper';
+AS 'MODULE_PATHNAME', 'bitvec_gt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:747
+-- pgcontext::pgcontext::vector_variants::bitvec_hamming_distance
+CREATE  FUNCTION "bitvec_hamming_distance"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_hamming_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:759
+-- pgcontext::pgcontext::vector_variants::bitvec_jaccard_distance
+CREATE  FUNCTION "bitvec_jaccard_distance"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS double precision /* f64 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_jaccard_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:288
+-- pgcontext::vector_variant_ordering::bitvec_ne
+CREATE  FUNCTION "bitvec_ne"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_ne_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:677
+-- pgcontext::pgcontext::vector_variants::bitvec_dims
+CREATE  FUNCTION "bitvec_dims"(
+	"vector" BitVec /* BitVec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_dims_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:278
+-- pgcontext::vector_variant_ordering::bitvec_le
+CREATE  FUNCTION "bitvec_le"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_le_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1058,6 +1105,30 @@ AS 'MODULE_PATHNAME', 'bitvec_from_bool_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:268
+-- pgcontext::vector_variant_ordering::bitvec_cmp
+CREATE  FUNCTION "bitvec_cmp"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_cmp_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:293
+-- pgcontext::vector_variant_ordering::bitvec_ge
+CREATE  FUNCTION "bitvec_ge"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_ge_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/vector_variant_ordering.rs:283
 -- pgcontext::vector_variant_ordering::bitvec_eq
 CREATE  FUNCTION "bitvec_eq"(
@@ -1067,18 +1138,6 @@ CREATE  FUNCTION "bitvec_eq"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'bitvec_eq_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:278
--- pgcontext::vector_variant_ordering::bitvec_le
-CREATE  FUNCTION "bitvec_le"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_le_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1095,76 +1154,6 @@ AS 'MODULE_PATHNAME', 'bitvec_enforce_typmod_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:298
--- pgcontext::vector_variant_ordering::bitvec_gt
-CREATE  FUNCTION "bitvec_gt"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_gt_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:268
--- pgcontext::vector_variant_ordering::bitvec_cmp
-CREATE  FUNCTION "bitvec_cmp"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_cmp_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:677
--- pgcontext::pgcontext::vector_variants::bitvec_dims
-CREATE  FUNCTION "bitvec_dims"(
-	"vector" BitVec /* BitVec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_dims_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:759
--- pgcontext::pgcontext::vector_variants::bitvec_jaccard_distance
-CREATE  FUNCTION "bitvec_jaccard_distance"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS double precision /* f64 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_jaccard_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:886
--- pgcontext::pgcontext::vector_variants::bitvec_bits_final
-CREATE  FUNCTION "bitvec_bits_final"(
-	"state" bool[] /* Vec < bool > */
-) RETURNS BitVec /* BitVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_bits_final_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:747
--- pgcontext::pgcontext::vector_variants::bitvec_hamming_distance
-CREATE  FUNCTION "bitvec_hamming_distance"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_hamming_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:881
 -- pgcontext::pgcontext::vector_variants::bitvec_and_transition
 CREATE  FUNCTION "bitvec_and_transition"(
@@ -1177,15 +1166,15 @@ AS 'MODULE_PATHNAME', 'bitvec_and_transition_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:288
--- pgcontext::vector_variant_ordering::bitvec_ne
-CREATE  FUNCTION "bitvec_ne"(
+-- crates/context-pg/src/vector_variant_ordering.rs:273
+-- pgcontext::vector_variant_ordering::bitvec_lt
+CREATE  FUNCTION "bitvec_lt"(
 	"left" BitVec, /* BitVec */
 	"right" BitVec /* BitVec */
 ) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_ne_wrapper';
+AS 'MODULE_PATHNAME', 'bitvec_lt_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1198,6 +1187,17 @@ CREATE  FUNCTION "bitvec_or_transition"(
 IMMUTABLE PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'bitvec_or_transition_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:886
+-- pgcontext::pgcontext::vector_variants::bitvec_bits_final
+CREATE  FUNCTION "bitvec_bits_final"(
+	"state" bool[] /* Vec < bool > */
+) RETURNS BitVec /* BitVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_bits_final_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1498,7 +1498,7 @@ AS 'MODULE_PATHNAME', 'hnsw_compact_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/pgvector_compat.rs:718
+-- crates/context-pg/src/pgvector_compat.rs:723
 -- pgcontext::pgvector_compat::compare_indexes
 CREATE  FUNCTION "compare_indexes"(
 	"table_name" TEXT, /* String */
@@ -1804,7 +1804,7 @@ AS 'MODULE_PATHNAME', 'embedding_migrations_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/pgvector_compat.rs:635
+-- crates/context-pg/src/pgvector_compat.rs:640
 -- pgcontext::pgvector_compat::enable_pgvector_binding
 CREATE  FUNCTION "enable_pgvector_binding"() RETURNS void
 STRICT
@@ -1940,6 +1940,51 @@ CREATE TYPE HalfVec (
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:429
+-- pgcontext::pgcontext::vector_variants::halfvec_from_integer_array
+CREATE  FUNCTION "halfvec_from_integer_array"(
+	"values" INT[] /* Vec < i32 > */
+) RETURNS HalfVec /* HalfVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_from_integer_array_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:818
+-- pgcontext::pgcontext::vector_variants::halfvec_avg_final
+CREATE  FUNCTION "halfvec_avg_final"(
+	"state" real[] /* Vec < f32 > */
+) RETURNS HalfVec /* HalfVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_avg_final_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:711
+-- pgcontext::pgcontext::vector_variants::halfvec_l1_distance
+CREATE  FUNCTION "halfvec_l1_distance"(
+	"left" HalfVec, /* HalfVec */
+	"right" HalfVec /* HalfVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_l1_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:525
+-- pgcontext::pgcontext::vector_variants::halfvec
+CREATE  FUNCTION "halfvec"(
+	"input" TEXT /* & str */
+) RETURNS HalfVec /* HalfVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/vector_variant_ordering.rs:216
 -- pgcontext::vector_variant_ordering::halfvec_ne
 CREATE  FUNCTION "halfvec_ne"(
@@ -1949,6 +1994,42 @@ CREATE  FUNCTION "halfvec_ne"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'halfvec_ne_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:637
+-- pgcontext::pgcontext::vector_variants::halfvec_dims
+CREATE  FUNCTION "halfvec_dims"(
+	"vector" HalfVec /* HalfVec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_dims_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:705
+-- pgcontext::pgcontext::vector_variants::halfvec_cosine_distance
+CREATE  FUNCTION "halfvec_cosine_distance"(
+	"left" HalfVec, /* HalfVec */
+	"right" HalfVec /* HalfVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_cosine_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_typmods.rs:141
+-- pgcontext::vector_variant_typmods::halfvec_enforce_typmod
+CREATE  FUNCTION "halfvec_enforce_typmod"(
+	"vector" HalfVec, /* HalfVec */
+	"typmod" INT, /* i32 */
+	"_explicit" bool /* bool */
+) RETURNS HalfVec /* HalfVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_enforce_typmod_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -1964,62 +2045,26 @@ AS 'MODULE_PATHNAME', 'halfvec_l2_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:693
--- pgcontext::pgcontext::vector_variants::halfvec_inner_product
-CREATE  FUNCTION "halfvec_inner_product"(
-	"left" HalfVec, /* HalfVec */
-	"right" HalfVec /* HalfVec */
-) RETURNS real /* f32 */
+-- crates/context-pg/src/vector_variants.rs:421
+-- pgcontext::pgcontext::vector_variants::halfvec_from_real_array
+CREATE  FUNCTION "halfvec_from_real_array"(
+	"values" real[] /* Vec < f32 > */
+) RETURNS HalfVec /* HalfVec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_inner_product_wrapper';
+AS 'MODULE_PATHNAME', 'halfvec_from_real_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:699
--- pgcontext::pgcontext::vector_variants::halfvec_negative_inner_product
-CREATE  FUNCTION "halfvec_negative_inner_product"(
-	"left" HalfVec, /* HalfVec */
-	"right" HalfVec /* HalfVec */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_negative_inner_product_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:221
--- pgcontext::vector_variant_ordering::halfvec_ge
-CREATE  FUNCTION "halfvec_ge"(
+-- crates/context-pg/src/vector_variant_ordering.rs:226
+-- pgcontext::vector_variant_ordering::halfvec_gt
+CREATE  FUNCTION "halfvec_gt"(
 	"left" HalfVec, /* HalfVec */
 	"right" HalfVec /* HalfVec */
 ) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_ge_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:206
--- pgcontext::vector_variant_ordering::halfvec_le
-CREATE  FUNCTION "halfvec_le"(
-	"left" HalfVec, /* HalfVec */
-	"right" HalfVec /* HalfVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_le_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:637
--- pgcontext::pgcontext::vector_variants::halfvec_dims
-CREATE  FUNCTION "halfvec_dims"(
-	"vector" HalfVec /* HalfVec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_dims_wrapper';
+AS 'MODULE_PATHNAME', 'halfvec_gt_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -2046,60 +2091,39 @@ AS 'MODULE_PATHNAME', 'halfvec_from_double_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:705
--- pgcontext::pgcontext::vector_variants::halfvec_cosine_distance
-CREATE  FUNCTION "halfvec_cosine_distance"(
+-- crates/context-pg/src/vector_variants.rs:699
+-- pgcontext::pgcontext::vector_variants::halfvec_negative_inner_product
+CREATE  FUNCTION "halfvec_negative_inner_product"(
 	"left" HalfVec, /* HalfVec */
 	"right" HalfVec /* HalfVec */
 ) RETURNS real /* f32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_cosine_distance_wrapper';
+AS 'MODULE_PATHNAME', 'halfvec_negative_inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:525
--- pgcontext::pgcontext::vector_variants::halfvec
-CREATE  FUNCTION "halfvec"(
-	"input" TEXT /* & str */
-) RETURNS HalfVec /* HalfVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:429
--- pgcontext::pgcontext::vector_variants::halfvec_from_integer_array
-CREATE  FUNCTION "halfvec_from_integer_array"(
-	"values" INT[] /* Vec < i32 > */
-) RETURNS HalfVec /* HalfVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_from_integer_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:711
--- pgcontext::pgcontext::vector_variants::halfvec_l1_distance
-CREATE  FUNCTION "halfvec_l1_distance"(
+-- crates/context-pg/src/vector_variant_ordering.rs:206
+-- pgcontext::vector_variant_ordering::halfvec_le
+CREATE  FUNCTION "halfvec_le"(
 	"left" HalfVec, /* HalfVec */
 	"right" HalfVec /* HalfVec */
-) RETURNS real /* f32 */
+) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_l1_distance_wrapper';
+AS 'MODULE_PATHNAME', 'halfvec_le_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:421
--- pgcontext::pgcontext::vector_variants::halfvec_from_real_array
-CREATE  FUNCTION "halfvec_from_real_array"(
-	"values" real[] /* Vec < f32 > */
-) RETURNS HalfVec /* HalfVec */
+-- crates/context-pg/src/vector_variant_ordering.rs:221
+-- pgcontext::vector_variant_ordering::halfvec_ge
+CREATE  FUNCTION "halfvec_ge"(
+	"left" HalfVec, /* HalfVec */
+	"right" HalfVec /* HalfVec */
+) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_from_real_array_wrapper';
+AS 'MODULE_PATHNAME', 'halfvec_ge_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -2115,18 +2139,6 @@ AS 'MODULE_PATHNAME', 'halfvec_eq_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:226
--- pgcontext::vector_variant_ordering::halfvec_gt
-CREATE  FUNCTION "halfvec_gt"(
-	"left" HalfVec, /* HalfVec */
-	"right" HalfVec /* HalfVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_gt_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/vector_variant_ordering.rs:196
 -- pgcontext::vector_variant_ordering::halfvec_cmp
 CREATE  FUNCTION "halfvec_cmp"(
@@ -2139,27 +2151,15 @@ AS 'MODULE_PATHNAME', 'halfvec_cmp_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:818
--- pgcontext::pgcontext::vector_variants::halfvec_avg_final
-CREATE  FUNCTION "halfvec_avg_final"(
-	"state" real[] /* Vec < f32 > */
-) RETURNS HalfVec /* HalfVec */
+-- crates/context-pg/src/vector_variants.rs:693
+-- pgcontext::pgcontext::vector_variants::halfvec_inner_product
+CREATE  FUNCTION "halfvec_inner_product"(
+	"left" HalfVec, /* HalfVec */
+	"right" HalfVec /* HalfVec */
+) RETURNS real /* f32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_avg_final_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_typmods.rs:141
--- pgcontext::vector_variant_typmods::halfvec_enforce_typmod
-CREATE  FUNCTION "halfvec_enforce_typmod"(
-	"vector" HalfVec, /* HalfVec */
-	"typmod" INT, /* i32 */
-	"_explicit" bool /* bool */
-) RETURNS HalfVec /* HalfVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_enforce_typmod_wrapper';
+AS 'MODULE_PATHNAME', 'halfvec_inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -2233,7 +2233,7 @@ AS 'MODULE_PATHNAME', 'hnsw_build_stats_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:473
+-- crates/context-pg/src/hnsw_am.rs:474
 -- pgcontext::hnsw_am::hnsw_last_scan_work
 CREATE  FUNCTION "hnsw_last_scan_work"() RETURNS TABLE (
 	"page_visits" bigint,  /* i64 */
@@ -3012,64 +3012,6 @@ AS 'MODULE_PATHNAME', 'explain_sparse_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:252
--- pgcontext::vector_variant_ordering::sparsevec_ne
-CREATE  FUNCTION "sparsevec_ne"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_ne_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:717
--- pgcontext::pgcontext::vector_variants::sparsevec_l2_distance
-CREATE  FUNCTION "sparsevec_l2_distance"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_l2_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:741
--- pgcontext::pgcontext::vector_variants::sparsevec_l1_distance
-CREATE  FUNCTION "sparsevec_l1_distance"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_l1_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:534
--- pgcontext::pgcontext::vector_variants::sparsevec
-CREATE  FUNCTION "sparsevec"(
-	"input" TEXT /* & str */
-) RETURNS SparseVec /* SparseVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:871
--- pgcontext::pgcontext::vector_variants::sparsevec_avg_final
-CREATE  FUNCTION "sparsevec_avg_final"(
-	"state" real[] /* Vec < f32 > */
-) RETURNS SparseVec /* SparseVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_avg_final_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/sparse_search.rs:19
 -- pgcontext::sparse_search::search_sparse
 CREATE  FUNCTION "search_sparse"(
@@ -3088,15 +3030,28 @@ AS 'MODULE_PATHNAME', 'search_sparse_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:237
--- pgcontext::vector_variant_ordering::sparsevec_lt
-CREATE  FUNCTION "sparsevec_lt"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS bool /* bool */
+-- crates/context-pg/src/vector_variants.rs:543
+-- pgcontext::pgcontext::vector_variants::sparsevec_from_arrays
+CREATE  FUNCTION "sparsevec_from_arrays"(
+	"indices" INT[], /* Vec < i32 > */
+	"values" real[], /* Vec < f32 > */
+	"dimensions" INT /* i32 */
+) RETURNS SparseVec /* SparseVec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_lt_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_from_arrays_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:741
+-- pgcontext::pgcontext::vector_variants::sparsevec_l1_distance
+CREATE  FUNCTION "sparsevec_l1_distance"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_l1_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3120,18 +3075,6 @@ AS 'MODULE_PATHNAME', 'search_sparse_collection_filtered_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:257
--- pgcontext::vector_variant_ordering::sparsevec_ge
-CREATE  FUNCTION "sparsevec_ge"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_ge_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/sparse_search.rs:115
 -- pgcontext::sparse_search::search_sparse
 CREATE  FUNCTION "search_sparse"(
@@ -3151,18 +3094,91 @@ AS 'MODULE_PATHNAME', 'search_sparse_collection_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:647
--- pgcontext::pgcontext::vector_variants::sparsevec_dims
-CREATE  FUNCTION "sparsevec_dims"(
-	"vector" SparseVec /* SparseVec */
+-- crates/context-pg/src/vector_variant_ordering.rs:232
+-- pgcontext::vector_variant_ordering::sparsevec_cmp
+CREATE  FUNCTION "sparsevec_cmp"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
 ) RETURNS INT /* i32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_dims_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_cmp_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:538
+-- crates/context-pg/src/vector_variants.rs:729
+-- pgcontext::pgcontext::vector_variants::sparsevec_negative_inner_product
+CREATE  FUNCTION "sparsevec_negative_inner_product"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_negative_inner_product_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:252
+-- pgcontext::vector_variant_ordering::sparsevec_ne
+CREATE  FUNCTION "sparsevec_ne"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_ne_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:247
+-- pgcontext::vector_variant_ordering::sparsevec_eq
+CREATE  FUNCTION "sparsevec_eq"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_eq_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:262
+-- pgcontext::vector_variant_ordering::sparsevec_gt
+CREATE  FUNCTION "sparsevec_gt"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_gt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:257
+-- pgcontext::vector_variant_ordering::sparsevec_ge
+CREATE  FUNCTION "sparsevec_ge"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_ge_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:237
+-- pgcontext::vector_variant_ordering::sparsevec_lt
+CREATE  FUNCTION "sparsevec_lt"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_lt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hnsw_am.rs:539
 -- pgcontext::hnsw_am::_hnsw_sparse_candidates
 CREATE  FUNCTION "_hnsw_sparse_candidates"(
 	"index_relation" regclass, /* PgRelation */
@@ -3179,44 +3195,40 @@ AS 'MODULE_PATHNAME', 'hnsw_sparse_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:543
--- pgcontext::pgcontext::vector_variants::sparsevec_from_arrays
-CREATE  FUNCTION "sparsevec_from_arrays"(
-	"indices" INT[], /* Vec < i32 > */
-	"values" real[], /* Vec < f32 > */
-	"dimensions" INT /* i32 */
+-- crates/context-pg/src/vector_variants.rs:657
+-- pgcontext::pgcontext::vector_variants::sparsevec_indices
+CREATE  FUNCTION "sparsevec_indices"(
+	"vector" SparseVec /* SparseVec */
+) RETURNS INT[] /* Vec < i32 > */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_indices_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:871
+-- pgcontext::pgcontext::vector_variants::sparsevec_avg_final
+CREATE  FUNCTION "sparsevec_avg_final"(
+	"state" real[] /* Vec < f32 > */
 ) RETURNS SparseVec /* SparseVec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_from_arrays_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_avg_final_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:729
--- pgcontext::pgcontext::vector_variants::sparsevec_negative_inner_product
-CREATE  FUNCTION "sparsevec_negative_inner_product"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS real /* f32 */
+-- crates/context-pg/src/vector_variants.rs:647
+-- pgcontext::pgcontext::vector_variants::sparsevec_dims
+CREATE  FUNCTION "sparsevec_dims"(
+	"vector" SparseVec /* SparseVec */
+) RETURNS INT /* i32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_negative_inner_product_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_dims_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:723
--- pgcontext::pgcontext::vector_variants::sparsevec_inner_product
-CREATE  FUNCTION "sparsevec_inner_product"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_inner_product_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:608
+-- crates/context-pg/src/hnsw_am.rs:609
 -- pgcontext::hnsw_am::_hnsw_sparse_masked_candidates
 CREATE  FUNCTION "_hnsw_sparse_masked_candidates"(
 	"index_relation" regclass, /* PgRelation */
@@ -3234,38 +3246,15 @@ AS 'MODULE_PATHNAME', 'hnsw_sparse_masked_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:657
--- pgcontext::pgcontext::vector_variants::sparsevec_indices
-CREATE  FUNCTION "sparsevec_indices"(
-	"vector" SparseVec /* SparseVec */
-) RETURNS INT[] /* Vec < i32 > */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_indices_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:232
--- pgcontext::vector_variant_ordering::sparsevec_cmp
-CREATE  FUNCTION "sparsevec_cmp"(
+-- crates/context-pg/src/vector_variants.rs:717
+-- pgcontext::pgcontext::vector_variants::sparsevec_l2_distance
+CREATE  FUNCTION "sparsevec_l2_distance"(
 	"left" SparseVec, /* SparseVec */
 	"right" SparseVec /* SparseVec */
-) RETURNS INT /* i32 */
+) RETURNS real /* f32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_cmp_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:262
--- pgcontext::vector_variant_ordering::sparsevec_gt
-CREATE  FUNCTION "sparsevec_gt"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_gt_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_l2_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3281,15 +3270,25 @@ AS 'MODULE_PATHNAME', 'sparsevec_cosine_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:247
--- pgcontext::vector_variant_ordering::sparsevec_eq
-CREATE  FUNCTION "sparsevec_eq"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS bool /* bool */
+-- crates/context-pg/src/vector_variants.rs:478
+-- pgcontext::pgcontext::vector_variants::sparsevec_from_real_array
+CREATE  FUNCTION "sparsevec_from_real_array"(
+	"values" real[] /* Vec < f32 > */
+) RETURNS SparseVec /* SparseVec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_eq_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_from_real_array_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:534
+-- pgcontext::pgcontext::vector_variants::sparsevec
+CREATE  FUNCTION "sparsevec"(
+	"input" TEXT /* & str */
+) RETURNS SparseVec /* SparseVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3488,14 +3487,15 @@ CREATE OPERATOR CLASS pgcontext.bitvec_ops
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:478
--- pgcontext::pgcontext::vector_variants::sparsevec_from_real_array
-CREATE  FUNCTION "sparsevec_from_real_array"(
-	"values" real[] /* Vec < f32 > */
-) RETURNS SparseVec /* SparseVec */
+-- crates/context-pg/src/vector_variants.rs:723
+-- pgcontext::pgcontext::vector_variants::sparsevec_inner_product
+CREATE  FUNCTION "sparsevec_inner_product"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS real /* f32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_from_real_array_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3821,6 +3821,96 @@ CREATE TYPE Vector (
 	INPUT = vector_in, /* pgcontext::pgcontext::vector::vector_in */
 	OUTPUT = vector_out, /* pgcontext::pgcontext::vector::vector_out */
 	STORAGE = extended
+);
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:323
+-- requires:
+--   Vector
+--   HalfVec
+--   SparseVec
+--   BitVec
+--   halfvec_l2_distance
+--   halfvec_negative_inner_product
+--   halfvec_cosine_distance
+--   halfvec_l1_distance
+--   sparsevec_l2_distance
+--   sparsevec_negative_inner_product
+--   sparsevec_cosine_distance
+--   sparsevec_l1_distance
+--   bitvec_hamming_distance
+--   bitvec_jaccard_distance
+
+
+CREATE OPERATOR pgcontext.<#> (LEFTARG = halfvec, RIGHTARG = halfvec, FUNCTION = pgcontext.halfvec_negative_inner_product, COMMUTATOR = OPERATOR(pgcontext.<#>));
+CREATE OPERATOR pgcontext.<=> (LEFTARG = halfvec, RIGHTARG = halfvec, FUNCTION = pgcontext.halfvec_cosine_distance, COMMUTATOR = OPERATOR(pgcontext.<=>));
+CREATE OPERATOR pgcontext.<+> (LEFTARG = halfvec, RIGHTARG = halfvec, FUNCTION = pgcontext.halfvec_l1_distance, COMMUTATOR = OPERATOR(pgcontext.<+>));
+CREATE OPERATOR pgcontext.<#> (LEFTARG = sparsevec, RIGHTARG = sparsevec, FUNCTION = pgcontext.sparsevec_negative_inner_product, COMMUTATOR = OPERATOR(pgcontext.<#>));
+CREATE OPERATOR pgcontext.<=> (LEFTARG = sparsevec, RIGHTARG = sparsevec, FUNCTION = pgcontext.sparsevec_cosine_distance, COMMUTATOR = OPERATOR(pgcontext.<=>));
+CREATE OPERATOR pgcontext.<+> (LEFTARG = sparsevec, RIGHTARG = sparsevec, FUNCTION = pgcontext.sparsevec_l1_distance, COMMUTATOR = OPERATOR(pgcontext.<+>));
+CREATE OPERATOR pgcontext.<%> (LEFTARG = bitvec, RIGHTARG = bitvec, FUNCTION = pgcontext.bitvec_jaccard_distance, COMMUTATOR = OPERATOR(pgcontext.<%>));
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_datum.rs:209
+-- requires:
+--   pgcontext_bootstrap
+--   Vector
+
+
+CREATE FUNCTION pgcontext._l2_distance_fast(pgcontext.vector, pgcontext.vector)
+RETURNS real
+AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION pgcontext._l2_distance_fast8(pgcontext.vector, pgcontext.vector)
+RETURNS double precision
+AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast8'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION pgcontext._negative_inner_product_fast(pgcontext.vector, pgcontext.vector)
+RETURNS real
+AS 'MODULE_PATHNAME', 'pgcontext_negative_inner_product_fast'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION pgcontext._cosine_distance_fast(pgcontext.vector, pgcontext.vector)
+RETURNS real
+AS 'MODULE_PATHNAME', 'pgcontext_cosine_distance_fast'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION pgcontext._l1_distance_fast(pgcontext.vector, pgcontext.vector)
+RETURNS real
+AS 'MODULE_PATHNAME', 'pgcontext_l1_distance_fast'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:183
+-- requires:
+--   Vector
+--   create_vector_fast_distance_functions
+
+
+CREATE OPERATOR pgcontext.<#> (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext._negative_inner_product_fast,
+    COMMUTATOR = OPERATOR(pgcontext.<#>)
+);
+
+CREATE OPERATOR pgcontext.<=> (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext._cosine_distance_fast,
+    COMMUTATOR = OPERATOR(pgcontext.<=>)
+);
+
+CREATE OPERATOR pgcontext.<+> (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext._l1_distance_fast,
+    COMMUTATOR = OPERATOR(pgcontext.<+>)
 );
 /* </end connected objects> */
 
@@ -4517,213 +4607,6 @@ SELECT pg_catalog.pg_extension_config_dump(
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:323
--- requires:
---   Vector
---   HalfVec
---   SparseVec
---   BitVec
---   halfvec_l2_distance
---   halfvec_negative_inner_product
---   halfvec_cosine_distance
---   halfvec_l1_distance
---   sparsevec_l2_distance
---   sparsevec_negative_inner_product
---   sparsevec_cosine_distance
---   sparsevec_l1_distance
---   bitvec_hamming_distance
---   bitvec_jaccard_distance
-
-
-CREATE OPERATOR pgcontext.<#> (LEFTARG = halfvec, RIGHTARG = halfvec, FUNCTION = pgcontext.halfvec_negative_inner_product, COMMUTATOR = OPERATOR(pgcontext.<#>));
-CREATE OPERATOR pgcontext.<=> (LEFTARG = halfvec, RIGHTARG = halfvec, FUNCTION = pgcontext.halfvec_cosine_distance, COMMUTATOR = OPERATOR(pgcontext.<=>));
-CREATE OPERATOR pgcontext.<+> (LEFTARG = halfvec, RIGHTARG = halfvec, FUNCTION = pgcontext.halfvec_l1_distance, COMMUTATOR = OPERATOR(pgcontext.<+>));
-CREATE OPERATOR pgcontext.<#> (LEFTARG = sparsevec, RIGHTARG = sparsevec, FUNCTION = pgcontext.sparsevec_negative_inner_product, COMMUTATOR = OPERATOR(pgcontext.<#>));
-CREATE OPERATOR pgcontext.<=> (LEFTARG = sparsevec, RIGHTARG = sparsevec, FUNCTION = pgcontext.sparsevec_cosine_distance, COMMUTATOR = OPERATOR(pgcontext.<=>));
-CREATE OPERATOR pgcontext.<+> (LEFTARG = sparsevec, RIGHTARG = sparsevec, FUNCTION = pgcontext.sparsevec_l1_distance, COMMUTATOR = OPERATOR(pgcontext.<+>));
-CREATE OPERATOR pgcontext.<%> (LEFTARG = bitvec, RIGHTARG = bitvec, FUNCTION = pgcontext.bitvec_jaccard_distance, COMMUTATOR = OPERATOR(pgcontext.<%>));
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_datum.rs:209
--- requires:
---   pgcontext_bootstrap
---   Vector
-
-
-CREATE FUNCTION pgcontext._l2_distance_fast(pgcontext.vector, pgcontext.vector)
-RETURNS real
-AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE FUNCTION pgcontext._l2_distance_fast8(pgcontext.vector, pgcontext.vector)
-RETURNS double precision
-AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast8'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE FUNCTION pgcontext._negative_inner_product_fast(pgcontext.vector, pgcontext.vector)
-RETURNS real
-AS 'MODULE_PATHNAME', 'pgcontext_negative_inner_product_fast'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE FUNCTION pgcontext._cosine_distance_fast(pgcontext.vector, pgcontext.vector)
-RETURNS real
-AS 'MODULE_PATHNAME', 'pgcontext_cosine_distance_fast'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE FUNCTION pgcontext._l1_distance_fast(pgcontext.vector, pgcontext.vector)
-RETURNS real
-AS 'MODULE_PATHNAME', 'pgcontext_l1_distance_fast'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:183
--- requires:
---   Vector
---   create_vector_fast_distance_functions
-
-
-CREATE OPERATOR pgcontext.<#> (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext._negative_inner_product_fast,
-    COMMUTATOR = OPERATOR(pgcontext.<#>)
-);
-
-CREATE OPERATOR pgcontext.<=> (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext._cosine_distance_fast,
-    COMMUTATOR = OPERATOR(pgcontext.<=>)
-);
-
-CREATE OPERATOR pgcontext.<+> (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext._l1_distance_fast,
-    COMMUTATOR = OPERATOR(pgcontext.<+>)
-);
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:432
--- pgcontext::pgcontext::vector::vector_lt
-CREATE  FUNCTION "vector_lt"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_lt_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/quantization_sql.rs:39
--- pgcontext::quantization_sql::scalar_reconstruct
-CREATE  FUNCTION "scalar_reconstruct"(
-	"codes" bytea, /* Vec < u8 > */
-	"min" real, /* f32 */
-	"max" real, /* f32 */
-	"levels" INT /* i32 */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'scalar_reconstruct_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:225
--- pgcontext::hnsw_am::hnsw_l2_distance
-CREATE  FUNCTION "hnsw_l2_distance"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS double precision /* f64 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'hnsw_l2_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:462
--- pgcontext::pgcontext::vector::vector_gt
-CREATE  FUNCTION "vector_gt"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_gt_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:572
--- pgcontext::pgcontext::vector::search
-CREATE  FUNCTION "search"(
-	"query" Vector, /* Vector */
-	"point_ids" bigint[], /* Vec < i64 > */
-	"vectors" Vector[], /* Vec < Vector > */
-	"metric" TEXT, /* String */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"score" real  /* f32 */
-)
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search.rs:41
--- pgcontext::table_search::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/candidate_recheck.rs:112
--- pgcontext::table_search::candidate_recheck::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector_name" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"candidate_point_ids" bigint[], /* Vec < i64 > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_named_vector_candidates_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:507
--- pgcontext::pgcontext::vector_variants::sparsevec_from_vector
-CREATE  FUNCTION "sparsevec_from_vector"(
-	"vector" Vector /* Vector */
-) RETURNS SparseVec /* SparseVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_from_vector_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/quantization_sql.rs:54
 -- pgcontext::quantization_sql::product_quantize
 CREATE  FUNCTION "product_quantize"(
@@ -4734,148 +4617,6 @@ CREATE  FUNCTION "product_quantize"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'product_quantize_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:655
--- pgcontext::pgcontext::vector::rerank_late_interaction
-CREATE  FUNCTION "rerank_late_interaction"(
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"point_ids" bigint[], /* Vec < i64 > */
-	"candidate_vectors" Vector[], /* Vec < Vector > */
-	"candidate_offsets" INT[], /* Vec < i32 > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"score" real  /* f32 */
-)
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'rerank_late_interaction_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query/late_interaction.rs:79
--- pgcontext::hybrid_query::late_interaction::explain_late_interaction
-CREATE  FUNCTION "explain_late_interaction"(
-	"collection" TEXT, /* String */
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"vector_column" TEXT /* String */
-) RETURNS TABLE (
-	"stage" TEXT,  /* String */
-	"detail" TEXT,  /* String */
-	"branch" TEXT,  /* Option < String > */
-	"strategy" TEXT,  /* String */
-	"status" QueryExplainStatus,  /* QueryExplainStatus */
-	"estimated_candidates" bigint,  /* Option < i64 > */
-	"candidate_budget" bigint  /* Option < i64 > */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'explain_late_interaction_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query.rs:122
--- pgcontext::hybrid_query::query
-CREATE  FUNCTION "query"(
-	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"sparse_vector_name" TEXT, /* String */
-	"sparse_query" SparseVec, /* SparseVec */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" double precision  /* f64 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'query_collection_dense_sparse_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:563
--- pgcontext::pgcontext::vector::l1_distance
-CREATE  FUNCTION "l1_distance"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'l1_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/candidate_recheck.rs:64
--- pgcontext::table_search::candidate_recheck::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"candidate_point_ids" bigint[], /* Vec < i64 > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_candidates_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:456
--- pgcontext::pgcontext::vector::vector_ge
-CREATE  FUNCTION "vector_ge"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_ge_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:134
--- pgcontext::hybrid_query::late_interaction_ann::explain_late_interaction_ann
-CREATE  FUNCTION "explain_late_interaction_ann"(
-	"collection" TEXT, /* String */
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"candidates_per_query" INT /* i32 */
-) RETURNS TABLE (
-	"stage" TEXT,  /* String */
-	"detail" TEXT,  /* String */
-	"branch" TEXT,  /* Option < String > */
-	"strategy" TEXT,  /* String */
-	"status" QueryExplainStatus,  /* QueryExplainStatus */
-	"estimated_candidates" bigint,  /* Option < i64 > */
-	"candidate_budget" bigint  /* Option < i64 > */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'explain_owned_late_interaction_ann_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:508
--- pgcontext::hnsw_am::_hnsw_candidates
-CREATE  FUNCTION "_hnsw_candidates"(
-	"index_relation" regclass, /* PgRelation */
-	"query" Vector, /* Vector */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"heap_tid" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'hnsw_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4900,113 +4641,34 @@ AS 'MODULE_PATHNAME', 'search_collection_named_vector_filtered_candidates_wrappe
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:320
--- pgcontext::pgcontext::vector::vector_from_double_array
-CREATE  FUNCTION "vector_from_double_array"(
-	"values" double precision[] /* Vec < f64 > */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_from_double_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:545
--- pgcontext::pgcontext::vector::inner_product
-CREATE  FUNCTION "inner_product"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'inner_product_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/grouped.rs:68
--- pgcontext::table_search::grouped::grouped_search
-CREATE  FUNCTION "grouped_search"(
-	"collection" TEXT, /* String */
-	"vector_name" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"group_by" TEXT, /* String */
-	"group_limit" INT, /* i32 */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"group_value" TEXT,  /* String */
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'grouped_search_collection_named_vector_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/candidate_recheck.rs:266
--- pgcontext::table_search::candidate_recheck::search_mmap_hnsw_artifact
-CREATE  FUNCTION "search_mmap_hnsw_artifact"(
-	"collection" TEXT, /* String */
-	"artifact_name" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"max_mapped_bytes" bigint, /* i64 */
-	"candidate_limit" INT, /* i32 */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_mmap_hnsw_artifact_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/quantization_sql.rs:17
--- pgcontext::quantization_sql::binary_quantize
-CREATE  FUNCTION "binary_quantize"(
+-- crates/context-pg/src/vector_variants.rs:507
+-- pgcontext::pgcontext::vector_variants::sparsevec_from_vector
+CREATE  FUNCTION "sparsevec_from_vector"(
 	"vector" Vector /* Vector */
-) RETURNS BitVec /* BitVec */
+) RETURNS SparseVec /* SparseVec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'binary_quantize_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_from_vector_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:438
--- pgcontext::pgcontext::vector::vector_le
-CREATE  FUNCTION "vector_le"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_le_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/grouped.rs:17
--- pgcontext::table_search::grouped::grouped_search
-CREATE  FUNCTION "grouped_search"(
+-- crates/context-pg/src/hybrid_query.rs:122
+-- pgcontext::hybrid_query::query
+CREATE  FUNCTION "query"(
 	"collection" TEXT, /* String */
 	"vector" Vector, /* Vector */
-	"group_by" TEXT, /* String */
-	"group_limit" INT, /* i32 */
+	"sparse_vector_name" TEXT, /* String */
+	"sparse_query" SparseVec, /* SparseVec */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
-	"group_value" TEXT,  /* String */
 	"point_id" bigint,  /* i64 */
 	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
+	"score" double precision  /* f64 */
 )
 STRICT
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'grouped_search_collection_wrapper';
+AS 'MODULE_PATHNAME', 'query_collection_dense_sparse_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5023,28 +4685,147 @@ AS 'MODULE_PATHNAME', 'product_reconstruct_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/query_builders.rs:11
--- pgcontext::query_builders::query_nearest
-CREATE  FUNCTION "query_nearest"(
-	"vector" Vector, /* Vector */
-	"limit" INT /* i32 */
-) RETURNS jsonb /* JsonB */
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
+-- crates/context-pg/src/vector.rs:299
+-- pgcontext::pgcontext::vector::vector_from_real_array
+CREATE  FUNCTION "vector_from_real_array"(
+	"values" real[] /* Vec < f32 > */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'query_nearest_wrapper';
+AS 'MODULE_PATHNAME', 'vector_from_real_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:422
--- pgcontext::pgcontext::vector::vector_cmp
-CREATE  FUNCTION "vector_cmp"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS INT /* i32 */
+-- crates/context-pg/src/vector.rs:572
+-- pgcontext::pgcontext::vector::search
+CREATE  FUNCTION "search"(
+	"query" Vector, /* Vector */
+	"point_ids" bigint[], /* Vec < i64 > */
+	"vectors" Vector[], /* Vec < Vector > */
+	"metric" TEXT, /* String */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"score" real  /* f32 */
+)
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_cmp_wrapper';
+AS 'MODULE_PATHNAME', 'search_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/recommend.rs:52
+-- pgcontext::table_search::recommend::recommend
+CREATE  FUNCTION "recommend"(
+	"collection" TEXT, /* String */
+	"positive_vectors" Vector[], /* Vec < Vector > */
+	"negative_vectors" Vector[], /* Vec < Vector > */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'recommend_collection_from_vectors_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:320
+-- pgcontext::pgcontext::vector::vector_from_double_array
+CREATE  FUNCTION "vector_from_double_array"(
+	"values" double precision[] /* Vec < f64 > */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_from_double_array_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:462
+-- pgcontext::pgcontext::vector::vector_gt
+CREATE  FUNCTION "vector_gt"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_gt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:432
+-- pgcontext::pgcontext::vector::vector_lt
+CREATE  FUNCTION "vector_lt"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_lt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hybrid_query/late_interaction.rs:39
+-- pgcontext::hybrid_query::late_interaction::search_late_interaction
+CREATE  FUNCTION "search_late_interaction"(
+	"collection" TEXT, /* String */
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"vector_column" TEXT, /* String */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" double precision  /* f64 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_late_interaction_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:539
+-- pgcontext::pgcontext::vector::l2_distance
+CREATE  FUNCTION "l2_distance"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'l2_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:563
+-- pgcontext::pgcontext::vector::l1_distance
+CREATE  FUNCTION "l1_distance"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'l1_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:611
+-- pgcontext::pgcontext::vector::rerank_quantized_candidates
+CREATE  FUNCTION "rerank_quantized_candidates"(
+	"query" Vector, /* Vector */
+	"point_ids" bigint[], /* Vec < i64 > */
+	"original_vectors" Vector[], /* Vec < Vector > */
+	"metric" TEXT, /* String */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"score" real  /* f32 */
+)
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'rerank_quantized_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5071,71 +4852,14 @@ AS 'MODULE_PATHNAME', 'search_legacy_late_interaction_ann_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:299
--- pgcontext::pgcontext::vector::vector_from_real_array
-CREATE  FUNCTION "vector_from_real_array"(
-	"values" real[] /* Vec < f32 > */
-) RETURNS Vector /* Vector */
+-- crates/context-pg/src/vector.rs:523
+-- pgcontext::pgcontext::vector::vector_dims
+CREATE  FUNCTION "vector_dims"(
+	"vector" Vector /* Vector */
+) RETURNS INT /* i32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_from_real_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query/late_interaction.rs:39
--- pgcontext::hybrid_query::late_interaction::search_late_interaction
-CREATE  FUNCTION "search_late_interaction"(
-	"collection" TEXT, /* String */
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"vector_column" TEXT, /* String */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" double precision  /* f64 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_late_interaction_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:54
--- pgcontext::hybrid_query::late_interaction_ann::search_late_interaction_ann
-CREATE  FUNCTION "search_late_interaction_ann"(
-	"collection" TEXT, /* String */
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"candidates_per_query" INT, /* i32 */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" double precision  /* f64 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_owned_late_interaction_ann_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/named.rs:16
--- pgcontext::table_search::named::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector_name" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_named_vector_wrapper';
+AS 'MODULE_PATHNAME', 'vector_dims_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5180,47 +4904,21 @@ CREATE CAST (halfvec AS vector)
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:523
--- pgcontext::pgcontext::vector::vector_dims
-CREATE  FUNCTION "vector_dims"(
-	"vector" Vector /* Vector */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_dims_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/quantization_sql.rs:27
--- pgcontext::quantization_sql::scalar_quantize
-CREATE  FUNCTION "scalar_quantize"(
-	"vector" Vector, /* Vector */
-	"min" real, /* f32 */
-	"max" real, /* f32 */
-	"levels" INT /* i32 */
-) RETURNS bytea /* Vec < u8 > */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'scalar_quantize_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/recommend.rs:52
--- pgcontext::table_search::recommend::recommend
-CREATE  FUNCTION "recommend"(
-	"collection" TEXT, /* String */
-	"positive_vectors" Vector[], /* Vec < Vector > */
-	"negative_vectors" Vector[], /* Vec < Vector > */
+-- crates/context-pg/src/vector.rs:655
+-- pgcontext::pgcontext::vector::rerank_late_interaction
+CREATE  FUNCTION "rerank_late_interaction"(
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"point_ids" bigint[], /* Vec < i64 > */
+	"candidate_vectors" Vector[], /* Vec < Vector > */
+	"candidate_offsets" INT[], /* Vec < i32 > */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
 	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
 	"score" real  /* f32 */
 )
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
+IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'recommend_collection_from_vectors_wrapper';
+AS 'MODULE_PATHNAME', 'rerank_late_interaction_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5244,6 +4942,80 @@ AS 'MODULE_PATHNAME', 'search_collection_named_vector_filtered_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:545
+-- pgcontext::pgcontext::vector::inner_product
+CREATE  FUNCTION "inner_product"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'inner_product_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:54
+-- pgcontext::hybrid_query::late_interaction_ann::search_late_interaction_ann
+CREATE  FUNCTION "search_late_interaction_ann"(
+	"collection" TEXT, /* String */
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"candidates_per_query" INT, /* i32 */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" double precision  /* f64 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_owned_late_interaction_ann_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/named.rs:16
+-- pgcontext::table_search::named::search
+CREATE  FUNCTION "search"(
+	"collection" TEXT, /* String */
+	"vector_name" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_collection_named_vector_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:416
+-- pgcontext::pgcontext::vector::vector_avg_final
+CREATE  FUNCTION "vector_avg_final"(
+	"state" real[] /* Vec < f32 > */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_avg_final_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/query_builders.rs:11
+-- pgcontext::query_builders::query_nearest
+CREATE  FUNCTION "query_nearest"(
+	"vector" Vector, /* Vector */
+	"limit" INT /* i32 */
+) RETURNS jsonb /* JsonB */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'query_nearest_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/vector.rs:557
 -- pgcontext::pgcontext::vector::cosine_distance
 CREATE  FUNCTION "cosine_distance"(
@@ -5256,14 +5028,327 @@ AS 'MODULE_PATHNAME', 'cosine_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:416
--- pgcontext::pgcontext::vector::vector_avg_final
-CREATE  FUNCTION "vector_avg_final"(
-	"state" real[] /* Vec < f32 > */
+-- crates/context-pg/src/vector.rs:444
+-- pgcontext::pgcontext::vector::vector_eq
+CREATE  FUNCTION "vector_eq"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_eq_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/candidate_recheck.rs:266
+-- pgcontext::table_search::candidate_recheck::search_mmap_hnsw_artifact
+CREATE  FUNCTION "search_mmap_hnsw_artifact"(
+	"collection" TEXT, /* String */
+	"artifact_name" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"max_mapped_bytes" bigint, /* i64 */
+	"candidate_limit" INT, /* i32 */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_mmap_hnsw_artifact_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:134
+-- pgcontext::hybrid_query::late_interaction_ann::explain_late_interaction_ann
+CREATE  FUNCTION "explain_late_interaction_ann"(
+	"collection" TEXT, /* String */
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"candidates_per_query" INT /* i32 */
+) RETURNS TABLE (
+	"stage" TEXT,  /* String */
+	"detail" TEXT,  /* String */
+	"branch" TEXT,  /* Option < String > */
+	"strategy" TEXT,  /* String */
+	"status" QueryExplainStatus,  /* QueryExplainStatus */
+	"estimated_candidates" bigint,  /* Option < i64 > */
+	"candidate_budget" bigint  /* Option < i64 > */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'explain_owned_late_interaction_ann_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_typmods.rs:88
+-- pgcontext::vector_variant_typmods::vector_enforce_typmod
+CREATE  FUNCTION "vector_enforce_typmod"(
+	"vector" Vector, /* Vector */
+	"typmod" INT, /* i32 */
+	"_explicit" bool /* bool */
 ) RETURNS Vector /* Vector */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_avg_final_wrapper';
+AS 'MODULE_PATHNAME', 'vector_enforce_typmod_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hybrid_query/late_interaction.rs:79
+-- pgcontext::hybrid_query::late_interaction::explain_late_interaction
+CREATE  FUNCTION "explain_late_interaction"(
+	"collection" TEXT, /* String */
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"vector_column" TEXT /* String */
+) RETURNS TABLE (
+	"stage" TEXT,  /* String */
+	"detail" TEXT,  /* String */
+	"branch" TEXT,  /* Option < String > */
+	"strategy" TEXT,  /* String */
+	"status" QueryExplainStatus,  /* QueryExplainStatus */
+	"estimated_candidates" bigint,  /* Option < i64 > */
+	"candidate_budget" bigint  /* Option < i64 > */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'explain_late_interaction_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/candidate_recheck.rs:112
+-- pgcontext::table_search::candidate_recheck::search
+CREATE  FUNCTION "search"(
+	"collection" TEXT, /* String */
+	"vector_name" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"candidate_point_ids" bigint[], /* Vec < i64 > */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_collection_named_vector_candidates_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search.rs:73
+-- pgcontext::table_search::search
+CREATE  FUNCTION "search"(
+	"collection" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"filter" TEXT, /* Option < String > */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_collection_filtered_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/grouped.rs:68
+-- pgcontext::table_search::grouped::grouped_search
+CREATE  FUNCTION "grouped_search"(
+	"collection" TEXT, /* String */
+	"vector_name" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"group_by" TEXT, /* String */
+	"group_limit" INT, /* i32 */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"group_value" TEXT,  /* String */
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'grouped_search_collection_named_vector_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/candidate_recheck.rs:410
+-- pgcontext::table_search::candidate_recheck::_mmap_hnsw_artifact_candidates
+CREATE  FUNCTION "_mmap_hnsw_artifact_candidates"(
+	"collection" TEXT, /* String */
+	"artifact_name" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"max_mapped_bytes" bigint, /* i64 */
+	"candidate_limit" INT, /* i32 */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"score" real,  /* f32 */
+	"generation_high_water" bigint  /* i64 */
+)
+STRICT SECURITY DEFINER
+SET search_path TO pg_catalog, pgcontext
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'mmap_hnsw_artifact_candidates_internal_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hnsw_am.rs:225
+-- pgcontext::hnsw_am::hnsw_l2_distance
+CREATE  FUNCTION "hnsw_l2_distance"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS double precision /* f64 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'hnsw_l2_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/grouped.rs:17
+-- pgcontext::table_search::grouped::grouped_search
+CREATE  FUNCTION "grouped_search"(
+	"collection" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"group_by" TEXT, /* String */
+	"group_limit" INT, /* i32 */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"group_value" TEXT,  /* String */
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'grouped_search_collection_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/candidate_recheck.rs:64
+-- pgcontext::table_search::candidate_recheck::search
+CREATE  FUNCTION "search"(
+	"collection" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"candidate_point_ids" bigint[], /* Vec < i64 > */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_collection_candidates_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:450
+-- pgcontext::pgcontext::vector::vector_ne
+CREATE  FUNCTION "vector_ne"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_ne_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/quantization_sql.rs:17
+-- pgcontext::quantization_sql::binary_quantize
+CREATE  FUNCTION "binary_quantize"(
+	"vector" Vector /* Vector */
+) RETURNS BitVec /* BitVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'binary_quantize_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:422
+-- pgcontext::pgcontext::vector::vector_cmp
+CREATE  FUNCTION "vector_cmp"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_cmp_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search.rs:41
+-- pgcontext::table_search::search
+CREATE  FUNCTION "search"(
+	"collection" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_collection_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:438
+-- pgcontext::pgcontext::vector::vector_le
+CREATE  FUNCTION "vector_le"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_le_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hnsw_am.rs:565
+-- pgcontext::hnsw_am::_hnsw_masked_candidates
+CREATE  FUNCTION "_hnsw_masked_candidates"(
+	"index_relation" regclass, /* PgRelation */
+	"query" Vector, /* Vector */
+	"allowed_heap_tids" anyarray, /* AnyArray */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"heap_tid" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'hnsw_masked_candidates_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hnsw_am.rs:509
+-- pgcontext::hnsw_am::_hnsw_candidates
+CREATE  FUNCTION "_hnsw_candidates"(
+	"index_relation" regclass, /* PgRelation */
+	"query" Vector, /* Vector */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"heap_tid" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'hnsw_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5332,24 +5417,23 @@ CREATE CAST (sparsevec AS vector)
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/table_search/candidate_recheck.rs:410
--- pgcontext::table_search::candidate_recheck::_mmap_hnsw_artifact_candidates
-CREATE  FUNCTION "_mmap_hnsw_artifact_candidates"(
+-- crates/context-pg/src/table_search/candidate_recheck.rs:162
+-- pgcontext::table_search::candidate_recheck::search
+CREATE  FUNCTION "search"(
 	"collection" TEXT, /* String */
-	"artifact_name" TEXT, /* String */
 	"vector" Vector, /* Vector */
-	"max_mapped_bytes" bigint, /* i64 */
-	"candidate_limit" INT, /* i32 */
+	"filter" TEXT, /* Option < String > */
+	"candidate_point_ids" bigint[], /* Vec < i64 > */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
 	"point_id" bigint,  /* i64 */
-	"score" real,  /* f32 */
-	"generation_high_water" bigint  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
 )
-STRICT SECURITY DEFINER
-SET search_path TO pg_catalog, pgcontext
+
+SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'mmap_hnsw_artifact_candidates_internal_wrapper';
+AS 'MODULE_PATHNAME', 'search_collection_filtered_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5510,34 +5594,23 @@ CREATE OPERATOR CLASS pgcontext.bitvec_hnsw_jaccard_ops
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_typmods.rs:88
--- pgcontext::vector_variant_typmods::vector_enforce_typmod
-CREATE  FUNCTION "vector_enforce_typmod"(
+-- crates/context-pg/src/hybrid_query.rs:70
+-- pgcontext::hybrid_query::query
+CREATE  FUNCTION "query"(
+	"collection" TEXT, /* String */
 	"vector" Vector, /* Vector */
-	"typmod" INT, /* i32 */
-	"_explicit" bool /* bool */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_enforce_typmod_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:611
--- pgcontext::pgcontext::vector::rerank_quantized_candidates
-CREATE  FUNCTION "rerank_quantized_candidates"(
-	"query" Vector, /* Vector */
-	"point_ids" bigint[], /* Vec < i64 > */
-	"original_vectors" Vector[], /* Vec < Vector > */
-	"metric" TEXT, /* String */
+	"text_query" TEXT, /* String */
+	"text_column" TEXT, /* String */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
 	"point_id" bigint,  /* i64 */
-	"score" real  /* f32 */
+	"source_key" TEXT,  /* String */
+	"score" double precision  /* f64 */
 )
-IMMUTABLE STRICT PARALLEL SAFE
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'rerank_quantized_candidates_wrapper';
+AS 'MODULE_PATHNAME', 'query_collection_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5552,46 +5625,15 @@ AS 'MODULE_PATHNAME', 'vector_from_integer_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/table_search.rs:73
--- pgcontext::table_search::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"filter" TEXT, /* Option < String > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_filtered_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:450
--- pgcontext::pgcontext::vector::vector_ne
-CREATE  FUNCTION "vector_ne"(
+-- crates/context-pg/src/vector.rs:456
+-- pgcontext::pgcontext::vector::vector_ge
+CREATE  FUNCTION "vector_ge"(
 	"left" Vector, /* Vector */
 	"right" Vector /* Vector */
 ) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_ne_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:444
--- pgcontext::pgcontext::vector::vector_eq
-CREATE  FUNCTION "vector_eq"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_eq_wrapper';
+AS 'MODULE_PATHNAME', 'vector_ge_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5666,73 +5708,31 @@ CREATE OPERATOR CLASS pgcontext.vector_ops
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:539
--- pgcontext::pgcontext::vector::l2_distance
-CREATE  FUNCTION "l2_distance"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS real /* f32 */
+-- crates/context-pg/src/quantization_sql.rs:39
+-- pgcontext::quantization_sql::scalar_reconstruct
+CREATE  FUNCTION "scalar_reconstruct"(
+	"codes" bytea, /* Vec < u8 > */
+	"min" real, /* f32 */
+	"max" real, /* f32 */
+	"levels" INT /* i32 */
+) RETURNS Vector /* Vector */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'l2_distance_wrapper';
+AS 'MODULE_PATHNAME', 'scalar_reconstruct_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:564
--- pgcontext::hnsw_am::_hnsw_masked_candidates
-CREATE  FUNCTION "_hnsw_masked_candidates"(
-	"index_relation" regclass, /* PgRelation */
-	"query" Vector, /* Vector */
-	"allowed_heap_tids" anyarray, /* AnyArray */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"heap_tid" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'hnsw_masked_candidates_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query.rs:70
--- pgcontext::hybrid_query::query
-CREATE  FUNCTION "query"(
-	"collection" TEXT, /* String */
+-- crates/context-pg/src/quantization_sql.rs:27
+-- pgcontext::quantization_sql::scalar_quantize
+CREATE  FUNCTION "scalar_quantize"(
 	"vector" Vector, /* Vector */
-	"text_query" TEXT, /* String */
-	"text_column" TEXT, /* String */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" double precision  /* f64 */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
+	"min" real, /* f32 */
+	"max" real, /* f32 */
+	"levels" INT /* i32 */
+) RETURNS bytea /* Vec < u8 > */
+IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'query_collection_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/candidate_recheck.rs:162
--- pgcontext::table_search::candidate_recheck::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"filter" TEXT, /* Option < String > */
-	"candidate_point_ids" bigint[], /* Vec < i64 > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_filtered_candidates_wrapper';
+AS 'MODULE_PATHNAME', 'scalar_quantize_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */

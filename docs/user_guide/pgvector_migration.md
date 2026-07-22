@@ -5,7 +5,9 @@ databases. The two main extensions can be installed in either order because
 pgvector owns `public.*` types while pgContext owns canonical `pgcontext.*`
 types. Keep an existing pgvector column in place and install the certified
 `pgcontext_pgvector` companion bridge before building a `pgcontext_hnsw` index
-over it. Dense `vector` and `halfvec` layouts are byte-certified; `sparsevec`
+over it. The bridge profile is PostgreSQL 17 with pgContext 0.1.0 and pgvector
+0.8.x installed in `public`. Dense `vector` and `halfvec` layouts are
+byte-certified; `sparsevec`
 ownership conversion remains fail-closed because its physical layouts differ. See
 [Trying pgContext on an Existing pgvector Database](pgvector_coexist.md) for
 the live workflow and inventory tools.

@@ -116,8 +116,11 @@ unsafe extern "C-unwind" fn pgcontext_hnsw_validate(opclass_oid: pg_sys::Oid) ->
     self::hnsw_validate_safe(opclass_oid)
 }
 
-fn hnsw_validate_safe(_opclass_oid: pg_sys::Oid) -> bool {
-    true
+fn hnsw_validate_safe(opclass_oid: pg_sys::Oid) -> bool {
+    // SAFETY: PostgreSQL passes an opclass catalog OID. The validator performs
+    // read-only syscache and extension-membership checks and retains no tuple
+    // pointers after returning.
+    unsafe { hnsw_validate_opclass(opclass_oid) }
 }
 
 #[pg_guard]
@@ -283,12 +286,28 @@ fn hnsw_get_tuple_safe(
                 (*scan.as_ptr()).xs_heap_continue = false;
                 (*scan.as_ptr()).xs_recheck = false;
                 if (*scan.as_ptr()).numberOfOrderBys > 0 {
-                    let metric = hnsw_score_metric((*scan.as_ptr()).indexRelation);
+                    let Some(contract) = (*state).orderby_contract else {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                            "HNSW order-by contract was not cached during scan preparation",
+                        );
+                    };
                     // Bit-Jaccard navigation is intentionally `f32`, while the
                     // SQL operator is exact `f64`. PostgreSQL must re-evaluate
                     // that operator on the visible heap tuple before ordering.
-                    (*scan.as_ptr()).xs_recheckorderby = metric == HnswScoreMetric::BitJaccard;
-                    store_hnsw_orderby_distance(scan.as_ptr(), metric, candidate.score);
+                    // The bridge likewise binds pgvector's exact float8
+                    // operators while graph navigation remains f32. Emit the
+                    // conservative -infinity bound so the executor rechecks
+                    // and exactly reranks every bounded ANN candidate.
+                    (*scan.as_ptr()).xs_recheckorderby =
+                        contract.metric == HnswScoreMetric::BitJaccard
+                            || contract.pgvector_binding;
+                    store_hnsw_orderby_distance(
+                        scan.as_ptr(),
+                        contract.metric,
+                        candidate.score,
+                        contract.pgvector_binding,
+                    );
                 } else {
                     (*scan.as_ptr()).xs_recheckorderby = false;
                 }
@@ -318,8 +337,21 @@ unsafe fn expand_hnsw_scan(scan: pg_sys::IndexScanDesc, state: &mut HnswScanStat
     // SAFETY: `scan` remains live for this callback and owns its order-by key.
     let query = unsafe { hnsw_orderby_query(scan) };
     // SAFETY: the live scan owns its index relation for the callback.
+    let Some(contract) = state.orderby_contract else {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "HNSW order-by contract was not cached before scan expansion",
+        );
+    };
+    // SAFETY: `scan` remains live for this callback and `contract.metric` was
+    // certified and cached from the same index relation during preparation.
     let mut outcome = unsafe {
-        hnsw_scan_candidates((*scan).indexRelation, query.as_ref(), Some(next_limit))
+        hnsw_scan_candidates_with_metric(
+            (*scan).indexRelation,
+            query.as_ref(),
+            Some(next_limit),
+            contract.metric,
+        )
     };
     outcome
         .candidates
@@ -337,11 +369,35 @@ unsafe fn store_hnsw_orderby_distance(
     scan: pg_sys::IndexScanDesc,
     metric: HnswScoreMetric,
     score: f32,
+    pgvector_binding: bool,
 ) {
     // SAFETY: PostgreSQL allocates these arrays in `pgcontext_hnsw_begin_scan`
     // when order-by keys are present, and this function is only called after
     // `numberOfOrderBys > 0`.
     let orderby_count = unsafe { c_int_to_usize((*scan).numberOfOrderBys, "scan order-bys") };
+    if pgvector_binding {
+        let mut order_by_types = vec![pg_sys::FLOAT8OID; orderby_count];
+        let mut distances = vec![
+            pg_sys::IndexOrderByDistance {
+                value: f64::NEG_INFINITY,
+                isnull: false,
+            };
+            orderby_count
+        ];
+        // SAFETY: The certified bridge contract requires a pgvector float8
+        // strategy operator for every active order-by key. Negative infinity
+        // is a valid common lower bound; `recheck = true` makes PostgreSQL
+        // replace it with the exact heap-operator distance before ordering.
+        unsafe {
+            pg_sys::index_store_float8_orderby_distances(
+                scan,
+                order_by_types.as_mut_ptr(),
+                distances.as_mut_ptr(),
+                true,
+            );
+        }
+        return;
+    }
     match metric {
         HnswScoreMetric::L2 | HnswScoreMetric::BitJaccard => {
             let (distance, recheck) = float8_orderby_distance(metric, score);

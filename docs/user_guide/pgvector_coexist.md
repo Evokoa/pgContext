@@ -11,13 +11,14 @@ The type OIDs are intentionally distinct. The main `pgcontext` extension has no
 catalog dependency on the `vector` extension, so installing or dropping
 pgvector does not remove or disable canonical pgContext objects.
 
-> **Checkpoint status:** the canonical main-extension boundary is implemented.
-> The `pgcontext_pgvector` companion named below is the next compatibility
-> checkpoint and is not included in the standalone `pgcontext` artifact yet.
+The optional `pgcontext_pgvector` companion is shipped as a separate extension
+artifact. Its certified profile is PostgreSQL 17, pgContext 0.1.0, and pgvector
+0.8.x installed in `public`; installation fails closed outside that profile.
 
 ```sql
 CREATE EXTENSION vector;
 CREATE EXTENSION pgcontext;
+CREATE EXTENSION pgcontext_pgvector; -- only for existing pgvector columns
 ```
 
 The reverse order is valid as well.
@@ -31,7 +32,32 @@ pgContext-owned type. Direct HNSW service over an existing `public.vector` or
 certified binary casts and pgvector-operator-bound opclasses; it keeps the main
 extension's dependency boundary clean.
 
-Until the bridge is installed, `pgcontext.migration_report()` remains available
+`make install` installs both control/SQL artifacts. If the main extension was
+installed directly with `cargo pgrx install`, install the SQL-only companion
+artifact with `scripts/install-pgvector-bridge.sh /path/to/pg_config` before
+running `CREATE EXTENSION pgcontext_pgvector`. The companion does not activate
+automatically and does not create pgvector itself.
+
+Build a pgContext index over the existing column without changing its type:
+
+```sql
+CREATE INDEX items_embedding_pgc
+    ON items USING pgcontext_hnsw
+       (embedding pgcontext.vector_hnsw_pgvector_cosine_ops);
+
+-- Existing pgvector-spelled SQL is unchanged and selects the index above.
+SELECT id
+FROM items
+ORDER BY embedding <=> $1::public.vector
+LIMIT 10;
+```
+
+The bridge exact-rechecks and reranks its bounded ANN candidate set with the
+pgvector heap operator. This preserves pgvector's `double precision` distance
+semantics; the conservative initial lower bound favors correctness over scan
+work until a tighter certified bound is available.
+
+Without the bridge, `pgcontext.migration_report()` remains available
 as a read-only inventory. It discovers pgvector columns and indexes by extension
 ownership, reports arrays and dependency blockers, and detects both HNSW and
 IVFFlat. `pgcontext.adopt_pgvector(..., dry_run => true)` may be used to inspect
@@ -64,6 +90,12 @@ conversion remains fail-closed because pgContext's sparse representation is not
 pgvector's packed layout. PostgreSQL exposes prepared statements only for the
 current backend, so drain or recycle application sessions at a type-ownership
 cutover.
+
+Dropping either prerequisite is blocked while the bridge is installed. Bridge
+indexes in turn block `DROP EXTENSION pgcontext_pgvector` under `RESTRICT`.
+Remove or convert those indexes first; dropping the bridge then removes its
+casts, support functions, and opclasses without removing either parent
+extension.
 
 IVFFlat remains an inventory-and-plan input, not a pgContext access method. A
 supported conversion rebuilds it as HNSW after validation rather than claiming

@@ -19,11 +19,14 @@ hnsw_am.rs|fn|candidate_mask_from_heap_tids|parses PostgreSQL array datums and c
 hnsw_am.rs|fn|hot_root_heap_tids|reads share-locked heap pages and maps visible HOT successors to index root TIDs
 hnsw_am.rs|fn|resolve_visible_hnsw_candidates|resolves index candidates through PostgreSQL table-AM visibility under the active snapshot
 hnsw_am.rs|fn|copy_rescan_keys|writes a validated PostgreSQL scan-key destination
+hnsw_am.rs|fn|ensure_hnsw_opclass_owner|certifies bridge opclass extension ownership from a live index relation
 hnsw_am.rs|fn|ensure_hnsw_strategy_operator|reads and releases PostgreSQL syscache tuples
 hnsw_am.rs|fn|expand_hnsw_scan|continues a validated live PostgreSQL index scan with a larger bounded candidate budget
 hnsw_am.rs|fn|hnsw_dense_from_datum|decodes a datum using its validated PostgreSQL type OID
 hnsw_am.rs|fn|hnsw_dense_score_metric|reads live dense operator-class metadata
+hnsw_am.rs|fn|hnsw_certified_pgvector_type_oid|resolves an exact public type OID and certifies pgvector extension ownership
 hnsw_am.rs|fn|hnsw_index_opcintype|reads a live relation-cache OID array
+hnsw_am.rs|fn|hnsw_index_uses_certified_pgvector_type|classifies a live opclass input through certified catalog OIDs
 hnsw_am.rs|fn|hnsw_index_opfamily|reads a live relation-cache OID array
 hnsw_am.rs|fn|hnsw_insert_via_delta_safe|appends a bounded delta record to a live PostgreSQL index relation and updates its metapage
 hnsw_am.rs|fn|hnsw_compact_relation|rebuilds a live PostgreSQL index relation's graph onto fresh pages and republishes its metapage
@@ -31,15 +34,24 @@ hnsw_am.rs|fn|lock_hnsw_compaction_table|reads a live index relation's catalog f
 hnsw_am.rs|fn|try_lock_hnsw_compaction_table|locks a live index relation's parent table without waiting, so the write path never blocks
 hnsw_am.rs|fn|hnsw_compaction_table_oid|reads a live index relation's catalog form for its parent table OID
 hnsw_am.rs|fn|hnsw_compact_on_threshold|compacts a live index relation from the insert path once its delta segment fills
-hnsw_am.rs|fn|hnsw_operator_namespace|reads and releases a PostgreSQL syscache tuple
+hnsw_am.rs|fn|hnsw_named_type_oid|resolves a schema-qualified type through PostgreSQL syscache metadata
+hnsw_am.rs|fn|hnsw_object_owned_by_extension|checks exact extension membership for a PostgreSQL catalog object
+hnsw_am.rs|fn|hnsw_operator_oid_matches|certifies an operator owner namespace name and signature from syscache metadata
+hnsw_am.rs|fn|hnsw_orderby_contract|certifies and caches a live index metric and pgvector binding
 hnsw_am.rs|fn|hnsw_orderby_query|reads a live PostgreSQL scan descriptor and key
 hnsw_am.rs|fn|hnsw_pgcontext_type_oid|calls PostgreSQL catalog lookup with a C string
 hnsw_am.rs|fn|hnsw_query_from_orderby_datum|decodes a PostgreSQL scan-key datum
 hnsw_am.rs|fn|hnsw_scan_candidates|reads a live index relation and PostgreSQL pages
+hnsw_am.rs|fn|hnsw_scan_candidates_with_metric|scans a live index relation with an already certified metric
 hnsw_am.rs|fn|hnsw_scan_state_ptr|dereferences the AM-owned scan-state slot
 hnsw_am.rs|fn|hnsw_score_metric|reads live relation and operator-class metadata
+hnsw_am.rs|fn|hnsw_score_metric_from_bridge_candidates|certifies pgvector bridge operator and support metadata
 hnsw_am.rs|fn|hnsw_score_metric_from_candidates|reads live relation and operator-class metadata candidates
+hnsw_am.rs|fn|hnsw_sort_family_matches|certifies the btree sort family referenced by a strategy operator
+hnsw_am.rs|fn|hnsw_support_proc_oid_matches|certifies support-procedure ownership name and signature
 hnsw_am.rs|fn|hnsw_support_proc_matches|reads PostgreSQL support-procedure metadata
+hnsw_am.rs|fn|hnsw_validate_opclass|validates a catalog opclass OID against the HNSW contract
+hnsw_am.rs|fn|hnsw_validate_opclass_candidates|certifies opfamily strategy support and sort metadata
 hnsw_am.rs|fn|hnsw_vector_from_index_values|reads callback-bounded datum and null arrays
 hnsw_am.rs|fn|hnsw_visible_heap_tid|reads a live scan descriptor and heap snapshot
 hnsw_am.rs|fn|prepare_hnsw_scan|reads a live scan descriptor and mutates owned state

@@ -471,14 +471,14 @@
     {
       "links": [],
       "path": "user_guide/pgvector_coexist.md",
-      "sha256": "0828d3972fbb10ef93d80b5966dab481303f390be9d688b1bbf8308dbe98ef93"
+      "sha256": "ed60e2ceb543aa3c4260c0998d421d1bda5ff24f4d6d6b31505f4f4852fb365c"
     },
     {
       "links": [
         "pgvector_coexist.md"
       ],
       "path": "user_guide/pgvector_migration.md",
-      "sha256": "e6349477c0d209ca451871cf9005430bdc238c7289035daeecea679ab7d242b2"
+      "sha256": "63b891fa28777c18384964ec5250c9fa77d3e0dd94a249e8861747cad027eb9f"
     },
     {
       "links": [
@@ -551,7 +551,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "1f56b54bcc87139cca9e086f1dd991eeb34ac21d54c392dba5675a81c58b2be6"
+      "sha256": "c4501dfbdde020bacaa31822ef57f957f62c843b0807ac3fa4641604fcfc103a"
     },
     {
       "links": [],

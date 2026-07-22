@@ -355,8 +355,8 @@ fn suggest_command(
             }
         },
         None => match type_name {
-            "vector" => "pgcontext.vector_hnsw_cosine_ops",
-            "halfvec" => "pgcontext.halfvec_hnsw_cosine_ops",
+            "vector" => "pgcontext.vector_hnsw_pgvector_cosine_ops",
+            "halfvec" => "pgcontext.halfvec_hnsw_pgvector_cosine_ops",
             _ => {
                 return format!(
                     "no certified pgContext opclass binding for pgvector type {type_name}"
@@ -433,6 +433,11 @@ fn adopt_pgvector(
         );
     }
     let target_oid: Option<pg_sys::Oid> = target.as_ref().map(|relation| relation.oid());
+    // `PgRelation` keeps the target open for as long as the wrapper lives.
+    // Release it before an executable plan issues CREATE INDEX on that table;
+    // PostgreSQL rejects DDL against a relation still used by an active query
+    // in the same session.
+    drop(target);
     let plans = Spi::connect(|client| {
         let table = client
             .select(ADOPT_INDEXES_SQL, None, &[target_oid.into()])

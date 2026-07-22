@@ -30,7 +30,11 @@ RUN cargo pgrx init --pg${PG_MAJOR}=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_confi
         --pg-config=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_config \
         --out-dir=/package \
         --no-default-features \
-        --features=pg${PG_MAJOR}
+        --features=pg${PG_MAJOR} \
+    && install -m 0644 pgcontext_pgvector.control \
+        /package/usr/share/postgresql/${PG_MAJOR}/extension/pgcontext_pgvector.control \
+    && install -m 0644 sql/pgcontext_pgvector--0.1.0.sql \
+        /package/usr/share/postgresql/${PG_MAJOR}/extension/pgcontext_pgvector--0.1.0.sql
 
 FROM ${POSTGRES_IMAGE}
 
