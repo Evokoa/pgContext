@@ -213,13 +213,21 @@ for semantics and caveats):
 
 - `pgcontext.migration_report()` returns one row per pgvector-typed
   column: `(schema_name text, table_name text, column_name text,
-  dimensions int, pgvector_indexes text[], pgcontext_indexes text[],
-  suggested_command text)`. Read-only.
+  type_name text, dimensions int, pgvector_indexes text[],
+  pgcontext_indexes text[], conversion_supported bool, blockers text[],
+  suggested_command text)`. Read-only. The blockers are a fail-closed
+  inventory for ownership conversion; array, generated, partitioned,
+  dependent-view, defaulted, and complex-index shapes are reported rather
+  than guessed.
 - `pgcontext.adopt_pgvector(target regclass DEFAULT NULL, dry_run bool
   DEFAULT true, drop_old bool DEFAULT false)` returns
   `(index_name text, action text, command text, executed bool)` rows;
   migrates pgvector `hnsw`/`ivfflat` indexes to `pgcontext_hnsw`
-  equivalents. Dry-run by default.
+  equivalents. Dry-run by default. Only extension-owned, usable, plain
+  single-column indexes are accepted. HNSW build options and tablespace are
+  preserved. If `drop_old` is requested, the replacement must first pass an
+  exact-oracle recall gate; a failure aborts the transaction without dropping
+  the source index.
 - `pgcontext.compare_indexes(table_name text, column_name text,
   queries int DEFAULT 20)` returns one row per ANN index on the column:
   `(index_name text, access_method text, operator text, p50_ms float8,

@@ -46,6 +46,13 @@ q "INSERT INTO docs
           (SELECT ('[' || string_agg(((n*7+d) % 10)::text, ',') || ']') FROM generate_series(1,8) d)::vector,
           (SELECT ('[' || string_agg(((n*7+d) % 10)::text || '.5', ',') || ']') FROM generate_series(1,8) d)::halfvec
      FROM generate_series(1, 300) n" >/dev/null
+q "CREATE TABLE migration_shapes (
+     id bigint PRIMARY KEY,
+     embedding vector(8),
+     embedding_array vector(8)[],
+     generated_embedding vector(8) GENERATED ALWAYS AS (embedding) STORED
+   );
+   CREATE VIEW migration_shapes_view AS SELECT embedding FROM migration_shapes" >/dev/null
 
 # 3. pgContext index directly on the pgvector-typed column; the advisory
 # nudge NOTICE must fire (once) and the GUC must silence it.
@@ -77,11 +84,41 @@ half_rt=$(q "SELECT hemb = (pgcontext.halfvec_to_vector(hemb)::text::halfvec) FR
 [[ "${half_rt}" == "t" ]] || fail "halfvec round trip through pgcontext failed"
 
 # 6. migration_report sees the columns; adopt_pgvector migrates indexing.
-q "CREATE INDEX docs_pgv ON docs USING hnsw (embedding vector_cosine_ops)" >/dev/null
+q "CREATE INDEX docs_pgv ON docs USING hnsw (embedding vector_cosine_ops)
+     WITH (m=8, ef_construction=40)" >/dev/null
 report_rows=$(q "SELECT count(*) FROM pgcontext.migration_report() WHERE table_name='docs'")
 [[ "${report_rows}" -ge 1 ]] || fail "migration_report returned no docs rows"
+supported=$(q "SELECT bool_and(conversion_supported AND cardinality(blockers)=0)
+                 FROM pgcontext.migration_report()
+                WHERE table_name='docs'")
+[[ "${supported}" == "t" ]] || fail "certified scalar vector/halfvec columns were not migration-ready"
+array_blocker=$(q "SELECT blockers::text
+                     FROM pgcontext.migration_report()
+                    WHERE table_name='migration_shapes' AND column_name='embedding_array'")
+[[ "${array_blocker}" == *"array columns require element-wise conversion"* ]] \
+  || fail "array dependency blocker missing: ${array_blocker}"
+generated_blocker=$(q "SELECT blockers::text
+                         FROM pgcontext.migration_report()
+                        WHERE table_name='migration_shapes' AND column_name='generated_embedding'")
+[[ "${generated_blocker}" == *"generated columns are not supported"* ]] \
+  || fail "generated-column blocker missing: ${generated_blocker}"
+view_blocker=$(q "SELECT blockers::text
+                    FROM pgcontext.migration_report()
+                   WHERE table_name='migration_shapes' AND column_name='embedding'")
+[[ "${view_blocker}" == *"dependent views or materialized views must be recreated"* ]] \
+  || fail "dependent-view blocker missing: ${view_blocker}"
 dry=$(q "SELECT count(*) FROM pgcontext.adopt_pgvector('docs') WHERE NOT executed")
 [[ "${dry}" -ge 1 ]] || fail "adopt_pgvector dry run proposed nothing"
+preserved=$(q "SELECT command FROM pgcontext.adopt_pgvector('docs')
+                WHERE index_name='docs_pgv' AND action='would create'")
+[[ "${preserved}" == *"WITH (ef_construction=40, m=8)"* || "${preserved}" == *"WITH (m=8, ef_construction=40)"* ]] \
+  || fail "HNSW reloptions were not preserved: ${preserved}"
+q "CREATE INDEX migration_shapes_partial ON migration_shapes USING hnsw
+     (embedding vector_l2_ops) WHERE id > 0" >/dev/null
+partial_action=$(q "SELECT action FROM pgcontext.adopt_pgvector('migration_shapes')
+                     WHERE index_name='migration_shapes_partial'")
+[[ "${partial_action}" == "skipped: partial index" ]] \
+  || fail "partial index was not refused: ${partial_action}"
 
 # 7. compare_indexes measures both families on the shared column.
 measured=$(q "SET pgcontext.pgvector_compat_warnings = off;

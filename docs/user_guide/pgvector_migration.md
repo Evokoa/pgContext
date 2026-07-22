@@ -1,11 +1,12 @@
 # Migrating from pgvector
 
-pgContext is designed to make migration from pgvector incremental and safe,
-but it is not currently a drop-in replacement. pgContext defines its own
-PostgreSQL vector types and index access method, so identical SQL type
-names do not make values with different PostgreSQL type OIDs
-interchangeable. Coexistence with pgvector in one database is still
-evolving and is not yet fully supported.
+pgContext supports an incremental coexistence workflow for existing pgvector
+databases. Install pgvector first and pgContext second, keep the existing
+pgvector column, and build a `pgcontext_hnsw` index over it. Dense `vector` and
+`halfvec` layouts are byte-certified; `sparsevec` ownership conversion remains
+fail-closed because its physical layouts differ. See
+[Trying pgContext on an Existing pgvector Database](pgvector_coexist.md) for
+the live workflow and inventory tools.
 
 Explicit pgContext HNSW opclasses cover half and sparse L2, inner product,
 cosine, and L1, plus bit Hamming and Jaccard. The names and metric bindings are
@@ -29,13 +30,11 @@ implemented with pgvector-compatible behavior. Assignments to dimensioned
 columns reject mismatches with SQLSTATE `22023`. Intentional differences are
 documented with tests.
 
-An existing column owned by the pgvector extension must not be assumed to pass
-pgContext registration merely because its displayed type name is `vector`.
-Until the
-[migration and compatibility roadmap](roadmap.md#pgvector-migration-and-compatibility)
-is implemented, preserve the original database and use an explicit copy/export
-and validation procedure in a separate test database before changing extension
-ownership or dropping pgvector indexes.
+An existing column owned by the pgvector extension can be indexed and
+registered directly in coexist mode. Run `pgcontext.migration_report()` first:
+it verifies the type owner and reports defaults, arrays, generated columns,
+partitions, dependent views, and complex indexes that must be handled before an
+ownership cutover. Index adoption never changes the column type.
 
 ## Filters and Hybrid Retrieval
 
@@ -65,9 +64,9 @@ artifact shape for pgContext's PostgreSQL-native source-table ownership model.
 Applications that depend on IVFFlat during migration should keep those pgvector
 indexes in place for that workload, and register the same source tables with
 pgContext for exact search, filters, hybrid retrieval, diagnostics, and HNSW
-evaluation only when the involved vector columns are verified as pgContext-
-compatible. The roadmap requires a real coexistence or conversion contract;
-that contract does not exist yet.
+evaluation. `pgcontext.adopt_pgvector()` inventories IVFFlat and emits a
+rebuild-as-HNSW plan; pgContext does not translate IVFFlat options or claim an
+IVFFlat implementation.
 
 ## Current Gaps
 

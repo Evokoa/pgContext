@@ -55,22 +55,31 @@ SET pgcontext.pgvector_compat_warnings = off;
 ## Migration tooling
 
 - **`pgcontext.migration_report()`** — read-only inventory: every
-  pgvector-typed column, its dimensions, existing pgvector and pgContext
-  indexes, and the exact suggested `CREATE INDEX` command per column.
+  pgvector-typed scalar or array column, its exact representation,
+  dimensions, existing pgvector and pgContext indexes, conversion readiness,
+  explicit dependency blockers, and the suggested `CREATE INDEX` command.
+  The first conversion profile is deliberately narrow: scalar `vector` and
+  `halfvec` columns without defaults, generated expressions, partitions,
+  dependent views, or complex indexes.
 - **`pgcontext.adopt_pgvector(target => NULL, dry_run => true,
   drop_old => false)`** — migrates pgvector `hnsw`/`ivfflat` indexes to
   `pgcontext_hnsw` equivalents with the matching metric. The default is
   a dry run that only prints the commands; pass `dry_run => false` to
-  execute, and `drop_old => true` to also drop each pgvector index after
-  its replacement builds. Index creation inside the function uses plain
+  execute. The planner refuses expression, partial, multicolumn, INCLUDE,
+  partitioned, invalid, counterfeit-opclass, and untranslatable IVFFlat
+  shapes. It preserves supported HNSW build options and tablespace.
+  `drop_old => true` validates the replacement against the exact oracle and
+  requires `recall_at_10 >= 0.99` before dropping the pgvector index; failure
+  aborts the transaction and leaves the source index intact. Index creation
+  inside the function uses plain
   `CREATE INDEX` (it cannot run `CONCURRENTLY`); on busy tables, prefer
   taking the dry-run commands and running them yourself with
   `CREATE INDEX CONCURRENTLY`.
 
 Column types are never changed by these tools: in coexist mode your
 data stays in pgvector's types, and dropping the pgvector extension is
-intentionally not possible. Full drop-in replacement (pgvector-spelled
-SQL with pgvector absent) is a separate roadmap stage.
+not yet possible. The ownership-conversion workflow is a separate, staged
+operation; do not use `DROP EXTENSION vector CASCADE` as a conversion tool.
 
 ## Comparing indexes side by side
 
@@ -97,6 +106,9 @@ measured family.
   been certified byte-compatible).
 - Restoring a dump of a coexist database requires pgvector to be created
   before pgContext, which matches the order `pg_dump` preserves.
+- PostgreSQL exposes prepared statements only for the current backend, so no
+  extension can inventory every client session's prepared SQL. Drain or
+  recycle application sessions at the ownership cutover.
 - `DROP EXTENSION vector CASCADE` in coexist mode also drops the
   pgContext objects bound to pgvector's types. Run
   `pgcontext.migration_report()` first and migrate deliberately instead.
