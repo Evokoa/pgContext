@@ -59,6 +59,425 @@ SELECT tokens.*
 GRANT SELECT ON pgcontext._visible_collection_late_interaction TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_late_interaction_tokens TO PUBLIC;
 
+CREATE FUNCTION pgcontext._capture_late_interaction_tokens()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    registration pgcontext._collection_late_interaction%ROWTYPE;
+    selected_record record;
+    current_source_key text;
+    previous_source_key text;
+    token_vectors public.vector[];
+    point bigint;
+    minimum_dimensions int4;
+    maximum_dimensions int4;
+BEGIN
+    SELECT *
+      INTO registration
+      FROM pgcontext._collection_late_interaction
+     WHERE collection_id = TG_ARGV[0]::bigint;
+
+    IF NOT FOUND OR registration.source_table_oid <> TG_RELID THEN
+        RAISE EXCEPTION 'late-interaction source trigger binding is stale for relation %', TG_RELID
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF TG_OP IN ('UPDATE', 'DELETE') THEN
+        previous_source_key := pg_catalog.to_jsonb(OLD)->>'id';
+        IF previous_source_key IS NULL OR previous_source_key = '' THEN
+            RAISE EXCEPTION 'late-interaction source key id must not be null or empty'
+                USING ERRCODE = '22023';
+        END IF;
+    END IF;
+
+    IF TG_OP = 'DELETE' THEN
+        DELETE FROM pgcontext._collection_late_interaction_tokens AS tokens
+         USING pgcontext._collection_points AS points
+         WHERE tokens.collection_id = registration.collection_id
+           AND tokens.point_id = points.point_id
+           AND points.collection_id = registration.collection_id
+           AND points.source_key = previous_source_key;
+
+        UPDATE pgcontext._collection_points
+           SET deleted_at = coalesce(deleted_at, pg_catalog.now()),
+               updated_at = pg_catalog.now()
+         WHERE collection_id = registration.collection_id
+           AND source_key = previous_source_key;
+        RETURN OLD;
+    END IF;
+
+    current_source_key := pg_catalog.to_jsonb(NEW)->>'id';
+    IF current_source_key IS NULL OR current_source_key = '' THEN
+        RAISE EXCEPTION 'late-interaction source key id must not be null or empty'
+            USING ERRCODE = '22023';
+    END IF;
+
+    EXECUTE pg_catalog.format(
+        'SELECT ($1).%I::public.vector[] AS token_vectors',
+        registration.token_column_name
+    )
+    INTO selected_record
+    USING NEW;
+    token_vectors := selected_record.token_vectors;
+
+    IF token_vectors IS NULL
+       OR pg_catalog.cardinality(token_vectors) = 0
+       OR pg_catalog.array_position(token_vectors, NULL) IS NOT NULL THEN
+        RAISE EXCEPTION 'late-interaction token source must contain at least one non-null vector for source key %', current_source_key
+            USING ERRCODE = '22023';
+    END IF;
+    IF pg_catalog.cardinality(token_vectors) > 16384 THEN
+        RAISE EXCEPTION 'late-interaction token count exceeds per-point limit 16384 for source key %', current_source_key
+            USING ERRCODE = '54000';
+    END IF;
+
+    SELECT pg_catalog.min(pgcontext.vector_dims(token)),
+           pg_catalog.max(pgcontext.vector_dims(token))
+      INTO minimum_dimensions, maximum_dimensions
+      FROM pg_catalog.unnest(token_vectors) AS token;
+    IF minimum_dimensions IS NULL OR minimum_dimensions <> maximum_dimensions THEN
+        RAISE EXCEPTION 'late-interaction token dimensions must be uniform for source key %', current_source_key
+            USING ERRCODE = '22023';
+    END IF;
+    IF registration.dimensions IS NOT NULL
+       AND registration.dimensions <> minimum_dimensions THEN
+        RAISE EXCEPTION 'late-interaction token dimension mismatch: expected %, found % for source key %',
+            registration.dimensions,
+            minimum_dimensions,
+            current_source_key
+            USING ERRCODE = '22023';
+    END IF;
+
+    IF TG_OP = 'UPDATE' AND previous_source_key <> current_source_key THEN
+        DELETE FROM pgcontext._collection_late_interaction_tokens AS tokens
+         USING pgcontext._collection_points AS points
+         WHERE tokens.collection_id = registration.collection_id
+           AND tokens.point_id = points.point_id
+           AND points.collection_id = registration.collection_id
+           AND points.source_key = previous_source_key;
+        UPDATE pgcontext._collection_points
+           SET deleted_at = coalesce(deleted_at, pg_catalog.now()),
+               updated_at = pg_catalog.now()
+         WHERE collection_id = registration.collection_id
+           AND source_key = previous_source_key;
+    END IF;
+
+    INSERT INTO pgcontext._collection_points (collection_id, source_key)
+    VALUES (registration.collection_id, current_source_key)
+    ON CONFLICT (collection_id, source_key) DO UPDATE
+        SET deleted_at = NULL,
+            updated_at = pg_catalog.now()
+    RETURNING point_id INTO point;
+
+    DELETE FROM pgcontext._collection_late_interaction_tokens
+     WHERE collection_id = registration.collection_id
+       AND point_id = point;
+    INSERT INTO pgcontext._collection_late_interaction_tokens (
+        collection_id,
+        point_id,
+        token_ordinal,
+        token_vector
+    )
+    SELECT registration.collection_id,
+           point,
+           ordinal::int4,
+           token
+      FROM pg_catalog.unnest(token_vectors) WITH ORDINALITY AS expanded(token, ordinal);
+
+    UPDATE pgcontext._collection_late_interaction
+       SET dimensions = coalesce(dimensions, minimum_dimensions),
+           updated_at = pg_catalog.now()
+     WHERE collection_id = registration.collection_id;
+    RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._begin_late_interaction_registration(
+    p_collection_id bigint,
+    p_source_table_oid oid,
+    p_source_schema_name text,
+    p_source_table_name text,
+    p_token_column_name text,
+    p_token_attnum int2
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    trigger_name text;
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections AS collections
+          JOIN pg_catalog.pg_class AS source_class
+            ON source_class.oid = collections.source_table_oid
+          JOIN pg_catalog.pg_namespace AS source_namespace
+            ON source_namespace.oid = source_class.relnamespace
+          JOIN pg_catalog.pg_attribute AS token_attribute
+            ON token_attribute.attrelid = source_class.oid
+           AND token_attribute.attname = p_token_column_name
+           AND token_attribute.attnum = p_token_attnum
+           AND token_attribute.attnum > 0
+           AND NOT token_attribute.attisdropped
+         WHERE collections.collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+           AND source_class.oid = p_source_table_oid
+           AND source_namespace.nspname = p_source_schema_name
+           AND source_class.relname = p_source_table_name
+           AND token_attribute.atttypid = 'public.vector[]'::pg_catalog.regtype
+    ) THEN
+        RAISE EXCEPTION 'invalid or unauthorized late-interaction registration for collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+    IF NOT pg_catalog.has_table_privilege(SESSION_USER, p_source_table_oid, 'SELECT') THEN
+        RAISE EXCEPTION 'permission denied for late-interaction source table %.%',
+            p_source_schema_name,
+            p_source_table_name
+            USING ERRCODE = '42501';
+    END IF;
+
+    INSERT INTO pgcontext._collection_late_interaction (
+        collection_id,
+        source_table_oid,
+        source_schema_name,
+        source_table_name,
+        token_column_name,
+        token_attnum
+    )
+    VALUES (
+        p_collection_id,
+        p_source_table_oid,
+        p_source_schema_name,
+        p_source_table_name,
+        p_token_column_name,
+        p_token_attnum
+    );
+
+    trigger_name := pg_catalog.format('pgcontext_late_interaction_%s', p_collection_id);
+    EXECUTE pg_catalog.format(
+        'CREATE TRIGGER %I AFTER INSERT OR UPDATE OF id, %I OR DELETE ON %I.%I '
+        'FOR EACH ROW EXECUTE FUNCTION pgcontext._capture_late_interaction_tokens(%L)',
+        trigger_name,
+        p_token_column_name,
+        p_source_schema_name,
+        p_source_table_name,
+        p_collection_id::text
+    );
+END;
+$$;
+
+CREATE FUNCTION pgcontext._store_late_interaction_tokens(
+    p_collection_id bigint,
+    p_source_key text,
+    p_token_vectors vector[]
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    registration pgcontext._collection_late_interaction%ROWTYPE;
+    point bigint;
+    minimum_dimensions int4;
+    maximum_dimensions int4;
+BEGIN
+    SELECT registrations.*
+      INTO registration
+      FROM pgcontext._collection_late_interaction AS registrations
+      JOIN pgcontext._collections AS collections USING (collection_id)
+     WHERE registrations.collection_id = p_collection_id
+       AND pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
+    IF NOT FOUND
+       OR NOT pg_catalog.has_table_privilege(
+           SESSION_USER,
+           registration.source_table_oid,
+           'SELECT'
+       ) THEN
+        RAISE EXCEPTION 'permission denied for late-interaction collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+    IF p_source_key IS NULL OR p_source_key = '' THEN
+        RAISE EXCEPTION 'late-interaction source key must not be null or empty'
+            USING ERRCODE = '22023';
+    END IF;
+    IF p_token_vectors IS NULL
+       OR pg_catalog.cardinality(p_token_vectors) = 0
+       OR pg_catalog.array_position(p_token_vectors, NULL) IS NOT NULL THEN
+        RAISE EXCEPTION 'late-interaction token source must contain at least one non-null vector for source key %', p_source_key
+            USING ERRCODE = '22023';
+    END IF;
+    IF pg_catalog.cardinality(p_token_vectors) > 16384 THEN
+        RAISE EXCEPTION 'late-interaction token count exceeds per-point limit 16384 for source key %', p_source_key
+            USING ERRCODE = '54000';
+    END IF;
+
+    SELECT pg_catalog.min(pgcontext.vector_dims(token)),
+           pg_catalog.max(pgcontext.vector_dims(token))
+      INTO minimum_dimensions, maximum_dimensions
+      FROM pg_catalog.unnest(p_token_vectors) AS token;
+    IF minimum_dimensions IS NULL OR minimum_dimensions <> maximum_dimensions THEN
+        RAISE EXCEPTION 'late-interaction token dimensions must be uniform for source key %', p_source_key
+            USING ERRCODE = '22023';
+    END IF;
+    IF registration.dimensions IS NOT NULL
+       AND registration.dimensions <> minimum_dimensions THEN
+        RAISE EXCEPTION 'late-interaction token dimension mismatch: expected %, found % for source key %',
+            registration.dimensions,
+            minimum_dimensions,
+            p_source_key
+            USING ERRCODE = '22023';
+    END IF;
+
+    INSERT INTO pgcontext._collection_points (collection_id, source_key)
+    VALUES (p_collection_id, p_source_key)
+    ON CONFLICT (collection_id, source_key) DO UPDATE
+        SET deleted_at = NULL,
+            updated_at = pg_catalog.now()
+    RETURNING point_id INTO point;
+
+    DELETE FROM pgcontext._collection_late_interaction_tokens
+     WHERE collection_id = p_collection_id
+       AND point_id = point;
+    INSERT INTO pgcontext._collection_late_interaction_tokens (
+        collection_id,
+        point_id,
+        token_ordinal,
+        token_vector
+    )
+    SELECT p_collection_id,
+           point,
+           ordinal::int4,
+           token
+      FROM pg_catalog.unnest(p_token_vectors) WITH ORDINALITY AS expanded(token, ordinal);
+
+    UPDATE pgcontext._collection_late_interaction
+       SET dimensions = coalesce(dimensions, minimum_dimensions),
+           updated_at = pg_catalog.now()
+     WHERE collection_id = p_collection_id;
+    RETURN point;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._finish_late_interaction_registration(
+    p_collection_id bigint,
+    p_dimensions int4
+)
+RETURNS oid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    index_name text;
+    index_oid oid;
+BEGIN
+    IF p_dimensions <= 0 OR NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collection_late_interaction AS registrations
+          JOIN pgcontext._collections AS collections USING (collection_id)
+         WHERE registrations.collection_id = p_collection_id
+           AND registrations.dimensions = p_dimensions
+           AND pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'invalid or unauthorized late-interaction finalization for collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    index_name := pg_catalog.format('pgcontext_late_interaction_%s_hnsw', p_collection_id);
+    EXECUTE pg_catalog.format(
+        'CREATE INDEX %I ON pgcontext._collection_late_interaction_tokens '
+        'USING pgcontext_hnsw ((token_vector::public.vector(%s)) pgcontext.vector_hnsw_ip_ops) '
+        'WHERE collection_id = %s',
+        index_name,
+        p_dimensions,
+        p_collection_id
+    );
+    index_oid := pg_catalog.to_regclass(
+        pg_catalog.format('pgcontext.%I', index_name)
+    )::oid;
+    UPDATE pgcontext._collection_late_interaction
+       SET hnsw_index_oid = index_oid,
+           status = 'ready',
+           updated_at = pg_catalog.now()
+     WHERE collection_id = p_collection_id;
+    RETURN index_oid;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._cleanup_late_interaction_registration()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    registration pgcontext._collection_late_interaction%ROWTYPE;
+    trigger_name text;
+    index_name text;
+BEGIN
+    SELECT *
+      INTO registration
+      FROM pgcontext._collection_late_interaction
+     WHERE collection_id = OLD.collection_id;
+    IF NOT FOUND THEN
+        RETURN OLD;
+    END IF;
+
+    trigger_name := pg_catalog.format(
+        'pgcontext_late_interaction_%s',
+        OLD.collection_id
+    );
+    BEGIN
+        EXECUTE pg_catalog.format(
+            'DROP TRIGGER IF EXISTS %I ON %I.%I',
+            trigger_name,
+            registration.source_schema_name,
+            registration.source_table_name
+        );
+    EXCEPTION WHEN undefined_table THEN
+        NULL;
+    END;
+
+    index_name := pg_catalog.format(
+        'pgcontext_late_interaction_%s_hnsw',
+        OLD.collection_id
+    );
+    EXECUTE pg_catalog.format('DROP INDEX IF EXISTS pgcontext.%I', index_name);
+    RETURN OLD;
+END;
+$$;
+
+CREATE TRIGGER pgcontext_cleanup_late_interaction_registration
+BEFORE DELETE ON pgcontext._collections
+FOR EACH ROW
+EXECUTE FUNCTION pgcontext._cleanup_late_interaction_registration();
+
+CREATE FUNCTION pgcontext._delete_inactive_late_interaction_tokens()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NEW.deleted_at IS NOT NULL THEN
+        DELETE FROM pgcontext._collection_late_interaction_tokens
+         WHERE collection_id = NEW.collection_id
+           AND point_id = NEW.point_id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER pgcontext_delete_inactive_late_interaction_tokens
+AFTER UPDATE OF deleted_at ON pgcontext._collection_points
+FOR EACH ROW
+EXECUTE FUNCTION pgcontext._delete_inactive_late_interaction_tokens();
+
 SELECT pg_catalog.pg_extension_config_dump(
     'pgcontext._collection_late_interaction',
     ''

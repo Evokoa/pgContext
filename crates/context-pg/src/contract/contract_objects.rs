@@ -5,7 +5,7 @@ use super::{
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 240;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 247;
 const SQL_CONTRACT_OBJECTS_LEN: usize =
     CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
@@ -42,6 +42,41 @@ const fn build_sql_contract_objects() -> [SqlContractObject; SQL_CONTRACT_OBJECT
 
 #[rustfmt::skip]
 const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_OBJECTS_LEN] = &[
+    SqlContractObject::function(
+        "_capture_late_interaction_tokens",
+        "",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_begin_late_interaction_registration",
+        "p_collection_id bigint, p_source_table_oid oid, p_source_schema_name text, p_source_table_name text, p_token_column_name text, p_token_attnum smallint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_store_late_interaction_tokens",
+        "p_collection_id bigint, p_source_key text, p_token_vectors vector[]",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_finish_late_interaction_registration",
+        "p_collection_id bigint, p_dimensions integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_cleanup_late_interaction_registration",
+        "",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_delete_inactive_late_interaction_tokens",
+        "",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "register_late_interaction",
+        "collection text, source_table text, token_source text",
+        SqlLifecycle::Experimental,
+    ),
     SqlContractObject::function(
         "collection_info",
         "collection_name text",

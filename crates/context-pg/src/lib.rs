@@ -24,6 +24,7 @@ mod error;
 mod hnsw_am;
 mod hybrid_query;
 mod late_interaction;
+mod late_interaction_catalog;
 mod late_interaction_catalog_schema;
 mod model_versions;
 mod operations;

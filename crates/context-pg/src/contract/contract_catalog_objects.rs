@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 140;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 142;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -320,6 +320,18 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
         SqlObjectKind::Trigger,
         Some("pgcontext"),
         "_collection_points.pgcontext_capture_build_point_delta",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Trigger,
+        Some("pgcontext"),
+        "_collection_points.pgcontext_delete_inactive_late_interaction_tokens",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Trigger,
+        Some("pgcontext"),
+        "_collections.pgcontext_cleanup_late_interaction_registration",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::object(
