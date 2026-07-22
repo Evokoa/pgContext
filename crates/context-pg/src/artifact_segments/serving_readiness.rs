@@ -10,7 +10,7 @@ use crate::domain_types::{ArtifactKind, ArtifactLifecycleState};
 use super::{
     ArtifactSegmentKind, ArtifactSegmentRow, artifact_absolute_path,
     artifact_relative_path_is_confined, lock_artifact_segment_target_shared,
-    mmap_payload_access_allowed, select_artifact_segments,
+    select_artifact_segments,
 };
 use crate::error::raise_sql_error;
 
@@ -116,7 +116,7 @@ pub fn artifact_segment_mmap_payload(
         )
     })
     .unwrap_or(false);
-    if !mmap_payload_access_allowed() && !session_is_superuser {
+    if !session_is_superuser {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
             "raw mmap artifact payload access is internal",
@@ -139,6 +139,36 @@ pub fn artifact_segment_mmap_payload(
     };
     let result = mmap_payload_row(row, loaded);
     TableIterator::once(result)
+}
+
+/// Runs an internal operation while a serving-ready artifact is mapped and
+/// durably pinned to the current backend.
+///
+/// The caller must enter through a SECURITY DEFINER SQL boundary that has
+/// re-derived collection membership. No payload borrow can outlive `action`,
+/// and the reader pin is released only after every borrow has ended.
+pub(crate) fn with_mapped_artifact_payload<R>(
+    collection: &str,
+    artifact_name: &str,
+    max_mapped_bytes: i64,
+    action: impl FnOnce(&[u8]) -> R,
+) -> R {
+    validate_non_negative_budget(max_mapped_bytes);
+    let row = find_mmap_artifact_row(collection, artifact_name);
+    lock_artifact_segment_target_shared(&row);
+    let row = find_mmap_artifact_row(collection, artifact_name);
+    let _pin = acquire_artifact_reader_pin(&row);
+    let loaded = match load_serving_ready_segment(&row, max_mapped_bytes) {
+        Ok(loaded) => loaded,
+        Err(failure) => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!(
+                "mmap artifact is not serving-ready: {} ({})",
+                failure.status, failure.detail
+            ),
+        ),
+    };
+    action(loaded.segment.payload())
 }
 
 fn find_mmap_artifact_row(collection: &str, artifact_name: &str) -> ArtifactSegmentRow {

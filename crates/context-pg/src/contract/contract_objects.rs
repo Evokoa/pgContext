@@ -5,7 +5,7 @@ use super::{
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 251;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 252;
 const SQL_CONTRACT_OBJECTS_LEN: usize =
     CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
@@ -42,6 +42,11 @@ const fn build_sql_contract_objects() -> [SqlContractObject; SQL_CONTRACT_OBJECT
 
 #[rustfmt::skip]
 const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_OBJECTS_LEN] = &[
+    SqlContractObject::function(
+        "_mmap_hnsw_artifact_candidates",
+        "collection text, artifact_name text, vector vector, max_mapped_bytes bigint, candidate_limit integer, \"limit\" integer",
+        SqlLifecycle::Internal,
+    ),
     SqlContractObject::function(
         "_capture_late_interaction_tokens",
         "",

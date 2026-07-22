@@ -1,7 +1,6 @@
 //! SQL adapters for rebuildable segment artifact bytes.
 
 use std::{
-    cell::Cell,
     collections::HashSet,
     fs,
     io::ErrorKind,
@@ -29,28 +28,6 @@ use crate::error::{raise_core_error, raise_sql_error};
 
 #[cfg(any(test, feature = "pg_test"))]
 static ARTIFACT_PUBLISH_FAILPOINT: AtomicU8 = AtomicU8::new(0);
-
-thread_local! {
-    static MMAP_PAYLOAD_ACCESS_DEPTH: Cell<u32> = const { Cell::new(0) };
-}
-
-struct MmapPayloadAccessGuard;
-
-impl Drop for MmapPayloadAccessGuard {
-    fn drop(&mut self) {
-        MMAP_PAYLOAD_ACCESS_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
-    }
-}
-
-pub(crate) fn with_mmap_payload_access<T>(action: impl FnOnce() -> T) -> T {
-    MMAP_PAYLOAD_ACCESS_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
-    let _guard = MmapPayloadAccessGuard;
-    action()
-}
-
-fn mmap_payload_access_allowed() -> bool {
-    MMAP_PAYLOAD_ACCESS_DEPTH.with(|depth| depth.get() != 0)
-}
 
 fn artifact_publish_failpoint(stage: u8, label: &'static str) {
     #[cfg(any(test, feature = "pg_test"))]
@@ -85,6 +62,7 @@ fn test_set_artifact_publish_failpoint(name: Option<String>) {
 mod diagnostics;
 mod quantization;
 mod serving_readiness;
+pub(crate) use serving_readiness::with_mapped_artifact_payload;
 
 type ArtifactSegmentResult = (
     i64,
