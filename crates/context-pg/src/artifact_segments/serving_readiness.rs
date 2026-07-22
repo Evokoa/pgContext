@@ -10,7 +10,7 @@ use crate::domain_types::{ArtifactKind, ArtifactLifecycleState};
 use super::{
     ArtifactSegmentKind, ArtifactSegmentRow, artifact_absolute_path,
     artifact_relative_path_is_confined, lock_artifact_segment_target_shared,
-    select_artifact_segments,
+    mmap_payload_access_allowed, select_artifact_segments,
 };
 use crate::error::raise_sql_error;
 
@@ -104,6 +104,24 @@ pub fn artifact_segment_mmap_payload(
         name!(payload, Vec<u8>),
     ),
 > {
+    let session_is_superuser = Spi::get_one::<bool>(
+        "SELECT roles.rolsuper
+           FROM pg_catalog.pg_roles AS roles
+          WHERE roles.rolname = SESSION_USER",
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to check mmap payload caller: {error}"),
+        )
+    })
+    .unwrap_or(false);
+    if !mmap_payload_access_allowed() && !session_is_superuser {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            "raw mmap artifact payload access is internal",
+        );
+    }
     validate_non_negative_budget(max_mapped_bytes);
     let row = find_mmap_artifact_row(&collection, &artifact_name);
     lock_artifact_segment_target_shared(&row);

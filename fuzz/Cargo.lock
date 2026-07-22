@@ -55,6 +55,7 @@ name = "context-storage"
 version = "0.1.0"
 dependencies = [
  "context-core",
+ "libc",
 ]
 
 [[package]]

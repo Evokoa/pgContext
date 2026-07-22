@@ -142,8 +142,14 @@ pub fn train_scalar_quantizer(
             ),
     };
     if explicit_bounds.is_none() && minimum == maximum {
-        minimum -= 0.5;
-        maximum += 0.5;
+        let lower = minimum.next_down();
+        let upper = maximum.next_up();
+        if lower.is_finite() {
+            minimum = lower;
+        }
+        if upper.is_finite() {
+            maximum = upper;
+        }
     }
     Ok(TrainedQuantizer::Scalar {
         quantizer: ScalarQuantizer::new(minimum, maximum, levels)?,
@@ -386,6 +392,27 @@ mod tests {
             quantizer
                 .reconstruct(&[code[0], code[1] | 0b1000_0000])
                 .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scalar_training_handles_constant_and_opposite_finite_extremes() -> crate::Result<()> {
+        for value in [1.0e20_f32, f32::MAX, -f32::MAX] {
+            let vector = DenseVector::new(vec![value])?;
+            let trained = train_scalar_quantizer(core::slice::from_ref(&vector), 256, None)?;
+            let reconstructed = trained.reconstruct(&trained.quantize(&vector)?)?;
+            assert!(reconstructed.as_slice()[0].is_finite());
+        }
+
+        let extremes = DenseVector::new(vec![-f32::MAX, f32::MAX])?;
+        let trained = train_scalar_quantizer(core::slice::from_ref(&extremes), 256, None)?;
+        let reconstructed = trained.reconstruct(&trained.quantize(&extremes)?)?;
+        assert!(
+            reconstructed
+                .as_slice()
+                .iter()
+                .all(|value| value.is_finite())
         );
         Ok(())
     }

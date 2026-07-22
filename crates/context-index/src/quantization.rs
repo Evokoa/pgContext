@@ -109,8 +109,9 @@ impl ScalarQuantizer {
     )]
     fn quantize_value(self, value: f32) -> Result<u8> {
         let clamped = value.clamp(self.min, self.max);
-        let scale = f32::from(self.levels - 1) / (self.max - self.min);
-        let code = ((clamped - self.min) * scale).round();
+        let span = f64::from(self.max) - f64::from(self.min);
+        let scale = f64::from(self.levels - 1) / span;
+        let code = ((f64::from(clamped) - f64::from(self.min)) * scale).round();
         let code = u16::try_from(code as u32).map_err(|_| {
             CoreError::InvalidVector("scalar quantization code exceeds u16".to_owned())
         })?;
@@ -122,6 +123,10 @@ impl ScalarQuantizer {
         })
     }
 
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "interpolation stays between validated finite f32 endpoints"
+    )]
     fn reconstruct_value(self, code: u8) -> Result<f32> {
         if u16::from(code) >= self.levels {
             return Err(CoreError::InvalidVector(format!(
@@ -131,9 +136,10 @@ impl ScalarQuantizer {
             .into());
         }
 
-        let steps = f32::from(self.levels - 1);
-        let fraction = f32::from(code) / steps;
-        Ok(self.min + ((self.max - self.min) * fraction))
+        let steps = f64::from(self.levels - 1);
+        let fraction = f64::from(code) / steps;
+        let value = f64::from(self.min) + ((f64::from(self.max) - f64::from(self.min)) * fraction);
+        Ok(value as f32)
     }
 }
 

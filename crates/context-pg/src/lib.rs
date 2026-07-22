@@ -78,6 +78,8 @@ mod tests {
 
     include!("pg_tests/sql_helpers.rs");
     include!("pg_tests/acl_denial.rs");
+    include!("pg_tests/artifact_build_rls.rs");
+    include!("pg_tests/artifact_quantization_policy.rs");
     include!("pg_tests/artifact_segments.rs");
     include!("pg_tests/artifact_segments_helpers.rs");
     include!("pg_tests/artifact_segment_hnsw_payload.rs");

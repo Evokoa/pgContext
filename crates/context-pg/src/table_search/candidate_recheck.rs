@@ -1,9 +1,11 @@
 //! Batched candidate recheck for collection-backed search.
 
+use std::{cmp::Reverse, collections::BinaryHeap};
+
 use context_core::{DistanceMetric, SearchLimit};
 use context_index::{HnswGraph, HnswGraphNodeSnapshot, HnswNodeId, HnswPointId};
 use context_storage::{
-    HnswGraphArtifactRecord, HnswGraphPayloadError, HnswGraphQuantization,
+    HnswGraphArtifactRecord, HnswGraphPayloadError, QuantizedHnswGraphView,
     decode_hnsw_graph_payload_versioned,
 };
 use pgrx::datum::DatumWithOid;
@@ -276,27 +278,44 @@ pub fn search_mmap_hnsw_artifact(
     // recheck below.
     let payload =
         load_mmap_artifact_payload(collection_name.as_str(), &artifact_name, max_mapped_bytes);
-    let graph_payload = decode_hnsw_graph_payload_versioned(&payload)
+    let quantized_view = QuantizedHnswGraphView::attach(&payload)
         .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
-    if graph_payload.quantization().is_some() && candidate_limit.get() <= limit.get() {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            format!(
-                "quantized mmap HNSW candidate_limit {} must exceed final limit {}",
-                candidate_limit.get(),
-                limit.get()
-            ),
+    let (generation_high_water, mut candidates) = if let Some(view) = quantized_view {
+        if candidate_limit.get() <= limit.get() {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+                format!(
+                    "quantized mmap HNSW candidate_limit {} must exceed final limit {}",
+                    candidate_limit.get(),
+                    limit.get()
+                ),
+            );
+        }
+        let generation_high_water = (0..view.len())
+            .filter_map(|node_id| view.node(node_id))
+            .map(|node| node.point_id())
+            .max()
+            .unwrap_or_default();
+        let candidates =
+            mmap_quantized_hnsw_candidates(&view, &query, metric, candidate_limit.get());
+        (generation_high_water, candidates)
+    } else {
+        let graph_payload = decode_hnsw_graph_payload_versioned(&payload)
+            .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
+        let generation_high_water = graph_payload
+            .records()
+            .iter()
+            .map(HnswGraphArtifactRecord::point_id)
+            .max()
+            .unwrap_or_default();
+        let candidates = mmap_hnsw_candidates(
+            graph_payload.into_records(),
+            &query,
+            metric,
+            candidate_limit.get(),
         );
-    }
-    let generation_high_water = graph_payload
-        .records()
-        .iter()
-        .map(HnswGraphArtifactRecord::point_id)
-        .max()
-        .unwrap_or_default();
-    let (records, quantization) = graph_payload.into_parts();
-    let records = quantized_navigation_records(records, quantization);
-    let mut candidates = mmap_hnsw_candidates(records, &query, metric, candidate_limit.get());
+        (generation_high_water, candidates)
+    };
     candidates.extend(mmap_delta_candidates(
         collection.collection_id,
         &registered_vector,
@@ -393,25 +412,27 @@ fn load_mmap_artifact_payload(
     artifact_name: &str,
     max_mapped_bytes: i64,
 ) -> Vec<u8> {
-    match Spi::get_one_with_args::<Vec<u8>>(
-        "SELECT payload
-           FROM pgcontext.artifact_segment_mmap_payload($1, $2, $3)",
-        &[
-            collection.into(),
-            artifact_name.into(),
-            max_mapped_bytes.into(),
-        ],
-    ) {
-        Ok(Some(payload)) => payload,
-        Ok(None) => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("mmap artifact payload query returned no row for artifact {artifact_name}"),
-        ),
-        Err(error) => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("failed to load mmap artifact payload: {error}"),
-        ),
-    }
+    crate::artifact_segments::with_mmap_payload_access(|| {
+        match Spi::get_one_with_args::<Vec<u8>>(
+            "SELECT payload
+               FROM pgcontext.artifact_segment_mmap_payload($1, $2, $3)",
+            &[
+                collection.into(),
+                artifact_name.into(),
+                max_mapped_bytes.into(),
+            ],
+        ) {
+            Ok(Some(payload)) => payload,
+            Ok(None) => raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                format!("mmap artifact payload query returned no row for artifact {artifact_name}"),
+            ),
+            Err(error) => raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                format!("failed to load mmap artifact payload: {error}"),
+            ),
+        }
+    })
 }
 
 fn mmap_hnsw_candidates(
@@ -453,27 +474,6 @@ fn mmap_hnsw_candidates(
     candidates.into_iter().take(candidate_limit).collect()
 }
 
-fn quantized_navigation_records(
-    records: Vec<HnswGraphArtifactRecord>,
-    quantization: Option<HnswGraphQuantization>,
-) -> Vec<HnswGraphArtifactRecord> {
-    let Some(quantization) = quantization else {
-        return records;
-    };
-    records
-        .into_iter()
-        .zip(quantization.codes())
-        .map(|(record, code)| {
-            let (node_id, point_id, _full_precision, neighbors) = record.into_parts();
-            let approximate = quantization
-                .codebook()
-                .reconstruct(code)
-                .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
-            HnswGraphArtifactRecord::new(node_id, point_id, approximate, neighbors)
-        })
-        .collect()
-}
-
 fn mmap_hnsw_graph_candidates(
     records: Vec<HnswGraphArtifactRecord>,
     query: &context_core::DenseVector,
@@ -513,6 +513,158 @@ fn mmap_hnsw_graph_candidates(
             (point_id, result.score())
         })
         .collect()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct EncodedCandidate {
+    node_id: usize,
+    score: f32,
+}
+
+impl Eq for EncodedCandidate {}
+
+impl Ord for EncodedCandidate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.score
+            .total_cmp(&other.score)
+            .then_with(|| self.node_id.cmp(&other.node_id))
+    }
+}
+
+impl PartialOrd for EncodedCandidate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn mmap_quantized_hnsw_candidates(
+    graph: &QuantizedHnswGraphView<'_>,
+    query: &context_core::DenseVector,
+    metric: DistanceMetric,
+    candidate_limit: usize,
+) -> Vec<(i64, f32)> {
+    if query.dimension() != graph.dimensions() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_EXCEPTION,
+            format!(
+                "quantized HNSW query dimensions mismatch: expected {}, got {}",
+                graph.dimensions(),
+                query.dimension()
+            ),
+        );
+    }
+    let config = crate::settings::hnsw_config_from_gucs();
+    let search_width = config.ef_search().max(candidate_limit);
+    let has_edges = (0..graph.len()).any(|node_id| {
+        graph
+            .node(node_id)
+            .is_some_and(|node| node.neighbors().next().is_some())
+    });
+    let candidates = if has_edges {
+        traverse_quantized_base_layer(graph, query, metric, search_width)
+    } else {
+        (0..graph.len())
+            .map(|node_id| score_quantized_node(graph, query, metric, node_id))
+            .collect()
+    };
+    let mut candidates = candidates
+        .into_iter()
+        .map(|candidate| {
+            let node = graph.node(candidate.node_id).unwrap_or_else(|| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    "quantized HNSW candidate node is missing",
+                )
+            });
+            let point_id = i64::try_from(node.point_id()).unwrap_or_else(|_| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    "HNSW graph artifact point id exceeds PostgreSQL bigint range",
+                )
+            });
+            (point_id, candidate.score)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(
+        |(left_point_id, left_score), (right_point_id, right_score)| {
+            left_score
+                .total_cmp(right_score)
+                .then_with(|| left_point_id.cmp(right_point_id))
+        },
+    );
+    candidates.truncate(candidate_limit);
+    candidates
+}
+
+fn traverse_quantized_base_layer(
+    graph: &QuantizedHnswGraphView<'_>,
+    query: &context_core::DenseVector,
+    metric: DistanceMetric,
+    search_width: usize,
+) -> Vec<EncodedCandidate> {
+    let entry = score_quantized_node(graph, query, metric, 0);
+    let mut pending = BinaryHeap::from([Reverse(entry)]);
+    let mut nearest = BinaryHeap::from([entry]);
+    let mut visited = vec![false; graph.len()];
+    visited[0] = true;
+
+    while let Some(Reverse(candidate)) = pending.pop() {
+        let worst = nearest.peek().map_or(f32::INFINITY, |item| item.score);
+        if nearest.len() >= search_width && candidate.score > worst {
+            break;
+        }
+        let node = graph.node(candidate.node_id).unwrap_or_else(|| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "quantized HNSW traversal node is missing",
+            )
+        });
+        for neighbor in node.neighbors() {
+            let neighbor = neighbor as usize;
+            let Some(was_visited) = visited.get_mut(neighbor) else {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    "quantized HNSW neighbor exceeds graph node count",
+                );
+            };
+            if *was_visited {
+                continue;
+            }
+            *was_visited = true;
+            let scored = score_quantized_node(graph, query, metric, neighbor);
+            let should_add = nearest.len() < search_width
+                || nearest
+                    .peek()
+                    .is_some_and(|current_worst| scored < *current_worst);
+            if should_add {
+                pending.push(Reverse(scored));
+                nearest.push(scored);
+                if nearest.len() > search_width {
+                    nearest.pop();
+                }
+            }
+        }
+    }
+    nearest.into_sorted_vec()
+}
+
+fn score_quantized_node(
+    graph: &QuantizedHnswGraphView<'_>,
+    query: &context_core::DenseVector,
+    metric: DistanceMetric,
+    node_id: usize,
+) -> EncodedCandidate {
+    let node = graph.node(node_id).unwrap_or_else(|| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "quantized HNSW node is missing",
+        )
+    });
+    let score = graph
+        .codebook()
+        .approximate_distance(query, node.code(), metric)
+        .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
+    EncodedCandidate { node_id, score }
 }
 
 fn mmap_delta_candidates(

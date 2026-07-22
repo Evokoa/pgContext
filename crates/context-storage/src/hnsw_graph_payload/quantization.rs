@@ -1,17 +1,18 @@
 //! Portable quantization metadata and code validation for HNSW payload v2.
 
-use context_core::DenseVector;
+use context_core::{DenseVector, DistanceMetric};
 
 use super::{
     HnswGraphPayloadError, read_f32, read_u16, read_u32, size_of_f32, size_of_u32, usize_to_u32,
 };
 
-pub(super) const QUANTIZATION_NONE: u32 = 0;
+pub(crate) const QUANTIZATION_NONE: u32 = 0;
 const QUANTIZATION_BINARY: u32 = 1;
 const QUANTIZATION_SCALAR: u32 = 2;
 const QUANTIZATION_PRODUCT: u32 = 3;
 const SCALAR_CODEBOOK_LEN: usize = 16;
 const PRODUCT_CODEBOOK_HEADER_LEN: usize = 12;
+const MAX_PRODUCT_CODEBOOKS: usize = 65_536;
 
 /// Persisted quantization codebook for an HNSW graph payload.
 #[derive(Debug, Clone, PartialEq)]
@@ -70,6 +71,10 @@ impl HnswGraphQuantizationCodebook {
     ///
     /// Returns [`HnswGraphPayloadError`] when the code has the wrong length,
     /// invalid binary padding, or an index outside its scalar/product codebook.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "interpolation stays between validated finite f32 endpoints"
+    )]
     pub fn reconstruct(&self, code: &[u8]) -> Result<DenseVector, HnswGraphPayloadError> {
         validate_quantized_code(self, 0, code)?;
         let values = match self {
@@ -88,9 +93,14 @@ impl HnswGraphQuantizationCodebook {
                 levels,
                 ..
             } => {
-                let steps = f32::from(*levels - 1);
+                let steps = f64::from(*levels - 1);
                 code.iter()
-                    .map(|value| minimum + ((maximum - minimum) * (f32::from(*value) / steps)))
+                    .map(|value| {
+                        let fraction = f64::from(*value) / steps;
+                        let reconstructed = f64::from(*minimum)
+                            + ((f64::from(*maximum) - f64::from(*minimum)) * fraction);
+                        reconstructed as f32
+                    })
                     .collect()
             }
             Self::Product { codebooks, .. } => {
@@ -103,6 +113,124 @@ impl HnswGraphQuantizationCodebook {
         };
         DenseVector::new(values)
             .map_err(|error| HnswGraphPayloadError::InvalidQuantization(error.to_string()))
+    }
+
+    /// Scores one encoded node against a full-precision query without
+    /// reconstructing or allocating a dense vector.
+    ///
+    /// Cosine navigation assigns positive infinity to an encoded zero vector.
+    /// This keeps an approximation artifact from aborting traversal while the
+    /// authoritative source-row recheck remains the final oracle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HnswGraphPayloadError`] for malformed codes, dimension
+    /// mismatches, unsupported raw-inner-product/binary metrics, or a zero
+    /// query vector under cosine distance.
+    pub fn approximate_distance(
+        &self,
+        query: &DenseVector,
+        code: &[u8],
+        metric: DistanceMetric,
+    ) -> Result<f32, HnswGraphPayloadError> {
+        validate_quantized_code(self, 0, code)?;
+        if query.dimension() != self.dimensions() {
+            return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+                "query dimensions mismatch: expected {}, got {}",
+                self.dimensions(),
+                query.dimension()
+            )));
+        }
+        if matches!(metric, DistanceMetric::InnerProduct) {
+            return Err(HnswGraphPayloadError::InvalidQuantization(
+                "raw inner product is not an ascending HNSW distance".to_owned(),
+            ));
+        }
+        if matches!(metric, DistanceMetric::Hamming | DistanceMetric::Jaccard) {
+            return Err(HnswGraphPayloadError::InvalidQuantization(
+                "dense quantization does not support binary HNSW metrics".to_owned(),
+            ));
+        }
+
+        let mut squared_l2 = 0.0_f32;
+        let mut l1 = 0.0_f32;
+        let mut dot = 0.0_f32;
+        let mut encoded_norm = 0.0_f32;
+        let mut query_norm = 0.0_f32;
+        self.for_each_reconstructed(code, |index, encoded| {
+            let query_value = query.as_slice()[index];
+            let difference = query_value - encoded;
+            squared_l2 += difference * difference;
+            l1 += difference.abs();
+            dot += query_value * encoded;
+            encoded_norm += encoded * encoded;
+            query_norm += query_value * query_value;
+        });
+        match metric {
+            DistanceMetric::L2 => Ok(squared_l2.sqrt()),
+            DistanceMetric::L1 => Ok(l1),
+            DistanceMetric::NegativeInnerProduct => Ok(-dot),
+            DistanceMetric::Cosine if query_norm == 0.0 => {
+                Err(HnswGraphPayloadError::InvalidQuantization(
+                    "cosine distance is undefined for a zero query vector".to_owned(),
+                ))
+            }
+            DistanceMetric::Cosine if encoded_norm == 0.0 => Ok(f32::INFINITY),
+            DistanceMetric::Cosine => Ok(1.0 - dot / (query_norm.sqrt() * encoded_norm.sqrt())),
+            DistanceMetric::InnerProduct | DistanceMetric::Hamming | DistanceMetric::Jaccard => {
+                unreachable!("unsupported metrics return before encoded scoring")
+            }
+        }
+    }
+
+    fn for_each_reconstructed(&self, code: &[u8], mut visit: impl FnMut(usize, f32)) {
+        match self {
+            Self::Binary { dimensions } => {
+                for index in 0..*dimensions {
+                    let value = if code[index / 8] & (1 << (index % 8)) == 0 {
+                        -1.0
+                    } else {
+                        1.0
+                    };
+                    visit(index, value);
+                }
+            }
+            Self::Scalar {
+                minimum,
+                maximum,
+                levels,
+                ..
+            } => {
+                let steps = f64::from(*levels - 1);
+                for (index, value) in code.iter().copied().enumerate() {
+                    let fraction = f64::from(value) / steps;
+                    let reconstructed = f64::from(*minimum)
+                        + ((f64::from(*maximum) - f64::from(*minimum)) * fraction);
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        reason = "interpolation stays between validated finite f32 endpoints"
+                    )]
+                    visit(index, reconstructed as f32);
+                }
+            }
+            Self::Product {
+                subvector_dimensions,
+                codebooks,
+                ..
+            } => {
+                for (subvector, (value, centroids)) in code.iter().zip(codebooks).enumerate() {
+                    let centroid = &centroids[usize::from(*value)];
+                    for (within_subvector, reconstructed) in
+                        centroid.as_slice().iter().copied().enumerate()
+                    {
+                        visit(
+                            subvector * subvector_dimensions + within_subvector,
+                            reconstructed,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -133,7 +261,7 @@ impl HnswGraphQuantization {
     }
 }
 
-pub(super) fn quantization_mode(codebook: &HnswGraphQuantizationCodebook) -> u32 {
+pub(crate) fn quantization_mode(codebook: &HnswGraphQuantizationCodebook) -> u32 {
     match codebook {
         HnswGraphQuantizationCodebook::Binary { .. } => QUANTIZATION_BINARY,
         HnswGraphQuantizationCodebook::Scalar { .. } => QUANTIZATION_SCALAR,
@@ -141,7 +269,7 @@ pub(super) fn quantization_mode(codebook: &HnswGraphQuantizationCodebook) -> u32
     }
 }
 
-pub(super) fn validate_quantization(
+pub(crate) fn validate_quantization(
     quantization: &HnswGraphQuantization,
     record_count: usize,
     dimensions: usize,
@@ -227,7 +355,7 @@ fn validate_quantization_codebook(
     }
 }
 
-fn validate_quantized_code(
+pub(crate) fn validate_quantized_code(
     codebook: &HnswGraphQuantizationCodebook,
     node_index: usize,
     code: &[u8],
@@ -272,7 +400,7 @@ fn validate_quantized_code(
     Ok(())
 }
 
-pub(super) fn encode_quantization_codebook(
+pub(crate) fn encode_quantization_codebook(
     codebook: &HnswGraphQuantizationCodebook,
 ) -> Result<Vec<u8>, HnswGraphPayloadError> {
     let mut output = Vec::new();
@@ -313,7 +441,7 @@ pub(super) fn encode_quantization_codebook(
     Ok(output)
 }
 
-pub(super) fn decode_quantization_codebook(
+pub(crate) fn decode_quantization_codebook(
     mode: u32,
     dimensions: usize,
     code_len: usize,
@@ -396,11 +524,38 @@ fn decode_product_codebook(
     let dimensions = read_u32(bytes, 0) as usize;
     let subvector_dimensions = read_u32(bytes, 4) as usize;
     let codebook_count = read_u32(bytes, 8) as usize;
+    if codebook_count == 0 || codebook_count > MAX_PRODUCT_CODEBOOKS {
+        return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+            "product codebook count must be in 1..={MAX_PRODUCT_CODEBOOKS}, got {codebook_count}"
+        )));
+    }
+    let minimum_bytes = PRODUCT_CODEBOOK_HEADER_LEN
+        .checked_add(codebook_count.checked_mul(size_of_u32()).ok_or_else(|| {
+            HnswGraphPayloadError::InvalidQuantization(
+                "product codebook count overflows usize".to_owned(),
+            )
+        })?)
+        .ok_or_else(|| {
+            HnswGraphPayloadError::InvalidQuantization(
+                "product codebook minimum length overflows usize".to_owned(),
+            )
+        })?;
+    if bytes.len() < minimum_bytes {
+        return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+            "truncated product codebook headers: expected at least {minimum_bytes}, got {}",
+            bytes.len()
+        )));
+    }
     let mut offset = PRODUCT_CODEBOOK_HEADER_LEN;
     let mut codebooks = Vec::with_capacity(codebook_count);
     for index in 0..codebook_count {
         require_codebook_bytes(bytes, offset, size_of_u32(), index)?;
         let centroid_count = read_u32(bytes, offset) as usize;
+        if !(1..=256).contains(&centroid_count) {
+            return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+                "product codebook {index} must contain 1..=256 centroids, got {centroid_count}"
+            )));
+        }
         offset += size_of_u32();
         let centroid_bytes = subvector_dimensions
             .checked_mul(size_of_f32())

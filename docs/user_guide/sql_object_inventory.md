@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `281906cc9d23394c86927c43e1abd45885e8187544e3e27646992960cf2ce90e`
+Full SQL artifact SHA-256: `9584cdb5d5892b754302552fb9a3933b48479fe710be59483a972733e324e362`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 

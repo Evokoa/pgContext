@@ -10,11 +10,15 @@ use core::{fmt, mem::size_of};
 use context_core::DenseVector;
 
 mod quantization;
+mod quantized_view;
 
 pub use quantization::{HnswGraphQuantization, HnswGraphQuantizationCodebook};
-use quantization::{
+pub(crate) use quantization::{
     QUANTIZATION_NONE, decode_quantization_codebook, encode_quantization_codebook,
-    quantization_mode, validate_quantization,
+    quantization_mode, validate_quantization, validate_quantized_code,
+};
+pub use quantized_view::{
+    QuantizedHnswGraphNodeView, QuantizedHnswGraphView, QuantizedNeighborIter,
 };
 
 const HNSW_GRAPH_PAYLOAD_MAGIC: [u8; 8] = *b"PGCTXHNS";
@@ -26,6 +30,7 @@ const HNSW_GRAPH_PAYLOAD_VERSION_V1: u32 = 1;
 const HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1: usize = 24;
 const HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2: usize = 40;
 const HNSW_GRAPH_RECORD_HEADER_LEN: usize = 16;
+const MAX_HNSW_GRAPH_RECORDS: usize = 1_000_000;
 type DecodedRecords = (Vec<HnswGraphArtifactRecord>, usize, Vec<Vec<u8>>);
 
 /// One portable HNSW graph record stored inside a segment payload.
@@ -153,6 +158,13 @@ pub enum HnswGraphPayloadError {
     EmptyGraph,
     /// Payload declared zero dimensions.
     EmptyVector,
+    /// Payload declares more records than the serving policy allows.
+    RecordCountLimit {
+        /// Declared record count.
+        declared: usize,
+        /// Maximum accepted record count.
+        maximum: usize,
+    },
     /// Payload ended before a complete record could be read.
     TruncatedRecord {
         /// Zero-based record index being decoded.
@@ -219,6 +231,10 @@ impl fmt::Display for HnswGraphPayloadError {
             }
             Self::EmptyGraph => formatter.write_str("HNSW graph payload has no records"),
             Self::EmptyVector => formatter.write_str("HNSW graph payload has zero dimensions"),
+            Self::RecordCountLimit { declared, maximum } => write!(
+                formatter,
+                "HNSW graph payload record count {declared} exceeds limit {maximum}"
+            ),
             Self::TruncatedRecord {
                 record_index,
                 expected,
@@ -476,6 +492,27 @@ fn decode_records(
     let vector_bytes = dimensions
         .checked_mul(size_of_f32())
         .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+    if record_count > MAX_HNSW_GRAPH_RECORDS {
+        return Err(HnswGraphPayloadError::RecordCountLimit {
+            declared: record_count,
+            maximum: MAX_HNSW_GRAPH_RECORDS,
+        });
+    }
+    let minimum_record_bytes = HNSW_GRAPH_RECORD_HEADER_LEN
+        .checked_add(vector_bytes)
+        .and_then(|bytes| bytes.checked_add(code_len))
+        .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+    let minimum_payload_bytes = record_count
+        .checked_mul(minimum_record_bytes)
+        .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+    let available = payload.len().saturating_sub(offset);
+    if available < minimum_payload_bytes {
+        return Err(HnswGraphPayloadError::TruncatedRecord {
+            record_index: 0,
+            expected: minimum_payload_bytes,
+            actual: available,
+        });
+    }
     let mut records = Vec::with_capacity(record_count);
     let mut codes = Vec::with_capacity(if code_len == 0 { 0 } else { record_count });
 
@@ -859,7 +896,7 @@ mod tests {
             Err(HnswGraphPayloadError::TruncatedRecord {
                 record_index: 0,
                 expected: 24,
-                actual: 7,
+                actual: 23,
             })
         );
         Ok(())
@@ -877,7 +914,7 @@ mod tests {
             Err(HnswGraphPayloadError::TruncatedRecord {
                 record_index: 0,
                 expected: 28,
-                actual: 8,
+                actual: 24,
             })
         );
         Ok(())

@@ -11,6 +11,7 @@ const DEFAULT_SCALAR_LEVELS: u16 = 256;
 const DEFAULT_PQ_SUBVECTOR_DIMENSIONS: usize = 8;
 const DEFAULT_PQ_CENTROIDS: usize = 16;
 const DEFAULT_PQ_ITERATIONS: usize = 8;
+const MAX_QUANTIZATION_TRAINING_SAMPLE: usize = 4_096;
 
 pub(super) fn quantize_graph_records(
     records: &[HnswGraphArtifactRecord],
@@ -23,10 +24,7 @@ pub(super) fn quantize_graph_records(
     if mode == "none" {
         return Ok(None);
     }
-    let sample = records
-        .iter()
-        .map(|record| record.vector().clone())
-        .collect::<Vec<_>>();
+    let sample = deterministic_training_sample(records);
     let dimensions = sample
         .first()
         .map(DenseVector::dimension)
@@ -59,11 +57,51 @@ pub(super) fn quantize_graph_records(
     }
     .map_err(|error| error.to_string())?;
     let codebook = persisted_codebook(&trained);
-    let codes = sample
+    let codes = records
         .iter()
-        .map(|vector| trained.quantize(vector).map_err(|error| error.to_string()))
+        .map(|record| {
+            trained
+                .quantize(record.vector())
+                .map_err(|error| error.to_string())
+        })
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Some(HnswGraphQuantization::new(codebook, codes)))
+}
+
+pub(super) fn validate_graph_quantization_policy(
+    records: &[HnswGraphArtifactRecord],
+    actual: Option<&HnswGraphQuantization>,
+    options: &Value,
+) -> Result<(), String> {
+    let expected = quantize_graph_records(records, options)?;
+    if expected.as_ref() == actual {
+        Ok(())
+    } else {
+        let expected_mode = quantization_mode(expected.as_ref());
+        let actual_mode = quantization_mode(actual);
+        Err(format!(
+            "persisted codebook/codes do not match registered policy: expected {expected_mode}, got {actual_mode}"
+        ))
+    }
+}
+
+fn quantization_mode(quantization: Option<&HnswGraphQuantization>) -> &'static str {
+    match quantization.map(HnswGraphQuantization::codebook) {
+        None => "none",
+        Some(HnswGraphQuantizationCodebook::Binary { .. }) => "binary",
+        Some(HnswGraphQuantizationCodebook::Scalar { .. }) => "scalar",
+        Some(HnswGraphQuantizationCodebook::Product { .. }) => "pq",
+    }
+}
+
+fn deterministic_training_sample(records: &[HnswGraphArtifactRecord]) -> Vec<DenseVector> {
+    let sample_count = records.len().min(MAX_QUANTIZATION_TRAINING_SAMPLE);
+    (0..sample_count)
+        .map(|sample_index| {
+            let record_index = sample_index.saturating_mul(records.len()) / sample_count;
+            records[record_index].vector().clone()
+        })
+        .collect()
 }
 
 fn persisted_codebook(trained: &TrainedQuantizer) -> HnswGraphQuantizationCodebook {

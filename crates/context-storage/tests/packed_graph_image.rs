@@ -3,8 +3,10 @@
 #![allow(clippy::expect_used, clippy::cast_possible_truncation)]
 
 use context_storage::{
-    AlignedImageBuf, PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode,
-    PackedGraphImageView, encode_packed_graph_image, packed_graph_image_len,
+    AlignedImageBuf, CURRENT_PACKED_GRAPH_IMAGE_VERSION, HnswGraphQuantization,
+    HnswGraphQuantizationCodebook, PackedGraphImageError, PackedGraphImageLayer,
+    PackedGraphImageNode, PackedGraphImageView, encode_packed_graph_image,
+    encode_packed_graph_image_v2, packed_graph_image_len,
 };
 use proptest::prelude::*;
 
@@ -87,6 +89,74 @@ fn round_trip_preserves_nodes_vectors_and_neighbors() {
     );
     assert!(view.neighbors(node0, 2).is_none(), "past layer_count");
     assert!(view.node(2).is_none(), "past node_count");
+}
+
+#[test]
+fn quantized_v2_round_trip_keeps_codes_zero_copy() {
+    let (dimensions, nodes, layers, neighbors, vectors) = sample_graph();
+    let quantization = HnswGraphQuantization::new(
+        HnswGraphQuantizationCodebook::Scalar {
+            dimensions: dimensions as usize,
+            minimum: -2.0,
+            maximum: 2.0,
+            levels: 16,
+        },
+        vec![vec![8, 4, 10], vec![7, 15, 5]],
+    );
+    let encoded = encode_packed_graph_image_v2(
+        dimensions,
+        &nodes,
+        &layers,
+        &neighbors,
+        &vectors,
+        Some(&quantization),
+    )
+    .expect("quantized image should encode");
+    let image = AlignedImageBuf::from_bytes(&encoded);
+    let view = PackedGraphImageView::attach(image.as_bytes(), true)
+        .expect("quantized image should attach");
+
+    let mut version = [0_u8; 4];
+    version.copy_from_slice(&encoded[8..12]);
+    assert_eq!(
+        u32::from_le_bytes(version),
+        CURRENT_PACKED_GRAPH_IMAGE_VERSION
+    );
+    assert_eq!(view.quantization_codebook(), Some(quantization.codebook()));
+    assert_eq!(view.node_code(0), Some(&[8, 4, 10][..]));
+    assert_eq!(view.node_code(1), Some(&[7, 15, 5][..]));
+    assert!(view.node_code(2).is_none());
+}
+
+#[test]
+fn quantized_v2_rejects_corrupt_codes_without_checksum() {
+    let (dimensions, nodes, layers, neighbors, vectors) = sample_graph();
+    let quantization = HnswGraphQuantization::new(
+        HnswGraphQuantizationCodebook::Scalar {
+            dimensions: dimensions as usize,
+            minimum: -2.0,
+            maximum: 2.0,
+            levels: 2,
+        },
+        vec![vec![0, 1, 0], vec![1, 0, 1]],
+    );
+    let mut encoded = encode_packed_graph_image_v2(
+        dimensions,
+        &nodes,
+        &layers,
+        &neighbors,
+        &vectors,
+        Some(&quantization),
+    )
+    .expect("quantized image should encode");
+    let last = encoded.len() - 1;
+    encoded[last] = 2;
+    let image = AlignedImageBuf::from_bytes(&encoded);
+
+    assert_eq!(
+        PackedGraphImageView::attach(image.as_bytes(), false).err(),
+        Some(PackedGraphImageError::InvalidQuantization)
+    );
 }
 
 #[test]

@@ -420,9 +420,9 @@ fn artifact_segment_mmap_payload_enforces_collection_visibility() {
                  'view-a',
                  100
             )",
-            "55000",
-            "serving-ready mmap artifact not found: m10_artifact_mmap_payload_acl/view-a",
-            "denied role cannot serve hidden artifacts",
+            "42501",
+            "raw mmap artifact payload access is internal",
+            "non-superuser cannot read raw artifact bytes",
         );
     });
 }

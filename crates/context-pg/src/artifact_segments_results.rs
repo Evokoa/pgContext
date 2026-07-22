@@ -184,7 +184,3 @@ fn validated_segment(segment: &[u8]) -> ValidatedSegment<'_> {
         payload: view.payload(),
     }
 }
-
-fn validated_segment_metadata(segment: &[u8]) -> ValidatedSegmentMetadata {
-    validated_segment(segment).metadata
-}

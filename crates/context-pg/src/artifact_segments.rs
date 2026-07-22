@@ -1,6 +1,7 @@
 //! SQL adapters for rebuildable segment artifact bytes.
 
 use std::{
+    cell::Cell,
     collections::HashSet,
     fs,
     io::ErrorKind,
@@ -17,6 +18,7 @@ use context_storage::{
     decode_hnsw_graph_payload, encode_hnsw_graph_payload_v2, encode_segment, load_segment_file,
     validate_mmap_segment, write_segment_atomic_with_hook,
 };
+use pgrx::JsonB;
 use pgrx::prelude::*;
 
 use crate::domain_types::{
@@ -27,6 +29,28 @@ use crate::error::{raise_core_error, raise_sql_error};
 
 #[cfg(any(test, feature = "pg_test"))]
 static ARTIFACT_PUBLISH_FAILPOINT: AtomicU8 = AtomicU8::new(0);
+
+thread_local! {
+    static MMAP_PAYLOAD_ACCESS_DEPTH: Cell<u32> = const { Cell::new(0) };
+}
+
+struct MmapPayloadAccessGuard;
+
+impl Drop for MmapPayloadAccessGuard {
+    fn drop(&mut self) {
+        MMAP_PAYLOAD_ACCESS_DEPTH.with(|depth| depth.set(depth.get().saturating_sub(1)));
+    }
+}
+
+pub(crate) fn with_mmap_payload_access<T>(action: impl FnOnce() -> T) -> T {
+    MMAP_PAYLOAD_ACCESS_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+    let _guard = MmapPayloadAccessGuard;
+    action()
+}
+
+fn mmap_payload_access_allowed() -> bool {
+    MMAP_PAYLOAD_ACCESS_DEPTH.with(|depth| depth.get() != 0)
+}
 
 fn artifact_publish_failpoint(stage: u8, label: &'static str) {
     #[cfg(any(test, feature = "pg_test"))]
@@ -179,16 +203,10 @@ pub fn encode_artifact_segment(kind: String, payload: Vec<u8>) -> Vec<u8> {
 }
 
 /// Builds a deterministic mmap graph artifact from visible source rows.
-#[pg_extern(schema = "pgcontext", security_definer, volatile)]
+#[pg_extern(schema = "pgcontext", volatile)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn build_mmap_hnsw_artifact(build_job_id: i64) -> Vec<u8> {
-    let job = resolve_publishable_build_job(build_job_id);
-    if job.artifact_kind != ArtifactKind::Mmap {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            "source-built artifact publication requires an mmap build job",
-        );
-    }
+    let job = resolve_visible_mmap_build_job(build_job_id);
     let collection_name = context_core::CollectionName::new(job.collection_name.clone())
         .unwrap_or_else(|error| raise_core_error(error));
     let mut registered =
@@ -396,7 +414,9 @@ pub fn publish_artifact_segment(
     ),
 > {
     let job = resolve_publishable_build_job(build_job_id);
-    let metadata = validated_segment_metadata(&segment);
+    let validated = validated_segment(&segment);
+    validate_artifact_payload_policy(&job, &validated);
+    let metadata = validated.metadata;
     lock_artifact_publish_target(&job);
     let generation = next_artifact_generation(&job);
     let artifact_id = insert_artifact_segment(&job, generation, &metadata, None);
@@ -432,8 +452,9 @@ pub fn publish_artifact_segment_file(
     ),
 > {
     let job = resolve_publishable_build_job(build_job_id);
-    replay_build_delta_tail(build_job_id);
     let validated = validated_segment(&segment);
+    validate_artifact_payload_policy(&job, &validated);
+    replay_build_delta_tail(build_job_id);
     lock_artifact_publish_target(&job);
     let generation = next_artifact_generation(&job);
     let relative_path = artifact_relative_path(&job, generation);
@@ -472,6 +493,59 @@ pub fn publish_artifact_segment_file(
     TableIterator::once(artifact_segment_file_result(
         resolve_visible_artifact_segment(artifact_id),
     ))
+}
+
+fn validate_artifact_payload_policy(job: &PublishableBuildJob, segment: &ValidatedSegment<'_>) {
+    if job.artifact_kind != ArtifactKind::Mmap || segment.storage_kind != SegmentKind::HnswGraph {
+        return;
+    }
+    let quantization_options = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT vectors.quantization_options
+               FROM pgcontext._visible_collection_vectors AS vectors
+              WHERE vectors.collection_id = $1
+              ORDER BY vectors.vector_id",
+            Some(1),
+            &[job.collection_id.into()],
+        )?;
+        if rows.is_empty() {
+            Ok::<_, spi::Error>(None)
+        } else {
+            Ok(Some(required_column(
+                rows.first().get::<JsonB>(1)?,
+                "quantization_options",
+            )))
+        }
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("artifact quantization policy lookup failed: {error}"),
+        )
+    });
+    let Some(quantization_options) = quantization_options else {
+        return;
+    };
+    let quantization_options = quantization_options.0;
+    let configured_mode = quantization_options
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("none");
+    let graph = match context_storage::decode_hnsw_graph_payload_versioned(segment.payload) {
+        Ok(graph) => graph,
+        Err(_) if configured_mode == "none" => return,
+        Err(error) => raise_hnsw_graph_payload_error(error),
+    };
+    if let Err(error) = quantization::validate_graph_quantization_policy(
+        graph.records(),
+        graph.quantization(),
+        &quantization_options,
+    ) {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            format!("artifact quantization policy mismatch: {error}"),
+        );
+    }
 }
 
 fn replay_build_delta_tail(build_job_id: i64) {

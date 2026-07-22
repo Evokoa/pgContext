@@ -73,3 +73,10 @@ path = "fuzz_targets/hnsw_page.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "quantized_codes"
+path = "fuzz_targets/quantized_codes.rs"
+test = false
+doc = false
+bench = false

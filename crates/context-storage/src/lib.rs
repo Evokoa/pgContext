@@ -43,13 +43,15 @@ pub use delta_segment::{
 pub use hnsw_graph_payload::{
     CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HnswGraphArtifactRecord, HnswGraphPayload,
     HnswGraphPayloadError, HnswGraphQuantization, HnswGraphQuantizationCodebook,
-    MIN_READABLE_HNSW_GRAPH_PAYLOAD_VERSION, decode_hnsw_graph_payload,
-    decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
+    MIN_READABLE_HNSW_GRAPH_PAYLOAD_VERSION, QuantizedHnswGraphNodeView, QuantizedHnswGraphView,
+    QuantizedNeighborIter, decode_hnsw_graph_payload, decode_hnsw_graph_payload_versioned,
+    encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
 };
 pub use mmap_file::{MappedSegment, map_segment_file};
 pub use packed_graph_image::{
-    AlignedImageBuf, PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode,
-    PackedGraphImageView, encode_packed_graph_image, packed_graph_image_len,
+    AlignedImageBuf, CURRENT_PACKED_GRAPH_IMAGE_VERSION, MIN_READABLE_PACKED_GRAPH_IMAGE_VERSION,
+    PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView,
+    encode_packed_graph_image, encode_packed_graph_image_v2, packed_graph_image_len,
 };
 
 /// Maximum segment payload accepted by this loader.
