@@ -72,6 +72,79 @@ fn execute_query_rejects_unknown_plan_fields() {
 }
 
 #[pg_test]
+fn execute_query_composes_all_named_postgres_sources() {
+    Spi::run(
+        "CREATE TABLE public.stage_g_named_sources (
+             id bigint PRIMARY KEY,
+             embedding vector NOT NULL,
+             sparse_embedding sparsevec NOT NULL,
+             body text NOT NULL,
+             token_vectors vector[] NOT NULL
+         );
+         INSERT INTO public.stage_g_named_sources VALUES
+             (1, '[1,0]'::vector, '{1:1}/2'::sparsevec, 'rust postgres',
+                 ARRAY['[1,0]'::vector, '[0.8,0.2]'::vector]),
+             (2, '[0.5,0.5]'::vector, '{1:0.5,2:0.5}/2'::sparsevec, 'hybrid search',
+                 ARRAY['[0.5,0.5]'::vector]),
+             (3, '[0,1]'::vector, '{2:1}/2'::sparsevec, 'postgres search',
+                 ARRAY['[0,1]'::vector, '[0.2,0.8]'::vector]);
+         SELECT pgcontext.create_collection(
+             'stage_g_named_sources', 'public.stage_g_named_sources'
+         );
+         SELECT pgcontext.register_vector(
+             'stage_g_named_sources', 'embedding', 'embedding', 2, 'l2'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'stage_g_named_sources', 'keywords', 'sparse_embedding', 2, 'cosine'
+         );
+         SELECT pgcontext.upsert_points(
+             'stage_g_named_sources', ARRAY['1', '2', '3']
+         );
+         CREATE INDEX stage_g_named_sources_hnsw
+             ON public.stage_g_named_sources
+             USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_ops);
+         SELECT pgcontext.attach_hnsw_index(
+             'stage_g_named_sources', 'embedding',
+             'public.stage_g_named_sources_hnsw'
+         );
+         SELECT * FROM pgcontext.register_late_interaction(
+             'stage_g_named_sources', 'public.stage_g_named_sources', 'token_vectors'
+         );",
+    )
+    .expect("named-source fixture should be created");
+
+    let rows = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_named_sources',
+               pgcontext.query_rerank(
+                   pgcontext.query_prefetch(ARRAY[
+                       pgcontext.query_nearest('[1,0]'::vector, 3),
+                       pgcontext.query_sparse_nearest(
+                           'keywords', '{1:1}/2'::sparsevec, 3
+                       ),
+                       pgcontext.query_full_text('postgres', 'body', 3),
+                       pgcontext.query_late_interaction(
+                           ARRAY['[1,0]'::vector], 3, 3
+                       )
+                   ]),
+                   3
+               )
+           )",
+    );
+
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].1, "1");
+    assert_eq!(
+        rows.iter()
+            .map(|row| row.0)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        rows.len()
+    );
+}
+
+#[pg_test]
 #[should_panic(expected = "query limit must be positive: 0")]
 fn query_nearest_rejects_zero_limits() {
     Spi::run("SELECT pgcontext.query_nearest('[1,2]'::vector, 0)")

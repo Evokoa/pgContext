@@ -126,6 +126,19 @@ fn composite_tree_reports_the_largest_descendant_limit() {
 }
 
 #[test]
+fn named_source_leaves_validate_full_text_and_late_interaction_inputs() {
+    let full_text = QueryIr::full_text("body".to_owned(), "rust postgres".to_owned(), 5)
+        .expect("full-text leaf should be valid");
+    assert!(matches!(full_text.kind(), QueryKind::FullText { .. }));
+
+    let late = QueryIr::late_interaction(vec![vec![1.0, 0.0], vec![0.0, 1.0]], 8, 3)
+        .expect("late-interaction leaf should be valid");
+    assert!(matches!(late.kind(), QueryKind::LateInteraction { .. }));
+    assert!(QueryIr::full_text("body;drop".to_owned(), "query".to_owned(), 1).is_err());
+    assert!(QueryIr::late_interaction(vec![vec![1.0], vec![1.0, 2.0]], 2, 1).is_err());
+}
+
+#[test]
 fn candidate_scores_must_be_finite() {
     assert!(matches!(
         Candidate::new(PointId::new(1), f64::NAN, CandidateBranch::DenseAnn),

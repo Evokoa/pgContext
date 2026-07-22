@@ -3,7 +3,7 @@
 mod candidate_recheck;
 mod grouped;
 mod named;
-mod recommend;
+pub(crate) mod recommend;
 mod support;
 
 use context_core::{CollectionName, DistanceMetric, ScrollCursor, ScrollCursorError, SearchLimit};

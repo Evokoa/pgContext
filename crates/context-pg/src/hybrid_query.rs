@@ -13,7 +13,7 @@ use crate::vector_variants::SparseVec;
 mod candidate_hydration;
 mod catalog;
 mod late_interaction;
-mod late_interaction_ann;
+pub(crate) mod late_interaction_ann;
 use candidate_hydration::{
     HydratedBranch as QueryBranch, HydratedCandidate, hydrate_dense_exact_candidates,
     hydrate_full_text_candidates, hydrate_sparse_planned_candidates,

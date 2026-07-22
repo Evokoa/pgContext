@@ -75,6 +75,124 @@ pub(crate) struct SpiHnswCandidateSource<'a> {
     registered_vector: &'a SearchVector,
 }
 
+type RecheckCache = Rc<RefCell<BTreeMap<PointId, HydratedCandidate>>>;
+
+struct PgCandidateRouter<'a> {
+    collection_name: &'a str,
+    collection_id: i64,
+    registered_vector: &'a SearchVector,
+    adapter: CandidateAdapter,
+    cache: RecheckCache,
+}
+
+impl CandidateSource for PgCandidateRouter<'_> {
+    fn readiness(&mut self, query: &QueryIr) -> Result<SourceReadiness> {
+        match query.kind() {
+            QueryKind::Nearest { .. } => match self.adapter {
+                CandidateAdapter::Exact => {
+                    SpiExactCandidateSource::new(self.collection_id, self.registered_vector)
+                        .readiness(query)
+                }
+                CandidateAdapter::Hnsw => {
+                    SpiHnswCandidateSource::new(self.collection_id, self.registered_vector)
+                        .readiness(query)
+                }
+            },
+            QueryKind::SparseNearest { .. }
+            | QueryKind::FullText { .. }
+            | QueryKind::LateInteraction { .. }
+            | QueryKind::Recommend { .. }
+            | QueryKind::Discover { .. }
+            | QueryKind::Lookup { .. } => Ok(SourceReadiness::Exact),
+            _ => Err(QueryError::PortFailure {
+                stage: "candidate_router",
+                message: "composite node reached a leaf candidate adapter".to_owned(),
+            }),
+        }
+    }
+
+    fn candidates(
+        &mut self,
+        query: &QueryIr,
+        filter: Option<&FilterCandidateBatch>,
+        limit: usize,
+    ) -> Result<CandidatePage> {
+        if matches!(query.kind(), QueryKind::Nearest { .. }) {
+            return match self.adapter {
+                CandidateAdapter::Exact => {
+                    SpiExactCandidateSource::new(self.collection_id, self.registered_vector)
+                        .candidates(query, filter, limit)
+                }
+                CandidateAdapter::Hnsw => {
+                    SpiHnswCandidateSource::new(self.collection_id, self.registered_vector)
+                        .candidates(query, filter, limit)
+                }
+            };
+        }
+        if filter.is_some() {
+            return Err(QueryError::PortFailure {
+                stage: "candidate_router",
+                message: "this named source does not accept a filter batch".to_owned(),
+            });
+        }
+        let rows = advanced_source_rows(
+            self.collection_name,
+            self.collection_id,
+            self.registered_vector,
+            query,
+            limit,
+        )?;
+        let branch = match query.kind() {
+            QueryKind::SparseNearest { .. } => CandidateBranch::Sparse,
+            QueryKind::FullText { .. } => CandidateBranch::FullText,
+            QueryKind::LateInteraction { .. } => CandidateBranch::MultiVector,
+            QueryKind::Recommend { .. } | QueryKind::Discover { .. } => CandidateBranch::DenseExact,
+            QueryKind::Lookup { .. } => CandidateBranch::UserProvided,
+            _ => unreachable!("advanced source rows only accepts executable named leaves"),
+        };
+        let mut cache = self.cache.borrow_mut();
+        cache.clear();
+        let mut candidates = Vec::with_capacity(rows.len());
+        for row in rows {
+            candidates.push(Candidate::new(row.point_id(), row.score(), branch)?);
+            cache.insert(row.point_id(), row);
+        }
+        Ok(CandidatePage::new(candidates, true))
+    }
+}
+
+struct PgRecheckerRouter<'a> {
+    dense: SpiSourceRechecker<'a>,
+    cache: RecheckCache,
+}
+
+impl SourceRechecker for PgRecheckerRouter<'_> {
+    fn recheck(
+        &mut self,
+        query: &QueryIr,
+        candidates: &[Candidate],
+        limit: usize,
+    ) -> Result<Vec<HydratedCandidate>> {
+        if matches!(query.kind(), QueryKind::Nearest { .. }) {
+            return self.dense.recheck(query, candidates, limit);
+        }
+        let cache = self.cache.borrow();
+        candidates
+            .iter()
+            .take(limit)
+            .map(|candidate| {
+                cache
+                    .get(&candidate.point_id())
+                    .cloned()
+                    .ok_or(QueryError::UnexpectedPointId {
+                        stage: "named_source_rechecker",
+                        point_id: candidate.point_id(),
+                    })
+            })
+            .collect()
+    }
+}
+
 impl<'a> SpiHnswCandidateSource<'a> {
     fn new(collection_id: i64, registered_vector: &'a SearchVector) -> Self {
         Self {
@@ -303,6 +421,7 @@ pub(crate) fn run_query(
     };
 
     let outcome = execute_prepared_query(
+        collection_name.as_str(),
         collection.collection_id,
         &registered_vector,
         &filter_fields,
@@ -315,6 +434,7 @@ pub(crate) fn run_query(
 }
 
 fn execute_prepared_query(
+    collection_name: &str,
     collection_id: i64,
     registered_vector: &SearchVector,
     filter_fields: &[FilterField],
@@ -335,17 +455,13 @@ fn execute_prepared_query(
         context_core::policy::MAX_QUERY_EXPANSIONS,
         query.max_node_limit(),
     )?;
-    let mut exact;
-    let mut hnsw;
-    let candidates: &mut dyn CandidateSource = match adapter {
-        CandidateAdapter::Exact => {
-            exact = SpiExactCandidateSource::new(collection_id, registered_vector);
-            &mut exact
-        }
-        CandidateAdapter::Hnsw => {
-            hnsw = SpiHnswCandidateSource::new(collection_id, registered_vector);
-            &mut hnsw
-        }
+    let cache = Rc::new(RefCell::new(BTreeMap::new()));
+    let mut candidates = PgCandidateRouter {
+        collection_name,
+        collection_id,
+        registered_vector,
+        adapter,
+        cache: Rc::clone(&cache),
     };
     let mut filter = SpiFilterCandidateSource {
         collection_id,
@@ -355,21 +471,194 @@ fn execute_prepared_query(
     let filter_port = query
         .has_filter_in_subtree()
         .then_some(&mut filter as &mut dyn FilterCandidateSource);
-    let mut rechecker = SpiSourceRechecker {
-        collection_id,
-        registered_vector,
-        filter_fields,
+    let mut rechecker = PgRecheckerRouter {
+        dense: SpiSourceRechecker {
+            collection_id,
+            registered_vector,
+            filter_fields,
+        },
+        cache,
     };
     let mut telemetry = PgTelemetrySink;
     let cancellation = PgCancellation;
     QueryExecutor::new(
-        candidates,
+        &mut candidates,
         filter_port,
         &mut rechecker,
         &mut telemetry,
         &cancellation,
     )
     .execute(query, budget)
+}
+
+fn advanced_source_rows(
+    collection_name: &str,
+    collection_id: i64,
+    registered_vector: &SearchVector,
+    query: &QueryIr,
+    limit: usize,
+) -> Result<Vec<HydratedCandidate>> {
+    let sql_limit = i32::try_from(limit).map_err(|_| QueryError::PortFailure {
+        stage: "named_candidate_source",
+        message: format!("candidate limit {limit} exceeds PostgreSQL integer"),
+    })?;
+    let rows = match query.kind() {
+        QueryKind::SparseNearest {
+            vector_name,
+            vector,
+        } => crate::sparse_search::search_sparse_collection(
+            collection_name.to_owned(),
+            vector_name.as_str().to_owned(),
+            crate::vector_variants::SparseVec::from_sparse(vector.clone()),
+            sql_limit,
+        )
+        .map(|(point_id, source_key, score)| (point_id, source_key, f64::from(score)))
+        .collect(),
+        QueryKind::FullText { text_column, query } => {
+            full_text_source_rows(collection_id, registered_vector, text_column, query, limit)?
+        }
+        QueryKind::LateInteraction {
+            vectors,
+            candidates_per_query,
+        } => {
+            let candidates_per_query =
+                i32::try_from(candidates_per_query.get()).map_err(|_| QueryError::PortFailure {
+                    stage: "late_interaction_candidate_source",
+                    message: "candidates_per_query exceeds PostgreSQL integer".to_owned(),
+                })?;
+            crate::hybrid_query::late_interaction_ann::search_owned_late_interaction_ann(
+                collection_name.to_owned(),
+                vectors.iter().cloned().map(Vector::from_dense).collect(),
+                candidates_per_query,
+                sql_limit,
+            )
+            .collect()
+        }
+        QueryKind::Recommend { positive, negative } => {
+            crate::table_search::recommend::recommend_collection_from_points(
+                collection_name.to_owned(),
+                sql_point_ids(positive.iter().copied())?,
+                sql_point_ids(negative.iter().copied())?,
+                sql_limit,
+            )
+            .map(|(point_id, source_key, score)| (point_id, source_key, f64::from(score)))
+            .collect()
+        }
+        QueryKind::Discover { context } => crate::table_search::recommend::discover_collection(
+            collection_name.to_owned(),
+            sql_point_ids(context.iter().copied())?,
+            sql_limit,
+        )
+        .map(|(point_id, source_key, score)| (point_id, source_key, f64::from(score)))
+        .collect(),
+        QueryKind::Lookup { point_ids } => lookup_source_rows(collection_id, point_ids, limit)?,
+        _ => {
+            return Err(QueryError::PortFailure {
+                stage: "named_candidate_source",
+                message: "query kind has no named PostgreSQL adapter".to_owned(),
+            });
+        }
+    };
+    rows.into_iter()
+        .map(|(point_id, source_key, score)| {
+            HydratedCandidate::new(
+                PointId::from_i64(point_id).ok_or_else(|| QueryError::PortFailure {
+                    stage: "named_candidate_source",
+                    message: format!("invalid PostgreSQL point ID {point_id}"),
+                })?,
+                SourceKey::new(source_key)?,
+                score,
+            )
+        })
+        .collect()
+}
+
+fn full_text_source_rows(
+    collection_id: i64,
+    registered_vector: &SearchVector,
+    text_column: &str,
+    text_query: &str,
+    limit: usize,
+) -> Result<Vec<(i64, String, f64)>> {
+    let table_name = quote_qualified_identifier(
+        &registered_vector.schema_name,
+        &registered_vector.table_name,
+    );
+    let text_column = quote_identifier(text_column);
+    let sql_limit = sql_limit(limit, "full_text_candidate_source")?;
+    let sql = format!(
+        "WITH query AS (SELECT pg_catalog.plainto_tsquery('simple', $2) AS tsquery)
+         SELECT points.point_id,
+                points.source_key,
+                pg_catalog.ts_rank_cd(
+                    pg_catalog.to_tsvector('simple', coalesce(source.{text_column}::text, '')),
+                    query.tsquery
+                )::double precision
+           FROM pgcontext._visible_collection_points AS points
+           JOIN {table_name} AS source ON source.id::text = points.source_key
+           CROSS JOIN query
+          WHERE points.collection_id = $1
+            AND points.deleted_at IS NULL
+            AND pg_catalog.to_tsvector('simple', coalesce(source.{text_column}::text, '')) @@ query.tsquery
+          ORDER BY 3 DESC, points.point_id ASC
+          LIMIT $3"
+    );
+    Spi::connect(|client| {
+        client
+            .select(
+                &sql,
+                Some(sql_limit),
+                &[collection_id.into(), text_query.into(), sql_limit.into()],
+            )
+            .map_err(|error| port_failure("full_text_candidate_source", error))?
+            .map(|row| {
+                Ok((
+                    spi_column::<i64>(&row, 1, "full_text_candidate_source")?,
+                    spi_column::<String>(&row, 2, "full_text_candidate_source")?,
+                    spi_column::<f64>(&row, 3, "full_text_candidate_source")?,
+                ))
+            })
+            .collect()
+    })
+}
+
+fn lookup_source_rows(
+    collection_id: i64,
+    point_ids: &[PointId],
+    limit: usize,
+) -> Result<Vec<(i64, String, f64)>> {
+    let sql_ids = sql_point_ids(point_ids.iter().copied())?;
+    let rows = Spi::connect(|client| {
+        client
+            .select(
+                "SELECT point_id, source_key
+                   FROM pgcontext._visible_collection_points
+                  WHERE collection_id = $1
+                    AND deleted_at IS NULL
+                    AND point_id = ANY($2::bigint[])",
+                None,
+                &[collection_id.into(), sql_ids.into()],
+            )
+            .map_err(|error| port_failure("lookup_candidate_source", error))?
+            .map(|row| {
+                Ok((
+                    spi_column::<i64>(&row, 1, "lookup_candidate_source")?,
+                    spi_column::<String>(&row, 2, "lookup_candidate_source")?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()
+    })?;
+    point_ids
+        .iter()
+        .take(limit)
+        .enumerate()
+        .filter_map(|(position, point_id)| {
+            let point_id = i64::try_from(point_id.get()).ok()?;
+            let source_key = rows.get(&point_id)?.clone();
+            let position = u32::try_from(position).ok()?;
+            Some(Ok((point_id, source_key, -f64::from(position))))
+        })
+        .collect()
 }
 
 fn effective_candidate_adapter(query: &QueryIr, adapter: CandidateAdapter) -> CandidateAdapter {
@@ -719,6 +1008,7 @@ pub(crate) fn differential_exact_rows_for_test(
     )
     .unwrap_or_else(|error| raise_query_error(error));
     let outcome = execute_prepared_query(
+        collection_name.as_str(),
         collection.collection_id,
         &registered_vector,
         &[],
@@ -767,6 +1057,7 @@ pub(crate) fn adapter_conformance_snapshot_for_test(
     )
     .unwrap_or_else(|error| raise_query_error(error));
     let exact = execute_prepared_query(
+        collection_name.as_str(),
         collection.collection_id,
         &registered_vector,
         &filter_fields,
@@ -775,6 +1066,7 @@ pub(crate) fn adapter_conformance_snapshot_for_test(
     )
     .unwrap_or_else(|error| raise_query_error(error));
     let hnsw = execute_prepared_query(
+        collection_name.as_str(),
         collection.collection_id,
         &registered_vector,
         &filter_fields,
@@ -829,6 +1121,7 @@ pub(crate) fn dense_metric_adapter_snapshot_for_test(
     )
     .unwrap_or_else(|error| raise_query_error(error));
     let exact = execute_prepared_query(
+        collection_name.as_str(),
         collection.collection_id,
         &registered_vector,
         &[],
@@ -837,6 +1130,7 @@ pub(crate) fn dense_metric_adapter_snapshot_for_test(
     )
     .unwrap_or_else(|error| raise_query_error(error));
     let hnsw = execute_prepared_query(
+        collection_name.as_str(),
         collection.collection_id,
         &registered_vector,
         &[],
@@ -884,3 +1178,6 @@ pub(crate) fn run_hnsw_for_test(collection: String) -> Vec<(i64, String, f32)> {
     .unwrap_or_else(|error| raise_query_error(error));
     run_query(&collection_name, query, CandidateAdapter::Hnsw)
 }
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::rc::Rc;

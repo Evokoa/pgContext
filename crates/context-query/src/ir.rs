@@ -28,6 +28,20 @@ pub enum QueryKind {
         /// Validated sparse query vector.
         vector: SparseVector,
     },
+    /// PostgreSQL full-text retrieval over a source column.
+    FullText {
+        /// Validated source-column name.
+        text_column: String,
+        /// Nonempty bounded text query.
+        query: String,
+    },
+    /// Owned late-interaction retrieval over query token vectors.
+    LateInteraction {
+        /// Validated nonempty query token vectors.
+        vectors: Vec<DenseVector>,
+        /// Candidate budget requested per query token.
+        candidates_per_query: SearchLimit,
+    },
     /// Positive/negative-example recommendation.
     Recommend {
         /// Positive logical examples.
@@ -142,6 +156,69 @@ impl QueryIr {
         Ok(query)
     }
 
+    /// Creates a validated full-text leaf request.
+    pub fn full_text(text_column: String, query: String, limit: usize) -> Result<Self> {
+        if text_column.is_empty() || text_column.len() > 63 {
+            return Err(invalid("text_column", "must contain 1..=63 bytes"));
+        }
+        if !text_column
+            .bytes()
+            .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        {
+            return Err(invalid(
+                "text_column",
+                "must contain only identifier characters",
+            ));
+        }
+        if query.is_empty() || query.len() > 4096 {
+            return Err(invalid("text_query", "must contain 1..=4096 bytes"));
+        }
+        let query = Self {
+            kind: QueryKind::FullText { text_column, query },
+            filter: None,
+            limit: SearchLimit::new(limit)?,
+            score_order: ScoreOrder::HigherIsBetter,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
+    /// Creates a validated owned late-interaction leaf request.
+    pub fn late_interaction(
+        vectors: Vec<Vec<f32>>,
+        candidates_per_query: usize,
+        limit: usize,
+    ) -> Result<Self> {
+        if vectors.is_empty() {
+            return Err(invalid("query_vectors", "must contain at least one vector"));
+        }
+        let vectors = vectors
+            .into_iter()
+            .map(DenseVector::new)
+            .collect::<core::result::Result<Vec<_>, _>>()?;
+        let dimensions = vectors[0].dimension();
+        if vectors
+            .iter()
+            .any(|vector| vector.dimension() != dimensions)
+        {
+            return Err(invalid(
+                "query_vectors",
+                "all vectors must have the same dimensions",
+            ));
+        }
+        let query = Self {
+            kind: QueryKind::LateInteraction {
+                vectors,
+                candidates_per_query: SearchLimit::new(candidates_per_query)?,
+            },
+            filter: None,
+            limit: SearchLimit::new(limit)?,
+            score_order: ScoreOrder::HigherIsBetter,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
     /// Creates a query from an application-level kind.
     ///
     /// # Errors
@@ -202,6 +279,8 @@ impl QueryIr {
                 | QueryKind::Rerank { query } => query.has_filter_in_subtree(),
                 QueryKind::Nearest { .. }
                 | QueryKind::SparseNearest { .. }
+                | QueryKind::FullText { .. }
+                | QueryKind::LateInteraction { .. }
                 | QueryKind::Recommend { .. }
                 | QueryKind::Discover { .. }
                 | QueryKind::Lookup { .. } => false,
@@ -223,6 +302,8 @@ impl QueryIr {
             | QueryKind::Rerank { query } => query.max_node_limit(),
             QueryKind::Nearest { .. }
             | QueryKind::SparseNearest { .. }
+            | QueryKind::FullText { .. }
+            | QueryKind::LateInteraction { .. }
             | QueryKind::Recommend { .. }
             | QueryKind::Discover { .. }
             | QueryKind::Lookup { .. } => 0,
@@ -272,7 +353,10 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
 
 fn validate_kind(kind: &QueryKind, depth: usize, nodes: &mut usize) -> Result<()> {
     match kind {
-        QueryKind::Nearest { .. } | QueryKind::SparseNearest { .. } => {}
+        QueryKind::Nearest { .. }
+        | QueryKind::SparseNearest { .. }
+        | QueryKind::FullText { .. }
+        | QueryKind::LateInteraction { .. } => {}
         QueryKind::Recommend { positive, negative } => {
             if positive.is_empty() {
                 return Err(invalid("positive", "must contain at least one point"));

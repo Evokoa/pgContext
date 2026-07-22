@@ -1,6 +1,6 @@
 //! SQL constructors for client-side query plans.
 
-use context_core::PointId;
+use context_core::{PointId, SparseVector};
 use context_query::{Formula, QueryError, QueryIr, QueryKind, QueryPlanValidator, ScoreOrder};
 use pgrx::JsonB;
 use pgrx::prelude::*;
@@ -8,6 +8,7 @@ use serde_json::{Map, Value, json};
 
 use crate::error::raise_query_error;
 use crate::vector::Vector;
+use crate::vector_variants::SparseVec;
 
 #[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
@@ -16,6 +17,68 @@ pub fn query_nearest(vector: Vector, limit: i32) -> JsonB {
         "kind": "nearest",
         "vector": vector_values(vector),
         "limit": query_limit(limit),
+    }))
+}
+
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn query_sparse_nearest(vector_name: String, vector: SparseVec, limit: i32) -> JsonB {
+    let vector = vector
+        .to_sparse()
+        .unwrap_or_else(|error| crate::error::raise_core_error(error));
+    JsonB(json!({
+        "kind": "sparse_nearest",
+        "vector_name": vector_name,
+        "vector": vector.to_string(),
+        "limit": query_limit(limit),
+    }))
+}
+
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn query_full_text(text_query: String, text_column: String, limit: i32) -> JsonB {
+    let node = QueryIr::full_text(text_column, text_query, query_limit_usize(limit))
+        .unwrap_or_else(|error| raise_query_error(error));
+    let QueryKind::FullText { text_column, query } = node.kind() else {
+        unreachable!("full-text constructor must produce a full-text node")
+    };
+    JsonB(json!({
+        "kind": "full_text",
+        "text_query": query,
+        "text_column": text_column,
+        "limit": node.limit(),
+    }))
+}
+
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn query_late_interaction(
+    query_vectors: Vec<Vector>,
+    candidates_per_query: i32,
+    limit: i32,
+) -> JsonB {
+    let vectors = query_vectors
+        .into_iter()
+        .map(vector_values)
+        .collect::<Vec<_>>();
+    let query = QueryIr::late_interaction(
+        vectors.clone(),
+        query_limit_usize(candidates_per_query),
+        query_limit_usize(limit),
+    )
+    .unwrap_or_else(|error| raise_query_error(error));
+    let QueryKind::LateInteraction {
+        candidates_per_query,
+        ..
+    } = query.kind()
+    else {
+        unreachable!("late-interaction constructor must produce a late-interaction node")
+    };
+    JsonB(json!({
+        "kind": "late_interaction",
+        "query_vectors": vectors,
+        "candidates_per_query": candidates_per_query.get(),
+        "limit": query.limit(),
     }))
 }
 
@@ -176,6 +239,48 @@ fn parse_query_node(
                 limit_field(object)?,
             )
         }
+        "sparse_nearest" => {
+            require_keys(object, &["kind", "vector_name", "vector", "limit"])?;
+            let vector = string_field(object, "vector")?
+                .parse::<SparseVector>()
+                .map_err(QueryError::from)?;
+            QueryIr::sparse_nearest(
+                string_field(object, "vector_name")?.to_owned(),
+                vector,
+                ScoreOrder::LowerIsBetter,
+                None,
+                limit_field(object)?,
+            )
+        }
+        "full_text" => {
+            require_keys(object, &["kind", "text_query", "text_column", "limit"])?;
+            QueryIr::full_text(
+                string_field(object, "text_column")?.to_owned(),
+                string_field(object, "text_query")?.to_owned(),
+                limit_field(object)?,
+            )
+        }
+        "late_interaction" => {
+            require_keys(
+                object,
+                &["kind", "query_vectors", "candidates_per_query", "limit"],
+            )?;
+            let vectors = object
+                .get("query_vectors")
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid_field("query_vectors", "must be an array"))?
+                .iter()
+                .map(|value| {
+                    let object = Map::from_iter([("vector".to_owned(), value.clone())]);
+                    f32_array(&object, "vector")
+                })
+                .collect::<context_query::Result<Vec<_>>>()?;
+            QueryIr::late_interaction(
+                vectors,
+                positive_usize_field(object, "candidates_per_query")?,
+                limit_field(object)?,
+            )
+        }
         "recommend" => {
             require_keys(
                 object,
@@ -329,11 +434,18 @@ fn string_field<'a>(
 }
 
 fn limit_field(object: &Map<String, Value>) -> context_query::Result<usize> {
+    positive_usize_field(object, "limit")
+}
+
+fn positive_usize_field(
+    object: &Map<String, Value>,
+    field: &'static str,
+) -> context_query::Result<usize> {
     let limit = object
-        .get("limit")
+        .get(field)
         .and_then(Value::as_i64)
-        .ok_or_else(|| invalid_field("limit", "must be a positive integer"))?;
-    usize::try_from(limit).map_err(|_| invalid_field("limit", "must be a positive integer"))
+        .ok_or_else(|| invalid_field(field, "must be a positive integer"))?;
+    usize::try_from(limit).map_err(|_| invalid_field(field, "must be a positive integer"))
 }
 
 fn f32_array(object: &Map<String, Value>, field: &'static str) -> context_query::Result<Vec<f32>> {
@@ -421,6 +533,11 @@ fn vector_values(vector: Vector) -> Vec<f32> {
 fn query_limit(limit: i32) -> i32 {
     validate_or_raise(QueryPlanValidator::limit(i64::from(limit)));
     limit
+}
+
+fn query_limit_usize(limit: i32) -> usize {
+    let limit = query_limit(limit);
+    usize::try_from(limit).unwrap_or_else(|_| unreachable!("validated query limit is positive"))
 }
 
 fn json_values(values: Vec<JsonB>) -> Vec<Value> {
