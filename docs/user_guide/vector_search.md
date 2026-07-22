@@ -88,9 +88,10 @@ mismatches are rejected, and bit vectors are capped at `16,000` bits. The SQL
 distance, Jaccard distance, distance operators, `boolean[]` casts, casts from
 PostgreSQL `bit` and `bit varying`, and casts back to PostgreSQL `bit` and
 `bit varying`, and `bitvec(n)` typmods as an experimental surface.
-Pgvector-compatible bit-vector Hamming ANN indexing is available through the
-explicit `pgcontext.bitvec_hnsw_hamming_ops` opclass; bit-vector Jaccard ANN
-indexing remains planned.
+Pgvector-compatible bit-vector ANN indexing is available through the explicit
+`pgcontext.bitvec_hnsw_hamming_ops` and
+`pgcontext.bitvec_hnsw_jaccard_ops` opclasses. Both traverse with the matching
+bit metric; Jaccard is not approximated with densified L2.
 
 ## Conversion Policy
 

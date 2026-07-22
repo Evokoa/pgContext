@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `2205f1b314bc83f6ff501d74ba3aef5f9de23eb28972a73218fe0edd05e70aae`
+Full SQL artifact SHA-256: `225a6e373d28fc63be070b2b6e3e2b6154c60098802d3e7f949e96b2e9bd011c`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,13 +16,13 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 18 |
 | Schemas | 1 |
-| Functions | 232 |
+| Functions | 236 |
 | Tables | 13 |
-| Views | 8 |
+| Views | 9 |
 | Triggers | 3 |
 | Casts | 23 |
 | Operators | 42 |
-| Operator classes | 11 |
+| Operator classes | 18 |
 | Aggregates | 8 |
 | Access methods | 1 |
 
@@ -74,6 +74,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 - view `pgcontext._visible_collection_points`
 - view `pgcontext._visible_collection_sparse_vectors`
 - view `pgcontext._visible_collection_vectors`
+- view `pgcontext._visible_collections`
 
 ## Function Names
 
@@ -289,6 +290,10 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext._l2_distance_fast8`
 - `pgcontext._l2_distance_fast`
 - `pgcontext._negative_inner_product_fast`
+- `pgcontext._refresh_collection_source_table`
+- `pgcontext._refresh_payload_source_bindings`
+- `pgcontext._refresh_sparse_vector_source_binding`
+- `pgcontext._refresh_vector_source_binding`
 - `pgcontext._reject_build_job_progress_regression`
 - `pgcontext.current_vector_config_revision`
 - `pgcontext.hamming_distance`
@@ -333,9 +338,16 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 | `vector_hnsw_ip_ops` | operator class | pgcontext_hnsw, vector | Experimental |
 | `vector_hnsw_cosine_ops` | operator class | pgcontext_hnsw, vector | Experimental |
 | `vector_hnsw_l1_ops` | operator class | pgcontext_hnsw, vector | Experimental |
-| `halfvec_hnsw_ops` | operator class | pgcontext_hnsw, halfvec | Experimental |
-| `sparsevec_hnsw_ops` | operator class | pgcontext_hnsw, sparsevec | Experimental |
-| `bitvec_hnsw_hamming_ops` | operator class | pgcontext_hnsw, bitvec | Experimental |
+| `halfvec_hnsw_ops` | operator class | pgcontext_hnsw, halfvec | Stable |
+| `halfvec_hnsw_ip_ops` | operator class | pgcontext_hnsw, halfvec | Stable |
+| `halfvec_hnsw_cosine_ops` | operator class | pgcontext_hnsw, halfvec | Stable |
+| `halfvec_hnsw_l1_ops` | operator class | pgcontext_hnsw, halfvec | Stable |
+| `sparsevec_hnsw_ops` | operator class | pgcontext_hnsw, sparsevec | Stable |
+| `sparsevec_hnsw_ip_ops` | operator class | pgcontext_hnsw, sparsevec | Stable |
+| `sparsevec_hnsw_cosine_ops` | operator class | pgcontext_hnsw, sparsevec | Stable |
+| `sparsevec_hnsw_l1_ops` | operator class | pgcontext_hnsw, sparsevec | Stable |
+| `bitvec_hnsw_hamming_ops` | operator class | pgcontext_hnsw, bitvec | Stable |
+| `bitvec_hnsw_jaccard_ops` | operator class | pgcontext_hnsw, bitvec | Stable |
 | `<->` | operator | vector, vector | Stable |
 | `<#>` | operator | vector, vector | Stable |
 | `<=>` | operator | vector, vector | Stable |
@@ -394,9 +406,16 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 
 - access method `pgcontext_hnsw`
 - operator class `pgcontext.bitvec_hnsw_hamming_ops`
+- operator class `pgcontext.bitvec_hnsw_jaccard_ops`
 - operator class `pgcontext.bitvec_ops`
+- operator class `pgcontext.halfvec_hnsw_cosine_ops`
+- operator class `pgcontext.halfvec_hnsw_ip_ops`
+- operator class `pgcontext.halfvec_hnsw_l1_ops`
 - operator class `pgcontext.halfvec_hnsw_ops`
 - operator class `pgcontext.halfvec_ops`
+- operator class `pgcontext.sparsevec_hnsw_cosine_ops`
+- operator class `pgcontext.sparsevec_hnsw_ip_ops`
+- operator class `pgcontext.sparsevec_hnsw_l1_ops`
 - operator class `pgcontext.sparsevec_hnsw_ops`
 - operator class `pgcontext.sparsevec_ops`
 - operator class `pgcontext.vector_hnsw_cosine_ops`

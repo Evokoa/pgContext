@@ -76,7 +76,7 @@ fn default_privileges_catalog_operators_and_opclasses_are_schema_bound() {
     let misplaced_opclasses = default_privileges_names_from_query(
         "SELECT opcname::text
            FROM pg_catalog.pg_opclass
-          WHERE opcname IN ('vector_ops', 'halfvec_ops', 'sparsevec_ops', 'bitvec_ops', 'vector_hnsw_ops', 'vector_hnsw_ip_ops', 'vector_hnsw_cosine_ops', 'vector_hnsw_l1_ops', 'halfvec_hnsw_ops', 'sparsevec_hnsw_ops', 'bitvec_hnsw_hamming_ops')
+          WHERE opcname IN ('vector_ops', 'halfvec_ops', 'sparsevec_ops', 'bitvec_ops', 'vector_hnsw_ops', 'vector_hnsw_ip_ops', 'vector_hnsw_cosine_ops', 'vector_hnsw_l1_ops', 'halfvec_hnsw_ops', 'halfvec_hnsw_ip_ops', 'halfvec_hnsw_cosine_ops', 'halfvec_hnsw_l1_ops', 'sparsevec_hnsw_ops', 'sparsevec_hnsw_ip_ops', 'sparsevec_hnsw_cosine_ops', 'sparsevec_hnsw_l1_ops', 'bitvec_hnsw_hamming_ops', 'bitvec_hnsw_jaccard_ops')
             AND opcintype IN ('vector'::regtype, 'halfvec'::regtype, 'sparsevec'::regtype, 'bitvec'::regtype)
             AND opcnamespace <> 'pgcontext'::regnamespace
           ORDER BY 1",

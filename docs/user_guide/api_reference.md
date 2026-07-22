@@ -421,11 +421,17 @@ validation, and exact scoring outside the stable compatibility promise:
   `pgcontext.sparsevec_ops`, and `pgcontext.bitvec_ops` for deterministic
   equality, comparison, and ordinary PostgreSQL btree indexes
 
-L2 HNSW index classes for `halfvec` and `sparsevec` are SQL-visible
-experimentally. `bitvec` Hamming HNSW is available through the explicit
-`pgcontext.bitvec_hnsw_hamming_ops` opclass. Non-L2 sparse ANN indexing plus
-bit-vector Jaccard ANN indexing remain planned before they are covered by the
-stable compatibility promise.
+The non-dense HNSW operator classes are first-class SQL contracts:
+
+- `halfvec_hnsw_ops`, `halfvec_hnsw_ip_ops`,
+  `halfvec_hnsw_cosine_ops`, and `halfvec_hnsw_l1_ops`
+- `sparsevec_hnsw_ops`, `sparsevec_hnsw_ip_ops`,
+  `sparsevec_hnsw_cosine_ops`, and `sparsevec_hnsw_l1_ops`
+- `bitvec_hnsw_hamming_ops` and `bitvec_hnsw_jaccard_ops`
+
+Each class stores a dense graph payload, traverses with the matching metric,
+and returns the exact operator distance type. The variant types and their
+non-index SQL helpers remain experimental as a broader compatibility surface.
 
 Experimental sparse collection metadata validates table-backed `sparsevec`
 source columns and stores per-vector sparse storage/index/status metadata:

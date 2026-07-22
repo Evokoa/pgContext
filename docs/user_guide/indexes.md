@@ -68,7 +68,7 @@ whole-graph reconstruction for traversal. The current in-memory adapter is a
 contract fixture, not evidence that PostgreSQL page writes are WAL-safe or that
 the experimental SQL access method is ready to serve production queries.
 Both in-memory and persisted-port traversal use the selected ascending-distance
-kernel for L2, negative inner product, cosine, or L1. Raw inner product is
+kernel for L2, negative inner product, cosine, L1, Hamming, or Jaccard. Raw inner product is
 rejected before traversal because nearest-first HNSW requires its negative
 ascending form. Result ties are ordered by stable point ID, and only the
 bounded traversal candidate set is sorted.
@@ -155,6 +155,21 @@ promise a long-term on-disk compatibility window or broad workload
 certification. Bounded tests cover insert, update, delete, abort, HOT/TID reuse,
 VACUUM, REINDEX, restart, forced index plans, exact-oracle ordering, and all four
 dense metrics.
+
+Non-dense operator-class names and metric bindings are stable within the PG17
+SQL contract even while the access method's on-disk compatibility remains
+experimental:
+
+| Input | Metrics and opclasses |
+| --- | --- |
+| `halfvec` | L2 `halfvec_hnsw_ops`; inner product `halfvec_hnsw_ip_ops`; cosine `halfvec_hnsw_cosine_ops`; L1 `halfvec_hnsw_l1_ops` |
+| `sparsevec` | L2 `sparsevec_hnsw_ops`; inner product `sparsevec_hnsw_ip_ops`; cosine `sparsevec_hnsw_cosine_ops`; L1 `sparsevec_hnsw_l1_ops` |
+| `bitvec` | Hamming `bitvec_hnsw_hamming_ops`; Jaccard `bitvec_hnsw_jaccard_ops` |
+
+The bit opclasses use bit-aware graph metrics. In particular, Jaccard never
+substitutes L2 over densified coordinates because that does not preserve result
+ordering. End-to-end tests compare every pair with a forced exact oracle and
+require candidate work below collection cardinality.
 
 ## IVFFlat
 

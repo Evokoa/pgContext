@@ -23,13 +23,13 @@ PGV-ANN-VECTOR-L2|HNSW opclass|vector|L2|experimental|installed|sql/pgcontext--0
 PGV-ANN-VECTOR-IP|HNSW opclass|vector|inner product|experimental|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.vector_hnsw_ip_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
 PGV-ANN-VECTOR-COSINE|HNSW opclass|vector|cosine|experimental|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.vector_hnsw_cosine_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
 PGV-ANN-VECTOR-L1|HNSW opclass|vector|L1|experimental|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.vector_hnsw_l1_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
-PGV-ANN-HALFVEC-L2|HNSW opclass|halfvec|L2|experimental|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
-PGV-ANN-HALFVEC-IP|HNSW opclass|halfvec|inner product|planned|roadmap|none|docs/user_guide/roadmap.md#Non-Dense ANN Opclasses
-PGV-ANN-HALFVEC-COSINE|HNSW opclass|halfvec|cosine|planned|roadmap|none|docs/user_guide/roadmap.md#Non-Dense ANN Opclasses
-PGV-ANN-HALFVEC-L1|HNSW opclass|halfvec|L1|planned|roadmap|none|docs/user_guide/roadmap.md#Non-Dense ANN Opclasses
-PGV-ANN-SPARSEVEC-L2|HNSW opclass|sparsevec|L2|experimental|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
-PGV-ANN-SPARSEVEC-IP|HNSW opclass|sparsevec|inner product|planned|roadmap|none|docs/user_guide/roadmap.md#Non-Dense ANN Opclasses
-PGV-ANN-SPARSEVEC-COSINE|HNSW opclass|sparsevec|cosine|planned|roadmap|none|docs/user_guide/roadmap.md#Non-Dense ANN Opclasses
-PGV-ANN-SPARSEVEC-L1|HNSW opclass|sparsevec|L1|planned|roadmap|none|docs/user_guide/roadmap.md#Non-Dense ANN Opclasses
-PGV-ANN-BITVEC-HAMMING|HNSW opclass|bitvec|Hamming|experimental|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.bitvec_hnsw_hamming_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
-PGV-ANN-BITVEC-JACCARD|HNSW opclass|bitvec|Jaccard|planned|roadmap|none|docs/user_guide/roadmap.md#Non-Dense ANN Opclasses
+PGV-ANN-HALFVEC-L2|HNSW opclass|halfvec|L2|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-ANN-HALFVEC-IP|HNSW opclass|halfvec|inner product|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_ip_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-ANN-HALFVEC-COSINE|HNSW opclass|halfvec|cosine|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_cosine_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-ANN-HALFVEC-L1|HNSW opclass|halfvec|L1|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_l1_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-ANN-SPARSEVEC-L2|HNSW opclass|sparsevec|L2|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-ANN-SPARSEVEC-IP|HNSW opclass|sparsevec|inner product|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_ip_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-ANN-SPARSEVEC-COSINE|HNSW opclass|sparsevec|cosine|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_cosine_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-ANN-SPARSEVEC-L1|HNSW opclass|sparsevec|L1|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_l1_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-ANN-BITVEC-HAMMING|HNSW opclass|bitvec|Hamming|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.bitvec_hnsw_hamming_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-ANN-BITVEC-JACCARD|HNSW opclass|bitvec|Jaccard|stable|installed|sql/pgcontext--0.1.0.sql#CREATE OPERATOR CLASS pgcontext.bitvec_hnsw_jaccard_ops|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix

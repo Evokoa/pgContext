@@ -30,12 +30,11 @@ also has structured construction, dense `real[]`/`vector` casts, and aggregates.
 `bitvec` also has `boolean[]`, PostgreSQL `bit`, and PostgreSQL `bit varying` casts plus
 pgvector-compatible built-in `bit` distance functions/operators and bitwise
 OR/AND aggregates. All three variant types also install default btree ordering
-opclasses. `halfvec` and `sparsevec` also expose experimental L2
-`pgcontext_hnsw` opclasses backed by dense vector storage, and `bitvec` exposes
-an explicit experimental `pgcontext.bitvec_hnsw_hamming_ops` opclass for
-Hamming order. Non-L2 sparse ANN indexing and bit-vector Jaccard ANN indexing
-remain planned; default `pgcontext_hnsw` attempts on `bitvec` columns fail with
-SQLSTATE `42704`.
+opclasses. The first-class non-dense HNSW surface covers L2, inner product,
+cosine, and L1 for both `halfvec` and `sparsevec`, plus explicit Hamming and
+Jaccard opclasses for `bitvec`. Default `pgcontext_hnsw` attempts on `bitvec`
+columns still fail with SQLSTATE `42704`, requiring callers to select the
+intended bit metric.
 
 ## Capability Areas
 

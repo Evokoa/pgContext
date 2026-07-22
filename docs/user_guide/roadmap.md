@@ -135,7 +135,7 @@ PG17 V1 freeze
 
 ## Non-Dense ANN Opclasses
 
-Status: planned after V1.
+Status: complete.
 
 Depends on: PG17 V1 freeze, dense pgvector HNSW, and the shared metric
 semantics.
@@ -151,7 +151,8 @@ Scope:
 - cover create, scan, insert, update, delete, VACUUM, REINDEX, restart,
   dimensions, casts, NULL/non-finite rules, SQLSTATEs, and exact oracles.
 
-Validated by an end-to-end serving test with exact-oracle and bounded-work assertions before promotion.
+Validated by end-to-end serving tests for every representation/metric pair with
+exact-oracle and bounded-work assertions.
 
 ## Quantized HNSW
 

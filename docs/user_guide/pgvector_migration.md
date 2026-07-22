@@ -89,13 +89,13 @@ OR/AND aggregates through `pgcontext.bit_or(bitvec)` and
 ordering opclasses for deterministic
 comparison and ordinary PostgreSQL btree indexes.
 
-Full pgvector parity remains planned for non-L2 sparse and bit-vector Jaccard
-ANN index classes. `halfvec` and `sparsevec` have experimental L2
-`pgcontext_hnsw` opclasses that store dense vector payloads and keep exact
-variant distances as the SQL ordering contract. `bitvec` has an explicit
-experimental `pgcontext.bitvec_hnsw_hamming_ops` opclass for Hamming order;
-default `pgcontext_hnsw` index attempts on `bitvec` columns still fail with
-SQLSTATE `42704` instead of silently choosing an unsupported metric.
+PgContext installs first-class HNSW opclasses for halfvec and sparsevec L2,
+inner product, cosine, and L1, plus bitvec Hamming and Jaccard. These classes
+store dense graph payloads but bind traversal and SQL ordering to the selected
+metric. Bitvec remains explicit—choose
+`pgcontext.bitvec_hnsw_hamming_ops` or
+`pgcontext.bitvec_hnsw_jaccard_ops`; a default `pgcontext_hnsw` attempt still
+fails with SQLSTATE `42704` rather than guessing a bit metric.
 Quantized candidate generation, sparse exact array search, and exact reranking
 are available from SQL as experimental APIs while serving-path integration
 continues to mature.

@@ -816,7 +816,14 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
         variant_hnsw_opclasses,
         vec![
             ("bitvec_hnsw_hamming_ops".to_owned(), false, false, true, true),
+            ("bitvec_hnsw_jaccard_ops".to_owned(), false, false, true, true),
+            ("halfvec_hnsw_cosine_ops".to_owned(), true, false, false, true),
+            ("halfvec_hnsw_ip_ops".to_owned(), true, false, false, true),
+            ("halfvec_hnsw_l1_ops".to_owned(), true, false, false, true),
             ("halfvec_hnsw_ops".to_owned(), true, false, false, true),
+            ("sparsevec_hnsw_cosine_ops".to_owned(), false, true, false, true),
+            ("sparsevec_hnsw_ip_ops".to_owned(), false, true, false, true),
+            ("sparsevec_hnsw_l1_ops".to_owned(), false, true, false, true),
             ("sparsevec_hnsw_ops".to_owned(), false, true, false, true)
         ],
         "promoted dense-storage variant HNSW opclasses should be present"
@@ -1377,6 +1384,182 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
 
     for (sql, sqlstate, message, context) in cases {
         assert_vector_compat_ddl_failure(sql, sqlstate, message, context);
+    }
+}
+
+#[pg_test]
+fn non_dense_hnsw_opclasses_match_exact_oracles_with_bounded_candidates() {
+    Spi::run(
+        "SET LOCAL pgcontext.hnsw_m = 16;
+         SET LOCAL pgcontext.hnsw_ef_construction = 256;
+         SET LOCAL pgcontext.hnsw_ef_search = 240;
+         SET LOCAL pgcontext.hnsw_shared_serving = off;
+         CREATE TEMP TABLE pgcontext_non_dense_hnsw_oracle (
+             id integer PRIMARY KEY,
+             half_value public.halfvec NOT NULL,
+             sparse_value public.sparsevec NOT NULL,
+             bit_value public.bitvec NOT NULL
+         );
+         INSERT INTO pgcontext_non_dense_hnsw_oracle
+         SELECT id,
+                format('[%s,%s,%s,%s]', id % 17 + 1, id % 19 + 1, id % 23 + 1, id % 29 + 1)::halfvec,
+                format('{1:%s,2:%s,3:%s,4:%s}/4', id % 17 + 1, id % 19 + 1, id % 23 + 1, id % 29 + 1)::sparsevec,
+                (id::bit(16))::bitvec
+           FROM generate_series(1, 256) AS id",
+    )
+    .expect("non-dense HNSW oracle fixture should build");
+
+    let cases = [
+        ("half_l2", "half_value", "halfvec_hnsw_ops", "<->", "pgcontext.halfvec('[3,5,7,11]')"),
+        ("half_ip", "half_value", "halfvec_hnsw_ip_ops", "<#>", "pgcontext.halfvec('[3,5,7,11]')"),
+        ("half_cosine", "half_value", "halfvec_hnsw_cosine_ops", "<=>", "pgcontext.halfvec('[3,5,7,11]')"),
+        ("half_l1", "half_value", "halfvec_hnsw_l1_ops", "<+>", "pgcontext.halfvec('[3,5,7,11]')"),
+        ("sparse_l2", "sparse_value", "sparsevec_hnsw_ops", "<->", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
+        ("sparse_ip", "sparse_value", "sparsevec_hnsw_ip_ops", "<#>", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
+        ("sparse_cosine", "sparse_value", "sparsevec_hnsw_cosine_ops", "<=>", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
+        ("sparse_l1", "sparse_value", "sparsevec_hnsw_l1_ops", "<+>", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
+        ("bit_hamming", "bit_value", "bitvec_hnsw_hamming_ops", "<~>", "pgcontext.bitvec('0000000010101010')"),
+        ("bit_jaccard", "bit_value", "bitvec_hnsw_jaccard_ops", "<%>", "pgcontext.bitvec('0000000010101010')"),
+    ];
+
+    for (suffix, column, opclass, operator, query) in cases {
+        let index_name = format!("pgcontext_non_dense_hnsw_{suffix}_idx");
+        Spi::run(&format!(
+            "CREATE INDEX {index_name}
+                ON pgcontext_non_dense_hnsw_oracle
+             USING pgcontext_hnsw ({column} pgcontext.{opclass})"
+        ))
+        .expect("non-dense HNSW opclass should build");
+
+        Spi::run(
+            "SET LOCAL enable_indexscan = off;
+             SET LOCAL enable_bitmapscan = off;
+             SET LOCAL enable_seqscan = on",
+        )
+        .expect("exact oracle should use a sequential scan");
+        let exact = Spi::get_one::<Vec<i32>>(&format!(
+            "SELECT array_agg(id)
+               FROM (
+                    SELECT id
+                      FROM pgcontext_non_dense_hnsw_oracle
+                     ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}, id
+                     LIMIT 10
+               ) oracle"
+        ))
+        .expect("non-dense exact oracle should execute")
+        .unwrap_or_default();
+
+        Spi::run(
+            "SET LOCAL enable_indexscan = on;
+             SET LOCAL enable_bitmapscan = off;
+             SET LOCAL enable_seqscan = off",
+        )
+        .expect("non-dense ANN query should use an index scan");
+        let indexed = Spi::get_one::<Vec<i32>>(&format!(
+            "SELECT array_agg(id)
+               FROM (
+                    SELECT id
+                      FROM pgcontext_non_dense_hnsw_oracle
+                     ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}, id
+                     LIMIT 10
+               ) approximate"
+        ))
+        .expect("non-dense HNSW query should execute")
+        .unwrap_or_default();
+        assert_eq!(indexed, exact, "{suffix} HNSW order diverged from its exact oracle");
+
+        let candidate_count = Spi::get_one::<i64>(
+            "SELECT candidates FROM pgcontext.hnsw_last_scan_work()",
+        )
+        .expect("non-dense HNSW work counters should be readable")
+        .unwrap_or_default();
+        assert!(candidate_count > 0, "{suffix} HNSW scan produced no candidates");
+        assert!(
+            candidate_count < 256,
+            "{suffix} HNSW scan scored the full collection: {candidate_count}"
+        );
+    }
+}
+
+#[pg_test]
+fn non_dense_hnsw_indexes_ignore_null_source_values() {
+    Spi::run(
+        "CREATE TEMP TABLE pgcontext_non_dense_hnsw_nullable (
+             id integer PRIMARY KEY,
+             half_value public.halfvec,
+             sparse_value public.sparsevec,
+             bit_value public.bitvec
+         );
+         INSERT INTO pgcontext_non_dense_hnsw_nullable VALUES
+             (1, '[1,0]'::halfvec, '{1:1}/2'::sparsevec, '10'::bitvec),
+             (2, NULL, NULL, NULL);
+         CREATE INDEX pgcontext_non_dense_hnsw_nullable_half_idx
+             ON pgcontext_non_dense_hnsw_nullable
+          USING pgcontext_hnsw (half_value pgcontext.halfvec_hnsw_ops);
+         CREATE INDEX pgcontext_non_dense_hnsw_nullable_sparse_idx
+             ON pgcontext_non_dense_hnsw_nullable
+          USING pgcontext_hnsw (sparse_value pgcontext.sparsevec_hnsw_ops);
+         CREATE INDEX pgcontext_non_dense_hnsw_nullable_bit_idx
+             ON pgcontext_non_dense_hnsw_nullable
+          USING pgcontext_hnsw (bit_value pgcontext.bitvec_hnsw_hamming_ops);
+         SET LOCAL enable_seqscan = off;
+         SET LOCAL enable_bitmapscan = off",
+    )
+    .expect("non-dense HNSW indexes should ignore NULL values while building");
+
+    for (column, operator, query, expected_index) in [
+        (
+            "half_value",
+            "<->",
+            "'[1,0]'::halfvec",
+            "pgcontext_non_dense_hnsw_nullable_half_idx",
+        ),
+        (
+            "sparse_value",
+            "<->",
+            "'{1:1}/2'::sparsevec",
+            "pgcontext_non_dense_hnsw_nullable_sparse_idx",
+        ),
+        (
+            "bit_value",
+            "<~>",
+            "'10'::bitvec",
+            "pgcontext_non_dense_hnsw_nullable_bit_idx",
+        ),
+    ] {
+        let plan = Spi::connect(|client| {
+            let result = client.select(
+                &format!(
+                    "EXPLAIN (COSTS FALSE, FORMAT TEXT)
+                     SELECT id
+                       FROM pgcontext_non_dense_hnsw_nullable
+                      ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}
+                      LIMIT 1"
+                ),
+                None,
+                &[],
+            )?;
+            result
+                .map(|row| Ok(row.get::<String>(1)?.unwrap_or_default()))
+                .collect::<Result<Vec<_>, spi::Error>>()
+                .map(|lines| lines.join("\n"))
+        })
+        .expect("nullable non-dense HNSW plan should execute");
+        assert!(
+            plan.contains(expected_index),
+            "nullable non-dense HNSW query did not use {expected_index}: {plan}"
+        );
+
+        assert_eq!(
+            Spi::get_one::<i32>(&format!(
+                "SELECT id
+                   FROM pgcontext_non_dense_hnsw_nullable
+                  ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}
+                  LIMIT 1"
+            ))
+            .expect("nullable non-dense HNSW query should execute"),
+            Some(1)
+        );
     }
 }
 

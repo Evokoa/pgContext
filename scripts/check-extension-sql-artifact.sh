@@ -52,83 +52,58 @@ validate_variant_hnsw_opclasses() {
 
   matches="$(
     grep -En \
-      'CREATE[[:space:]]+OPERATOR[[:space:]]+CLASS[[:space:]]+([^[:space:]]+\.)?bitvec_hnsw_ops\b|DEFAULT[[:space:]]+FOR[[:space:]]+TYPE[[:space:]]+(public\.)?bitvec[[:space:]]+USING[[:space:]]+pgcontext_hnsw|CREATE[[:space:]]+OPERATOR[[:space:]]+CLASS[[:space:]]+([^[:space:]]+\.)?bitvec_hnsw_jaccard_ops\b' \
+      'CREATE[[:space:]]+OPERATOR[[:space:]]+CLASS[[:space:]]+([^[:space:]]+\.)?bitvec_hnsw_ops\b|DEFAULT[[:space:]]+FOR[[:space:]]+TYPE[[:space:]]+(public\.)?bitvec[[:space:]]+USING[[:space:]]+pgcontext_hnsw' \
       "${input}" || true
   )"
-
   if [[ -n "${matches}" ]]; then
-    echo "forbidden incomplete variant HNSW opclass found in ${label} SQL artifact: ${input}" >&2
+    echo "forbidden default bitvec HNSW opclass found in ${label} SQL artifact: ${input}" >&2
     echo "${matches}" >&2
-    echo "bitvec HNSW must use explicit metric opclasses; only bitvec_hnsw_hamming_ops is currently promoted." >&2
+    echo "bitvec HNSW must require an explicit Hamming or Jaccard opclass." >&2
     exit 1
   fi
 
-  matches="$(
-    perl -0ne '
-      while (/CREATE\s+OPERATOR\s+CLASS\s+(?:\S+\.)?halfvec_hnsw_ops\b.*?;/gis) {
-        my $block = $&;
-        print $block unless $block =~ /DEFAULT\s+FOR\s+TYPE\s+public\.halfvec\s+USING\s+pgcontext_hnsw/is
-            && $block =~ /OPERATOR\s+1\s+pgcontext\.<->\s*\(public\.halfvec,\s*public\.halfvec\)\s+FOR\s+ORDER\s+BY\s+pg_catalog\.float_ops/is
-            && $block =~ /FUNCTION\s+1\s+pgcontext\.halfvec_l2_distance\s*\(public\.halfvec,\s*public\.halfvec\)/is
-            && $block =~ /STORAGE\s+public\.vector/is;
-      }
-      while (/CREATE\s+OPERATOR\s+CLASS\s+(?:\S+\.)?sparsevec_hnsw_ops\b.*?;/gis) {
-        my $block = $&;
-        print $block unless $block =~ /DEFAULT\s+FOR\s+TYPE\s+public\.sparsevec\s+USING\s+pgcontext_hnsw/is
-            && $block =~ /OPERATOR\s+1\s+pgcontext\.<->\s*\(public\.sparsevec,\s*public\.sparsevec\)\s+FOR\s+ORDER\s+BY\s+pg_catalog\.float_ops/is
-            && $block =~ /FUNCTION\s+1\s+pgcontext\.sparsevec_l2_distance\s*\(public\.sparsevec,\s*public\.sparsevec\)/is
-            && $block =~ /STORAGE\s+public\.vector/is;
-      }
-      while (/CREATE\s+OPERATOR\s+CLASS\s+(?:\S+\.)?bitvec_hnsw_hamming_ops\b.*?;/gis) {
-        my $block = $&;
-        print $block unless $block =~ /FOR\s+TYPE\s+public\.bitvec\s+USING\s+pgcontext_hnsw/is
-            && $block !~ /DEFAULT\s+FOR\s+TYPE/is
-            && $block =~ /OPERATOR\s+1\s+pgcontext\.<~>\s*\(public\.bitvec,\s*public\.bitvec\)\s+FOR\s+ORDER\s+BY\s+pg_catalog\.integer_ops/is
-            && $block =~ /FUNCTION\s+1\s+pgcontext\.bitvec_hamming_distance\s*\(public\.bitvec,\s*public\.bitvec\)/is
-            && $block =~ /STORAGE\s+public\.vector/is;
-      }
-    ' "${input}"
-  )"
+  if ! perl -0 - "${input}" <<'PERL'
+use strict;
+use warnings;
 
-  if [[ -n "${matches}" ]]; then
-    echo "incomplete dense-storage variant HNSW opclass found in ${label} SQL artifact: ${input}" >&2
-    echo "${matches}" >&2
-    echo "variant HNSW opclasses must use the promoted metric operator and dense vector storage." >&2
-    exit 1
-  fi
+my $path = shift @ARGV;
+open my $fh, '<', $path or die "cannot read $path: $!\n";
+local $/;
+my $sql = <$fh>;
+exit 0 unless $sql =~ /CREATE\s+ACCESS\s+METHOD\s+pgcontext_hnsw\b/is;
 
-  local halfvec_count
-  local sparsevec_count
-  local bitvec_hamming_count
-  local hnsw_surface_count
+my @specs = (
+    ['halfvec_hnsw_ops', 'halfvec', 'default', '<->', 'float_ops', 'halfvec_l2_distance'],
+    ['halfvec_hnsw_ip_ops', 'halfvec', 'explicit', '<#>', 'float_ops', 'halfvec_negative_inner_product'],
+    ['halfvec_hnsw_cosine_ops', 'halfvec', 'explicit', '<=>', 'float_ops', 'halfvec_cosine_distance'],
+    ['halfvec_hnsw_l1_ops', 'halfvec', 'explicit', '<+>', 'float_ops', 'halfvec_l1_distance'],
+    ['sparsevec_hnsw_ops', 'sparsevec', 'default', '<->', 'float_ops', 'sparsevec_l2_distance'],
+    ['sparsevec_hnsw_ip_ops', 'sparsevec', 'explicit', '<#>', 'float_ops', 'sparsevec_negative_inner_product'],
+    ['sparsevec_hnsw_cosine_ops', 'sparsevec', 'explicit', '<=>', 'float_ops', 'sparsevec_cosine_distance'],
+    ['sparsevec_hnsw_l1_ops', 'sparsevec', 'explicit', '<+>', 'float_ops', 'sparsevec_l1_distance'],
+    ['bitvec_hnsw_hamming_ops', 'bitvec', 'explicit', '<~>', 'integer_ops', 'bitvec_hamming_distance'],
+    ['bitvec_hnsw_jaccard_ops', 'bitvec', 'explicit', '<%>', 'float_ops', 'bitvec_jaccard_distance'],
+);
 
-  halfvec_count="$(
-    perl -0ne '
-      my @blocks = /CREATE\s+OPERATOR\s+CLASS\s+(?:\S+\.)?halfvec_hnsw_ops\b.*?;/gis;
-      print scalar(@blocks);
-    ' "${input}"
-  )"
-  sparsevec_count="$(
-    perl -0ne '
-      my @blocks = /CREATE\s+OPERATOR\s+CLASS\s+(?:\S+\.)?sparsevec_hnsw_ops\b.*?;/gis;
-      print scalar(@blocks);
-    ' "${input}"
-  )"
-  bitvec_hamming_count="$(
-    perl -0ne '
-      my @blocks = /CREATE\s+OPERATOR\s+CLASS\s+(?:\S+\.)?bitvec_hnsw_hamming_ops\b.*?;/gis;
-      print scalar(@blocks);
-    ' "${input}"
-  )"
-  hnsw_surface_count="$(
-    grep -Ec \
-      'CREATE[[:space:]]+ACCESS[[:space:]]+METHOD[[:space:]]+pgcontext_hnsw\b|CREATE[[:space:]]+OPERATOR[[:space:]]+CLASS[[:space:]]+([^[:space:]]+\.)?(halfvec_hnsw_ops|sparsevec_hnsw_ops|bitvec_hnsw_hamming_ops)\b' \
-      "${input}" || true
-  )"
-
-  if [[ "${hnsw_surface_count}" != "0" && ( "${halfvec_count}" != "1" || "${sparsevec_count}" != "1" || "${bitvec_hamming_count}" != "1" ) ]]; then
-    echo "expected exactly one promoted dense-storage variant HNSW opclass for each variant in ${label} SQL artifact: ${input}" >&2
-    echo "found halfvec_hnsw_ops=${halfvec_count}, sparsevec_hnsw_ops=${sparsevec_count}, bitvec_hnsw_hamming_ops=${bitvec_hamming_count}" >&2
+for my $spec (@specs) {
+    my ($name, $type, $default, $operator, $order, $function) = @$spec;
+    my @blocks = $sql =~ /CREATE\s+OPERATOR\s+CLASS\s+(?:\S+\.)?\Q$name\E\b.*?;/gis;
+    die "expected exactly one $name opclass, found " . scalar(@blocks) . "\n"
+        unless @blocks == 1;
+    my $block = $blocks[0];
+    my $default_ok = $default eq 'default'
+        ? $block =~ /DEFAULT\s+FOR\s+TYPE/is
+        : $block !~ /DEFAULT\s+FOR\s+TYPE/is;
+    die "invalid $name opclass contract\n" unless
+        $default_ok
+        && $block =~ /FOR\s+TYPE\s+public\.\Q$type\E\s+USING\s+pgcontext_hnsw/is
+        && $block =~ /OPERATOR\s+1\s+pgcontext\.\Q$operator\E\s*\(public\.\Q$type\E,\s*public\.\Q$type\E\)\s+FOR\s+ORDER\s+BY\s+pg_catalog\.\Q$order\E/is
+        && $block =~ /FUNCTION\s+1\s+pgcontext\.\Q$function\E\s*\(public\.\Q$type\E,\s*public\.\Q$type\E\)/is
+        && $block =~ /STORAGE\s+public\.vector/is;
+}
+PERL
+  then
+    echo "incomplete promoted non-dense HNSW opclass in ${label} SQL artifact: ${input}" >&2
     exit 1
   fi
 }

@@ -36,7 +36,11 @@ use crate::error::{raise_core_error, raise_sql_error, raise_sql_error_with_hint}
 use crate::settings::hnsw_config_from_gucs;
 use crate::vector_variants::{BitVec, HalfVec, SparseVec};
 #[allow(unused_imports)]
-use crate::vector_variants::{bitvec_hamming_distance, halfvec_l2_distance, sparsevec_l2_distance};
+use crate::vector_variants::{
+    bitvec_hamming_distance, bitvec_jaccard_distance, halfvec_cosine_distance, halfvec_l1_distance,
+    halfvec_l2_distance, halfvec_negative_inner_product, sparsevec_cosine_distance,
+    sparsevec_l1_distance, sparsevec_l2_distance, sparsevec_negative_inner_product,
+};
 
 mod bitmap;
 #[allow(

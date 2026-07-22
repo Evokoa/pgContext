@@ -55,8 +55,9 @@ failure.
   non-indexed collections, forces an immediate stop, restarts, and verifies WAL
   replay preserves query behavior.
 - `crash_restart_hnsw.sh`: exercises insert, update, delete, VACUUM, REINDEX,
-  and exact-oracle order for all four dense HNSW metrics, restarts the pgrx
-  PostgreSQL cluster, and rechecks every metric's index-backed order.
+  and exact-oracle order for dense, halfvec, sparsevec, and bitvec HNSW metrics,
+  restarts the pgrx PostgreSQL cluster, and rechecks every metric's index-backed
+  order.
 - `pgvector_hnsw_lifecycle.sh`: the bounded V1 dense-metric launch gate; forces
   L2, inner-product, cosine, and L1 index plans through DML, VACUUM, REINDEX,
   restart, and exact-order comparison.

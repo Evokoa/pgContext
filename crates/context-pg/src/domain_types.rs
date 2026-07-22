@@ -11,12 +11,26 @@ pub(crate) fn parse_distance_metric(value: &str) -> Option<DistanceMetric> {
         "inner_product" => Some(DistanceMetric::NegativeInnerProduct),
         "cosine" => Some(DistanceMetric::Cosine),
         "l1" => Some(DistanceMetric::L1),
+        "hamming" => Some(DistanceMetric::Hamming),
+        "jaccard" => Some(DistanceMetric::Jaccard),
         _ => None,
     }
 }
 
+fn parse_numeric_distance_metric(value: &str) -> Option<DistanceMetric> {
+    parse_distance_metric(value).filter(|metric| {
+        matches!(
+            metric,
+            DistanceMetric::L2
+                | DistanceMetric::NegativeInnerProduct
+                | DistanceMetric::Cosine
+                | DistanceMetric::L1
+        )
+    })
+}
+
 pub(crate) fn distance_metric_from_sql(value: &str, subject: &str) -> DistanceMetric {
-    parse_distance_metric(value).unwrap_or_else(|| {
+    parse_numeric_distance_metric(value).unwrap_or_else(|| {
         let subject = metric_subject_prefix(subject);
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
@@ -26,7 +40,7 @@ pub(crate) fn distance_metric_from_sql(value: &str, subject: &str) -> DistanceMe
 }
 
 pub(crate) fn distance_metric_from_query(value: &str, subject: &str) -> DistanceMetric {
-    parse_distance_metric(value).unwrap_or_else(|| {
+    parse_numeric_distance_metric(value).unwrap_or_else(|| {
         let subject = metric_subject_prefix(subject);
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
@@ -201,7 +215,7 @@ mod tests {
 
     use super::{
         ArtifactKind, ArtifactLifecycleState, VectorStatus, distance_metric_label,
-        parse_distance_metric,
+        parse_distance_metric, parse_numeric_distance_metric,
     };
 
     #[test]
@@ -211,6 +225,8 @@ mod tests {
             DistanceMetric::NegativeInnerProduct,
             DistanceMetric::Cosine,
             DistanceMetric::L1,
+            DistanceMetric::Hamming,
+            DistanceMetric::Jaccard,
         ] {
             assert_eq!(
                 parse_distance_metric(distance_metric_label(metric)),
@@ -218,6 +234,8 @@ mod tests {
             );
         }
         assert_eq!(parse_distance_metric("typo"), None);
+        assert_eq!(parse_numeric_distance_metric("hamming"), None);
+        assert_eq!(parse_numeric_distance_metric("jaccard"), None);
     }
 
     #[test]

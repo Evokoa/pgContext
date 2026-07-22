@@ -269,6 +269,22 @@ fn sparse_exact_search_rejects_unknown_metric_with_sqlstate() {
 }
 
 #[pg_test]
+fn sparse_exact_search_rejects_bit_metric_with_sqlstate() {
+    assert_vector_search_sql_failure(
+        "SELECT pgcontext.search_sparse(
+                pgcontext.sparsevec('{}/1'),
+                ARRAY[1]::bigint[],
+                ARRAY[pgcontext.sparsevec('{}/1')],
+                'hamming',
+                1
+         )",
+        "22023",
+        "unsupported sparse distance metric: hamming",
+        "sparse exact bit metric",
+    );
+}
+
+#[pg_test]
 fn sparse_exact_search_rejects_cosine_zero_vector_with_sqlstate() {
     assert_vector_search_sql_failure(
         "SELECT pgcontext.search_sparse(
@@ -757,6 +773,21 @@ fn exact_search_rejects_unknown_metric() {
          )",
     )
     .expect("unknown metric should fail");
+}
+
+#[pg_test]
+#[should_panic(expected = "unsupported distance metric: hamming")]
+fn exact_search_rejects_bit_metric() {
+    Spi::run(
+        "SELECT pgcontext.search(
+                '[0]'::vector,
+                ARRAY[1]::bigint[],
+                ARRAY['[0]'::vector],
+                'hamming',
+                1
+         )",
+    )
+    .expect("bit metric should fail for numeric exact search");
 }
 
 #[pg_test]
