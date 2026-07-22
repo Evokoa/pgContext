@@ -67,6 +67,48 @@ fn query_ir_rejects_invalid_recursive_semantics() {
 }
 
 #[test]
+fn query_ir_requires_filters_on_executable_leaf_branches() {
+    let nearest = QueryIr::nearest(None, vec![1.0, 0.0], ScoreOrder::HigherIsBetter, None, 2)
+        .expect("nearest query should be valid");
+    assert!(matches!(
+        QueryIr::new(
+            QueryKind::Rerank {
+                query: Box::new(nearest),
+            },
+            ScoreOrder::HigherIsBetter,
+            Some(serde_json::json!({
+                "must": [{"key": "tenant", "match": {"value": "acme"}}]
+            })),
+            2,
+        ),
+        Err(QueryError::InvalidInput {
+            field: "filter",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn prefetch_requires_higher_is_better_fusion_order() {
+    let branch = QueryIr::nearest(None, vec![1.0, 0.0], ScoreOrder::HigherIsBetter, None, 2)
+        .expect("nearest query should be valid");
+    assert!(matches!(
+        QueryIr::new(
+            QueryKind::Prefetch {
+                branches: vec![branch],
+            },
+            ScoreOrder::LowerIsBetter,
+            None,
+            2,
+        ),
+        Err(QueryError::InvalidInput {
+            field: "score_order",
+            ..
+        })
+    ));
+}
+
+#[test]
 fn candidate_scores_must_be_finite() {
     assert!(matches!(
         Candidate::new(PointId::new(1), f64::NAN, CandidateBranch::DenseAnn),

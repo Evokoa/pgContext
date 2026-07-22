@@ -299,6 +299,12 @@ pub enum StageKind {
     Candidates,
     /// Authoritative source hydration and recheck.
     SourceRecheck,
+    /// Multi-branch reciprocal-rank or weighted fusion.
+    Fusion,
+    /// Score threshold, weight, or formula transformation.
+    ScoreTransform,
+    /// Final deterministic exact rerank.
+    Rerank,
 }
 
 /// Bounded diagnostic emitted after one stage.

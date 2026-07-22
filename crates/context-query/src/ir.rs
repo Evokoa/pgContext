@@ -188,6 +188,24 @@ impl QueryIr {
         self.score_order
     }
 
+    pub(crate) fn has_filter_in_subtree(&self) -> bool {
+        self.filter.is_some()
+            || match &self.kind {
+                QueryKind::Prefetch { branches } => {
+                    branches.iter().any(Self::has_filter_in_subtree)
+                }
+                QueryKind::Weighted { query, .. }
+                | QueryKind::ScoreThreshold { query, .. }
+                | QueryKind::Formula { query, .. }
+                | QueryKind::Rerank { query } => query.has_filter_in_subtree(),
+                QueryKind::Nearest { .. }
+                | QueryKind::SparseNearest { .. }
+                | QueryKind::Recommend { .. }
+                | QueryKind::Discover { .. }
+                | QueryKind::Lookup { .. } => false,
+            }
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         let mut nodes = 0;
         validate_query(self, 1, &mut nodes)
@@ -201,6 +219,29 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
     *nodes = nodes.saturating_add(1);
     if *nodes > MAX_QUERY_NODES {
         return Err(invalid("query", "exceeds maximum node count"));
+    }
+    if query.filter.is_some()
+        && matches!(
+            query.kind,
+            QueryKind::Prefetch { .. }
+                | QueryKind::Weighted { .. }
+                | QueryKind::ScoreThreshold { .. }
+                | QueryKind::Formula { .. }
+                | QueryKind::Rerank { .. }
+        )
+    {
+        return Err(invalid(
+            "filter",
+            "must be attached to executable leaf branches",
+        ));
+    }
+    if matches!(query.kind, QueryKind::Prefetch { .. })
+        && query.score_order != ScoreOrder::HigherIsBetter
+    {
+        return Err(invalid(
+            "score_order",
+            "prefetch fusion scores must use higher-is-better ordering",
+        ));
     }
     validate_kind(&query.kind, depth, nodes)
 }

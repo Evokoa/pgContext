@@ -9,6 +9,8 @@ use crate::{
     types::deterministic_points,
 };
 
+mod composite;
+
 /// Pure executor composed from owned synchronous query ports.
 pub struct QueryExecutor<'a> {
     candidates: &'a mut dyn CandidateSource,
@@ -53,6 +55,25 @@ impl<'a> QueryExecutor<'a> {
         budget: ExecutionBudget,
     ) -> Result<ExecutionOutcome> {
         query.validate()?;
+        if query.limit() > budget.max_results() {
+            return Ok(outcome(
+                Completion::BudgetExhausted,
+                Vec::new(),
+                Vec::new(),
+                BudgetUsage::default(),
+            ));
+        }
+        if is_composite(query) {
+            return self.execute_composite(query, budget);
+        }
+        self.execute_leaf(query, budget)
+    }
+
+    fn execute_leaf(
+        &mut self,
+        query: &QueryIr,
+        budget: ExecutionBudget,
+    ) -> Result<ExecutionOutcome> {
         let mut usage = BudgetUsage::default();
         let mut diagnostics = Vec::new();
 
@@ -323,6 +344,17 @@ impl<'a> QueryExecutor<'a> {
 
         Ok(outcome(completion, points, diagnostics, usage))
     }
+}
+
+fn is_composite(query: &QueryIr) -> bool {
+    matches!(
+        query.kind(),
+        crate::QueryKind::Prefetch { .. }
+            | crate::QueryKind::Weighted { .. }
+            | crate::QueryKind::ScoreThreshold { .. }
+            | crate::QueryKind::Formula { .. }
+            | crate::QueryKind::Rerank { .. }
+    )
 }
 
 fn outcome(
