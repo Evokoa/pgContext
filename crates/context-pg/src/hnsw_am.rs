@@ -497,16 +497,7 @@ fn ensure_masked_hnsw_relation(index_relation: pg_sys::Relation) -> HnswScoreMet
     // SAFETY: the relation was checked as an index above and stays locked by
     // `PgRelation`; opclass metadata reads are therefore callback-independent
     // but otherwise identical to the regular AM scan validation.
-    match unsafe { hnsw_score_metric(index_relation) } {
-        metric @ (HnswScoreMetric::L2
-        | HnswScoreMetric::NegativeInnerProduct
-        | HnswScoreMetric::Cosine
-        | HnswScoreMetric::L1) => metric,
-        HnswScoreMetric::BitHamming => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-            "masked HNSW Hamming traversal is unavailable until metric serving",
-        ),
-    }
+    unsafe { hnsw_score_metric(index_relation) }
 }
 
 fn search_limit_from_masked_candidates(limit: i32) -> SearchLimit {
@@ -637,19 +628,22 @@ enum HnswScoreMetric {
     Cosine,
     L1,
     BitHamming,
+    BitJaccard,
 }
 
 impl HnswScoreMetric {
     /// Returns the dense graph score preserving this metric's ordering.
     ///
-    /// Hamming uses L2 over 0/1 coordinates because its square root is
-    /// monotone in the number of differing bits.
+    /// Bit metrics operate over the validated dense 0/1 storage form so their
+    /// graph traversal score has the same ordering as the SQL operator.
     const fn navigation_metric(self) -> DistanceMetric {
         match self {
-            Self::L2 | Self::BitHamming => DistanceMetric::L2,
+            Self::L2 => DistanceMetric::L2,
             Self::NegativeInnerProduct => DistanceMetric::NegativeInnerProduct,
             Self::Cosine => DistanceMetric::NegativeInnerProduct,
             Self::L1 => DistanceMetric::L1,
+            Self::BitHamming => DistanceMetric::Hamming,
+            Self::BitJaccard => DistanceMetric::Jaccard,
         }
     }
 
@@ -683,6 +677,7 @@ impl HnswScoreMetric {
             Self::Cosine => 3,
             Self::L1 => 4,
             Self::BitHamming => 5,
+            Self::BitJaccard => 6,
         }
     }
 }
@@ -843,33 +838,16 @@ unsafe fn hnsw_scan_candidates(
     // single-column AM.
     let metric = unsafe { hnsw_score_metric(index_relation) };
     if let Some(query) = query {
-        match metric {
-            HnswScoreMetric::L2
-            | HnswScoreMetric::NegativeInnerProduct
-            | HnswScoreMetric::Cosine
-            | HnswScoreMetric::L1 => {
-                // SAFETY: The versioned metapage binds this opclass metric to
-                // the persisted graph's construction configuration.
-                let config = unsafe { hnsw_stored_config(index_relation, metric) };
-                let requested_limit = requested_limit.unwrap_or(config.ef_search());
-                // SAFETY: The page adapter reads only through shared pins while
-                // this AM callback owns the relation. It fetches nodes/layers
-                // on demand and never materializes the persisted graph.
-                return unsafe {
-                    hnsw_page_graph_scan_candidates(
-                        index_relation,
-                        metric,
-                        query,
-                        config,
-                        requested_limit,
-                    )
-                };
-            }
-            HnswScoreMetric::BitHamming => raise_sql_error(
-                PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-                "HNSW Hamming kNN serving is not available until the metric-serving checkpoint",
-            ),
-        }
+        // SAFETY: The versioned metapage binds this opclass metric to the
+        // persisted graph's construction configuration.
+        let config = unsafe { hnsw_stored_config(index_relation, metric) };
+        let requested_limit = requested_limit.unwrap_or(config.ef_search());
+        // SAFETY: The page adapter reads only through shared pins while this
+        // AM callback owns the relation. It fetches nodes/layers on demand and
+        // never materializes the persisted graph.
+        return unsafe {
+            hnsw_page_graph_scan_candidates(index_relation, metric, query, config, requested_limit)
+        };
     }
     // A non-ordered AM scan has no kNN strategy: it visits visible index
     // entries without manufacturing a score-ranked exact candidate set.

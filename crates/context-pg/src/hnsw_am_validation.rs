@@ -128,44 +128,60 @@ unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric
         // support-proc and operator-family metadata.
         unsafe { hnsw_dense_score_metric(index_relation) }
     } else if type_oid == halfvec_oid {
-        // SAFETY: The caller passes a valid index relation for the current AM
-        // callback, and halfvec indexes must declare the promoted L2 support
-        // proc to avoid silently scoring another metric as L2.
-        unsafe {
-            ensure_hnsw_metric_contract(
-                index_relation,
-                "halfvec_l2_distance",
+        let candidates = [
+            (HnswScoreMetric::L2, "halfvec_l2_distance", pg_sys::FLOAT4OID, "<->"),
+            (
+                HnswScoreMetric::NegativeInnerProduct,
+                "halfvec_negative_inner_product",
                 pg_sys::FLOAT4OID,
-                "<->",
-            )
-        };
-        HnswScoreMetric::L2
+                "<#>",
+            ),
+            (
+                HnswScoreMetric::Cosine,
+                "halfvec_cosine_distance",
+                pg_sys::FLOAT4OID,
+                "<=>",
+            ),
+            (HnswScoreMetric::L1, "halfvec_l1_distance", pg_sys::FLOAT4OID, "<+>"),
+        ];
+        // SAFETY: The caller provides a live initialized index relation.
+        unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, "halfvec") }
     } else if type_oid == sparsevec_oid {
-        // SAFETY: The caller passes a valid index relation for the current AM
-        // callback, and sparsevec indexes must declare the promoted L2 support
-        // proc to avoid silently scoring another metric as L2.
-        unsafe {
-            ensure_hnsw_metric_contract(
-                index_relation,
-                "sparsevec_l2_distance",
+        let candidates = [
+            (HnswScoreMetric::L2, "sparsevec_l2_distance", pg_sys::FLOAT4OID, "<->"),
+            (
+                HnswScoreMetric::NegativeInnerProduct,
+                "sparsevec_negative_inner_product",
                 pg_sys::FLOAT4OID,
-                "<->",
-            )
-        };
-        HnswScoreMetric::L2
+                "<#>",
+            ),
+            (
+                HnswScoreMetric::Cosine,
+                "sparsevec_cosine_distance",
+                pg_sys::FLOAT4OID,
+                "<=>",
+            ),
+            (HnswScoreMetric::L1, "sparsevec_l1_distance", pg_sys::FLOAT4OID, "<+>"),
+        ];
+        // SAFETY: The caller provides a live initialized index relation.
+        unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, "sparsevec") }
     } else if type_oid == bitvec_oid {
-        // SAFETY: The caller passes a valid index relation for the current AM
-        // callback, and bitvec indexes must declare the promoted Hamming
-        // support proc to avoid silently scoring another bit metric as Hamming.
-        unsafe {
-            ensure_hnsw_metric_contract(
-                index_relation,
+        let candidates = [
+            (
+                HnswScoreMetric::BitHamming,
                 "bitvec_hamming_distance",
                 pg_sys::INT4OID,
                 "<~>",
-            )
-        };
-        HnswScoreMetric::BitHamming
+            ),
+            (
+                HnswScoreMetric::BitJaccard,
+                "bitvec_jaccard_distance",
+                pg_sys::FLOAT8OID,
+                "<%>",
+            ),
+        ];
+        // SAFETY: The caller provides a live initialized index relation.
+        unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, "bitvec") }
     } else {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
@@ -201,7 +217,21 @@ unsafe fn hnsw_dense_score_metric(index_relation: pg_sys::Relation) -> HnswScore
             "<+>",
         ),
     ];
-    for (metric, support_name, return_type, operator_name) in candidates {
+    // SAFETY: The caller provides a live initialized index relation.
+    unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, "vector") }
+}
+
+unsafe fn hnsw_score_metric_from_candidates(
+    index_relation: pg_sys::Relation,
+    candidates: &[(
+        HnswScoreMetric,
+        &'static str,
+        pg_sys::Oid,
+        &'static str,
+    )],
+    type_name: &str,
+) -> HnswScoreMetric {
+    for &(metric, support_name, return_type, operator_name) in candidates {
         // SAFETY: The caller provides a live initialized index relation.
         if unsafe { hnsw_support_proc_matches(index_relation, support_name, return_type) } {
             // SAFETY: The same relation must bind strategy 1 to the operator
@@ -212,39 +242,8 @@ unsafe fn hnsw_dense_score_metric(index_relation: pg_sys::Relation) -> HnswScore
     }
     raise_sql_error(
         PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
-        "HNSW vector opclass must use a supported pgcontext metric function",
+        format!("HNSW {type_name} opclass must use a supported pgcontext metric function"),
     )
-}
-
-unsafe fn ensure_hnsw_metric_contract(
-    index_relation: pg_sys::Relation,
-    expected_support_name: &'static str,
-    expected_support_return_type: pg_sys::Oid,
-    expected_operator_name: &'static str,
-) {
-    // SAFETY: The caller passes a valid index relation for this AM callback.
-    unsafe {
-        ensure_hnsw_support_proc(
-            index_relation,
-            expected_support_name,
-            expected_support_return_type,
-        );
-        ensure_hnsw_strategy_operator(index_relation, expected_operator_name);
-    }
-}
-
-unsafe fn ensure_hnsw_support_proc(
-    index_relation: pg_sys::Relation,
-    expected_name: &'static str,
-    expected_return_type: pg_sys::Oid,
-) {
-    // SAFETY: The caller provides a live initialized index relation.
-    if !unsafe { hnsw_support_proc_matches(index_relation, expected_name, expected_return_type) } {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
-            format!("HNSW opclass must use pgcontext.{expected_name}"),
-        );
-    }
 }
 
 unsafe fn hnsw_support_proc_matches(

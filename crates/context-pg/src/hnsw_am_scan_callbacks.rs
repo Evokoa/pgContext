@@ -333,7 +333,7 @@ unsafe fn store_hnsw_orderby_distance(
     // `numberOfOrderBys > 0`.
     let orderby_count = unsafe { c_int_to_usize((*scan).numberOfOrderBys, "scan order-bys") };
     match metric {
-        HnswScoreMetric::L2 => {
+        HnswScoreMetric::L2 | HnswScoreMetric::BitJaccard => {
             let mut order_by_types = vec![pg_sys::FLOAT8OID; orderby_count];
             let mut distances = vec![
                 pg_sys::IndexOrderByDistance {

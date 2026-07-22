@@ -485,14 +485,5 @@ fn ensure_compactable_hnsw_relation(index_relation: pg_sys::Relation) -> HnswSco
     }
     // SAFETY: the relation was checked as an index above and stays locked by
     // `PgRelation`; this reads the same opclass metadata the AM scan does.
-    match unsafe { hnsw_score_metric(index_relation) } {
-        metric @ (HnswScoreMetric::L2
-        | HnswScoreMetric::NegativeInnerProduct
-        | HnswScoreMetric::Cosine
-        | HnswScoreMetric::L1) => metric,
-        HnswScoreMetric::BitHamming => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-            "compacting a Hamming HNSW index is unavailable until metric serving",
-        ),
-    }
+    unsafe { hnsw_score_metric(index_relation) }
 }

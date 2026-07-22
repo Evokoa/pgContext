@@ -380,6 +380,8 @@ fn hnsw_metric_metapage_identity_round_trips_every_dense_metric() -> context_ind
             3,
         ),
         (HnswScoreMetric::L1, DistanceMetric::L1, 4),
+        (HnswScoreMetric::BitHamming, DistanceMetric::Hamming, 5),
+        (HnswScoreMetric::BitJaccard, DistanceMetric::Jaccard, 6),
     ];
 
     for (score_metric, graph_metric, storage_tag) in cases {
