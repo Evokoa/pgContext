@@ -1,16 +1,16 @@
 //! PostgreSQL adapters for the transport-neutral query executor.
 
-use context_core::{CollectionName, DenseVector, DistanceMetric, PointId, SourceKey};
+use context_core::{CollectionName, DenseVector, PointId, SourceKey};
 use context_query::{
-    Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateSource, ExecutionBudget,
-    ExecutionOutcome, FilterCandidateBatch, FilterCandidateSource, HydratedCandidate, QueryError,
-    QueryExecutor, QueryIr, QueryKind, Result, SourceReadiness, SourceRechecker, StageDiagnostic,
-    TelemetrySink,
+    Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateSource, Completion,
+    ExecutionBudget, ExecutionOutcome, ExecutionState, FilterCandidateBatch, FilterCandidateSource,
+    HydratedCandidate, QueryError, QueryExecutor, QueryIr, QueryKind, Result, SourceReadiness,
+    SourceRechecker, StageDiagnostic, TelemetrySink,
 };
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 
-use crate::error::raise_query_error;
+use crate::error::{raise_query_error, raise_sql_error};
 use crate::table_search::{
     FilterField, SearchVector, distance_function, load_filter_fields, push_filter_parameter_args,
     quote_identifier, quote_qualified_identifier, require_collection_owner,
@@ -285,6 +285,13 @@ pub(crate) fn run_query(
         collection_name,
         query.limit(),
     );
+    if adapter == CandidateAdapter::Hnsw {
+        crate::collection_limits::enforce_candidate_budget(
+            collection.collection_id,
+            collection_name,
+            candidate_limit(&query, adapter),
+        );
+    }
     let filter_fields = query
         .filter()
         .map(|_| load_filter_fields(collection.collection_id))
@@ -298,6 +305,7 @@ pub(crate) fn run_query(
         adapter,
     )
     .unwrap_or_else(|error| raise_query_error(error));
+    require_complete_outcome(&outcome);
     outcome_rows(&outcome).unwrap_or_else(|error| raise_query_error(error))
 }
 
@@ -308,12 +316,7 @@ fn execute_prepared_query(
     query: &QueryIr,
     adapter: CandidateAdapter,
 ) -> Result<ExecutionOutcome> {
-    let candidate_limit = match adapter {
-        CandidateAdapter::Exact => query.limit(),
-        CandidateAdapter::Hnsw => {
-            crate::settings::hnsw_candidate_budget_from_guc().max(query.limit())
-        }
-    };
+    let candidate_limit = candidate_limit(query, adapter);
     let budget = ExecutionBudget::new(
         candidate_limit,
         context_core::policy::MAX_RECALL_CHECK_POINT_IDS,
@@ -359,6 +362,40 @@ fn execute_prepared_query(
     .execute(query, budget)
 }
 
+fn candidate_limit(query: &QueryIr, adapter: CandidateAdapter) -> usize {
+    match adapter {
+        CandidateAdapter::Exact => query.limit(),
+        CandidateAdapter::Hnsw => {
+            crate::settings::hnsw_candidate_budget_from_guc().max(query.limit())
+        }
+    }
+}
+
+fn require_complete_outcome(outcome: &ExecutionOutcome) {
+    match outcome.state() {
+        ExecutionState::Ready => {}
+        ExecutionState::RebuildRequired { reason } => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("query source requires rebuild: {reason:?}"),
+        ),
+        ExecutionState::NotReady { reason } => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("query source is not ready: {reason:?}"),
+        ),
+    }
+    match outcome.completion() {
+        Completion::Complete => {}
+        Completion::Cancelled => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_QUERY_CANCELED,
+            "query execution was cancelled",
+        ),
+        Completion::BudgetExhausted => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            "query execution exhausted its work budget",
+        ),
+    }
+}
+
 fn candidate_rows(
     collection_id: i64,
     registered_vector: &SearchVector,
@@ -367,24 +404,34 @@ fn candidate_rows(
     limit: usize,
     adapter: CandidateAdapter,
 ) -> Result<CandidatePage> {
+    match adapter {
+        CandidateAdapter::Exact => {
+            exact_candidate_rows(collection_id, registered_vector, query, filter, limit)
+        }
+        CandidateAdapter::Hnsw => {
+            hnsw_candidate_rows(collection_id, registered_vector, query, filter, limit)
+        }
+    }
+}
+
+fn exact_candidate_rows(
+    collection_id: i64,
+    registered_vector: &SearchVector,
+    query: &QueryIr,
+    filter: Option<&FilterCandidateBatch>,
+    limit: usize,
+) -> Result<CandidatePage> {
     let query_vector = sql_vector(query)?;
     let table_name = quote_qualified_identifier(
         &registered_vector.schema_name,
         &registered_vector.table_name,
     );
     let vector_column = quote_identifier(&registered_vector.vector_column_name);
-    let score_expression = match adapter {
-        CandidateAdapter::Exact => format!(
-            "pgcontext.{}(source.{vector_column}, $1)",
-            distance_function(registered_vector.metric)
-        ),
-        CandidateAdapter::Hnsw => format!(
-            "source.{vector_column} OPERATOR(pgcontext.{}) $1",
-            distance_operator(registered_vector.metric)?
-        ),
-    };
-    let probe_limit = limit.saturating_add(1);
-    let sql_limit = sql_limit(probe_limit, "candidate_source")?;
+    let score_expression = format!(
+        "pgcontext.{}(source.{vector_column}, $1)",
+        distance_function(registered_vector.metric)
+    );
+    let sql_limit = sql_limit(limit, "candidate_source")?;
     let (filter_sql, point_ids) = match filter {
         Some(filter) => (
             " AND points.point_id = ANY($3::bigint[])",
@@ -415,24 +462,100 @@ fn candidate_rows(
         let rows = client
             .select(&sql, Some(sql_limit), &args)
             .map_err(|error| port_failure("candidate_source", error))?;
-        let branch = match adapter {
-            CandidateAdapter::Exact => CandidateBranch::DenseExact,
-            CandidateAdapter::Hnsw => CandidateBranch::DenseAnn,
-        };
         let mut candidates = Vec::new();
         for row in rows {
             let point_id = spi_point_id(&row, 1, "candidate_source")?;
-            let score = match adapter {
-                CandidateAdapter::Exact => {
-                    f64::from(spi_column::<f32>(&row, 2, "candidate_source")?)
-                }
-                CandidateAdapter::Hnsw => spi_column::<f64>(&row, 2, "candidate_source")?,
-            };
-            candidates.push(Candidate::new(point_id, score, branch)?);
+            let score = f64::from(spi_column::<f32>(&row, 2, "candidate_source")?);
+            candidates.push(Candidate::new(
+                point_id,
+                score,
+                CandidateBranch::DenseExact,
+            )?);
         }
-        let exhausted = candidates.len() <= limit;
-        candidates.truncate(limit);
-        Ok(CandidatePage::new(candidates, exhausted))
+        Ok(CandidatePage::new(candidates, true))
+    })
+}
+
+fn hnsw_candidate_rows(
+    collection_id: i64,
+    registered_vector: &SearchVector,
+    query: &QueryIr,
+    filter: Option<&FilterCandidateBatch>,
+    limit: usize,
+) -> Result<CandidatePage> {
+    let query_vector = sql_vector(query)?;
+    let index_oid = registered_vector
+        .hnsw_index_oid
+        .ok_or_else(|| QueryError::PortFailure {
+            stage: "candidate_source",
+            message: "registered vector has no attached HNSW index".to_owned(),
+        })?;
+    let table_name = quote_qualified_identifier(
+        &registered_vector.schema_name,
+        &registered_vector.table_name,
+    );
+    let sql_limit = sql_limit(limit, "candidate_source")?;
+    let hnsw_limit = i32::try_from(limit).map_err(|_| QueryError::PortFailure {
+        stage: "candidate_source",
+        message: format!("HNSW candidate limit {limit} exceeds PostgreSQL integer"),
+    })?;
+    let point_ids = filter
+        .map(|filter| sql_point_ids(filter.point_ids().iter().copied()))
+        .transpose()?;
+    let (filter_sql, limit_placeholder, index_placeholder) = if point_ids.is_some() {
+        (" AND points.point_id = ANY($3::bigint[])", 4, 5)
+    } else {
+        ("", 3, 4)
+    };
+    let sql = format!(
+        "WITH candidate_mask AS MATERIALIZED (
+             SELECT array_agg(source.ctid ORDER BY source.ctid) AS heap_tids
+               FROM pgcontext._visible_collection_points AS points
+               JOIN {table_name} AS source ON source.id::text = points.source_key
+              WHERE points.collection_id = $2
+                AND points.deleted_at IS NULL
+                {filter_sql}
+         ),
+         ann_candidates AS MATERIALIZED (
+             SELECT ann.heap_tid, ann.score::float8 AS score
+               FROM candidate_mask
+              CROSS JOIN LATERAL pgcontext._hnsw_masked_candidates(
+                    ${index_placeholder},
+                    $1,
+                    candidate_mask.heap_tids,
+                    ${limit_placeholder}
+                ) AS ann
+         )
+         SELECT points.point_id, ann.score
+           FROM ann_candidates AS ann
+           JOIN {table_name} AS source ON source.ctid::text = ann.heap_tid
+           JOIN pgcontext._visible_collection_points AS points
+             ON points.source_key = source.id::text
+          WHERE points.collection_id = $2
+            AND points.deleted_at IS NULL
+          ORDER BY ann.score ASC, points.point_id ASC
+          LIMIT ${limit_placeholder}"
+    );
+    let mut args = Vec::<DatumWithOid<'_>>::with_capacity(5);
+    args.push(query_vector.into());
+    args.push(collection_id.into());
+    if let Some(point_ids) = point_ids {
+        args.push(point_ids.into());
+    }
+    args.push(hnsw_limit.into());
+    args.push(index_oid.into());
+
+    Spi::connect(|client| {
+        let rows = client
+            .select(&sql, Some(sql_limit), &args)
+            .map_err(|error| port_failure("candidate_source", error))?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            let point_id = spi_point_id(&row, 1, "candidate_source")?;
+            let score = spi_column::<f64>(&row, 2, "candidate_source")?;
+            candidates.push(Candidate::new(point_id, score, CandidateBranch::DenseAnn)?);
+        }
+        Ok(CandidatePage::new(candidates, true))
     })
 }
 
@@ -448,19 +571,6 @@ fn nearest_vector(query: &QueryIr) -> Result<&DenseVector> {
 
 fn sql_vector(query: &QueryIr) -> Result<Vector> {
     Ok(Vector::from_dense(nearest_vector(query)?.clone()))
-}
-
-fn distance_operator(metric: DistanceMetric) -> Result<&'static str> {
-    match metric {
-        DistanceMetric::L2 => Ok("<->"),
-        DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => Ok("<#>"),
-        DistanceMetric::Cosine => Ok("<=>"),
-        DistanceMetric::L1 => Ok("<+>"),
-        DistanceMetric::Hamming | DistanceMetric::Jaccard => Err(QueryError::PortFailure {
-            stage: "candidate_source",
-            message: "bit metrics cannot serve dense vector queries".to_owned(),
-        }),
-    }
 }
 
 fn sql_point_ids(point_ids: impl IntoIterator<Item = PointId>) -> Result<Vec<i64>> {
@@ -593,6 +703,9 @@ pub(crate) struct AdapterConformanceSnapshot {
     pub(crate) hnsw_candidates: usize,
     pub(crate) exact_rechecks: usize,
     pub(crate) hnsw_rechecks: usize,
+    pub(crate) exact_complete: bool,
+    pub(crate) hnsw_complete: bool,
+    pub(crate) hnsw_work_candidates: i64,
 }
 
 #[cfg(feature = "pg_test")]
@@ -635,6 +748,15 @@ pub(crate) fn adapter_conformance_snapshot_for_test(
     .unwrap_or_else(|error| raise_query_error(error));
     let exact_usage = exact.usage();
     let hnsw_usage = hnsw.usage();
+    let hnsw_work_candidates =
+        Spi::get_one::<i64>("SELECT candidates FROM pgcontext.hnsw_last_scan_work()")
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    format!("failed to read HNSW adapter work: {error}"),
+                )
+            })
+            .unwrap_or_default();
     AdapterConformanceSnapshot {
         exact_rows: outcome_rows(&exact).unwrap_or_else(|error| raise_query_error(error)),
         hnsw_rows: outcome_rows(&hnsw).unwrap_or_else(|error| raise_query_error(error)),
@@ -643,5 +765,86 @@ pub(crate) fn adapter_conformance_snapshot_for_test(
         hnsw_candidates: hnsw_usage.candidates(),
         exact_rechecks: exact_usage.rechecks(),
         hnsw_rechecks: hnsw_usage.rechecks(),
+        exact_complete: exact.state() == &ExecutionState::Ready
+            && exact.completion() == Completion::Complete,
+        hnsw_complete: hnsw.state() == &ExecutionState::Ready
+            && hnsw.completion() == Completion::Complete,
+        hnsw_work_candidates,
     }
+}
+
+#[cfg(feature = "pg_test")]
+pub(crate) fn dense_metric_adapter_snapshot_for_test(
+    collection: String,
+) -> AdapterConformanceSnapshot {
+    let collection_name = crate::table_search::collection_name_from_sql(collection);
+    let collection = resolve_collection(&collection_name);
+    require_collection_owner(&collection, &collection_name);
+    let mut registered_vector =
+        resolve_registered_vector(&collection_name, collection.collection_id);
+    validate_search_drift(collection.collection_id, &mut registered_vector);
+    require_table_select_privilege(&registered_vector);
+    let query = QueryIr::nearest(
+        None,
+        vec![1.0, 0.0],
+        context_query::ScoreOrder::LowerIsBetter,
+        None,
+        3,
+    )
+    .unwrap_or_else(|error| raise_query_error(error));
+    let exact = execute_prepared_query(
+        collection.collection_id,
+        &registered_vector,
+        &[],
+        &query,
+        CandidateAdapter::Exact,
+    )
+    .unwrap_or_else(|error| raise_query_error(error));
+    let hnsw = execute_prepared_query(
+        collection.collection_id,
+        &registered_vector,
+        &[],
+        &query,
+        CandidateAdapter::Hnsw,
+    )
+    .unwrap_or_else(|error| raise_query_error(error));
+    let exact_usage = exact.usage();
+    let hnsw_usage = hnsw.usage();
+    let hnsw_work_candidates =
+        Spi::get_one::<i64>("SELECT candidates FROM pgcontext.hnsw_last_scan_work()")
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    format!("failed to read HNSW metric adapter work: {error}"),
+                )
+            })
+            .unwrap_or_default();
+    AdapterConformanceSnapshot {
+        exact_rows: outcome_rows(&exact).unwrap_or_else(|error| raise_query_error(error)),
+        hnsw_rows: outcome_rows(&hnsw).unwrap_or_else(|error| raise_query_error(error)),
+        filter_candidates: 0,
+        exact_candidates: exact_usage.candidates(),
+        hnsw_candidates: hnsw_usage.candidates(),
+        exact_rechecks: exact_usage.rechecks(),
+        hnsw_rechecks: hnsw_usage.rechecks(),
+        exact_complete: exact.state() == &ExecutionState::Ready
+            && exact.completion() == Completion::Complete,
+        hnsw_complete: hnsw.state() == &ExecutionState::Ready
+            && hnsw.completion() == Completion::Complete,
+        hnsw_work_candidates,
+    }
+}
+
+#[cfg(feature = "pg_test")]
+pub(crate) fn run_hnsw_for_test(collection: String) -> Vec<(i64, String, f32)> {
+    let collection_name = crate::table_search::collection_name_from_sql(collection);
+    let query = QueryIr::nearest(
+        None,
+        vec![1.0, 0.0],
+        context_query::ScoreOrder::LowerIsBetter,
+        None,
+        1,
+    )
+    .unwrap_or_else(|error| raise_query_error(error));
+    run_query(&collection_name, query, CandidateAdapter::Hnsw)
 }
