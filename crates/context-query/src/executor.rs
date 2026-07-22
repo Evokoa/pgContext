@@ -236,9 +236,7 @@ impl<'a> QueryExecutor<'a> {
             } else {
                 "candidate_source_partial"
             },
-            filter_batch
-                .as_ref()
-                .map_or(0, |batch| batch.point_ids().len()),
+            page.scored_count(),
             page.candidates().len(),
             None,
         );

@@ -172,7 +172,7 @@ fn hydrated(point_id: u64, score: f64) -> HydratedCandidate {
 fn executor_runs_filter_candidates_recheck_and_deterministic_output() {
     let mut candidates = FakeCandidateSource {
         readiness: SourceReadiness::Ready,
-        page: CandidatePage::new(vec![candidate(3, 0.7), candidate(1, 0.7)], true),
+        page: CandidatePage::with_scored_count(vec![candidate(3, 0.7), candidate(1, 0.7)], 7, true),
         ..Default::default()
     };
     let mut filter = FakeFilterSource {
@@ -213,6 +213,8 @@ fn executor_runs_filter_candidates_recheck_and_deterministic_output() {
     assert_eq!(filter.calls, 1);
     assert_eq!(rechecker.calls, 1);
     assert_eq!(telemetry.diagnostics.len(), 3);
+    assert_eq!(telemetry.diagnostics[1].input_count(), 7);
+    assert_eq!(telemetry.diagnostics[1].output_count(), 2);
 }
 
 #[test]

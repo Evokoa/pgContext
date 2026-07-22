@@ -1,7 +1,7 @@
 //! Validated query intermediate representation.
 
 use context_core::policy::{MAX_FILTER_DEPTH, MAX_FILTER_NODES, MAX_RECALL_CHECK_POINT_IDS};
-use context_core::{DenseVector, PointId, SearchLimit, VectorName};
+use context_core::{DenseVector, PointId, SearchLimit, SparseVector, VectorName};
 use context_filter::{Filter, parse_filter_json};
 use serde_json::Value as JsonValue;
 
@@ -20,6 +20,13 @@ pub enum QueryKind {
         vector_name: Option<VectorName>,
         /// Validated query vector.
         vector: DenseVector,
+    },
+    /// Nearest-neighbor retrieval over a selected sparse vector.
+    SparseNearest {
+        /// Named sparse-vector selector.
+        vector_name: VectorName,
+        /// Validated sparse query vector.
+        vector: SparseVector,
     },
     /// Positive/negative-example recommendation.
     Recommend {
@@ -109,6 +116,32 @@ impl QueryIr {
         Ok(query)
     }
 
+    /// Creates a validated sparse nearest-neighbor request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] for an invalid vector name, sparse
+    /// vector, filter shape, or zero limit.
+    pub fn sparse_nearest(
+        vector_name: String,
+        vector: SparseVector,
+        score_order: ScoreOrder,
+        filter: Option<JsonValue>,
+        limit: usize,
+    ) -> Result<Self> {
+        let query = Self {
+            kind: QueryKind::SparseNearest {
+                vector_name: VectorName::new(vector_name)?,
+                vector,
+            },
+            filter: parse_filter(filter)?,
+            limit: SearchLimit::new(limit)?,
+            score_order,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
     /// Creates a query from an application-level kind.
     ///
     /// # Errors
@@ -174,7 +207,7 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
 
 fn validate_kind(kind: &QueryKind, depth: usize, nodes: &mut usize) -> Result<()> {
     match kind {
-        QueryKind::Nearest { .. } => {}
+        QueryKind::Nearest { .. } | QueryKind::SparseNearest { .. } => {}
         QueryKind::Recommend { positive, negative } => {
             if positive.is_empty() {
                 return Err(invalid("positive", "must contain at least one point"));

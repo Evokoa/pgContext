@@ -74,6 +74,7 @@ impl Candidate {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CandidatePage {
     candidates: Vec<Candidate>,
+    scored_count: usize,
     exhausted: bool,
 }
 
@@ -81,8 +82,24 @@ impl CandidatePage {
     /// Creates a candidate page.
     #[must_use]
     pub const fn new(candidates: Vec<Candidate>, exhausted: bool) -> Self {
+        let scored_count = candidates.len();
         Self {
             candidates,
+            scored_count,
+            exhausted,
+        }
+    }
+
+    /// Creates a candidate page with explicit bounded scoring work.
+    #[must_use]
+    pub const fn with_scored_count(
+        candidates: Vec<Candidate>,
+        scored_count: usize,
+        exhausted: bool,
+    ) -> Self {
+        Self {
+            candidates,
+            scored_count,
             exhausted,
         }
     }
@@ -97,6 +114,12 @@ impl CandidatePage {
     #[must_use]
     pub fn into_candidates(self) -> Vec<Candidate> {
         self.candidates
+    }
+
+    /// Returns how many source candidates the adapter scored to produce this page.
+    #[must_use]
+    pub const fn scored_count(&self) -> usize {
+        self.scored_count
     }
 
     /// Reports whether the source has no additional candidates.

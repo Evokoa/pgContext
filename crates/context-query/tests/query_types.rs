@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
-use context_core::{PointId, policy::MAX_RECALL_CHECK_POINT_IDS};
+use context_core::{PointId, SparseEntry, SparseVector, policy::MAX_RECALL_CHECK_POINT_IDS};
 use context_query::{
     Candidate, CandidateBranch, ExecutionBudget, Formula, QueryError, QueryIr, QueryKind,
     ScoreOrder,
@@ -71,6 +71,30 @@ fn candidate_scores_must_be_finite() {
             field: "candidate_score",
             ..
         })
+    ));
+}
+
+#[test]
+fn sparse_nearest_ir_preserves_named_sparse_vector() {
+    let vector = SparseVector::new(
+        8,
+        vec![
+            SparseEntry::new(1, 0.5).expect("entry should be valid"),
+            SparseEntry::new(6, 1.0).expect("entry should be valid"),
+        ],
+    )
+    .expect("sparse vector should be valid");
+    let query = QueryIr::sparse_nearest(
+        "keywords".to_owned(),
+        vector.clone(),
+        ScoreOrder::LowerIsBetter,
+        None,
+        3,
+    )
+    .expect("sparse nearest query should be valid");
+    assert!(matches!(
+        query.kind(),
+        QueryKind::SparseNearest { vector: stored, .. } if stored == &vector
     ));
 }
 
