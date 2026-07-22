@@ -177,6 +177,7 @@ unsafe fn hnsw_page_graph_scan_candidates(
             graph.page_visits,
             graph.node_reads,
             limit.get(),
+            None,
         )
     }
 }
@@ -223,6 +224,7 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
             graph.page_visits,
             graph.node_reads,
             limit.get(),
+            Some(mask),
         )
     }
 }
@@ -239,6 +241,7 @@ unsafe fn hnsw_scan_candidates_with_delta_merge(
     page_visits: usize,
     node_reads: usize,
     requested_limit: usize,
+    delta_mask: Option<&CandidateMask>,
 ) -> HnswScanCandidates {
     // SAFETY: this adapter exists only for the active AM callback.
     let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
@@ -264,15 +267,20 @@ unsafe fn hnsw_scan_candidates_with_delta_merge(
         );
     }
     record_hnsw_delta_segment_scan();
-    let entries = delta_records.iter().map(|record| match record.kind {
-        DeltaRecordKind::Live => DeltaScanEntry::Live {
-            heap_tid: record.heap_tid,
-            vector: record.vector.as_slice(),
-        },
-        DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
-            heap_tid: record.heap_tid,
-        },
-    });
+    let entries = delta_records
+        .iter()
+        .filter(|record| {
+            delta_mask.is_none_or(|mask| mask.allows(HnswPointId::new(record.heap_tid)))
+        })
+        .map(|record| match record.kind {
+            DeltaRecordKind::Live => DeltaScanEntry::Live {
+                heap_tid: record.heap_tid,
+                vector: record.vector.as_slice(),
+            },
+            DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
+                heap_tid: record.heap_tid,
+            },
+        });
     let delta_outcome = scan_delta_topk(
         entries,
         metric.navigation_metric(),
@@ -280,6 +288,7 @@ unsafe fn hnsw_scan_candidates_with_delta_merge(
         requested_limit,
     )
     .unwrap_or_else(|error| raise_hnsw_scan_error(error));
+    let scored_delta_vectors = delta_outcome.scored_count;
     let base_hits = outcome
         .results()
         .iter()
@@ -299,7 +308,7 @@ unsafe fn hnsw_scan_candidates_with_delta_merge(
     HnswScanCandidates {
         work: HnswScanWork {
             page_visits,
-            node_reads,
+            node_reads: node_reads.saturating_add(scored_delta_vectors),
             candidates: candidates.len(),
             rechecks: 0,
             exact_strategy: false,

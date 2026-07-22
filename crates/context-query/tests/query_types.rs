@@ -2,7 +2,10 @@
 
 #![allow(clippy::expect_used)]
 
-use context_core::{PointId, SparseEntry, SparseVector, policy::MAX_RECALL_CHECK_POINT_IDS};
+use context_core::{
+    PointId, SparseEntry, SparseVector,
+    policy::{MAX_HNSW_CANDIDATE_MASK_POINTS, MAX_RECALL_CHECK_POINT_IDS},
+};
 use context_query::{
     Candidate, CandidateBranch, ExecutionBudget, Formula, QueryError, QueryIr, QueryKind,
     ScoreOrder,
@@ -138,6 +141,24 @@ fn execution_budget_rejects_values_above_policy_ceilings() {
             ..
         })
     ));
+    assert!(matches!(
+        ExecutionBudget::new(
+            1,
+            MAX_HNSW_CANDIDATE_MASK_POINTS.saturating_add(1),
+            1,
+            1,
+            1,
+            1,
+        ),
+        Err(QueryError::InvalidInput {
+            field: "max_filter_candidates",
+            ..
+        })
+    ));
+    assert!(
+        ExecutionBudget::new(1, MAX_HNSW_CANDIDATE_MASK_POINTS, 1, 1, 1, 1).is_ok(),
+        "the query budget must admit the configured HNSW mask ceiling"
+    );
     assert!(matches!(
         ExecutionBudget::new(1, 1, 1, usize::MAX, 1, 1),
         Err(QueryError::InvalidInput {

@@ -541,8 +541,9 @@ fn hnsw_mask_candidate_limit_guc_raises_the_masked_scan_budget_above_the_default
     )
     .expect("mask-budget probe table should be created");
     Spi::run(
-        "INSERT INTO mask_budget_probe \
-         VALUES (1, '[1,2,3,4]'::vector), (2, '[5,6,7,8]'::vector)",
+        "INSERT INTO mask_budget_probe
+         SELECT n, ('[' || n || ',2,3,4]')::vector
+           FROM generate_series(1, 10001) AS n",
     )
     .expect("mask-budget probe rows should insert");
     Spi::run(
@@ -551,28 +552,30 @@ fn hnsw_mask_candidate_limit_guc_raises_the_masked_scan_budget_above_the_default
     )
     .expect("mask-budget probe index should build");
 
-    // A mask larger than the default candidate-mask budget (10,000 points):
-    // synthetic TIDs are enough because the budget check runs before any
-    // point in the mask is resolved against the graph.
+    // A real source-row mask larger than the default candidate-mask budget
+    // (10,000 points). Real TIDs also exercise the HOT-root canonicalizer.
     let over_default_budget_sql =
-        "WITH candidates AS (
-             SELECT ('(' || n || ',1)')::tid AS heap_tid
-               FROM generate_series(0, 10000) AS n
-         )
-         SELECT * FROM pgcontext._hnsw_masked_candidates(
+        "SELECT * FROM pgcontext._hnsw_masked_candidates(
              'mask_budget_probe_hnsw'::regclass,
              '[1,2,3,4]'::vector,
-             (SELECT array_agg(heap_tid) FROM candidates),
+             (SELECT array_agg(ctid ORDER BY ctid) FROM mask_budget_probe),
              5
          )";
+    let index_oid = Spi::get_one::<pg_sys::Oid>(
+        "SELECT 'mask_budget_probe_hnsw'::regclass::oid",
+    )
+    .expect("mask-budget index OID should load")
+    .expect("mask-budget index should exist");
 
-    let rejected_at_default = PgTryBuilder::new(|| {
-        Spi::run(over_default_budget_sql)
-            .expect("over-default-budget masked scan should fail before raising the GUC");
-        false
-    })
-    .catch_when(PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED, |_| true)
-    .execute();
+    let rejected_at_default = crate::hnsw_am::with_hnsw_candidate_helper_capability(index_oid, || {
+        PgTryBuilder::new(|| {
+            Spi::run(over_default_budget_sql)
+                .expect("over-default-budget masked scan should fail before raising the GUC");
+            false
+        })
+        .catch_when(PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED, |_| true)
+        .execute()
+    });
     assert!(
         rejected_at_default,
         "masked scan above the default budget must fail with SQLSTATE 54000 by default"
@@ -580,8 +583,11 @@ fn hnsw_mask_candidate_limit_guc_raises_the_masked_scan_budget_above_the_default
 
     Spi::run("SET pgcontext.hnsw_mask_candidate_limit = 20000")
         .expect("mask-candidate-limit GUC should be settable above the default");
-    Spi::run(over_default_budget_sql)
-        .expect("masked scan should succeed once the GUC raises the budget above 10,001 points");
+    crate::hnsw_am::with_hnsw_candidate_helper_capability(index_oid, || {
+        Spi::run(over_default_budget_sql).expect(
+            "masked scan should succeed once the GUC raises the budget above 10,001 points",
+        );
+    });
     Spi::run("RESET pgcontext.hnsw_mask_candidate_limit")
         .expect("mask-candidate-limit GUC should reset");
 }

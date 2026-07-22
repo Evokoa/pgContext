@@ -20,13 +20,15 @@ Extended production certification and unimplemented product behavior live in
   remain experimental.
 - `pgcontext.search` is the stable single-vector retrieval surface.
   `pgcontext.query` covers dense plus full-text fusion and experimental exact
-  dense+sparse RRF fusion. ANN sparse and multi-branch planners are post-V1
-  roadmap features.
+  dense+sparse RRF fusion. Named sparse ANN is a separate experimental search
+  path; composite multi-branch planning remains roadmap work.
 - Named dense vector registration and search-by-name selection are stable. The
   per-vector metadata functions are stable containers, but HNSW/quantization
   option semantics and full planner use are not part of the stable promise yet.
-- Named sparse table-backed ANN/index serving and internally maintained
-  multi-vector/late-interaction ANN are post-V1 roadmap features.
+- Named sparse table-backed ANN/index serving is experimental and requires an
+  explicitly attached, metric-matched HNSW index. It falls back to exact search
+  when the binding is absent or stale. Internally maintained
+  multi-vector/late-interaction ANN remains outside the stable V1 surface.
 - Qdrant-style payload mutation helpers and bulk point backfill APIs are stable
   SQL surfaces. Experimental backend-local build-job metadata exists for
   owner-scoped progress, cancellation, retry, abandoned-backend detection, and
@@ -108,10 +110,15 @@ Extended production certification and unimplemented product behavior live in
   The update-churn lane in the [benchmark](../benchmarks/pgvector.md) records
   both the pre-compaction measurements and the re-measurement above.
 
-## Unimplemented Serving Paths
+## Experimental or Unimplemented Serving Paths
 
 - Quantization helpers do not provide quantized HNSW build or serving.
-- Named sparse vector search is exact; named sparse ANN is not implemented.
+- Named sparse ANN densifies sparse values for graph traversal, then exactly
+  rechecks authoritative sparse source rows. Its index records therefore share
+  the documented single-page dimension/degree envelope, and the feature is not
+  part of the stable V1 contract. Live post-build delta vectors are scanned
+  exactly and included in `explain_sparse.scored_count`; use REINDEX or the
+  documented compaction lifecycle when bounded base-graph work is required.
 - Late-interaction ANN is not internally maintained and requires an
   experimental user-managed token companion table.
 - Typed composite query structures do not yet execute every advanced candidate

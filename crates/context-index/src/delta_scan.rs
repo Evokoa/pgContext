@@ -58,6 +58,9 @@ pub struct DeltaScanOutcome {
     /// Every heap TID the delta mentions; base candidates with these TIDs
     /// are stale (superseded or deleted) and must not surface.
     pub retired: BTreeSet<u64>,
+    /// Number of final live delta vectors scored exactly before top-k
+    /// truncation. This is work performed, not the number of returned hits.
+    pub scored_count: usize,
 }
 
 /// One row of a compacted graph: the current vector for a live heap TID.
@@ -132,7 +135,8 @@ pub fn scan_delta_topk<'a>(
 ) -> Result<DeltaScanOutcome> {
     let (live, retired) = fold_live_state(entries);
 
-    let mut hits = Vec::with_capacity(live.len().min(k));
+    let scored_count = live.len();
+    let mut hits = Vec::with_capacity(scored_count.min(k));
     for (heap_tid, vector) in live {
         let score = metric
             .distance_slices(query, vector)
@@ -141,7 +145,11 @@ pub fn scan_delta_topk<'a>(
     }
     sort_hits(&mut hits);
     hits.truncate(k);
-    Ok(DeltaScanOutcome { hits, retired })
+    Ok(DeltaScanOutcome {
+        hits,
+        retired,
+        scored_count,
+    })
 }
 
 /// Merges base-graph candidates with a delta scan into one ascending-score

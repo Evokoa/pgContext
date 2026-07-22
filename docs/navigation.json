@@ -18,6 +18,10 @@
           "path": "benchmarks/pgvector.md"
         },
         {
+          "title": "Owned late-interaction storage benchmark",
+          "path": "benchmarks/late_interaction_owned.md"
+        },
+        {
           "title": "Quickstart",
           "path": "quickstart.md"
         },

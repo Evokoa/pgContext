@@ -842,6 +842,72 @@ fn sparse_search_refreshes_drifted_source_table_without_catalog_writes() {
 }
 
 #[pg_test]
+fn sparse_ann_preserves_non_superuser_acl_and_source_rls() {
+    acl_create_role("m5_acl_sparse_ann_owner");
+    acl_grant_api_access("m5_acl_sparse_ann_owner");
+
+    acl_set_session_user("m5_acl_sparse_ann_owner");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_sparse_ann_docs (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL,
+             tenant text NOT NULL
+         );
+         INSERT INTO public.m5_acl_sparse_ann_docs (id, lexical, tenant)
+         SELECT value,
+                pg_catalog.format('{1:%s}/4', value)::sparsevec,
+                'other'
+           FROM generate_series(1, 64) AS value;
+         INSERT INTO public.m5_acl_sparse_ann_docs (id, lexical, tenant)
+         VALUES (100, pgcontext.sparsevec('{1:100}/4'), 'm5_acl_sparse_ann_owner');
+         ALTER TABLE public.m5_acl_sparse_ann_docs ENABLE ROW LEVEL SECURITY;
+         ALTER TABLE public.m5_acl_sparse_ann_docs FORCE ROW LEVEL SECURITY;
+         CREATE POLICY m5_acl_sparse_ann_tenant
+             ON public.m5_acl_sparse_ann_docs
+          USING (tenant = SESSION_USER);
+         SELECT pgcontext.create_collection(
+             'm5_acl_sparse_ann_docs', 'public.m5_acl_sparse_ann_docs'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'm5_acl_sparse_ann_docs', 'lexical', 'lexical', 4, 'l2'
+         );
+         SELECT pgcontext.upsert_points(
+             'm5_acl_sparse_ann_docs',
+             ARRAY(
+                 SELECT value::text FROM generate_series(1, 64) AS value
+                 UNION ALL SELECT '100'
+             )
+         );
+         CREATE INDEX m5_acl_sparse_ann_docs_hnsw
+             ON public.m5_acl_sparse_ann_docs USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm5_acl_sparse_ann_docs', 'lexical',
+             'public.m5_acl_sparse_ann_docs_hnsw'
+         );
+         SET LOCAL pgcontext.hnsw_candidate_budget = 8;",
+    )
+    .expect("non-superuser sparse ANN fixture should be created");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_sparse_vectors", "SELECT"),
+        "sparse ANN callers must not need private sparse catalog SELECT"
+    );
+    let visible_sources = Spi::get_one::<String>(
+        "SELECT coalesce(string_agg(source_key, ',' ORDER BY source_key), '')
+           FROM pgcontext.search_sparse(
+                'm5_acl_sparse_ann_docs', 'lexical',
+                pgcontext.sparsevec('{}/4'), 1
+           )",
+    )
+    .expect("non-superuser sparse ANN should execute")
+    .expect("sparse ANN aggregate should not be null");
+    assert_eq!(visible_sources, "100");
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
 fn drop_collection_denies_non_owner_collections() {
     acl_create_role("m2_acl_collection_owner_d");
     acl_create_role("m2_acl_denied_drop");

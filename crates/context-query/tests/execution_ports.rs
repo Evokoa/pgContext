@@ -218,6 +218,36 @@ fn executor_runs_filter_candidates_recheck_and_deterministic_output() {
 }
 
 #[test]
+fn exact_source_readiness_executes_the_authoritative_fallback() {
+    let mut candidates = FakeCandidateSource {
+        readiness: SourceReadiness::Exact,
+        page: CandidatePage::with_scored_count(vec![candidate(1, 0.5)], 12, true),
+        ..Default::default()
+    };
+    let mut rechecker = FakeRechecker {
+        rows: vec![hydrated(1, 0.5)],
+        ..Default::default()
+    };
+    let mut telemetry = FakeTelemetry::default();
+
+    let outcome = QueryExecutor::new(
+        &mut candidates,
+        None,
+        &mut rechecker,
+        &mut telemetry,
+        &CancelAfter::never(),
+    )
+    .execute(&query(false), budget())
+    .expect("exact fallback should execute");
+
+    assert_eq!(outcome.state(), &ExecutionState::Ready);
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.usage().candidates(), 1);
+    assert_eq!(outcome.usage().rechecks(), 1);
+    assert_eq!(telemetry.diagnostics[0].input_count(), 12);
+}
+
+#[test]
 fn executor_returns_not_ready_without_requesting_candidates() {
     let mut candidates = FakeCandidateSource {
         readiness: SourceReadiness::NotReady {

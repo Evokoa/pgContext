@@ -4,10 +4,10 @@ In pgContext, a collection is a catalog entry that groups table-backed
 retrieval configuration. The V1 milestone covers collection
 create/inspect/drop, dense vector-column registration, stable point ID
 mappings, exact table-backed search, deterministic point scrolling, and
-experimental sparse vector-column metadata.
+experimental sparse vector-column metadata and exact-rechecked named sparse ANN.
 
-Future consumption of vector configuration by quantized serving and named
-sparse ANN is tracked in the [post-V1 roadmap](roadmap.md).
+Future consumption of vector configuration by quantized serving is tracked in
+the [post-V1 roadmap](roadmap.md).
 
 Collection names must be ASCII identifiers:
 

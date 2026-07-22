@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `ebb497f910a501b92d1d2ba0976a45cd0c55c66e0473c9dbe265ac13986c23e0`
+Full SQL artifact SHA-256: `6d63302fec3b7a90e89cb1b949132d35d5db1651ae4f7e57d47660a987807355`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,7 +16,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 18 |
 | Schemas | 1 |
-| Functions | 250 |
+| Functions | 255 |
 | Tables | 15 |
 | Views | 10 |
 | Triggers | 4 |
@@ -94,6 +94,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"vector_out"`
 - `pgcontext."_hnsw_candidates"`
 - `pgcontext."_hnsw_masked_candidates"`
+- `pgcontext."_hnsw_sparse_candidates"`
+- `pgcontext."_hnsw_sparse_masked_candidates"`
 - `pgcontext."_mmap_hnsw_artifact_candidates"`
 - `pgcontext."adopt_pgvector"`
 - `pgcontext."artifact_segment_diagnostics"`
@@ -102,6 +104,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext."artifact_segment_serving_readiness"`
 - `pgcontext."artifact_segments"`
 - `pgcontext."attach_hnsw_index"`
+- `pgcontext."attach_sparse_hnsw_index"`
 - `pgcontext."backfill_points"`
 - `pgcontext."binary_quantize"`
 - `pgcontext."bitvec"`
@@ -156,6 +159,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext."explain"`
 - `pgcontext."explain_late_interaction"`
 - `pgcontext."explain_late_interaction_ann"`
+- `pgcontext."explain_sparse"`
 - `pgcontext."explore"`
 - `pgcontext."facet"`
 - `pgcontext."grouped_search"`

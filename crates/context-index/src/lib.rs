@@ -475,7 +475,9 @@ impl CandidateMask {
         }
     }
 
-    fn allows(&self, point_id: HnswPointId) -> bool {
+    /// Returns whether the point is eligible to appear in masked search work.
+    #[must_use]
+    pub fn allows(&self, point_id: HnswPointId) -> bool {
         self.allow_all || self.allowed.contains(&point_id)
     }
 

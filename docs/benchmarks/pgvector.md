@@ -62,9 +62,9 @@ performance-measured). The harness and archived result JSON are in
 ## Latency vs. recall Pareto sweep (SciFact 5,183 x 384, cosine)
 
 Three-system `ef_search` sweep, 200 queries, 20 warmups, top-10, m=16,
-ef_construction=64. Archived:
-[sweep JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-21eda7ec.json)
-at commit `21eda7ec`.
+ef_construction=64. Harness artifact
+`apple-m4-pro-pg17.9-2026-07-16-sweep-21eda7ec.json` was recorded at commit
+`21eda7ec`; generated result files are not distributed in this source snapshot.
 
 | ef | pgContext p50 / recall@10 | pgvector p50 / recall@10 | Qdrant p50 / recall@10 |
 |---:|---:|---:|---:|
@@ -91,9 +91,9 @@ only.
 ## Three-trial matched-recall run (SciFact)
 
 Rotating trial order, median/combined distribution across three trials,
-pgContext ef=48 vs pgvector/Qdrant ef=40. Archived:
-[three-trial JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-clean-74f083c2.json)
-at commit `74f083c2`.
+pgContext ef=48 vs pgvector/Qdrant ef=40. Harness artifact
+`apple-m4-pro-pg17.9-2026-07-16-clean-74f083c2.json` was recorded at commit
+`74f083c2`; generated result files are not distributed in this source snapshot.
 
 | Measurement | pgContext | pgvector | Qdrant |
 |---|---:|---:|---:|
@@ -117,9 +117,9 @@ engineering items, not footnotes.
 ## Filtered ANN across selectivity (SciFact)
 
 `filtered-sweep` lane, 1% / 10% / 50% selectivity predicates, matched
-settings as above. Archived:
-[filtered-sweep JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-filtered-sweep-21eda7ec.json)
-at commit `21eda7ec`.
+settings as above. Harness artifact
+`apple-m4-pro-pg17.9-2026-07-16-filtered-sweep-21eda7ec.json` was recorded at
+commit `21eda7ec`; generated result files are not distributed in this source snapshot.
 
 | Selectivity | Strategy | p50 | recall@10 |
 |---|---|---:|---:|
@@ -148,9 +148,9 @@ pgContext's planned adaptive filtered execution.
 
 Seeded synthetic clustered corpus (100,000 x 384, generator in the harness),
 single trial, same settings, `maintenance_work_mem=2GB` for both PostgreSQL
-systems. Archived:
-[100k JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-100k-86330dcd.json)
-at commit `86330dcd`.
+systems. Harness artifact
+`apple-m4-pro-pg17.9-2026-07-16-100k-86330dcd.json` was recorded at commit
+`86330dcd`; generated result files are not distributed in this source snapshot.
 
 | Measurement | pgContext | pgvector | Qdrant |
 |---|---:|---:|---:|
@@ -184,9 +184,9 @@ for both systems, and the graceful-build gap is tracked as follow-up work.
 
 Because fixed small-ef points are meaningless here, the 100k comparison that
 matters is the high-ef sweep (m=16, ef_construction=64 for all systems).
-Archived:
-[100k sweep JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-100k-531360f5.json)
-at commit `531360f5`.
+Harness artifact `apple-m4-pro-pg17.9-2026-07-16-sweep-100k-531360f5.json`
+was recorded at commit `531360f5`; generated result files are not distributed
+in this source snapshot.
 
 | ef | pgContext p50 / recall@10 | pgvector p50 / recall@10 | Qdrant p50 / recall@10 |
 |---:|---:|---:|---:|
@@ -242,9 +242,9 @@ read latency alongside that lane's recall figures).
 
 pgContext serves concurrent backends from a shared packed-base registry (a
 `GetNamedDSMSegment`-backed registry: one backend publishes its packed
-generation, other backends attach it instead of rebuilding). Archived:
-[concurrency-100k-3ea49bb0.json](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-concurrency-100k-3ea49bb0.json)
-at commit `3ea49bb0`.
+generation, other backends attach it instead of rebuilding). Harness artifact
+`apple-m4-pro-pg17.9-2026-07-16-concurrency-100k-3ea49bb0.json` was recorded at
+commit `3ea49bb0`; generated result files are not distributed in this source snapshot.
 
 | Clients | pgContext agg QPS / backend RSS | pgvector agg QPS / backend RSS |
 |---:|---:|---:|
@@ -262,9 +262,9 @@ fallback state; memory parity is a known limitation.
 ## 1M synthetic scale lane
 
 Same generator at 1,000,000 x 384, single trial,
-`maintenance_work_mem=2GB`. Archived:
-[1M JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-1m-f29edac4.json)
-at commit `f29edac4`.
+`maintenance_work_mem=2GB`. Harness artifact
+`apple-m4-pro-pg17.9-2026-07-16-1m-f29edac4.json` was recorded at commit
+`f29edac4`; generated result files are not distributed in this source snapshot.
 
 | Measurement | pgContext | pgvector | Qdrant |
 |---|---:|---:|---:|
@@ -401,9 +401,9 @@ measuring steady state on a warm, reused connection.
 
 With the shared packed-base registry, only the first backend after a restart
 rebuilds the packed generation; every later backend attaches the published
-image. Archived:
-[cold-cache-100k-0c8129e6.json](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-cold-cache-100k-0c8129e6.json)
-at commit `0c8129e6`.
+image. Harness artifact
+`apple-m4-pro-pg17.9-2026-07-16-cold-cache-100k-0c8129e6.json` was recorded at
+commit `0c8129e6`; generated result files are not distributed in this source snapshot.
 
 | Measurement | pgContext | pgvector |
 |---|---:|---:|

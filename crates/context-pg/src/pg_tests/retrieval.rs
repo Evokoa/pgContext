@@ -61,6 +61,30 @@ fn table_search_postgres_adapters_obey_bounded_executor_contracts() {
 }
 
 #[pg_test]
+fn zero_mask_budget_selects_dense_exact_fallback() {
+    create_filter_search_collection("stage_b_zero_mask_fallback");
+    upsert_search_points(
+        "stage_b_zero_mask_fallback",
+        &["10", "20", "30", "40"],
+    );
+    Spi::run(
+        "SELECT pgcontext.register_filter_column(
+            'stage_b_zero_mask_fallback', 'tenant_id', 'tenant_id'
+         );
+         SET LOCAL pgcontext.hnsw_mask_candidate_limit = 0;",
+    )
+    .expect("zero mask budget fixture should be configured");
+
+    let snapshot = crate::retrieval::adapter_conformance_snapshot_for_test(
+        "stage_b_zero_mask_fallback".to_owned(),
+    );
+    assert_eq!(snapshot.hnsw_rows, snapshot.exact_rows);
+    assert_eq!(snapshot.hnsw_candidates, snapshot.exact_candidates);
+    assert_eq!(snapshot.hnsw_rechecks, snapshot.exact_rechecks);
+    assert!(snapshot.hnsw_complete);
+}
+
+#[pg_test]
 fn hnsw_adapter_binds_attached_index_for_every_dense_metric() {
     let cases = [
         ("l2", "l2", "vector_hnsw_ops"),

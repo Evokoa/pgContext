@@ -198,6 +198,77 @@ pub fn attach_hnsw_index(collection_name: String, vector_name: String, index_nam
     }
 }
 
+/// Binds a registered sparse vector to its validated PostgreSQL HNSW index.
+#[pg_extern(schema = "pgcontext", security_definer)]
+#[search_path(pg_catalog, pgcontext)]
+pub fn attach_sparse_hnsw_index(collection_name: String, vector_name: String, index_name: String) {
+    let collection_name = collection_name_from_sql(collection_name);
+    let vector_name = vector_name_from_sql(vector_name);
+    let collection = require_collection(&collection_name);
+    require_collection_owner(&collection);
+    let updated = Spi::connect_mut(|client| {
+        client.update(
+        "UPDATE pgcontext._collection_sparse_vectors AS vectors
+            SET index_options = pg_catalog.jsonb_set(
+                    vectors.index_options,
+                    '{hnsw_index}',
+                    pg_catalog.to_jsonb(pg_catalog.format('%I.%I', index_namespace.nspname, index_class.relname)),
+                    true
+                ),
+                updated_at = pg_catalog.now()
+           FROM pg_catalog.pg_class AS index_class
+           JOIN pg_catalog.pg_namespace AS index_namespace
+             ON index_namespace.oid = index_class.relnamespace
+           JOIN pg_catalog.pg_index AS index_def ON index_def.indexrelid = index_class.oid
+           JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_class.relam
+           JOIN pg_catalog.pg_opclass AS operator_class ON operator_class.oid = index_def.indclass[0]
+           JOIN pg_catalog.pg_namespace AS operator_namespace
+             ON operator_namespace.oid = operator_class.opcnamespace
+          WHERE vectors.collection_id = $1
+            AND vectors.vector_name = $2
+            AND index_class.oid = pg_catalog.to_regclass($3)
+            AND index_class.relkind = 'i'
+            AND index_def.indrelid = vectors.source_table_oid
+            AND index_def.indisvalid
+            AND index_def.indisready
+            AND index_def.indislive
+            AND index_def.indpred IS NULL
+            AND index_def.indexprs IS NULL
+            AND index_def.indnkeyatts = 1
+            AND access_method.amname = 'pgcontext_hnsw'
+            AND index_def.indkey[0] = vectors.vector_attnum
+            AND operator_namespace.nspname = 'pgcontext'
+            AND operator_class.opcintype = 'public.sparsevec'::pg_catalog.regtype
+            AND operator_class.opcname = CASE vectors.metric
+                    WHEN 'l2' THEN 'sparsevec_hnsw_ops'
+                    WHEN 'inner_product' THEN 'sparsevec_hnsw_ip_ops'
+                    WHEN 'cosine' THEN 'sparsevec_hnsw_cosine_ops'
+                    WHEN 'l1' THEN 'sparsevec_hnsw_l1_ops'
+                END
+        RETURNING vectors.sparse_vector_id",
+        Some(1),
+        &[
+            collection.id.into(),
+            vector_name.as_str().into(),
+            index_name.into(),
+        ],
+        )
+        .map(|rows| !rows.is_empty())
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to attach sparse HNSW index: {error}"),
+        )
+    });
+    if !updated {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            "HNSW index does not match the registered sparse collection vector",
+        );
+    }
+}
+
 /// Registers a table-backed sparse vector column.
 #[pg_extern(schema = "pgcontext", security_definer)]
 #[search_path(pg_catalog, pgcontext)]

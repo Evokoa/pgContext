@@ -3,6 +3,7 @@
 use core::cmp::Ordering;
 
 use context_core::{DistanceMetric, SearchLimit, SparseVector};
+use pgrx::JsonB;
 use pgrx::prelude::*;
 
 use crate::domain_types::{distance_metric_from_catalog, distance_metric_from_query};
@@ -49,7 +50,68 @@ pub fn search_sparse(
     TableIterator::new(rows)
 }
 
-/// Returns exact top-k search results from a registered table-backed sparse vector.
+/// Explains actual named sparse candidate and exact-recheck work.
+#[pg_extern(schema = "pgcontext")]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn explain_sparse(
+    collection: String,
+    vector_name: String,
+    query: SparseVec,
+    limit: i32,
+) -> TableIterator<
+    'static,
+    (
+        name!(strategy, String),
+        name!(active_points, i64),
+        name!(scored_count, i64),
+        name!(candidate_count, i64),
+        name!(recheck_count, i64),
+    ),
+> {
+    let collection_name = collection_name_from_sql(collection);
+    let collection = resolve_sparse_collection(&collection_name);
+    require_sparse_collection_owner(&collection, &collection_name);
+    let mut registered_vector =
+        resolve_registered_sparse_vector(&collection_name, collection.collection_id, &vector_name);
+    validate_sparse_vector_drift(collection.collection_id, &mut registered_vector);
+    require_sparse_table_select_privilege(&registered_vector);
+    let query = sparsevec_to_core(query);
+    require_sparse_query_dimensions(&registered_vector, &query);
+    let limit = search_limit_from_sql(limit);
+    crate::collection_limits::enforce_search_limit(
+        collection.collection_id,
+        &collection_name,
+        limit.get(),
+    );
+    let execution = crate::retrieval::run_sparse_query(
+        &collection_name,
+        collection.collection_id,
+        &registered_vector,
+        query,
+        None,
+        limit.get(),
+    );
+    let scored_count = execution
+        .outcome
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.stage() == context_query::StageKind::Candidates)
+        .map_or(0, context_query::StageDiagnostic::input_count);
+    let usage = execution.outcome.usage();
+    let strategy = match execution.strategy {
+        crate::retrieval::SparseCandidateStrategy::Exact => "exact",
+        crate::retrieval::SparseCandidateStrategy::Hnsw(_) => "hnsw",
+    };
+    TableIterator::once((
+        strategy.to_owned(),
+        active_sparse_points(collection.collection_id, &registered_vector),
+        count_to_i64(scored_count, "scored_count"),
+        count_to_i64(usage.candidates(), "candidate_count"),
+        count_to_i64(usage.rechecks(), "recheck_count"),
+    ))
+}
+
+/// Returns ANN candidates with exact top-k reranking for a registered sparse vector.
 #[pg_extern(schema = "pgcontext", name = "search_sparse")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_sparse_collection(
@@ -74,14 +136,75 @@ pub fn search_sparse_collection(
     require_sparse_table_select_privilege(&registered_vector);
 
     let query = sparsevec_to_core(query);
+    require_sparse_query_dimensions(&registered_vector, &query);
     let limit = search_limit_from_sql(limit);
     crate::collection_limits::enforce_search_limit(
         collection.collection_id,
         &collection_name,
         limit.get(),
     );
-    let rows =
-        search_registered_sparse_table(collection.collection_id, &registered_vector, query, limit);
+    let rows = crate::retrieval::run_sparse_query(
+        &collection_name,
+        collection.collection_id,
+        &registered_vector,
+        query,
+        None,
+        limit.get(),
+    )
+    .rows;
+    TableIterator::new(rows)
+}
+
+/// Returns top-k named sparse results restricted by a registered filter.
+#[pg_extern(schema = "pgcontext", name = "search_sparse")]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn search_sparse_collection_filtered(
+    collection: String,
+    vector_name: String,
+    query: SparseVec,
+    filter: Option<String>,
+    limit: i32,
+) -> TableIterator<
+    'static,
+    (
+        name!(point_id, i64),
+        name!(source_key, String),
+        name!(score, f32),
+    ),
+> {
+    let collection_name = collection_name_from_sql(collection);
+    let collection = resolve_sparse_collection(&collection_name);
+    require_sparse_collection_owner(&collection, &collection_name);
+    let mut registered_vector =
+        resolve_registered_sparse_vector(&collection_name, collection.collection_id, &vector_name);
+    validate_sparse_vector_drift(collection.collection_id, &mut registered_vector);
+    require_sparse_table_select_privilege(&registered_vector);
+
+    let query = sparsevec_to_core(query);
+    require_sparse_query_dimensions(&registered_vector, &query);
+    let filter = filter.map(|filter| {
+        serde_json::from_str(&filter).unwrap_or_else(|error| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+                format!("invalid sparse search filter JSON: {error}"),
+            )
+        })
+    });
+    let limit = search_limit_from_sql(limit);
+    crate::collection_limits::enforce_search_limit(
+        collection.collection_id,
+        &collection_name,
+        limit.get(),
+    );
+    let rows = crate::retrieval::run_sparse_query(
+        &collection_name,
+        collection.collection_id,
+        &registered_vector,
+        query,
+        filter,
+        limit.get(),
+    )
+    .rows;
     TableIterator::new(rows)
 }
 
@@ -92,14 +215,16 @@ struct SparseCollection {
 }
 
 #[derive(Debug, Clone)]
-struct RegisteredSparseVector {
-    schema_name: String,
-    table_name: String,
-    table_oid: pg_sys::Oid,
-    vector_name: String,
-    vector_column_name: String,
-    vector_attnum: i16,
-    metric: DistanceMetric,
+pub(crate) struct RegisteredSparseVector {
+    pub(crate) schema_name: String,
+    pub(crate) table_name: String,
+    pub(crate) table_oid: pg_sys::Oid,
+    pub(crate) vector_name: String,
+    pub(crate) vector_column_name: String,
+    pub(crate) vector_attnum: i16,
+    pub(crate) dimensions: usize,
+    pub(crate) metric: DistanceMetric,
+    pub(crate) hnsw_index_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -170,7 +295,9 @@ fn resolve_registered_sparse_vector(
                     vector_name,
                     vector_column_name,
                     vector_attnum,
-                    metric
+                    dimensions,
+                    metric,
+                    index_options
                FROM pgcontext._visible_collection_sparse_vectors
               WHERE collection_id = $1
                 AND vector_name = $2",
@@ -202,10 +329,22 @@ fn resolve_registered_sparse_vector(
             vector_name: spi_required_column::<String>(&row, 4, "vector_name"),
             vector_column_name: spi_required_column::<String>(&row, 5, "vector_column_name"),
             vector_attnum: spi_required_column::<i16>(&row, 6, "vector_attnum"),
+            dimensions: usize::try_from(spi_required_column::<i32>(&row, 7, "dimensions"))
+                .unwrap_or_else(|_| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                        "registered sparse vector dimensions are invalid",
+                    )
+                }),
             metric: distance_metric_from_catalog(
-                spi_required_column::<String>(&row, 7, "metric"),
+                spi_required_column::<String>(&row, 8, "metric"),
                 "sparse vector",
             ),
+            hnsw_index_name: spi_required_column::<JsonB>(&row, 9, "index_options")
+                .0
+                .get("hnsw_index")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
         }
     })
 }
@@ -300,6 +439,101 @@ fn validate_sparse_vector_drift(
     });
 }
 
+pub(crate) fn resolve_sparse_hnsw_index(
+    registered_vector: &RegisteredSparseVector,
+) -> Option<pg_sys::Oid> {
+    let index_name = registered_vector.hnsw_index_name.as_deref()?;
+    let expected_opclass = match registered_vector.metric {
+        DistanceMetric::L2 => "sparsevec_hnsw_ops",
+        DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => {
+            "sparsevec_hnsw_ip_ops"
+        }
+        DistanceMetric::Cosine => "sparsevec_hnsw_cosine_ops",
+        DistanceMetric::L1 => "sparsevec_hnsw_l1_ops",
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => return None,
+    };
+    Spi::get_one_with_args::<pg_sys::Oid>(
+        "SELECT index_class.oid
+           FROM pg_catalog.pg_class AS index_class
+           JOIN pg_catalog.pg_index AS index_def ON index_def.indexrelid = index_class.oid
+           JOIN pg_catalog.pg_am AS access_method ON access_method.oid = index_class.relam
+           JOIN pg_catalog.pg_opclass AS operator_class ON operator_class.oid = index_def.indclass[0]
+           JOIN pg_catalog.pg_namespace AS operator_namespace
+             ON operator_namespace.oid = operator_class.opcnamespace
+          WHERE index_class.oid = pg_catalog.to_regclass($1)
+            AND index_class.relkind = 'i'
+            AND index_def.indrelid = $2
+            AND index_def.indisvalid
+            AND index_def.indisready
+            AND index_def.indislive
+            AND index_def.indpred IS NULL
+            AND index_def.indexprs IS NULL
+            AND index_def.indnkeyatts = 1
+            AND index_def.indkey[0] = $3
+            AND access_method.amname = 'pgcontext_hnsw'
+            AND operator_namespace.nspname = 'pgcontext'
+            AND operator_class.opcintype = 'public.sparsevec'::pg_catalog.regtype
+            AND operator_class.opcname = $4",
+        &[
+            index_name.into(),
+            registered_vector.table_oid.into(),
+            registered_vector.vector_attnum.into(),
+            expected_opclass.into(),
+        ],
+    )
+    .ok()
+    .flatten()
+}
+
+fn require_sparse_query_dimensions(
+    registered_vector: &RegisteredSparseVector,
+    query: &SparseVector,
+) {
+    if query.dimensions() != registered_vector.dimensions {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            format!(
+                "dimension mismatch: left has {} dimensions, right has {}",
+                registered_vector.dimensions,
+                query.dimensions()
+            ),
+        );
+    }
+}
+
+fn active_sparse_points(collection_id: i64, registered_vector: &RegisteredSparseVector) -> i64 {
+    let table_name = crate::table_search::quote_qualified_identifier(
+        &registered_vector.schema_name,
+        &registered_vector.table_name,
+    );
+    Spi::get_one_with_args::<i64>(
+        &format!(
+            "SELECT count(*)::bigint
+               FROM pgcontext._visible_collection_points AS points
+               JOIN {table_name} AS source ON source.id::text = points.source_key
+              WHERE points.collection_id = $1
+                AND points.deleted_at IS NULL"
+        ),
+        &[collection_id.into()],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to count active sparse points: {error}"),
+        )
+    })
+    .unwrap_or_default()
+}
+
+fn count_to_i64(value: usize, label: &'static str) -> i64 {
+    i64::try_from(value).unwrap_or_else(|_| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE,
+            format!("sparse explain {label} exceeds bigint"),
+        )
+    })
+}
+
 fn refresh_restored_sparse_metadata(
     collection_id: i64,
     registered_vector: &mut RegisteredSparseVector,
@@ -345,49 +579,7 @@ fn refresh_restored_sparse_metadata(
     registered_vector.vector_attnum = current_vector_attnum;
 }
 
-fn search_registered_sparse_table(
-    collection_id: i64,
-    registered_vector: &RegisteredSparseVector,
-    query: SparseVector,
-    limit: SearchLimit,
-) -> Vec<(i64, String, f32)> {
-    let table_name = quote_qualified_identifier(
-        &registered_vector.schema_name,
-        &registered_vector.table_name,
-    );
-    let vector_column = quote_identifier(&registered_vector.vector_column_name);
-    let distance_function = sparse_distance_function(registered_vector.metric);
-    let sql = format!(
-        "SELECT points.point_id,
-                points.source_key,
-                pgcontext.{distance_function}(source.{vector_column}, $1) AS score
-           FROM pgcontext._visible_collection_points AS points
-           JOIN {table_name} AS source ON source.id::text = points.source_key
-          WHERE points.collection_id = $2
-            AND points.deleted_at IS NULL
-          ORDER BY score ASC, points.point_id ASC
-          LIMIT $3"
-    );
-    let limit = i64::try_from(limit.get()).unwrap_or(i64::MAX);
-    let query = SparseVec::from_sparse(query);
-
-    Spi::connect(|client| {
-        let rows = match client.select(
-            &sql,
-            Some(limit),
-            &[query.into(), collection_id.into(), limit.into()],
-        ) {
-            Ok(rows) => rows,
-            Err(error) => raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                format!("failed to search registered sparse table: {error}"),
-            ),
-        };
-        sparse_table_rows_from_spi(rows)
-    })
-}
-
-fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
+pub(crate) fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
     match metric {
         DistanceMetric::L2 => "sparsevec_l2_distance",
         DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => {
@@ -513,53 +705,6 @@ fn sparsevec_to_core(vector: SparseVec) -> SparseVector {
     }
 }
 
-fn sparse_table_rows_from_spi(rows: spi::SpiTupleTable<'_>) -> Vec<(i64, String, f32)> {
-    let mut output = Vec::new();
-    for row in rows {
-        output.push((
-            spi_iter_required_column::<i64>(&row, 1, "point_id"),
-            spi_iter_required_column::<String>(&row, 2, "source_key"),
-            spi_iter_required_column::<f32>(&row, 3, "score"),
-        ));
-    }
-    output
-}
-
-fn quote_qualified_identifier(schema_name: &str, table_name: &str) -> String {
-    Spi::get_one_with_args::<String>(
-        "SELECT pg_catalog.format('%I.%I', $1, $2)",
-        &[schema_name.into(), table_name.into()],
-    )
-    .unwrap_or_else(|error| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("failed to quote table identifier: {error}"),
-        )
-    })
-    .unwrap_or_else(|| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            "quoted table identifier returned null",
-        )
-    })
-}
-
-fn quote_identifier(identifier: &str) -> String {
-    Spi::get_one_with_args::<String>("SELECT pg_catalog.format('%I', $1)", &[identifier.into()])
-        .unwrap_or_else(|error| {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                format!("failed to quote column identifier: {error}"),
-            )
-        })
-        .unwrap_or_else(|| {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                "quoted column identifier returned null",
-            )
-        })
-}
-
 fn session_user() -> String {
     match Spi::get_one::<String>("SELECT SESSION_USER::text") {
         Ok(Some(user)) => user,
@@ -605,27 +750,6 @@ where
 {
     match row.get::<T>(index) {
         Ok(value) => value,
-        Err(error) => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("failed to read sparse search column {column_name}: {error}"),
-        ),
-    }
-}
-
-fn spi_iter_required_column<T>(
-    row: &spi::SpiHeapTupleData<'_>,
-    index: usize,
-    column_name: &'static str,
-) -> T
-where
-    T: FromDatum + IntoDatum,
-{
-    match row.get::<T>(index) {
-        Ok(Some(value)) => value,
-        Ok(None) => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("sparse search column is null: {column_name}"),
-        ),
         Err(error) => raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             format!("failed to read sparse search column {column_name}: {error}"),

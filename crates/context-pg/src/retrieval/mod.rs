@@ -1,5 +1,8 @@
 //! PostgreSQL adapters for the transport-neutral query executor.
 
+mod sparse;
+pub(crate) use sparse::{SparseCandidateStrategy, run_sparse_query};
+
 use context_core::{CollectionName, DenseVector, PointId, SourceKey};
 use context_query::{
     Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateSource, Completion,
@@ -274,6 +277,7 @@ pub(crate) fn run_query(
     query: QueryIr,
     adapter: CandidateAdapter,
 ) -> Vec<(i64, String, f32)> {
+    let adapter = effective_candidate_adapter(&query, adapter);
     let collection = resolve_collection(collection_name);
     require_collection_owner(&collection, collection_name);
     let mut registered_vector =
@@ -316,10 +320,15 @@ fn execute_prepared_query(
     query: &QueryIr,
     adapter: CandidateAdapter,
 ) -> Result<ExecutionOutcome> {
+    let adapter = effective_candidate_adapter(query, adapter);
     let candidate_limit = candidate_limit(query, adapter);
+    let filter_candidate_limit = match adapter {
+        CandidateAdapter::Exact => context_core::policy::MAX_RECALL_CHECK_POINT_IDS,
+        CandidateAdapter::Hnsw => crate::settings::hnsw_mask_candidate_limit_from_guc(),
+    };
     let budget = ExecutionBudget::new(
         candidate_limit,
-        context_core::policy::MAX_RECALL_CHECK_POINT_IDS,
+        filter_candidate_limit,
         candidate_limit,
         3,
         1,
@@ -360,6 +369,17 @@ fn execute_prepared_query(
         &cancellation,
     )
     .execute(query, budget)
+}
+
+fn effective_candidate_adapter(query: &QueryIr, adapter: CandidateAdapter) -> CandidateAdapter {
+    if adapter == CandidateAdapter::Hnsw
+        && query.filter().is_some()
+        && crate::settings::hnsw_mask_candidate_limit_from_guc() == 0
+    {
+        CandidateAdapter::Exact
+    } else {
+        adapter
+    }
 }
 
 fn candidate_limit(query: &QueryIr, adapter: CandidateAdapter) -> usize {
@@ -558,17 +578,19 @@ fn hnsw_candidate_rows(
     args.push(hnsw_limit.into());
     args.push(index_oid.into());
 
-    Spi::connect(|client| {
-        let rows = client
-            .select(&sql, Some(sql_limit), &args)
-            .map_err(|error| port_failure("candidate_source", error))?;
-        let mut candidates = Vec::new();
-        for row in rows {
-            let point_id = spi_point_id(&row, 1, "candidate_source")?;
-            let score = spi_column::<f64>(&row, 2, "candidate_source")?;
-            candidates.push(Candidate::new(point_id, score, CandidateBranch::DenseAnn)?);
-        }
-        Ok(CandidatePage::new(candidates, true))
+    crate::hnsw_am::with_hnsw_candidate_helper_capability(index_oid, || {
+        Spi::connect(|client| {
+            let rows = client
+                .select(&sql, Some(sql_limit), &args)
+                .map_err(|error| port_failure("candidate_source", error))?;
+            let mut candidates = Vec::new();
+            for row in rows {
+                let point_id = spi_point_id(&row, 1, "candidate_source")?;
+                let score = spi_column::<f64>(&row, 2, "candidate_source")?;
+                candidates.push(Candidate::new(point_id, score, CandidateBranch::DenseAnn)?);
+            }
+            Ok(CandidatePage::new(candidates, true))
+        })
     })
 }
 

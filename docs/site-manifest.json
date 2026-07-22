@@ -21,38 +21,6 @@
       "sha256": "fb8152a3a8e66d3d2178745f868869b4cc64190cdf794990a9b52dac6eb4d9ac"
     },
     {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-100k-86330dcd.json",
-      "sha256": "fae630bfdfca3f0680c8e2a338384316098ea44495ffe532b2c981d3f7052263"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-1m-f29edac4.json",
-      "sha256": "599acaf60dde18ac412452108ff889edc1c2f63c0dcca524955766c9540fbeaa"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-clean-74f083c2.json",
-      "sha256": "b580f3da06f24b4105f19a4b96314fdd928808cdfb627dc694dbbc1eea8c9bb8"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-cold-cache-100k-0c8129e6.json",
-      "sha256": "f1bb6e1660d6e3e7161d947d2ebf52d65532db25d22db4ce9680acdc5324208b"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-concurrency-100k-3ea49bb0.json",
-      "sha256": "75c605e19c47ac71da7abca666034179b0a8502b36f3acf53c34237cf4a1ff91"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-filtered-sweep-21eda7ec.json",
-      "sha256": "cc001c979113a9808d9757f30d3bf1a02777f52de053a40ec907feb150bd0f86"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-100k-531360f5.json",
-      "sha256": "d875179d2a7e0cdbcc8d6f1c99adca858fe46e763a98a1a757cea66dfa9adca9"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-21eda7ec.json",
-      "sha256": "81739eacdda57550d0b355df97548862ebe2884ced49373f2021a41dd43d482f"
-    },
-    {
       "path": "docs/benchmarks/reports/pgcontext-vs-pgvector-vs-qdrant.html",
       "sha256": "6692e1b1c19c3d655d62daf90864d71d1a411cf625f7c0f7866c88112b36f73a"
     },
@@ -65,18 +33,15 @@
       "sha256": "7bdb370ff00265fa7d303fd2ab176ebbd7cd946ab636294f164a17f292e1c39a"
     }
   ],
-  "navigation_sha256": "06636d7214ba08ebc344d8711fefd8da5930322cc75df0a7ae8c0c05cef1cbac",
+  "navigation_sha256": "89ef0a7a896d5e1fc7bb4deec236170b700b13c9fb79e003c69c1377824e4590",
   "pages": [
     {
+      "links": [],
+      "path": "benchmarks/late_interaction_owned.md",
+      "sha256": "740c577cc51d89c5f626940615c8246583ae4cc5bebdc7b78bdc5628f9ea0ec9"
+    },
+    {
       "links": [
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-100k-86330dcd.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-1m-f29edac4.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-clean-74f083c2.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-cold-cache-100k-0c8129e6.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-concurrency-100k-3ea49bb0.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-filtered-sweep-21eda7ec.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-100k-531360f5.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-21eda7ec.json",
         "https://github.com/erikbern/ann-benchmarks",
         "https://huggingface.co/datasets/mteb/scifact",
         "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2",
@@ -84,7 +49,7 @@
         "reports/pgcontext-vs-pgvector.html"
       ],
       "path": "benchmarks/pgvector.md",
-      "sha256": "eb5a82b354362c4466c86cf95840858f342b8bfec76994ae26c2bb24e06b8849"
+      "sha256": "a2e169bf87b7c92184af3fb1466a84b87684f75013d3f58a514141c038048963"
     },
     {
       "links": [
@@ -114,7 +79,7 @@
         "./hnsw_storage_contract.md"
       ],
       "path": "contributor_guide/architecture.md",
-      "sha256": "dbbd51ced043f11fd95c813c26ebc86cba0cb6c166c0a069ebeb96caf543452f"
+      "sha256": "2d0bb87e0156d62afcaf1ce54bf95ab895df5b3b2adf22ebb022292042243183"
     },
     {
       "links": [
@@ -150,7 +115,7 @@
     {
       "links": [],
       "path": "contributor_guide/postgres_module_organization.md",
-      "sha256": "b31809d858145c62cab83a5b60e7d1773d96ceb9921258407d0c50e28b683aaa"
+      "sha256": "91b27bf59f2759d6a5ac650c47465aac7e6a0892078291beb9bf9a94229dd87a"
     },
     {
       "links": [
@@ -188,7 +153,7 @@
         "unsafe_ffi_audit_2026-07-11.md"
       ],
       "path": "contributor_guide/security_review.md",
-      "sha256": "614fe90a5a25839a0ad3db10005c546d992e4b6f15a6d8e73c9bb6bc20c9bd64"
+      "sha256": "5b6a972375bf039fca3cc63e3071a01c7b4079ec161022e200471ade8bcaf371"
     },
     {
       "links": [],
@@ -222,18 +187,19 @@
         "./hnsw_callback_contract.md"
       ],
       "path": "contributor_guide/unsafe_review.md",
-      "sha256": "61875985c7778f04d4ce0a772245b99b9c6891fac148a6ef5ea7b0177e479b9b"
+      "sha256": "af12ea34e6d305383a5af186bf1a7c08fe08ec8e00654e5a38aba281f4b313aa"
     },
     {
       "links": [
         "../benchmarks/pgvector.md"
       ],
       "path": "contributor_guide/vector_engine.md",
-      "sha256": "f503531ad5e6eae1af3500359567c829151dc817b518a0002f956c0674732332"
+      "sha256": "ae42abed82ff600933a187f74be621919d1a10f0c688e70022c3d6a28acaed17"
     },
     {
       "links": [
         "../release/README.md",
+        "benchmarks/late_interaction_owned.md",
         "benchmarks/pgvector.md",
         "contributor_guide/README.md",
         "known_issues.md",
@@ -258,7 +224,7 @@
         "user_guide/vector_search.md"
       ],
       "path": "index.md",
-      "sha256": "fad0402bb780c52d38fe0ec6bebbd7a43dd64bb8cae8cee5b8b561031f705f81"
+      "sha256": "ae497484d656e429b8f8638d8be477f0be4589d58c3c4f4fbdd833bf3bec8013"
     },
     {
       "links": [
@@ -340,7 +306,7 @@
         "user_guide/pgvector_migration.md"
       ],
       "path": "pgcontext-vs-pgvector-vs-qdrant.md",
-      "sha256": "60b0530380a4e7c11c2e527865469707ff028759e013896c7a4b0f13a62a51c6"
+      "sha256": "7c81b9fff2993aeb89e0bcb48b07d077ad583411cefcb42d730c428cf4357b7d"
     },
     {
       "links": [
@@ -397,7 +363,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "632e2c2a67f6adc432e997d757d7a03a5dadb43b7861a9e2697afbc66470ae63"
+      "sha256": "09938443cf298251c3d622d19db36b78553041811125cb4414cfca1b0ccbda45"
     },
     {
       "links": [
@@ -407,7 +373,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "acf6722086b6b06960d0a043c69c676d41d29e8f4d608cdbaa5b4aff78d0e61c"
+      "sha256": "c0863eeb9d13869dafd96357a5c9e91afba29d93064f47af3c9f3ddf0b85563a"
     },
     {
       "links": [],
@@ -419,7 +385,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/collections.md",
-      "sha256": "44af6f1d0c08fbd4b5276a622f345f973f933798eb73ca3d1b7256a2620e1253"
+      "sha256": "eb1f44cef110392edbb923e2ec44b1424a27a7a5e59427722905b5f0ca9fed49"
     },
     {
       "links": [
@@ -446,11 +412,10 @@
     },
     {
       "links": [
-        "pgvector_coexist.md",
-        "roadmap.md"
+        "pgvector_coexist.md"
       ],
       "path": "user_guide/indexes.md",
-      "sha256": "4bfb2b983390033bbd93bd19249241f4053de8be7e2de50c96a33417b17af678"
+      "sha256": "85a8ef352224827ab287e8d1a2d858df9d32ac2cc97b7713bfb4573c67c5ba2a"
     },
     {
       "links": [
@@ -466,7 +431,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/limitations.md",
-      "sha256": "fb4818b25b66780f3ae75d99721109bd13bcfe8505e31292ecc23993f5da64d7"
+      "sha256": "d911034f031173bedcb75347f84989a95385c4fbcc0b94c43a67ffc13c30ab91"
     },
     {
       "links": [
@@ -496,12 +461,12 @@
         "troubleshooting.md"
       ],
       "path": "user_guide/operations.md",
-      "sha256": "d3c26c7c5a82ffd581a1384f72daffdd0fd09411119997547e3a5ea1bcde5b7f"
+      "sha256": "ce2f0a1f2721daab2b086faf309c8c65976a892261bb00d45da7d0d8ce05e4e5"
     },
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "10d5492744f631b298d26197c362be7abc49806081c7d6cf21bcc387b05f2b10"
+      "sha256": "cbb5a00be667441d0d3fe2ff04eda97f8a8b3dca656b14af544289c1911743eb"
     },
     {
       "links": [],
@@ -510,11 +475,10 @@
     },
     {
       "links": [
-        "roadmap.md",
         "roadmap.md#pgvector-migration-and-compatibility"
       ],
       "path": "user_guide/pgvector_migration.md",
-      "sha256": "0404666ecae1dadc0ad460d98f59ff887691b9856709ddf3c8d8c638b4829728"
+      "sha256": "5dc29c326d85e993d3634fc454ab5f2b056fb5ec3dd36299e70713c52e724cd4"
     },
     {
       "links": [
@@ -558,7 +522,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "247b77ce98ea91204b4235e8e9e62f77f796ba5952f8055783ebc7c88231143d"
+      "sha256": "c3719fae894ad86e32223e1c9a22b2310a2c909902a24561cd2bc19da1703793"
     },
     {
       "links": [
@@ -572,7 +536,7 @@
         "https://github.com/evokoa/pggraph"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "c9cb704834ec0a151e0b8dccd5a8a5980eaab90eb7d83fd9f21421042054dc89"
+      "sha256": "0f67f77cdfdca872abbe10b6869fbb24c44eb4e1f81eeb6e1740e32b9bed3a68"
     },
     {
       "links": [],
@@ -587,7 +551,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "62b29228a2af0c3536e1ede44a0a5bcfe63f2b37d2f5305b333a3ad33ebc3159"
+      "sha256": "2cf8a91f567d58a779a4289ec888436df81416e99bc2cc9682f41bf7d8c67c34"
     },
     {
       "links": [],
@@ -611,7 +575,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/vector_search.md",
-      "sha256": "c91b036d153d47fa29d933b9e761f50c8fe7de2e9f61d97a54a66c1d74bd4932"
+      "sha256": "84a3f2140d23fe919a401c926035efbe52197d3a62ae43ebb812853d8f155b8b"
     }
   ],
   "public_files": [
@@ -689,7 +653,7 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "13464c7a7bf0c4bc926fc065ff150da2896e59d8772527c6974ae88f8553c2c7"
+      "sha256": "f1a1dc14fabb5bc07863aff184cf08ca015ab27e9571097c6db7ae81ebd93784"
     },
     {
       "links": [],
@@ -701,7 +665,7 @@
         "mailto:team@evokoa.com"
       ],
       "path": "SECURITY.md",
-      "sha256": "843974ea03ca4df15be4c908023ad719c886a8012166f8b18352ad952fe478bb"
+      "sha256": "a82ebb7985bcf90fc4a20052e00bfc2a62e38c00ee1f69d8af6d996bb7d06f42"
     },
     {
       "links": [],

@@ -14,6 +14,7 @@ HEAVY_GATES=(
   tests/heavy/mapped_hnsw_lifecycle_cleanup.sh
   tests/heavy/mmap_hnsw_artifact_restart.sh
   tests/heavy/hnsw_vacuum.sh
+  tests/heavy/named_sparse_ann_lifecycle.sh
   tests/heavy/concurrent_read_write.sh
   tests/heavy/filtered_ann_recall.sh
   tests/heavy/late_interaction_ann_serving.sh
@@ -41,6 +42,18 @@ HNSW_VACUUM_MARKERS=(
   "hnsw_vacuum_index_ready"
   "hnsw_vacuum_advice_present"
   "hnsw_reindex_ready"
+)
+NAMED_SPARSE_ANN_MARKERS=(
+  "named_sparse_ann_vacuum_reindex"
+  "named_sparse_ann_exact_oracle: before_restart"
+  "named_sparse_ann_bounded_work: before_restart"
+  "named_sparse_ann_recall_threshold: before_restart"
+  "named_sparse_ann_exact_oracle: after_restart"
+  "named_sparse_ann_bounded_work: after_restart"
+  "named_sparse_ann_recall_threshold: after_restart"
+  "named_sparse_ann_hot_visible: before_vacuum"
+  "named_sparse_ann_hot_visible: after_vacuum"
+  "named_sparse_ann_restart_complete"
 )
 FILTERED_ANN_RECALL_MARKERS=(
   "filtered_ann_exact_oracle_seqscan"
@@ -427,6 +440,18 @@ run_gate() {
           exit_code=1
           overall_status=1
           printf '\nhnsw_vacuum: failed; missing evidence marker: %s\n' "${marker}" >>"${log_file}"
+          break
+        fi
+      done
+    fi
+    if [[ "${status}" == "passed" && "${gate}" == "heavy:named_sparse_ann_lifecycle" ]]; then
+      local marker
+      for marker in "${NAMED_SPARSE_ANN_MARKERS[@]}"; do
+        if ! grep -qxF "${marker}" "${log_file}"; then
+          status="failed"
+          exit_code=1
+          overall_status=1
+          printf '\nnamed_sparse_ann_lifecycle: failed; missing evidence marker: %s\n' "${marker}" >>"${log_file}"
           break
         fi
       done

@@ -211,6 +211,8 @@ impl HydratedCandidate {
 pub enum SourceReadiness {
     /// Source is ready to serve the current query.
     Ready,
+    /// Source will serve the query through its authoritative exact fallback.
+    Exact,
     /// Source exists but its active generation is stale.
     RebuildRequired {
         /// Bounded diagnostic reason.

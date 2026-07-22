@@ -441,13 +441,20 @@ source columns and stores per-vector sparse storage/index/status metadata:
 - `pgcontext.register_sparse_vector(collection_name text, vector_name text, vector_column text, dimensions integer, metric text)`
 - `pgcontext.collection_sparse_vectors(collection_name text)`
 - `pgcontext.configure_sparse_vector(collection_name text, vector_name text, storage_options jsonb, index_options jsonb, status text)`
+- `pgcontext.attach_sparse_hnsw_index(collection_name text, vector_name text, index_name text)`
+  validates and binds a schema-qualified, metric-matched sparse HNSW index.
 
 - `pgcontext.search_sparse(query sparsevec, point_ids bigint[], vectors sparsevec[], metric text, limit integer)`
   scores explicit sparse candidate arrays with `l2`, `inner_product`,
   `cosine`, or `l1` and returns exact top-k rows with deterministic tie breaks.
 - `pgcontext.search_sparse(collection text, vector_name text, query sparsevec, limit integer)`
-  scores a named sparse source column for active collection points with exact
-  table-backed semantics.
+  serves a validated attached sparse HNSW index with exact source rerank, or
+  falls back to exhaustive exact table-backed scoring when no valid binding exists.
+- `pgcontext.search_sparse(collection text, vector_name text, query sparsevec, filter text, limit integer)`
+  applies registered-field filter JSON through an HNSW candidate mask and the
+  final authoritative source recheck.
+- `pgcontext.explain_sparse(collection text, vector_name text, query sparsevec, limit integer)`
+  reports the actual exact/HNSW strategy and scored/candidate/recheck counters.
 - `pgcontext.query(collection text, vector vector, sparse_vector_name text, sparse_query sparsevec, limit integer)`
   fuses dense exact search with exact sparse search through reciprocal rank
   fusion. Sparse ANN branches remain outside the stable compatibility promise.
@@ -516,8 +523,8 @@ as final SQL scores.
 
 ## Current Maturity Boundary
 
-Pgvector-compatible non-L2 sparse ANN index classes, SQL `bit` ANN indexing,
-quantized index scan serving, external artifact import/export APIs, sparse ANN
-branch serving, and full multi-vector serving are not stable today. Missing
+Named sparse ANN, SQL `bit` ANN indexing, quantized index scan serving,
+external artifact import/export APIs, and full multi-vector serving are not
+stable today. Missing
 product behavior, longer-duration certification, and broader workload coverage
 are tracked in the public roadmap.

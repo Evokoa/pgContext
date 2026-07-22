@@ -383,15 +383,17 @@ pub(in crate::table_search) fn search_registered_table_filtered(
     args.push(hnsw_index_oid.into());
     push_filter_parameter_args(&mut args, parameter_values);
 
-    Spi::connect(|client| {
-        let rows = match client.select(&sql, Some(limit), &args) {
-            Ok(rows) => rows,
-            Err(error) => raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                format!("failed to search filtered registered table: {error}"),
-            ),
-        };
-        table_search_rows_from_spi(rows, "filtered table search")
+    crate::hnsw_am::with_hnsw_candidate_helper_capability(hnsw_index_oid, || {
+        Spi::connect(|client| {
+            let rows = match client.select(&sql, Some(limit), &args) {
+                Ok(rows) => rows,
+                Err(error) => raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    format!("failed to search filtered registered table: {error}"),
+                ),
+            };
+            table_search_rows_from_spi(rows, "filtered table search")
+        })
     })
 }
 

@@ -2,7 +2,8 @@
 
 use crate::{QueryError, Result};
 use context_core::policy::{
-    MAX_QUERY_EXPANSIONS, MAX_QUERY_STAGES, MAX_RECALL_CHECK_POINT_IDS, MAX_SEARCH_LIMIT,
+    MAX_HNSW_CANDIDATE_MASK_POINTS, MAX_QUERY_EXPANSIONS, MAX_QUERY_STAGES,
+    MAX_RECALL_CHECK_POINT_IDS, MAX_SEARCH_LIMIT,
 };
 
 /// Hard limits applied to one query execution.
@@ -50,7 +51,7 @@ impl ExecutionBudget {
             (
                 "max_filter_candidates",
                 max_filter_candidates,
-                MAX_RECALL_CHECK_POINT_IDS,
+                MAX_HNSW_CANDIDATE_MASK_POINTS,
             ),
             ("max_rechecks", max_rechecks, MAX_RECALL_CHECK_POINT_IDS),
             ("max_stages", max_stages, MAX_QUERY_STAGES),

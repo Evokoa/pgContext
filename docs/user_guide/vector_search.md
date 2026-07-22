@@ -5,8 +5,8 @@ metrics, and exact top-k search. The PostgreSQL extension exposes this
 through a SQL-facing dense vector type, distance functions, and an
 array-based exact search function.
 
-Metric-bound non-dense HNSW opclasses are implemented. Named sparse ANN,
-internally maintained late interaction, and composite query execution are
+Metric-bound non-dense HNSW opclasses and named sparse ANN are implemented.
+Composite query execution is
 tracked in the [post-V1 roadmap](roadmap.md).
 
 ## Dense Vector Text
@@ -45,11 +45,10 @@ input/output, dimensions, construction from aligned `integer[]` indexes and
 `real[]` values, casts to and from dense `real[]` arrays, canonical index/value
 accessors, and exact L2, inner-product, negative-inner-product, cosine, and L1
 distance functions plus distance operators and sum/average aggregates as an experimental
-surface. `pgcontext.search_sparse` also provides experimental exact top-k over
-explicit sparse candidate arrays and registered sparse source columns for `l2`,
-`inner_product`, `cosine`, and `l1`. `sparsevec` L2 `pgcontext_hnsw` indexes
-are experimental and use dense vector storage; non-L2 sparse ANN/index serving
-remains planned. Sparse cosine rejects zero vectors because the distance is
+surface. `pgcontext.search_sparse` provides experimental exact top-k over
+explicit sparse candidate arrays and exact-rechecked ANN over registered sparse
+source columns for `l2`, `inner_product`, `cosine`, and `l1`. Sparse
+`pgcontext_hnsw` indexes use dense graph storage. Sparse cosine rejects zero vectors because the distance is
 undefined.
 
 ```sql
@@ -65,6 +64,61 @@ FROM pgcontext.search_sparse(
   2
 );
 ```
+
+Named search falls back to exhaustive exact scoring until a validated HNSW
+index is attached. Build the metric-matched index and bind its schema-qualified
+identity to the sparse registration:
+
+```sql
+CREATE INDEX docs_lexical_hnsw
+ON docs USING pgcontext_hnsw
+  (lexical pgcontext.sparsevec_hnsw_ops);
+
+SELECT pgcontext.attach_sparse_hnsw_index(
+  'docs', 'lexical', 'public.docs_lexical_hnsw'
+);
+```
+
+Use `sparsevec_hnsw_ip_ops`, `sparsevec_hnsw_cosine_ops`, or
+`sparsevec_hnsw_l1_ops` for the corresponding registered metric. Attachment
+rejects a different table/column/metric, partial or expression indexes, and
+invalid indexes. Every ANN candidate is joined back to the current source row
+and exactly rescored under the caller's ACL/RLS snapshot. A missing, dropped,
+or configuration-cleared binding falls back to exact search.
+
+The five-argument overload accepts the same registered-field filter JSON as
+dense filtered search and uses a sparse HNSW candidate mask:
+
+```sql
+SELECT point_id, source_key, score
+FROM pgcontext.search_sparse(
+  'docs',
+  'lexical',
+  pgcontext.sparsevec('{1:1,3:2}/4096'),
+  '{"must":[{"key":"tenant","match":"acme"}]}',
+  10
+);
+```
+
+`pgcontext.explain_sparse` reports `strategy`, `active_points`,
+`scored_count`, `candidate_count`, and `recheck_count`. `scored_count` includes
+both graph node scoring and every live vector scored exactly in the HNSW delta
+segment, so inserts made after the last build are not hidden from work
+accounting. A rebuilt/compacted HNSW generation should show bounded scored and
+candidate work while rechecking every produced candidate.
+
+Filtered sparse ANN uses `pgcontext.hnsw_mask_candidate_limit` as both its
+executor and AM mask ceiling. Raising that setting therefore permits a larger
+registered-field filter set end to end instead of failing first at a separate
+fixed query-executor limit. Setting it to `0` disables masked ANN for filtered
+queries and selects the authoritative exact fallback.
+
+Named sparse ANN also masks unfiltered traversal to active collection points
+whose source rows are visible under the caller's ACL/RLS snapshot. This keeps
+closer hidden, unregistered, or logically deleted rows from consuming the
+candidate page. When that caller-visible set exceeds
+`pgcontext.hnsw_mask_candidate_limit`, pgContext selects exact search; raise the
+setting when bounded ANN is preferred for a larger visible collection.
 
 For a collection registered with `pgcontext.register_sparse_vector`, use the
 named sparse vector directly:

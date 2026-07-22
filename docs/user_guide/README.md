@@ -22,7 +22,8 @@ experimental. Named sparse vector registration and
 storage/index/status metadata are also SQL-visible experimentally. Exact sparse
 top-k over explicit arrays and named sparse source columns is available through
 `pgcontext.search_sparse`, and exact dense+sparse RRF fusion is available
-through `pgcontext.query`; sparse ANN/index serving remains planned.
+through `pgcontext.query`. Named sparse search can bind a metric-matched HNSW
+index for bounded candidates with exact source rerank and exact fallback.
 Experimental SQL wrappers expose `halfvec`, `sparsevec`, and `bitvec`
 input/output, typmods, dimension helpers, exact distance helpers, and distance
 operators. `halfvec` also has explicit rounding numeric-array casts and aggregates; `sparsevec`
@@ -53,9 +54,10 @@ intended bit metric.
 
 ## Explicitly Not Implemented
 
-V1 does not implement quantized HNSW serving, named sparse ANN serving,
-internally maintained late-interaction token
-indexes, complete composite-query-plan execution, memory-mapped HNSW graph
+Named sparse ANN is implemented as an experimental, exact-rechecked path and is
+not part of the stable V1 contract. V1 does not implement quantized HNSW
+serving, internally maintained late-interaction token indexes, complete
+composite-query-plan execution, memory-mapped HNSW graph
 traversal, or complete automatic query telemetry. IVFFlat is intentionally not
 part of pgContext's V1 product. Existing helper APIs, metadata containers, or
 artifact readers do not imply that these serving paths exist.

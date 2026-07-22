@@ -5,7 +5,7 @@ use super::{
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 254;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 259;
 const SQL_CONTRACT_OBJECTS_LEN: usize =
     CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
@@ -730,6 +730,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(
+        "search_sparse",
+        "collection text, vector_name text, query sparsevec, filter text, \"limit\" integer",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
         "rerank_quantized_candidates",
         "query vector, point_ids bigint[], original_vectors vector[], metric text, \"limit\" integer",
         SqlLifecycle::Experimental,
@@ -751,6 +756,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "validate_hnsw_graph_artifact",
         "segment bytea",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "explain_sparse",
+        "collection text, vector_name text, query sparsevec, \"limit\" integer",
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(
@@ -891,6 +901,16 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         "index_relation regclass, query vector, allowed_heap_tids anyarray, \"limit\" integer",
         SqlLifecycle::Internal,
     ),
+    SqlContractObject::function(
+        "_hnsw_sparse_candidates",
+        "index_relation regclass, query sparsevec, \"limit\" integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_hnsw_sparse_masked_candidates",
+        "index_relation regclass, query sparsevec, allowed_heap_tids anyarray, \"limit\" integer",
+        SqlLifecycle::Internal,
+    ),
     SqlContractObject::function("_mapped_hnsw_sql_drop", "", SqlLifecycle::Internal),
     SqlContractObject::function("_l1_distance_fast", "vector, vector", SqlLifecycle::Internal),
     SqlContractObject::function("_l2_distance_fast", "vector, vector", SqlLifecycle::Internal),
@@ -903,6 +923,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "adopt_pgvector",
         "target regclass, dry_run boolean, drop_old boolean",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "attach_sparse_hnsw_index",
+        "collection_name text, vector_name text, index_name text",
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(

@@ -29,8 +29,8 @@ does **not** yet ship, and where each is headed:
 - **`halfvec`, `sparsevec`, and `bitvec` maturity** — their SQL types remain
   experimental, while the complete metric-bound HNSW opclass names are now
   stable as recorded in
-  [Non-Dense ANN Opclasses](#non-dense-ann-opclasses). Named sparse ANN remains
-  separate roadmap work under [Named Sparse ANN](#named-sparse-ann).
+  [Non-Dense ANN Opclasses](#non-dense-ann-opclasses). Named sparse ANN is now
+  implemented experimentally under [Named Sparse ANN](#named-sparse-ann).
 - **x86-64 performance** — the AVX2+FMA kernels are implemented and
   correctness-verified, but no x86 speed claim is made until measured on real
   x86 hardware. Every published benchmark is Apple Silicon (NEON). See the
@@ -224,11 +224,11 @@ Validated by an end-to-end serving test with exact-oracle and bounded-work asser
 
 ## Named Sparse ANN
 
-Status: planned after non-dense sparse opclasses.
+Status: implemented experimentally.
 
 Depends on: non-dense ANN opclasses and metadata-filtered ANN.
 
-Scope:
+Implemented scope:
 
 - add a real sparse ANN candidate source through the query-owned port;
 - retain exact sparse scoring as the correctness oracle and final recheck;

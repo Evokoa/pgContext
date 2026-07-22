@@ -14,6 +14,10 @@ hnsw_am.rs|extern|pgcontext_hnsw_insert_cleanup|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_rescan|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_vacuum_cleanup|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_validate|guarded PostgreSQL AM callback
+hnsw_am.rs|fn|VisibleHeapTidResolver::new|opens PostgreSQL table-AM fetch state for the heap relation owned by a validated index
+hnsw_am.rs|fn|candidate_mask_from_heap_tids|parses PostgreSQL array datums and canonicalizes source TIDs through a validated index relation
+hnsw_am.rs|fn|hot_root_heap_tids|reads share-locked heap pages and maps visible HOT successors to index root TIDs
+hnsw_am.rs|fn|resolve_visible_hnsw_candidates|resolves index candidates through PostgreSQL table-AM visibility under the active snapshot
 hnsw_am.rs|fn|copy_rescan_keys|writes a validated PostgreSQL scan-key destination
 hnsw_am.rs|fn|ensure_hnsw_strategy_operator|reads and releases PostgreSQL syscache tuples
 hnsw_am.rs|fn|expand_hnsw_scan|continues a validated live PostgreSQL index scan with a larger bounded candidate budget

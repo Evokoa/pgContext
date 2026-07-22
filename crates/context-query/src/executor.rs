@@ -84,7 +84,7 @@ impl<'a> QueryExecutor<'a> {
             ));
         }
         match readiness {
-            SourceReadiness::Ready => {}
+            SourceReadiness::Ready | SourceReadiness::Exact => {}
             SourceReadiness::RebuildRequired { reason } => {
                 let diagnostic = StageDiagnostic::new(
                     StageKind::Readiness,

@@ -305,11 +305,11 @@ deliberately different feature cannot be mistaken for stable parity.
 | HNSW access method | `experimental` | Dense, half, sparse, and bit metric-bound HNSW are implemented; format stability, the single-page node envelope, and broad certification remain open. |
 | Filtered ANN serving | `experimental` | Persisted HNSW, candidate masks, and authoritative source rechecks are implemented; broader workload tuning remains open. |
 | SQL halfvec | `experimental` | Exact SQL and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist. |
-| SQL sparsevec | `experimental` | Exact SQL, named exact search, and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist; named sparse ANN remains planned. |
+| SQL sparsevec | `experimental` | Exact SQL and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist; named sparse search can attach those indexes for bounded candidates and authoritative exact rerank. |
 | SQL bit vectors | `experimental` | Exact Hamming/Jaccard SQL and stable explicit Hamming/Jaccard HNSW opclass names exist; Jaccard ordering is heap-rechecked exactly. |
 | SQL quantization APIs | `experimental` | Binary, scalar, and product helpers exist; quantized HNSW serving is planned. |
 | Per-vector dense index and quantization metadata | `experimental` | Validated configuration metadata exists; complete build-and-scan consumption is planned. |
-| Named sparse vectors per collection | `experimental` | Registration, exact search, and exact fusion exist; sparse ANN serving is planned. |
+| Named sparse vectors per collection | `experimental` | Registration, exact fallback, validated HNSW binding, filters, bounded-work explain counters, exact rerank, and exact fusion exist. |
 | Multi-vector and late-interaction query | `experimental` | Exact MaxSim and experimental token candidates exist; internal token-index maintenance is planned. |
 | IVFFlat | `intentionally different` | IVFFlat is not implemented; retain pgvector IVFFlat, use exact search, or rebuild as HNSW. |
 | PostgreSQL-native ACL, RLS, transactions, and backups | `intentionally different` | pgContext uses PostgreSQL's authority instead of recreating it in another service. |
@@ -328,8 +328,8 @@ Important current limits:
 - Non-dense SQL types and the HNSW on-disk format remain experimental, and
   densified node records must fit the documented 8,064-byte page envelope.
 - Quantized HNSW build and serving are not implemented.
-- Named sparse search is exact unless an explicitly supported experimental
-  index path is selected.
+- Named sparse ANN is experimental, explicitly attached, and densifies graph
+  traversal while retaining exact sparse source rerank and exact fallback.
 - Late-interaction token indexes are not maintained automatically.
 - Typed composite query plans are constructed and validated, but not every
   candidate-source combination executes as one pipeline.
@@ -386,11 +386,15 @@ bounded traversal, then rerank against authoritative source vectors. The work
 also includes codebook/configuration revisions, corruption handling,
 replacement, recall, and serving diagnostics.
 
-### 3. Named sparse ANN
+### Completed: named sparse ANN
 
-Add a real sparse candidate source for registered sparse vectors, with exact
-sparse scoring as the final oracle, bounded-work counters, filter masks, and a
-complete update/VACUUM/REINDEX/restart lifecycle.
+Registered sparse vectors can bind validated metric-matched HNSW indexes, use
+filtered candidate masks, and expose bounded scored/candidate/recheck work.
+Authoritative exact sparse rerank, exact fallback, ACL/RLS, DML, VACUUM,
+REINDEX, configuration-change, and restart gates own the experimental path.
+Raw dense and sparse candidate helpers are backend-capability guarded, HOT
+successors resolve through PostgreSQL's table AM before source recheck, and
+scored-work counters include exact live-delta scans.
 
 ### 4. Internally maintained late interaction
 
