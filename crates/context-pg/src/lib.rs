@@ -24,6 +24,7 @@ mod error;
 mod hnsw_am;
 mod hybrid_query;
 mod late_interaction;
+mod late_interaction_catalog_schema;
 mod model_versions;
 mod operations;
 mod payload_catalog;
@@ -109,6 +110,7 @@ mod tests {
     include!("pg_tests/hybrid_query.rs");
     include!("pg_tests/hybrid_sparse_cosine.rs");
     include!("pg_tests/late_interaction_ann.rs");
+    include!("pg_tests/late_interaction_owned.rs");
     include!("pg_tests/late_interaction_planner.rs");
     include!("pg_tests/index_advisor.rs");
     include!("pg_tests/model_versions.rs");

@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 136;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 140;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -271,6 +271,18 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::object(
         SqlObjectKind::Table,
         Some("pgcontext"),
+        "_collection_late_interaction",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Table,
+        Some("pgcontext"),
+        "_collection_late_interaction_tokens",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Table,
+        Some("pgcontext"),
         "_collection_aliases",
         SqlLifecycle::Internal,
     ),
@@ -345,6 +357,18 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
         SqlObjectKind::View,
         Some("pgcontext"),
         "_visible_collection_points",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::View,
+        Some("pgcontext"),
+        "_visible_collection_late_interaction",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::View,
+        Some("pgcontext"),
+        "_visible_collection_late_interaction_tokens",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::object(
