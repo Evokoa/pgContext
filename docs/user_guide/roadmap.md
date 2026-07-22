@@ -26,11 +26,11 @@ does **not** yet ship, and where each is headed:
   and the planned migration tooling already detects IVFFlat indexes and
   proposes an explicit retain, exact-search, or rebuild-as-HNSW plan. See
   [pgvector Migration and Compatibility](#pgvector-migration-and-compatibility).
-- **`halfvec`, `sparsevec`, and `bitvec` maturity** — `halfvec` leads and
-  `sparsevec`/`bitvec` are experimental today; promotion to first-class HNSW
-  opclasses is planned through
-  [Non-Dense ANN Opclasses](#non-dense-ann-opclasses) (including bit-vector
-  Hamming and Jaccard) and [Named Sparse ANN](#named-sparse-ann).
+- **`halfvec`, `sparsevec`, and `bitvec` maturity** — their SQL types remain
+  experimental, while the complete metric-bound HNSW opclass names are now
+  stable as recorded in
+  [Non-Dense ANN Opclasses](#non-dense-ann-opclasses). Named sparse ANN remains
+  separate roadmap work under [Named Sparse ANN](#named-sparse-ann).
 - **x86-64 performance** — the AVX2+FMA kernels are implemented and
   correctness-verified, but no x86 speed claim is made until measured on real
   x86 hardware. Every published benchmark is Apple Silicon (NEON). See the

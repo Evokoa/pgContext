@@ -277,10 +277,15 @@ fn hnsw_get_tuple_safe(
                 );
                 (*scan.as_ptr()).xs_heap_continue = false;
                 (*scan.as_ptr()).xs_recheck = false;
-                (*scan.as_ptr()).xs_recheckorderby = false;
                 if (*scan.as_ptr()).numberOfOrderBys > 0 {
                     let metric = hnsw_score_metric((*scan.as_ptr()).indexRelation);
+                    // Bit-Jaccard navigation is intentionally `f32`, while the
+                    // SQL operator is exact `f64`. PostgreSQL must re-evaluate
+                    // that operator on the visible heap tuple before ordering.
+                    (*scan.as_ptr()).xs_recheckorderby = metric == HnswScoreMetric::BitJaccard;
                     store_hnsw_orderby_distance(scan.as_ptr(), metric, candidate.score);
+                } else {
+                    (*scan.as_ptr()).xs_recheckorderby = false;
                 }
                 record_hnsw_scan_work((*state).work);
                 return true;
@@ -334,10 +339,11 @@ unsafe fn store_hnsw_orderby_distance(
     let orderby_count = unsafe { c_int_to_usize((*scan).numberOfOrderBys, "scan order-bys") };
     match metric {
         HnswScoreMetric::L2 | HnswScoreMetric::BitJaccard => {
+            let (distance, recheck) = float8_orderby_distance(metric, score);
             let mut order_by_types = vec![pg_sys::FLOAT8OID; orderby_count];
             let mut distances = vec![
                 pg_sys::IndexOrderByDistance {
-                    value: f64::from(score),
+                    value: distance,
                     isnull: false,
                 };
                 orderby_count
@@ -349,7 +355,7 @@ unsafe fn store_hnsw_orderby_distance(
                     scan,
                     order_by_types.as_mut_ptr(),
                     distances.as_mut_ptr(),
-                    false,
+                    recheck,
                 );
             }
         }
@@ -374,6 +380,25 @@ unsafe fn store_hnsw_orderby_distance(
                 }
             }
         }
+    }
+}
+
+/// Returns a conservative lower bound for an exact `f64` Jaccard distance.
+///
+/// Graph navigation computes `1 - intersection / union` with two `f32`
+/// operations over exactly represented counts. Each operation contributes at
+/// most half an ulp in `[0, 1]`; subtracting two `f32::EPSILON`s therefore
+/// keeps PostgreSQL's reorder-queue key below the exact SQL distance. The heap
+/// operator recheck supplies the final `f64` value.
+fn bit_jaccard_orderby_lower_bound(score: f32) -> f64 {
+    (f64::from(score) - 2.0 * f64::from(f32::EPSILON)).max(0.0)
+}
+
+fn float8_orderby_distance(metric: HnswScoreMetric, score: f32) -> (f64, bool) {
+    match metric {
+        HnswScoreMetric::BitJaccard => (bit_jaccard_orderby_lower_bound(score), true),
+        HnswScoreMetric::L2 => (f64::from(score), false),
+        _ => unreachable!("only float8 HNSW metrics use float8 order-by storage"),
     }
 }
 

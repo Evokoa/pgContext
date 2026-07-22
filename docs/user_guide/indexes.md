@@ -168,8 +168,19 @@ experimental:
 
 The bit opclasses use bit-aware graph metrics. In particular, Jaccard never
 substitutes L2 over densified coordinates because that does not preserve result
-ordering. End-to-end tests compare every pair with a forced exact oracle and
-require candidate work below collection cardinality.
+ordering. Jaccard graph navigation remains `real` precision, but its ordered
+scan value is a conservative lower bound and PostgreSQL rechecks the visible
+heap value with the exact `double precision` operator before final ordering.
+End-to-end tests compare every pair with a forced exact oracle, assert the
+metric-specific index plan, and require candidate work below collection
+cardinality.
+
+The SQL vector types accept up to 16,000 dimensions, but this experimental
+HNSW format stores each densified node and its graph links in a single page.
+The encoded record ceiling is 8,064 bytes, so the effective indexable dimension
+also depends on `hnsw_m` and the node's layers. Oversized builds fail with
+SQLSTATE `54000`; reduce dimensions or `pgcontext.hnsw_m`. A future bit-native
+or multi-page record format may raise this index-specific ceiling.
 
 ## IVFFlat
 

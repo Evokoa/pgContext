@@ -183,16 +183,19 @@ semantics in the same database.
 representations:
 
 - `halfvec` with dimensions, typmods, numeric-array casts, exact metrics,
-  aggregates, ordering, and an experimental L2 HNSW operator class;
+  aggregates, ordering, and explicit L2, inner-product, cosine, and L1 HNSW
+  operator classes;
 - `sparsevec` with canonical sparse input, structured construction, dense
   conversions, exact L2/inner-product/cosine/L1 metrics, aggregates, exact
-  top-k, named sparse registration/search, and an experimental L2 HNSW class;
+  top-k, named sparse registration/search, and explicit L2, inner-product,
+  cosine, and L1 HNSW classes;
 - `bitvec` with dimensions, boolean-array and PostgreSQL `bit` casts,
-  Hamming/Jaccard metrics, bitwise aggregates, ordering, and an experimental
-  Hamming HNSW operator class.
+  Hamming/Jaccard metrics, bitwise aggregates, ordering, and explicit Hamming
+  and Jaccard HNSW operator classes.
 
-These types are useful for experimentation and migration work, but their full
-ANN metric matrix is not yet part of the stable promise.
+These types are useful for experimentation and migration work. Their HNSW
+opclass names and metric bindings are stable, while the SQL types and HNSW
+on-disk format remain experimental.
 
 ### Quantization building blocks
 
@@ -299,11 +302,11 @@ deliberately different feature cannot be mistaken for stable parity.
 
 | Capability | Parity status | What that means in 0.1.0 |
 |---|---|---|
-| HNSW access method | `experimental` | Dense L2, inner-product, cosine, and L1 HNSW are implemented; format stability and broad certification remain open. |
+| HNSW access method | `experimental` | Dense, half, sparse, and bit metric-bound HNSW are implemented; format stability, the single-page node envelope, and broad certification remain open. |
 | Filtered ANN serving | `experimental` | Persisted HNSW, candidate masks, and authoritative source rechecks are implemented; broader workload tuning remains open. |
-| SQL halfvec | `experimental` | Exact SQL and an L2 HNSW path exist; the complete non-dense opclass matrix is planned. |
-| SQL sparsevec | `experimental` | Exact SQL, named search, and an L2 HNSW path exist; other sparse ANN metrics are planned. |
-| SQL bit vectors | `experimental` | Exact Hamming/Jaccard SQL and Hamming HNSW exist; Jaccard ANN is planned. |
+| SQL halfvec | `experimental` | Exact SQL and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist. |
+| SQL sparsevec | `experimental` | Exact SQL, named exact search, and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist; named sparse ANN remains planned. |
+| SQL bit vectors | `experimental` | Exact Hamming/Jaccard SQL and stable explicit Hamming/Jaccard HNSW opclass names exist; Jaccard ordering is heap-rechecked exactly. |
 | SQL quantization APIs | `experimental` | Binary, scalar, and product helpers exist; quantized HNSW serving is planned. |
 | Per-vector dense index and quantization metadata | `experimental` | Validated configuration metadata exists; complete build-and-scan consumption is planned. |
 | Named sparse vectors per collection | `experimental` | Registration, exact search, and exact fusion exist; sparse ANN serving is planned. |
@@ -322,7 +325,8 @@ Important current limits:
 - PostgreSQL 17 is the only supported V1 major.
 - Dense HNSW and filtered ANN remain experimental.
 - IVFFlat is not implemented.
-- The complete non-dense HNSW metric matrix is not implemented.
+- Non-dense SQL types and the HNSW on-disk format remain experimental, and
+  densified node records must fit the documented 8,064-byte page envelope.
 - Quantized HNSW build and serving are not implemented.
 - Named sparse search is exact unless an explicitly supported experimental
   index path is selected.
@@ -368,12 +372,12 @@ model.
 The roadmap is dependency-ordered. Listing a feature here means it is planned,
 not that it is partially promised by 0.1.0.
 
-### 1. Complete non-dense ANN coverage
+### Completed foundation: non-dense ANN coverage
 
-Expand half-vector, sparse-vector, and bit-vector HNSW across the metrics whose
-ordering and pruning semantics are valid. This includes full insert, update,
-delete, VACUUM, REINDEX, restart, dimension, cast, and exact-oracle behavior for
-each promoted operator class.
+Half-vector and sparse-vector HNSW now cover L2, inner product, cosine, and L1;
+bit-vector HNSW covers Hamming and exact-rechecked Jaccard ordering. Bounded
+insert, update, delete, VACUUM, REINDEX, restart, dimension, cast, plan, work,
+and exact-oracle gates own the promoted operator classes.
 
 ### 2. Quantized HNSW serving
 

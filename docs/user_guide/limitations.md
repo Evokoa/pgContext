@@ -14,10 +14,10 @@ Extended production certification and unimplemented product behavior live in
   `pgcontext.search_sparse`; `bitvec` covers `boolean[]`, PostgreSQL `bit` and
   `bit varying` casts, pgvector-compatible built-in `bit` distance
   functions/operators, bitwise OR/AND aggregates, and btree ordering opclasses.
-  L2 HNSW index classes for `halfvec` and `sparsevec` are experimental, and
-  explicit Hamming HNSW indexing is available for `bitvec`. Non-dense ANN
-  promotion is not part of the current stable SQL promise; it is documented in
-  the post-V1 roadmap.
+  Explicit HNSW opclasses serve L2, inner product, cosine, and L1 for `halfvec`
+  and `sparsevec`, plus Hamming and Jaccard for `bitvec`. The opclass names and
+  metric bindings are stable; the non-dense SQL types and HNSW on-disk format
+  remain experimental.
 - `pgcontext.search` is the stable single-vector retrieval surface.
   `pgcontext.query` covers dense plus full-text fusion and experimental exact
   dense+sparse RRF fusion. ANN sparse and multi-branch planners are post-V1
@@ -46,6 +46,13 @@ Extended production certification and unimplemented product behavior live in
 - The experimental HNSW on-page record format is intentionally not backward
   compatible during construction. Recreate an HNSW index after upgrading
   pgContext to a version whose on-page format differs.
+- SQL vector values may contain up to 16,000 dimensions, but the current HNSW
+  format stores each densified node plus its graph links in one PostgreSQL page.
+  An encoded node record is capped at 8,064 bytes; the effective indexable
+  dimension therefore also depends on graph degree and layers. `CREATE INDEX`
+  fails with SQLSTATE `54000` before appending an oversized record. Reduce the
+  dimensions or `pgcontext.hnsw_m`; multi-page and bit-native records are not
+  implemented in this format.
 - Four-metric dense HNSW has bounded exact-oracle, VACUUM, REINDEX,
   crash/restart, replica-promotion, concurrency, filtered-ANN, and work-budget
   coverage. It remains experimental because V1 does not promise a stable
@@ -103,8 +110,6 @@ Extended production certification and unimplemented product behavior live in
 
 ## Unimplemented Serving Paths
 
-- Complete non-dense ANN metric coverage is not implemented. Only the
-  experimental variant opclasses described under SQL Surface exist.
 - Quantization helpers do not provide quantized HNSW build or serving.
 - Named sparse vector search is exact; named sparse ANN is not implemented.
 - Late-interaction ANN is not internally maintained and requires an

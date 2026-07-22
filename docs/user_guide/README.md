@@ -47,11 +47,14 @@ intended bit metric.
   fusion.
 - Experimental persisted dense HNSW indexes and adaptive filtered ANN, with
   exact source rechecks and bounded PostgreSQL 17 lifecycle evidence.
+- Stable metric-bound HNSW opclass names for half and sparse L2, inner product,
+  cosine, and L1, plus bit Hamming and Jaccard; their SQL types and the HNSW
+  on-disk format remain experimental.
 
 ## Explicitly Not Implemented
 
-V1 does not implement complete non-dense ANN metric coverage, quantized HNSW
-serving, named sparse ANN serving, internally maintained late-interaction token
+V1 does not implement quantized HNSW serving, named sparse ANN serving,
+internally maintained late-interaction token
 indexes, complete composite-query-plan execution, memory-mapped HNSW graph
 traversal, or complete automatic query telemetry. IVFFlat is intentionally not
 part of pgContext's V1 product. Existing helper APIs, metadata containers, or

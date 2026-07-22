@@ -5,8 +5,9 @@ metrics, and exact top-k search. The PostgreSQL extension exposes this
 through a SQL-facing dense vector type, distance functions, and an
 array-based exact search function.
 
-Non-dense ANN, named sparse ANN, internally maintained late interaction, and
-composite query execution are tracked in the [post-V1 roadmap](roadmap.md).
+Metric-bound non-dense HNSW opclasses are implemented. Named sparse ANN,
+internally maintained late interaction, and composite query execution are
+tracked in the [post-V1 roadmap](roadmap.md).
 
 ## Dense Vector Text
 

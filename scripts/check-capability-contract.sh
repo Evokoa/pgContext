@@ -235,8 +235,8 @@ for id in \
 done
 
 # V1 source-to-sink trace. These structural guards deliberately pin executable
-# wiring, not documentation prose: installed dense opclasses must reach metric
-# dispatch and persisted page traversal, while filtered ANN must derive masks
+# wiring, not documentation prose: installed dense and non-dense opclasses must
+# reach metric dispatch and persisted page traversal, while filtered ANN derives masks
 # from the registered source predicate and pass the attached index OID into the
 # page-backed candidate function.
 require_fixed() {
@@ -250,26 +250,28 @@ require_fixed() {
 }
 
 for opclass in \
-  vector_hnsw_ops vector_hnsw_ip_ops vector_hnsw_cosine_ops vector_hnsw_l1_ops; do
+  vector_hnsw_ops vector_hnsw_ip_ops vector_hnsw_cosine_ops vector_hnsw_l1_ops \
+  halfvec_hnsw_ops halfvec_hnsw_ip_ops halfvec_hnsw_cosine_ops halfvec_hnsw_l1_ops \
+  sparsevec_hnsw_ops sparsevec_hnsw_ip_ops sparsevec_hnsw_cosine_ops sparsevec_hnsw_l1_ops \
+  bitvec_hnsw_hamming_ops bitvec_hnsw_jaccard_ops; do
   require_fixed sql/pgcontext--0.1.0.sql \
     "CREATE OPERATOR CLASS pgcontext.${opclass}" \
-    "installed dense HNSW opclass"
+    "installed HNSW opclass"
 done
-for metric in L2 NegativeInnerProduct Cosine L1; do
+for metric in L2 NegativeInnerProduct Cosine L1 BitHamming BitJaccard; do
   require_fixed crates/context-pg/src/hnsw_am_validation.rs \
     "HnswScoreMetric::${metric}" \
-    "dense HNSW metric dispatch"
+    "HNSW metric dispatch"
 done
-require_fixed crates/context-pg/src/hnsw_am.rs \
+require_fixed crates/context-pg/src/hnsw_am_metapage.rs \
   'stored_config(self, expected_metric: HnswScoreMetric, ef_search: usize)' \
   'persisted HNSW metric/config load'
-require_fixed crates/context-pg/src/hnsw_am_page_storage.rs \
+require_fixed crates/context-pg/src/hnsw_am_graph_scan.rs \
   'exact_strategy: false' \
   'page-backed HNSW work accounting'
 if grep -R -Fq -- 'exact_strategy: true' \
-    "${REPO_ROOT}/crates/context-pg/src/hnsw_am.rs" \
-    "${REPO_ROOT}/crates/context-pg/src/hnsw_am_page_storage.rs"; then
-  echo "dense HNSW source introduced a silent exact-strategy path" >&2
+    "${REPO_ROOT}/crates/context-pg/src/hnsw_am_graph_scan.rs"; then
+  echo "HNSW graph source introduced a silent exact-strategy path" >&2
   exit 1
 fi
 
@@ -280,7 +282,7 @@ require_fixed crates/context-pg/src/table_search.rs \
   'WHERE {filter_sql}' \
   'filtered ANN registered-predicate materialization'
 require_fixed crates/context-pg/src/table_search.rs \
-  'array_agg(heap_tid::text ORDER BY ordinal) AS heap_tids' \
+  'array_agg(heap_tid ORDER BY heap_tid) AS heap_tids' \
   'filtered ANN source-derived candidate mask'
 require_fixed crates/context-pg/src/table_search.rs \
   'CROSS JOIN LATERAL pgcontext._hnsw_masked_candidates(' \

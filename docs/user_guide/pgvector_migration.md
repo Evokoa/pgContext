@@ -7,8 +7,11 @@ names do not make values with different PostgreSQL type OIDs
 interchangeable. Coexistence with pgvector in one database is still
 evolving and is not yet fully supported.
 
-The non-dense HNSW metric pairs not included in V1 are tracked in the
-[post-V1 roadmap](roadmap.md).
+Explicit pgContext HNSW opclasses cover half and sparse L2, inner product,
+cosine, and L1, plus bit Hamming and Jaccard. The names and metric bindings are
+stable, while the variant SQL types and HNSW on-disk format remain
+experimental; review the index-specific single-page dimension envelope before
+rebuilding large pgvector indexes.
 
 ## Dense Vectors
 

@@ -1455,6 +1455,28 @@ fn non_dense_hnsw_opclasses_match_exact_oracles_with_bounded_candidates() {
              SET LOCAL enable_seqscan = off",
         )
         .expect("non-dense ANN query should use an index scan");
+        let plan = Spi::connect(|client| {
+            let result = client.select(
+                &format!(
+                    "EXPLAIN (COSTS FALSE, FORMAT TEXT)
+                     SELECT id
+                       FROM pgcontext_non_dense_hnsw_oracle
+                      ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}, id
+                      LIMIT 10"
+                ),
+                None,
+                &[],
+            )?;
+            result
+                .map(|row| Ok(row.get::<String>(1)?.unwrap_or_default()))
+                .collect::<Result<Vec<_>, spi::Error>>()
+                .map(|lines| lines.join("\n"))
+        })
+        .expect("non-dense HNSW plan should be readable");
+        assert!(
+            plan.contains(&format!("Index Scan using {index_name}")),
+            "{suffix} query did not use its HNSW index:\n{plan}"
+        );
         let indexed = Spi::get_one::<Vec<i32>>(&format!(
             "SELECT array_agg(id)
                FROM (
@@ -1479,6 +1501,89 @@ fn non_dense_hnsw_opclasses_match_exact_oracles_with_bounded_candidates() {
             "{suffix} HNSW scan scored the full collection: {candidate_count}"
         );
     }
+}
+
+#[pg_test]
+fn bitvec_jaccard_hnsw_rechecks_overlapping_float4_bounds() {
+    Spi::run(
+        "SET LOCAL pgcontext.hnsw_shared_serving = off;
+         CREATE TEMP TABLE pgcontext_bit_jaccard_recheck (
+             id integer PRIMARY KEY,
+             bit_value public.bitvec NOT NULL
+         );
+         INSERT INTO pgcontext_bit_jaccard_recheck VALUES
+             (1, pgcontext.bitvec(repeat('1', 1998))),
+             (2, pgcontext.bitvec(repeat('1', 1996) || '00'));
+         CREATE INDEX pgcontext_bit_jaccard_recheck_idx
+             ON pgcontext_bit_jaccard_recheck
+          USING pgcontext_hnsw (bit_value pgcontext.bitvec_hnsw_jaccard_ops);
+         SET LOCAL enable_indexscan = on;
+         SET LOCAL enable_bitmapscan = off;
+         SET LOCAL enable_seqscan = off",
+    )
+    .expect("bitvec Jaccard reorder fixture should build");
+
+    let query = "pgcontext.bitvec(repeat('1', 1997) || '0')";
+    let plan = Spi::connect(|client| {
+        let result = client.select(
+            &format!(
+                "EXPLAIN (COSTS FALSE, FORMAT TEXT)
+                 SELECT id
+                   FROM pgcontext_bit_jaccard_recheck
+                  ORDER BY bit_value OPERATOR(pgcontext.<%>) {query}
+                  LIMIT 1"
+            ),
+            None,
+            &[],
+        )?;
+        result
+            .map(|row| Ok(row.get::<String>(1)?.unwrap_or_default()))
+            .collect::<Result<Vec<_>, spi::Error>>()
+            .map(|lines| lines.join("\n"))
+    })
+    .expect("bitvec Jaccard reorder plan should be readable");
+    assert!(
+        plan.contains("Index Scan using pgcontext_bit_jaccard_recheck_idx"),
+        "bitvec Jaccard reorder query did not use its HNSW index:\n{plan}"
+    );
+
+    let nearest = Spi::get_one::<i32>(&format!(
+        "SELECT id
+           FROM pgcontext_bit_jaccard_recheck
+          ORDER BY bit_value OPERATOR(pgcontext.<%>) {query}
+          LIMIT 1"
+    ))
+    .expect("bitvec Jaccard reorder query should execute");
+    assert_eq!(nearest, Some(1));
+
+    let rechecks = Spi::get_one::<i64>("SELECT rechecks FROM pgcontext.hnsw_last_scan_work()")
+        .expect("bitvec Jaccard reorder work should be readable")
+        .unwrap_or_default();
+    assert!(
+        rechecks >= 2,
+        "bitvec Jaccard exact reorder did not consume both overlapping bounds: {rechecks}"
+    );
+}
+
+#[pg_test]
+fn non_dense_hnsw_rejects_records_above_the_single_page_envelope() {
+    Spi::run(
+        "CREATE TEMP TABLE pgcontext_non_dense_hnsw_oversized (
+             bit_value public.bitvec NOT NULL
+         );
+         INSERT INTO pgcontext_non_dense_hnsw_oversized
+         VALUES (pgcontext.bitvec(repeat('1', 8001)))",
+    )
+    .expect("oversized non-dense HNSW fixture should build");
+
+    assert_vector_compat_ddl_failure(
+        "CREATE INDEX pgcontext_non_dense_hnsw_oversized_idx
+            ON pgcontext_non_dense_hnsw_oversized
+         USING pgcontext_hnsw (bit_value pgcontext.bitvec_hnsw_jaccard_ops)",
+        "54000",
+        "HNSW vector record exceeds single-page storage limit: 32032 bytes (maximum 8064); reduce vector dimensions or hnsw_m",
+        "non-dense HNSW single-page record envelope",
+    );
 }
 
 #[pg_test]
