@@ -162,6 +162,7 @@ mod tests {
     include!("pg_tests/facet.rs");
     include!("pg_tests/grouped_search.rs");
     include!("pg_tests/hnsw_am.rs");
+    include!("pg_tests/hnsw_pgvector_compat.rs");
     include!("pg_tests/hnsw_compaction.rs");
     include!("pg_tests/hnsw_delta_segment.rs");
     include!("pg_tests/hnsw_serving.rs");

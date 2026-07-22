@@ -974,56 +974,7 @@ struct HnswOrderByContract {
     pgvector_binding: bool,
 }
 
-impl HnswScoreMetric {
-    /// Returns the dense graph score preserving this metric's ordering.
-    ///
-    /// Bit metrics operate over the validated dense 0/1 storage form so their
-    /// graph traversal score has the same ordering as the SQL operator.
-    const fn navigation_metric(self) -> DistanceMetric {
-        match self {
-            Self::L2 => DistanceMetric::L2,
-            Self::NegativeInnerProduct => DistanceMetric::NegativeInnerProduct,
-            Self::Cosine => DistanceMetric::NegativeInnerProduct,
-            Self::L1 => DistanceMetric::L1,
-            Self::BitHamming => DistanceMetric::Hamming,
-            Self::BitJaccard => DistanceMetric::Jaccard,
-        }
-    }
-
-    fn prepare_vector(self, vector: DenseVector) -> Result<DenseVector, context_core::Error> {
-        if self != Self::Cosine {
-            return Ok(vector);
-        }
-        let mut values = vector.into_values();
-        let norm_squared = values.iter().map(|value| value * value).sum::<f32>();
-        if !norm_squared.is_finite() || norm_squared <= 0.0 {
-            return Err(context_core::Error::InvalidVector(
-                "cosine HNSW vectors must have a finite nonzero norm".to_owned(),
-            ));
-        }
-        let inverse_norm = norm_squared.sqrt().recip();
-        values.iter_mut().for_each(|value| *value *= inverse_norm);
-        DenseVector::new(values)
-    }
-
-    const fn output_score(self, navigation_score: f32) -> f32 {
-        match self {
-            Self::Cosine => navigation_score + 1.0,
-            _ => navigation_score,
-        }
-    }
-
-    const fn storage_tag(self) -> u16 {
-        match self {
-            Self::L2 => 1,
-            Self::NegativeInnerProduct => 2,
-            Self::Cosine => 3,
-            Self::L1 => 4,
-            Self::BitHamming => 5,
-            Self::BitJaccard => 6,
-        }
-    }
-}
+include!("hnsw_am_metric.rs");
 
 #[pg_guard]
 #[allow(unused_qualifications)]
@@ -1076,14 +1027,17 @@ fn hnsw_build_callback_safe(
     }) else {
         return;
     };
-    let dimension = dimension_to_u32(dense.dimension());
     let point_id = HnswPointId::new(item_pointer_to_u64(*tid.as_ref()));
 
     let state = state.as_mut();
-    let dense = state
+    let Some(dense) = state
         .score_metric
         .prepare_vector(dense)
-        .unwrap_or_else(|error| raise_core_error(error));
+        .unwrap_or_else(|error| raise_core_error(error))
+    else {
+        return;
+    };
+    let dimension = dimension_to_u32(dense.dimension());
     if state.parallel_workers > 1 {
         // Collected, not inserted: `finish_parallel_build` builds the graph
         // across worker threads once the scan completes. Duplicate/dimension
@@ -1215,8 +1169,7 @@ unsafe fn hnsw_scan_candidates_with_metric(
     // A non-ordered AM scan has no kNN strategy: it visits visible index
     // entries without manufacturing a score-ranked exact candidate set.
     // SAFETY: The scan owns a live index relation for the callback duration.
-    let records = unsafe { read_hnsw_vector_records(index_relation) };
-    let candidates = hnsw_unordered_scan_candidates(records);
+    let candidates = unsafe { hnsw_unordered_scan_candidates_with_delta(index_relation) };
     HnswScanCandidates {
         work: HnswScanWork {
             candidates: candidates.len(),

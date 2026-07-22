@@ -3,7 +3,29 @@
 set -euo pipefail
 
 PSQL=${PGCONTEXT_CONVERSION_PSQL:-psql}
+PG_DUMP=${PGCONTEXT_CONVERSION_PG_DUMP:-pg_dump}
+PG_RESTORE=${PGCONTEXT_CONVERSION_PG_RESTORE:-pg_restore}
 DB=${PGCONTEXT_CONVERSION_DB:-pgcontext_pgvector_conversion_check}
+RESTORE_DB=${PGCONTEXT_CONVERSION_RESTORE_DB:-pgcontext_pgvector_conversion_restore_check}
+DUMP_FILE=${TMPDIR:-/tmp}/pgcontext-pgvector-conversion-${$}.dump
+
+if [[ ! "${DB}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+  || [[ ! "${RESTORE_DB}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+  echo "FAIL: conversion database names must be simple SQL identifiers" >&2
+  exit 2
+fi
+
+cleanup() {
+  if [[ -n "${sleeping_backend_shell_pid:-}" ]] \
+    && kill -0 "${sleeping_backend_shell_pid}" 2>/dev/null; then
+    kill "${sleeping_backend_shell_pid}" 2>/dev/null || true
+    wait "${sleeping_backend_shell_pid}" 2>/dev/null || true
+  fi
+  ${PSQL} -d postgres -v ON_ERROR_STOP=1 \
+    -c "DROP DATABASE IF EXISTS ${RESTORE_DB};" >/dev/null 2>&1 || true
+  rm -f "${DUMP_FILE}"
+}
+trap cleanup EXIT
 
 fail() {
   echo "FAIL: $*" >&2
@@ -222,12 +244,46 @@ shadow_guard=$(q "SELECT embedding::text = \"${shadow_column}\"::text
                     FROM conversion_online WHERE id = 1")
 [[ "${shadow_guard}" == "t" ]] || fail "online trigger allowed a direct shadow overwrite"
 
+# The checkpoint belongs to the catalog, not the backend that produced it.
+# Have one long-lived conversion-owner backend commit a bounded batch, then
+# terminate that same backend while it sleeps. A new backend must advance from
+# the cursor committed by the terminated producer rather than restart the job.
 online_status=backfilling
-online_status=$(q_owner "SELECT status FROM pgcontext.run_pgvector_ownership_conversion(${online_id}, 1)")
+${PSQL} -d "${DB}" -v ON_ERROR_STOP=1 -Atq \
+  -c "SET SESSION AUTHORIZATION conversion_owner;
+      SET application_name = 'pgcontext_conversion_resume_gate'" \
+  -c "SELECT status
+        FROM pgcontext.run_pgvector_ownership_conversion(${online_id}, 1)" \
+  -c "SELECT pg_catalog.pg_sleep(30)" >/dev/null 2>&1 &
+sleeping_backend_shell_pid=$!
+sleeping_backend_pid=
+for _ in $(seq 1 20); do
+  sleeping_backend_pid=$(q "SELECT pid
+                              FROM pg_catalog.pg_stat_activity
+                             WHERE application_name = 'pgcontext_conversion_resume_gate'
+                               AND wait_event = 'PgSleep'
+                             LIMIT 1")
+  [[ -z "${sleeping_backend_pid}" ]] || break
+  sleep 0.1
+done
+[[ -n "${sleeping_backend_pid}" ]] || fail "could not observe backend selected for termination"
+cursor_before_termination=$(q "SELECT backfill_cursor::text
+                                 FROM pgcontext._visible_pgvector_ownership_conversions
+                                WHERE conversion_id = ${online_id}")
 cursor_progress=$(q "SELECT backfill_cursor <> '(0,0)' AND processed_rows <= 1
                        FROM pgcontext._visible_pgvector_ownership_conversions
                       WHERE conversion_id = ${online_id}")
-[[ "${cursor_progress}" == "t" ]] || fail "online backfill did not persist bounded cursor progress"
+[[ "${cursor_progress}" == "t" ]] \
+  || fail "producer backend did not commit bounded cursor progress before termination"
+terminated=$(q "SELECT pg_catalog.pg_terminate_backend(${sleeping_backend_pid})")
+[[ "${terminated}" == "t" ]] || fail "could not terminate conversion backend"
+wait "${sleeping_backend_shell_pid}" 2>/dev/null || true
+online_status=$(q_owner "SELECT status FROM pgcontext.run_pgvector_ownership_conversion(${online_id}, 1)")
+cursor_after_termination=$(q "SELECT backfill_cursor::text
+                                FROM pgcontext._visible_pgvector_ownership_conversions
+                               WHERE conversion_id = ${online_id}")
+[[ "${cursor_after_termination}" != "${cursor_before_termination}" ]] \
+  || fail "online conversion did not resume beyond the persisted cursor after backend termination"
 for _ in $(seq 1 9); do
   online_status=$(q_owner "SELECT status FROM pgcontext.run_pgvector_ownership_conversion(${online_id}, 1)")
   [[ "${online_status}" == "backfilling" ]] || break
@@ -373,6 +429,87 @@ final_exact_after=$(q "SELECT pg_catalog.string_agg(
                       WHERE embedding IS NOT NULL")
 [[ "${final_exact_after}" == "${final_exact_before}" ]] \
   || fail "finalized conversion changed exact distance results"
+
+# Every supported pgvector dense type/metric pairing must preserve exact
+# distances and rebuild to the corresponding canonical pgContext opclass.
+for matrix_type in vector halfvec; do
+  for matrix_metric in l2 inner_product cosine l1; do
+    case "${matrix_metric}" in
+      l2)
+        matrix_operator='<->'
+        source_opclass="${matrix_type}_l2_ops"
+        target_opclass="${matrix_type}_hnsw_ops"
+        ;;
+      inner_product)
+        matrix_operator='<#>'
+        source_opclass="${matrix_type}_ip_ops"
+        target_opclass="${matrix_type}_hnsw_ip_ops"
+        ;;
+      cosine)
+        matrix_operator='<=>'
+        source_opclass="${matrix_type}_cosine_ops"
+        target_opclass="${matrix_type}_hnsw_cosine_ops"
+        ;;
+      l1)
+        matrix_operator='<+>'
+        source_opclass="${matrix_type}_l1_ops"
+        target_opclass="${matrix_type}_hnsw_l1_ops"
+        ;;
+    esac
+    matrix_table="conversion_matrix_${matrix_type}_${matrix_metric}"
+    q "CREATE TABLE ${matrix_table} (
+         id bigint PRIMARY KEY,
+         embedding public.${matrix_type}(3) NOT NULL
+       );
+       INSERT INTO ${matrix_table} VALUES
+         (1, '[1,0,0]'), (2, '[0,1,0]'), (3, '[0.5,0.5,0.5]');
+       CREATE INDEX ${matrix_table}_ann
+         ON ${matrix_table} USING hnsw (embedding public.${source_opclass});
+       ALTER TABLE ${matrix_table} OWNER TO conversion_owner" >/dev/null
+    matrix_before=$(q "SELECT pg_catalog.string_agg(
+                              id || ':' || pg_catalog.to_char(
+                                (embedding OPERATOR(public.${matrix_operator})
+                                  '[0.2,0.8,0.1]'::public.${matrix_type})::float8,
+                                'FM999999990.000000'
+                              ),
+                              ',' ORDER BY id
+                            )
+                       FROM ${matrix_table}")
+    matrix_id=$(q_owner "SELECT conversion_id
+                           FROM pgcontext.start_pgvector_ownership_conversion(
+                             '${matrix_table}'::pg_catalog.regclass,
+                             'embedding',
+                             'fast',
+                             '${matrix_metric}',
+                             application_dependencies_reviewed => true
+                           )")
+    matrix_status=$(q_owner "SELECT status
+                               FROM pgcontext.run_pgvector_ownership_conversion(
+                                 ${matrix_id}, sessions_drained => true
+                               )")
+    [[ "${matrix_status}" == "completed" ]] \
+      || fail "${matrix_type}/${matrix_metric} conversion ended in ${matrix_status}"
+    matrix_after=$(q "SELECT pg_catalog.string_agg(
+                             id || ':' || pg_catalog.to_char(
+                               (embedding OPERATOR(pgcontext.${matrix_operator})
+                                 '[0.2,0.8,0.1]'::pgcontext.${matrix_type})::float8,
+                               'FM999999990.000000'
+                             ),
+                             ',' ORDER BY id
+                           )
+                      FROM ${matrix_table}")
+    [[ "${matrix_after}" == "${matrix_before}" ]] \
+      || fail "${matrix_type}/${matrix_metric} conversion changed exact distances"
+    matrix_index=$(q "SELECT access_method.amname || ':' || opclass.opcname
+                        FROM pg_catalog.pg_class AS relation
+                        JOIN pg_catalog.pg_index AS index ON index.indexrelid = relation.oid
+                        JOIN pg_catalog.pg_am AS access_method ON access_method.oid = relation.relam
+                        JOIN pg_catalog.pg_opclass AS opclass ON opclass.oid = index.indclass[0]
+                       WHERE relation.relname = '${matrix_table}_ann'")
+    [[ "${matrix_index}" == "pgcontext_hnsw:${target_opclass}" ]] \
+      || fail "${matrix_type}/${matrix_metric} rebuilt unexpected index ${matrix_index}"
+  done
+done
 
 # Representative dependency and authorization refusals fail before any DDL.
 q "CREATE TABLE conversion_blocked (
@@ -522,9 +659,46 @@ canonical_nearest=$(q "SELECT id FROM conversion_final
                         LIMIT 1")
 [[ "${canonical_nearest}" == "1" ]] || fail "finalized canonical HNSW failed after pgvector removal"
 
+# A finalized database must dump and restore without the bridge or pgvector.
+${PG_DUMP} -d "${DB}" --format=custom --file="${DUMP_FILE}"
+${PSQL} -d postgres -v ON_ERROR_STOP=1 \
+  -c "DROP DATABASE IF EXISTS ${RESTORE_DB};" \
+  -c "CREATE DATABASE ${RESTORE_DB};" >/dev/null
+${PG_RESTORE} --exit-on-error --no-owner --dbname="${RESTORE_DB}" "${DUMP_FILE}"
+restored_extensions=$(${PSQL} -d "${RESTORE_DB}" -v ON_ERROR_STOP=1 -Atq \
+  -c "SELECT pg_catalog.string_agg(extname, ',' ORDER BY extname)
+        FROM pg_catalog.pg_extension
+       WHERE extname IN ('pgcontext', 'pgcontext_pgvector', 'vector')")
+[[ "${restored_extensions}" == "pgcontext" ]] \
+  || fail "restored database has unexpected vector extensions: ${restored_extensions}"
+restored_exact=$(${PSQL} -d "${RESTORE_DB}" -v ON_ERROR_STOP=1 -Atq \
+  -c "SELECT pg_catalog.string_agg(
+             id || ':' || pg_catalog.round(
+               (embedding OPERATOR(pgcontext.<->) '[0.25,0.75,0]'::pgcontext.vector)::numeric,
+               6
+             )::text,
+             ',' ORDER BY id
+           )
+        FROM conversion_final
+       WHERE embedding IS NOT NULL")
+[[ "${restored_exact}" == "${final_exact_after}" ]] \
+  || fail "dump/restore changed finalized exact distance results"
+restored_index=$(${PSQL} -d "${RESTORE_DB}" -v ON_ERROR_STOP=1 -Atq \
+  -c "SELECT access_method.amname || ':' || opclass.opcname
+        FROM pg_catalog.pg_class AS relation
+        JOIN pg_catalog.pg_index AS index ON index.indexrelid = relation.oid
+        JOIN pg_catalog.pg_am AS access_method ON access_method.oid = relation.relam
+        JOIN pg_catalog.pg_opclass AS opclass ON opclass.oid = index.indclass[0]
+       WHERE index.indrelid = 'conversion_final'::pg_catalog.regclass
+         AND access_method.amname = 'pgcontext_hnsw'")
+[[ "${restored_index}" == "pgcontext_hnsw:vector_hnsw_ops" ]] \
+  || fail "dump/restore produced unexpected canonical index ${restored_index}"
+${PSQL} -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE ${RESTORE_DB};" >/dev/null
+rm -f "${DUMP_FILE}"
+
 q "REASSIGN OWNED BY conversion_owner TO CURRENT_USER;
    DROP OWNED BY conversion_owner;
    DROP ROLE conversion_owner" >/dev/null
 
 ${PSQL} -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE ${DB};" >/dev/null
-echo "pgvector ownership conversion verification passed (fast, resumable online, rollback, finalization, and pgvector removal)"
+echo "pgvector ownership conversion verification passed (metric matrix, backend resume, rollback, dump/restore, and pgvector removal)"

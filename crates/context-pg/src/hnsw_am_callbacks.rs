@@ -195,10 +195,13 @@ fn hnsw_insert_safe(
     }) else {
         return false;
     };
-    let dimensions = dimension_to_u32(vector.dimension());
-    let vector = score_metric
+    let Some(vector) = score_metric
         .prepare_vector(vector)
-        .unwrap_or_else(|error| raise_core_error(error));
+        .unwrap_or_else(|error| raise_core_error(error))
+    else {
+        return false;
+    };
+    let dimensions = dimension_to_u32(vector.dimension());
     let heap_tid = item_pointer_to_u64(*heap_tid.as_ref());
 
     // SAFETY: The callback owns a live index relation whose metapage was

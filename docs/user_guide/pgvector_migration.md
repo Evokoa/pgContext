@@ -124,6 +124,24 @@ its schema. Final validation, like cutover validation, scans while the reverse
 trigger is active under `ACCESS SHARE`; only the final trigger/column DDL uses
 the upgraded exclusive lock.
 
+The release gate exercises `vector` and `halfvec` conversions for L2, inner
+product, cosine, and L1. It compares exact distances before and after each
+conversion, terminates a backend between bounded online batches and resumes
+from the persisted cursor, validates rollback to untouched pgvector objects,
+drops both the bridge and pgvector after finalization, and restores a custom
+format dump into a clean database. A pgvector-derived `pg_regress` profile also
+keeps the pgvector-owned columns and query operators unchanged while replacing
+only the HNSW access method and opclass. Run the live gates with:
+
+```sh
+scripts/check-pgvector-ownership-conversion.sh
+scripts/check-pgvector-regression-compat.sh
+```
+
+The regression profile is deliberately bounded to the supported PostgreSQL 17
+HNSW migration contract; it does not claim IVFFlat implementation or pgvector's
+HNSW-specific GUC surface.
+
 Online mode adds a physical column, so applications must use explicit INSERT
 column lists throughout the migration. PostgreSQL cannot inventory prepared SQL
 in other backends; the `sessions_drained` value is an operator attestation, not
