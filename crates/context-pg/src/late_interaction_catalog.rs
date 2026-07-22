@@ -688,14 +688,11 @@ fn estimate_source_token_row_bytes(row: &SourceTokenMetadata) -> usize {
         .dimensions
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(1);
-    token_count
-        .checked_mul(
-            dimensions
-                .checked_mul(size_of::<f32>())
-                .and_then(|bytes| bytes.checked_add(ESTIMATED_VECTOR_OVERHEAD_BYTES))
-                .unwrap_or(usize::MAX),
-        )
-        .unwrap_or(usize::MAX)
+    token_count.saturating_mul(
+        dimensions
+            .saturating_mul(size_of::<f32>())
+            .saturating_add(ESTIMATED_VECTOR_OVERHEAD_BYTES),
+    )
 }
 
 fn load_source_token_batch(sql: &str, source_keys: &[String]) -> Vec<SourceTokenRow> {
