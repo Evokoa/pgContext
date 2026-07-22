@@ -183,6 +183,99 @@ impl HnswGraphQuantizationCodebook {
         }
     }
 
+    /// Precomputes query-to-code contributions for repeated encoded scoring.
+    ///
+    /// The resulting scorer performs work proportional to encoded byte length,
+    /// rather than original vector dimensions, for every visited graph node.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HnswGraphPayloadError`] for an incompatible query or metric.
+    pub fn prepare_query(
+        &self,
+        query: &DenseVector,
+        metric: DistanceMetric,
+    ) -> Result<PreparedQuantizedQuery, HnswGraphPayloadError> {
+        validate_query_contract(self, query, metric)?;
+        let mut offsets = Vec::with_capacity(self.code_len() + 1);
+        let mut contributions = Vec::new();
+        offsets.push(0);
+        match self {
+            Self::Binary { dimensions } => {
+                for byte_index in 0..dimensions.div_ceil(8) {
+                    for encoded_byte in u8::MIN..=u8::MAX {
+                        let mut contribution = DistanceContribution::default();
+                        for bit in 0..8 {
+                            let dimension = byte_index * 8 + bit;
+                            if dimension == *dimensions {
+                                break;
+                            }
+                            let encoded = if encoded_byte & (1 << bit) == 0 {
+                                -1.0
+                            } else {
+                                1.0
+                            };
+                            contribution.add(metric, query.as_slice()[dimension], encoded);
+                        }
+                        contributions.push(contribution);
+                    }
+                    offsets.push(contributions.len());
+                }
+            }
+            Self::Scalar {
+                minimum,
+                maximum,
+                levels,
+                ..
+            } => {
+                let steps = f64::from(*levels - 1);
+                for query_value in query.as_slice() {
+                    for encoded in 0..*levels {
+                        let fraction = f64::from(encoded) / steps;
+                        let reconstructed = f64::from(*minimum)
+                            + ((f64::from(*maximum) - f64::from(*minimum)) * fraction);
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            reason = "interpolation stays between validated finite f32 endpoints"
+                        )]
+                        let reconstructed = reconstructed as f32;
+                        let mut contribution = DistanceContribution::default();
+                        contribution.add(metric, *query_value, reconstructed);
+                        contributions.push(contribution);
+                    }
+                    offsets.push(contributions.len());
+                }
+            }
+            Self::Product { codebooks, .. } => {
+                let mut query_offset = 0;
+                for centroids in codebooks {
+                    for centroid in centroids {
+                        let mut contribution = DistanceContribution::default();
+                        for (within_subvector, reconstructed) in
+                            centroid.as_slice().iter().copied().enumerate()
+                        {
+                            contribution.add(
+                                metric,
+                                query.as_slice()[query_offset + within_subvector],
+                                reconstructed,
+                            );
+                        }
+                        contributions.push(contribution);
+                    }
+                    query_offset += centroids[0].dimension();
+                    offsets.push(contributions.len());
+                }
+            }
+        }
+        Ok(PreparedQuantizedQuery {
+            metric,
+            query_norm: query.as_slice().iter().map(|value| value * value).sum(),
+            offsets,
+            contributions,
+            binary_padding_mask: binary_padding_mask(self),
+        })
+    }
+
     fn for_each_reconstructed(&self, code: &[u8], mut visit: impl FnMut(usize, f32)) {
         match self {
             Self::Binary { dimensions } => {
@@ -232,6 +325,131 @@ impl HnswGraphQuantizationCodebook {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DistanceContribution {
+    primary: f32,
+    encoded_norm: f32,
+}
+
+impl DistanceContribution {
+    fn add(&mut self, metric: DistanceMetric, query: f32, encoded: f32) {
+        self.primary += match metric {
+            DistanceMetric::L2 => {
+                let difference = query - encoded;
+                difference * difference
+            }
+            DistanceMetric::L1 => (query - encoded).abs(),
+            DistanceMetric::NegativeInnerProduct => -(query * encoded),
+            DistanceMetric::Cosine => query * encoded,
+            DistanceMetric::InnerProduct | DistanceMetric::Hamming | DistanceMetric::Jaccard => {
+                unreachable!("prepared query contract rejects unsupported metrics")
+            }
+        };
+        if metric == DistanceMetric::Cosine {
+            self.encoded_norm += encoded * encoded;
+        }
+    }
+}
+
+/// Query-scoped lookup scorer for compact quantized node codes.
+#[derive(Debug, Clone)]
+pub struct PreparedQuantizedQuery {
+    metric: DistanceMetric,
+    query_norm: f32,
+    offsets: Vec<usize>,
+    contributions: Vec<DistanceContribution>,
+    binary_padding_mask: Option<u8>,
+}
+
+impl PreparedQuantizedQuery {
+    /// Scores one encoded node in work proportional to code bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HnswGraphPayloadError`] for a malformed or out-of-codebook
+    /// code.
+    pub fn score(&self, code: &[u8]) -> Result<f32, HnswGraphPayloadError> {
+        let code_len = self.offsets.len().saturating_sub(1);
+        if code.len() != code_len {
+            return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+                "prepared query code length mismatch: expected {code_len}, got {}",
+                code.len()
+            )));
+        }
+        if let (Some(mask), Some(last)) = (self.binary_padding_mask, code.last())
+            && last & !mask != 0
+        {
+            return Err(HnswGraphPayloadError::InvalidQuantization(
+                "prepared query binary code has non-zero padding bits".to_owned(),
+            ));
+        }
+        let mut primary = 0.0_f32;
+        let mut encoded_norm = 0.0_f32;
+        for (position, encoded) in code.iter().copied().enumerate() {
+            let start = self.offsets[position];
+            let end = self.offsets[position + 1];
+            let index = start.saturating_add(usize::from(encoded));
+            let Some(contribution) = self.contributions.get(index).filter(|_| index < end) else {
+                return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+                    "prepared query code {encoded} exceeds position {position} table size {}",
+                    end - start
+                )));
+            };
+            primary += contribution.primary;
+            encoded_norm += contribution.encoded_norm;
+        }
+        match self.metric {
+            DistanceMetric::L2 => Ok(primary.sqrt()),
+            DistanceMetric::L1 | DistanceMetric::NegativeInnerProduct => Ok(primary),
+            DistanceMetric::Cosine if encoded_norm == 0.0 => Ok(f32::INFINITY),
+            DistanceMetric::Cosine => {
+                Ok(1.0 - primary / (self.query_norm.sqrt() * encoded_norm.sqrt()))
+            }
+            DistanceMetric::InnerProduct | DistanceMetric::Hamming | DistanceMetric::Jaccard => {
+                unreachable!("prepared query contract rejects unsupported metrics")
+            }
+        }
+    }
+}
+
+fn validate_query_contract(
+    codebook: &HnswGraphQuantizationCodebook,
+    query: &DenseVector,
+    metric: DistanceMetric,
+) -> Result<(), HnswGraphPayloadError> {
+    if query.dimension() != codebook.dimensions() {
+        return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+            "query dimensions mismatch: expected {}, got {}",
+            codebook.dimensions(),
+            query.dimension()
+        )));
+    }
+    if matches!(metric, DistanceMetric::InnerProduct) {
+        return Err(HnswGraphPayloadError::InvalidQuantization(
+            "raw inner product is not an ascending HNSW distance".to_owned(),
+        ));
+    }
+    if matches!(metric, DistanceMetric::Hamming | DistanceMetric::Jaccard) {
+        return Err(HnswGraphPayloadError::InvalidQuantization(
+            "dense quantization does not support binary HNSW metrics".to_owned(),
+        ));
+    }
+    if metric == DistanceMetric::Cosine && query.as_slice().iter().all(|value| *value == 0.0) {
+        return Err(HnswGraphPayloadError::InvalidQuantization(
+            "cosine distance is undefined for a zero query vector".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn binary_padding_mask(codebook: &HnswGraphQuantizationCodebook) -> Option<u8> {
+    let HnswGraphQuantizationCodebook::Binary { dimensions } = codebook else {
+        return None;
+    };
+    let remainder = dimensions % 8;
+    (remainder != 0).then(|| (1_u8 << remainder) - 1)
 }
 
 /// Quantized codes bound to one graph's record ordering.

@@ -5,7 +5,7 @@ use std::{cmp::Reverse, collections::BinaryHeap};
 use context_core::{DistanceMetric, SearchLimit};
 use context_index::{HnswGraph, HnswGraphNodeSnapshot, HnswNodeId, HnswPointId};
 use context_storage::{
-    HnswGraphArtifactRecord, HnswGraphPayloadError, QuantizedHnswGraphView,
+    HnswGraphArtifactRecord, HnswGraphPayloadError, PreparedQuantizedQuery, QuantizedHnswGraphView,
     decode_hnsw_graph_payload_versioned,
 };
 use pgrx::datum::DatumWithOid;
@@ -555,16 +555,20 @@ fn mmap_quantized_hnsw_candidates(
     }
     let config = crate::settings::hnsw_config_from_gucs();
     let search_width = config.ef_search().max(candidate_limit);
+    let prepared = graph
+        .codebook()
+        .prepare_query(query, metric)
+        .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
     let has_edges = (0..graph.len()).any(|node_id| {
         graph
             .node(node_id)
             .is_some_and(|node| node.neighbors().next().is_some())
     });
     let candidates = if has_edges {
-        traverse_quantized_base_layer(graph, query, metric, search_width)
+        traverse_quantized_base_layer(graph, &prepared, search_width)
     } else {
         (0..graph.len())
-            .map(|node_id| score_quantized_node(graph, query, metric, node_id))
+            .map(|node_id| score_quantized_node(graph, &prepared, node_id))
             .collect()
     };
     let mut candidates = candidates
@@ -598,11 +602,10 @@ fn mmap_quantized_hnsw_candidates(
 
 fn traverse_quantized_base_layer(
     graph: &QuantizedHnswGraphView<'_>,
-    query: &context_core::DenseVector,
-    metric: DistanceMetric,
+    prepared: &PreparedQuantizedQuery,
     search_width: usize,
 ) -> Vec<EncodedCandidate> {
-    let entry = score_quantized_node(graph, query, metric, 0);
+    let entry = score_quantized_node(graph, prepared, 0);
     let mut pending = BinaryHeap::from([Reverse(entry)]);
     let mut nearest = BinaryHeap::from([entry]);
     let mut visited = vec![false; graph.len()];
@@ -631,7 +634,7 @@ fn traverse_quantized_base_layer(
                 continue;
             }
             *was_visited = true;
-            let scored = score_quantized_node(graph, query, metric, neighbor);
+            let scored = score_quantized_node(graph, prepared, neighbor);
             let should_add = nearest.len() < search_width
                 || nearest
                     .peek()
@@ -650,8 +653,7 @@ fn traverse_quantized_base_layer(
 
 fn score_quantized_node(
     graph: &QuantizedHnswGraphView<'_>,
-    query: &context_core::DenseVector,
-    metric: DistanceMetric,
+    prepared: &PreparedQuantizedQuery,
     node_id: usize,
 ) -> EncodedCandidate {
     let node = graph.node(node_id).unwrap_or_else(|| {
@@ -660,9 +662,8 @@ fn score_quantized_node(
             "quantized HNSW node is missing",
         )
     });
-    let score = graph
-        .codebook()
-        .approximate_distance(query, node.code(), metric)
+    let score = prepared
+        .score(node.code())
         .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
     EncodedCandidate { node_id, score }
 }

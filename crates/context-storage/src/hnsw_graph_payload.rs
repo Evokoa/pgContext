@@ -12,7 +12,9 @@ use context_core::DenseVector;
 mod quantization;
 mod quantized_view;
 
-pub use quantization::{HnswGraphQuantization, HnswGraphQuantizationCodebook};
+pub use quantization::{
+    HnswGraphQuantization, HnswGraphQuantizationCodebook, PreparedQuantizedQuery,
+};
 pub(crate) use quantization::{
     QUANTIZATION_NONE, decode_quantization_codebook, encode_quantization_codebook,
     quantization_mode, validate_quantization, validate_quantized_code,

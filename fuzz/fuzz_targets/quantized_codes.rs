@@ -56,6 +56,9 @@ fn exercise(data: &[u8]) {
             let _ = quantization
                 .codebook()
                 .approximate_distance(query, code, metric);
+            if let Ok(prepared) = quantization.codebook().prepare_query(query, metric) {
+                let _ = prepared.score(code);
+            }
         }
     }
 }

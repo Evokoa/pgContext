@@ -60,8 +60,10 @@ fn encoded_distance_matches_reconstruction_without_allocating_a_node_vector() ->
         DistanceMetric::Cosine,
     ] {
         let encoded = codebook.approximate_distance(&query, &code, metric)?;
+        let prepared = codebook.prepare_query(&query, metric)?.score(&code)?;
         let expected = metric.distance(&query, &reconstructed)?;
         assert!((encoded - expected).abs() <= f32::EPSILON * 8.0);
+        assert!((prepared - expected).abs() <= f32::EPSILON * 8.0);
     }
     Ok(())
 }
