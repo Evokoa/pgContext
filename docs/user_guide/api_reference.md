@@ -457,10 +457,12 @@ source columns and stores per-vector sparse storage/index/status metadata:
   binds a collection's source-table `vector[]` column, materializes one private
   pgContext token row per array element under invoker ACL/RLS, installs a
   same-transaction source-DML capture trigger, and builds a collection-scoped
-  inner-product HNSW index. An empty source is registered as `building` until a
-  repair can infer dimensions and publish the index.
+  inner-product HNSW index. The ordinary-table source must expose `id` as a
+  `NOT NULL`, immediate, single-column unique key. An empty source is registered
+  as `building` until a repair can infer dimensions and publish the index.
 - `pgcontext.repair_late_interaction(collection text, batch_size integer)`
-  atomically replaces the derived token rows in bounded source-scan batches,
+  atomically replaces the derived token rows with keyset pagination and a
+  per-batch materialization byte budget,
   refreshes restored table bindings, reinstalls the capture trigger, and
   rebuilds the HNSW index. A failed statement or savepoint rolls the previous
   token generation and index back intact.
@@ -471,7 +473,19 @@ source columns and stores per-vector sparse storage/index/status metadata:
   reports the exact table scan, MaxSim comparison count, comparison budget, and
   typed ANN-planner readiness diagnostics for a table-backed late-interaction
   query without materializing candidate vectors.
+- `pgcontext.search_late_interaction_ann(collection text, query_vectors vector[], candidates_per_query integer, limit integer)`
+  serves approximate candidates from the collection's registered, pgContext-owned
+  token relation and collection-scoped inner-product HNSW generation. The
+  candidate prefix expands geometrically, within collection and comparison
+  budgets, when deleted or RLS-hidden candidates are removed by the invoker-side
+  source recheck. Final ordering always uses exact MaxSim over the current source
+  row; token vectors and source-table identifiers are not caller parameters.
+- `pgcontext.explain_late_interaction_ann(collection text, query_vectors vector[], candidates_per_query integer)`
+  validates the bound source column and exact owned HNSW predicate, expression,
+  dimension, and opclass before reporting the ANN planner strategy. It does not
+  expose raw token vectors or exact global token counts.
 - `pgcontext.search_late_interaction_ann(collection text, query_vectors vector[], vector_column text, token_table text, token_source_key_column text, token_vector_column text, candidates_per_query integer, limit integer)`
+  is the legacy experimental overload for user-maintained companion tables. It
   uses a companion token table with a `pgcontext_hnsw` index to collect
   approximate candidate source keys from a `NOT NULL` source-key column and a
   dimensioned `vector(n) NOT NULL` token column, deduplicates them, and
@@ -485,7 +499,8 @@ source columns and stores per-vector sparse storage/index/status metadata:
   token candidates, and enforces the actual hydrated exact-rerank budget while
   scoring source-table vectors.
 - `pgcontext.explain_late_interaction_ann(collection text, query_vectors vector[], vector_column text, token_table text, token_source_key_column text, token_vector_column text, candidates_per_query integer)`
-  validates the companion token table, `NOT NULL` source-key and token-vector
+  is the legacy companion-table explain overload. It validates the companion
+  token table, `NOT NULL` source-key and token-vector
   columns, declared `vector(n)` dimensions, HNSW index, ACLs, strict collection
   candidate budget, and planner budget before reporting the
   `ann_candidate_serving` planner strategy.

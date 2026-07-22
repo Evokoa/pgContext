@@ -5,7 +5,7 @@ use super::{
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 249;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 251;
 const SQL_CONTRACT_OBJECTS_LEN: usize =
     CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
@@ -54,12 +54,17 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function(
         "_store_late_interaction_tokens",
-        "p_collection_id bigint, p_source_key text, p_token_vectors vector[]",
+        "p_collection_id bigint, p_source_key text",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
         "_finish_late_interaction_registration",
         "p_collection_id bigint, p_dimensions integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_late_interaction_ann_candidate_points",
+        "p_collection_id bigint, p_query vector, p_limit integer",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
@@ -73,11 +78,6 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
-        "_delete_inactive_late_interaction_tokens",
-        "",
-        SqlLifecycle::Internal,
-    ),
-    SqlContractObject::function(
         "register_late_interaction",
         "collection text, source_table text, token_source text",
         SqlLifecycle::Experimental,
@@ -85,6 +85,16 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "repair_late_interaction",
         "collection text, batch_size integer",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "search_late_interaction_ann",
+        "collection text, query_vectors vector[], candidates_per_query integer, \"limit\" integer",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "explain_late_interaction_ann",
+        "collection text, query_vectors vector[], candidates_per_query integer",
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(

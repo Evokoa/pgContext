@@ -1,9 +1,10 @@
 //! Experimental ANN candidate generation for late-interaction SQL search.
 
 use core::cmp::Ordering;
+use std::collections::HashSet;
 
 use context_core::{
-    DenseVector, Error as CoreError, QualifiedTableName, SearchLimit, SqlIdentifier,
+    CollectionName, DenseVector, Error as CoreError, QualifiedTableName, SearchLimit, SqlIdentifier,
 };
 use context_query::MultiVectorAnnStrategyKind;
 use pgrx::{pg_sys, prelude::*};
@@ -12,8 +13,8 @@ use crate::error::{raise_core_error, raise_sql_error};
 use crate::vector::Vector;
 
 use super::late_interaction::{
-    late_interaction_ann_candidate_strategy, late_interaction_ann_detail,
-    late_interaction_ann_status, late_interaction_ann_strategy_name,
+    LateInteractionCandidateStats, late_interaction_ann_candidate_strategy,
+    late_interaction_ann_detail, late_interaction_ann_status, late_interaction_ann_strategy_name,
     late_interaction_candidate_stats, late_interaction_rows_from_spi,
     require_late_interaction_collection_owner, require_late_interaction_table_select_privilege,
     resolve_late_interaction_collection, validate_late_interaction_drift,
@@ -34,18 +35,537 @@ pub(super) struct LateInteractionAnnSource {
     vector_dimensions: usize,
 }
 
+#[derive(Debug, Clone)]
+struct OwnedLateInteractionAnnSource {
+    token_column: String,
+    dimensions: Option<usize>,
+    point_count: usize,
+    token_count: usize,
+    index_oid: Option<pg_sys::Oid>,
+    ready: bool,
+}
+
+/// Searches the collection through its pgContext-owned late-interaction index.
+///
+/// Registration binds the source token column and maintains both token rows and
+/// the collection-scoped HNSW index, so callers only provide the query and
+/// budgets. Candidate generation is approximate; final MaxSim scoring hydrates
+/// the source table as the invoker and therefore preserves ACL, RLS, and MVCC.
+#[pg_extern(schema = "pgcontext", name = "search_late_interaction_ann")]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn search_owned_late_interaction_ann(
+    collection: String,
+    query_vectors: Vec<Vector>,
+    candidates_per_query: i32,
+    limit: i32,
+) -> TableIterator<
+    'static,
+    (
+        name!(point_id, i64),
+        name!(source_key, String),
+        name!(score, f64),
+    ),
+> {
+    let collection_name = collection_name_from_sql(collection);
+    let mut collection = resolve_late_interaction_collection(&collection_name);
+    require_late_interaction_collection_owner(&collection, &collection_name);
+    let ann_source = resolve_owned_late_interaction_ann_source(collection.collection_id);
+    validate_late_interaction_drift(&mut collection, &ann_source.token_column);
+    require_late_interaction_table_select_privilege(&collection);
+
+    let candidates_per_query = search_limit_from_sql(candidates_per_query);
+    let query_vectors = super::late_interaction::dense_vectors_from_sql(
+        "late interaction query_vectors",
+        query_vectors,
+    );
+    validate_owned_late_interaction_dimensions(&ann_source, &query_vectors);
+    let limit = search_limit_from_sql(limit);
+    let projected_candidate_count =
+        late_interaction_projected_candidate_count(query_vectors.len(), candidates_per_query.get());
+    crate::collection_limits::enforce_search_limit(
+        collection.collection_id,
+        &collection_name,
+        limit.get(),
+    );
+    crate::collection_limits::enforce_candidate_budget(
+        collection.collection_id,
+        &collection_name,
+        projected_candidate_count,
+    );
+
+    let candidate_stats = owned_late_interaction_candidate_stats(&ann_source);
+    let ann_strategy = late_interaction_ann_candidate_strategy(
+        &query_vectors,
+        candidate_stats,
+        candidates_per_query,
+    );
+    match ann_strategy.kind() {
+        MultiVectorAnnStrategyKind::AnnCandidateServing => {
+            require_owned_late_interaction_ready(&ann_source)
+        }
+        MultiVectorAnnStrategyKind::ExactNoOp => return TableIterator::new(Vec::new()),
+        MultiVectorAnnStrategyKind::Rejected => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            format!(
+                "late interaction comparison budget exceeded: {} > {}",
+                ann_strategy.projected_comparisons(),
+                crate::late_interaction::MAX_LATE_INTERACTION_COMPARISONS
+            ),
+        ),
+        MultiVectorAnnStrategyKind::ExactTableScan
+        | MultiVectorAnnStrategyKind::PlannedNotServingReady => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            late_interaction_ann_detail(&ann_strategy),
+        ),
+    }
+
+    let rows = search_owned_late_interaction_adaptive(
+        &collection,
+        &collection_name,
+        &ann_source,
+        &query_vectors,
+        candidates_per_query,
+        limit,
+    );
+    TableIterator::new(rows)
+}
+
+/// Explains the pgContext-owned late-interaction ANN candidate path.
+#[pg_extern(schema = "pgcontext", name = "explain_late_interaction_ann")]
+#[search_path(pg_catalog, pgcontext, public)]
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx SQL generation requires the explicit table row tuple"
+)]
+pub fn explain_owned_late_interaction_ann(
+    collection: String,
+    query_vectors: Vec<Vector>,
+    candidates_per_query: i32,
+) -> TableIterator<
+    'static,
+    (
+        name!(stage, String),
+        name!(detail, String),
+        name!(branch, Option<String>),
+        name!(strategy, String),
+        name!(status, QueryExplainStatus),
+        name!(estimated_candidates, Option<i64>),
+        name!(candidate_budget, Option<i64>),
+    ),
+> {
+    let collection_name = collection_name_from_sql(collection);
+    let mut collection = resolve_late_interaction_collection(&collection_name);
+    require_late_interaction_collection_owner(&collection, &collection_name);
+    let ann_source = resolve_owned_late_interaction_ann_source(collection.collection_id);
+    validate_late_interaction_drift(&mut collection, &ann_source.token_column);
+    require_late_interaction_table_select_privilege(&collection);
+
+    let candidates_per_query = search_limit_from_sql(candidates_per_query);
+    let query_vectors = super::late_interaction::dense_vectors_from_sql(
+        "late interaction query_vectors",
+        query_vectors,
+    );
+    validate_owned_late_interaction_dimensions(&ann_source, &query_vectors);
+    let projected_candidate_count =
+        late_interaction_projected_candidate_count(query_vectors.len(), candidates_per_query.get());
+    crate::collection_limits::enforce_candidate_budget(
+        collection.collection_id,
+        &collection_name,
+        projected_candidate_count,
+    );
+    let candidate_stats = owned_late_interaction_candidate_stats(&ann_source);
+    let ann_strategy = late_interaction_ann_candidate_strategy(
+        &query_vectors,
+        candidate_stats,
+        candidates_per_query,
+    );
+    let source_status = if ann_source.ready || candidate_stats.point_count == 0 {
+        QueryExplainStatus::Ready
+    } else {
+        QueryExplainStatus::Fallback
+    };
+
+    TableIterator::new(vec![
+        (
+            "ann_source".to_owned(),
+            format!(
+                "owned_relation=pgcontext._collection_late_interaction_tokens token_source={} index_oid={}",
+                ann_source.token_column,
+                ann_source
+                    .index_oid
+                    .map_or_else(|| "none".to_owned(), |oid| oid.to_string()),
+            ),
+            Some("multi_vector".to_owned()),
+            "owned_hnsw_token_candidates".to_owned(),
+            source_status,
+            None,
+            Some(policy_to_i64(
+                candidates_per_query.get(),
+                "late_interaction_candidates_per_query",
+            )),
+        ),
+        (
+            "ann_planner".to_owned(),
+            late_interaction_ann_detail(&ann_strategy),
+            Some("multi_vector".to_owned()),
+            late_interaction_ann_strategy_name(ann_strategy.kind()).to_owned(),
+            late_interaction_ann_status(ann_strategy.kind()),
+            Some(policy_to_i64(
+                ann_strategy.projected_comparisons(),
+                "late_interaction_projected_comparisons",
+            )),
+            Some(policy_to_i64(
+                crate::late_interaction::MAX_LATE_INTERACTION_COMPARISONS,
+                "max_late_interaction_comparisons",
+            )),
+        ),
+    ])
+}
+
+fn resolve_owned_late_interaction_ann_source(collection_id: i64) -> OwnedLateInteractionAnnSource {
+    Spi::connect(|client| {
+        let rows = client
+            .select(
+                "SELECT registrations.token_column_name,
+                        registrations.dimensions,
+                        registrations.point_count,
+                        registrations.token_count,
+                        registrations.hnsw_index_oid,
+                        registrations.status = 'ready'
+                            AND index_metadata.indisvalid
+                            AND index_metadata.indisready
+                            AND access_method.amname = 'pgcontext_hnsw'
+                            AND index_class.relname = pg_catalog.format(
+                                'pgcontext_late_interaction_%s_hnsw',
+                                registrations.collection_id
+                            )
+                            AND index_metadata.indnkeyatts = 1
+                            AND index_metadata.indnatts = 1
+                            AND operator_namespace.nspname = 'pgcontext'
+                            AND operator_class.opcname = 'vector_hnsw_ip_ops'
+                            AND pg_catalog.regexp_replace(
+                                pg_catalog.pg_get_expr(
+                                    index_metadata.indpred,
+                                    index_metadata.indrelid,
+                                    true
+                                ),
+                                '[()[:space:]]',
+                                '',
+                                'g'
+                            ) = pg_catalog.format(
+                                'collection_id=%s',
+                                registrations.collection_id
+                            )
+                            AND pg_catalog.regexp_replace(
+                                pg_catalog.pg_get_indexdef(
+                                    index_metadata.indexrelid,
+                                    1,
+                                    true
+                                ),
+                                '[()[:space:]]',
+                                '',
+                                'g'
+                            ) IN (
+                                pg_catalog.format(
+                                    'token_vector::vector%s',
+                                    registrations.dimensions
+                                ),
+                                pg_catalog.format(
+                                    'token_vector::public.vector%s',
+                                    registrations.dimensions
+                                )
+                            ) AS ready,
+                        registrations.source_table_oid = collections.source_table_oid
+                            AND token_attribute.attnum = registrations.token_attnum
+                            AND token_attribute.atttypid = 'public.vector[]'::regtype
+                            AND token_attribute.attnotnull AS source_binding_valid
+                   FROM pgcontext._visible_collection_late_interaction AS registrations
+                   JOIN pgcontext._visible_collections AS collections USING (collection_id)
+                   LEFT JOIN pg_catalog.pg_attribute AS token_attribute
+                     ON token_attribute.attrelid = registrations.source_table_oid
+                    AND token_attribute.attname = registrations.token_column_name
+                    AND token_attribute.attnum > 0
+                    AND NOT token_attribute.attisdropped
+                   LEFT JOIN pg_catalog.pg_index AS index_metadata
+                     ON index_metadata.indexrelid = registrations.hnsw_index_oid
+                    AND index_metadata.indrelid = 'pgcontext._collection_late_interaction_tokens'::regclass
+                   LEFT JOIN pg_catalog.pg_class AS index_class
+                     ON index_class.oid = index_metadata.indexrelid
+                   LEFT JOIN pg_catalog.pg_am AS access_method
+                     ON access_method.oid = index_class.relam
+                   LEFT JOIN pg_catalog.pg_opclass AS operator_class
+                     ON operator_class.oid = index_metadata.indclass[0]
+                   LEFT JOIN pg_catalog.pg_namespace AS operator_namespace
+                     ON operator_namespace.oid = operator_class.opcnamespace
+                  WHERE registrations.collection_id = $1",
+                Some(1),
+                &[collection_id.into()],
+            )
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    format!("failed to resolve owned late-interaction ANN source: {error}"),
+                )
+            });
+        if rows.is_empty() {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
+                "late-interaction registration does not exist for collection",
+            );
+        }
+        let row = rows.first();
+        if spi_optional_column::<bool>(&row, 7, "late_interaction_source_binding_valid")
+            != Some(true)
+        {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                "late-interaction source binding has drifted; run pgcontext.repair_late_interaction",
+            );
+        }
+        let dimensions = spi_optional_column::<i32>(&row, 2, "late_interaction_dimensions")
+            .map(|value| usize_from_owned_count(i64::from(value), "late_interaction_dimensions"));
+        let point_count = usize_from_owned_count(
+            spi_required_column::<i64>(&row, 3, "late_interaction_point_count"),
+            "late_interaction_point_count",
+        );
+        let token_count = usize_from_owned_count(
+            spi_required_column::<i64>(&row, 4, "late_interaction_token_count"),
+            "late_interaction_token_count",
+        );
+        if (point_count == 0) != (token_count == 0) || (point_count > 0 && dimensions.is_none()) {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "late-interaction registration counters are inconsistent; run pgcontext.repair_late_interaction",
+            );
+        }
+        OwnedLateInteractionAnnSource {
+            token_column: spi_required_column(&row, 1, "late_interaction_token_column"),
+            dimensions,
+            point_count,
+            token_count,
+            index_oid: spi_optional_column(&row, 5, "late_interaction_hnsw_index_oid"),
+            ready: spi_optional_column::<bool>(&row, 6, "late_interaction_ready").unwrap_or(false),
+        }
+    })
+}
+
+fn usize_from_owned_count(value: i64, label: &'static str) -> usize {
+    usize::try_from(value).unwrap_or_else(|_| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            format!("{label} is negative or exceeds usize range: {value}"),
+        )
+    })
+}
+
+fn owned_late_interaction_candidate_stats(
+    ann_source: &OwnedLateInteractionAnnSource,
+) -> LateInteractionCandidateStats {
+    LateInteractionCandidateStats {
+        point_count: ann_source.point_count,
+        vector_count: ann_source.token_count,
+    }
+}
+
+fn validate_owned_late_interaction_dimensions(
+    ann_source: &OwnedLateInteractionAnnSource,
+    query_vectors: &[DenseVector],
+) {
+    let Some(first_query_vector) = query_vectors.first() else {
+        raise_core_error(CoreError::InvalidVector(
+            "late-interaction query vectors must not be empty".to_owned(),
+        ));
+    };
+    let query_dimensions = first_query_vector.dimension();
+    for query_vector in &query_vectors[1..] {
+        if query_vector.dimension() != query_dimensions {
+            raise_core_error(CoreError::DimensionMismatch {
+                left: query_dimensions,
+                right: query_vector.dimension(),
+            });
+        }
+    }
+    if let Some(expected_dimensions) = ann_source.dimensions
+        && query_dimensions != expected_dimensions
+    {
+        raise_core_error(CoreError::DimensionMismatch {
+            left: query_dimensions,
+            right: expected_dimensions,
+        });
+    }
+}
+
+fn require_owned_late_interaction_ready(ann_source: &OwnedLateInteractionAnnSource) {
+    if !ann_source.ready || ann_source.index_oid.is_none() || ann_source.dimensions.is_none() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            "late-interaction ANN generation is not ready; run pgcontext.repair_late_interaction",
+        );
+    }
+}
+
+fn owned_late_interaction_ann_point_ids(
+    collection_id: i64,
+    query_vectors: &[DenseVector],
+    candidates_per_query: usize,
+) -> Vec<i64> {
+    let candidate_limit = i32::try_from(candidates_per_query).unwrap_or_else(|_| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            "late-interaction candidates_per_query exceeds integer range",
+        )
+    });
+    let mut seen = HashSet::new();
+    let mut point_ids = Vec::new();
+    for query_vector in query_vectors {
+        let sql_vector = Vector::from_dense(query_vector.clone());
+        Spi::connect(|client| {
+            let rows = client
+                .select(
+                    "SELECT point_id
+                       FROM pgcontext._late_interaction_ann_candidate_points($1, $2, $3)",
+                    None,
+                    &[
+                        collection_id.into(),
+                        sql_vector.into(),
+                        candidate_limit.into(),
+                    ],
+                )
+                .unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                        format!("failed to collect owned late-interaction ANN candidates: {error}"),
+                    )
+                });
+            for row in rows {
+                let point_id = spi_iter_required_column::<i64>(&row, 1, "ann_candidate_point_id");
+                if seen.insert(point_id) {
+                    point_ids.push(point_id);
+                }
+            }
+        });
+    }
+    point_ids
+}
+
+fn search_owned_late_interaction_adaptive(
+    collection: &super::late_interaction::LateInteractionCollection,
+    collection_name: &CollectionName,
+    ann_source: &OwnedLateInteractionAnnSource,
+    query_vectors: &[DenseVector],
+    candidates_per_query: SearchLimit,
+    limit: SearchLimit,
+) -> Vec<(i64, String, f64)> {
+    let max_per_query = crate::late_interaction::MAX_LATE_INTERACTION_COMPARISONS
+        .checked_div(query_vectors.len())
+        .unwrap_or(0)
+        .max(1)
+        .min(ann_source.token_count);
+    let mut candidate_limit = candidates_per_query.get().min(max_per_query);
+    loop {
+        let projected_candidates =
+            late_interaction_projected_candidate_count(query_vectors.len(), candidate_limit);
+        crate::collection_limits::enforce_candidate_budget(
+            collection.collection_id,
+            collection_name,
+            projected_candidates,
+        );
+        let point_ids = owned_late_interaction_ann_point_ids(
+            collection.collection_id,
+            query_vectors,
+            candidate_limit,
+        );
+        let rows = search_late_interaction_candidate_points(
+            collection,
+            query_vectors,
+            &ann_source.token_column,
+            &point_ids,
+            limit,
+        );
+        if rows.len() >= limit.get() || candidate_limit >= ann_source.token_count {
+            return rows;
+        }
+        if candidate_limit >= max_per_query {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+                format!(
+                    "late interaction visibility recheck exhausted the bounded ANN candidate ceiling at {candidate_limit} candidates per query"
+                ),
+            );
+        }
+        candidate_limit = candidate_limit
+            .saturating_mul(2)
+            .max(candidate_limit.saturating_add(1))
+            .min(max_per_query);
+    }
+}
+
+fn search_late_interaction_candidate_points(
+    collection: &super::late_interaction::LateInteractionCollection,
+    query_vectors: &[DenseVector],
+    vector_column: &str,
+    point_ids: &[i64],
+    limit: SearchLimit,
+) -> Vec<(i64, String, f64)> {
+    if point_ids.is_empty() {
+        return Vec::new();
+    }
+
+    let table_name = quote_qualified_identifier(&collection.schema_name, &collection.table_name);
+    let vector_column = quote_identifier(vector_column);
+    let sql = format!(
+        "WITH candidate_points AS MATERIALIZED (
+             SELECT DISTINCT candidate_point_id
+               FROM unnest($2::bigint[]) AS candidate(candidate_point_id)
+         )
+         SELECT points.point_id,
+                points.source_key,
+                source.{vector_column}
+           FROM candidate_points AS candidates
+           JOIN pgcontext._visible_collection_points AS points
+             ON points.point_id = candidates.candidate_point_id
+           JOIN {table_name} AS source ON source.id::text = points.source_key
+          WHERE points.collection_id = $1
+            AND points.deleted_at IS NULL"
+    );
+    let mut scored_rows = Spi::connect(|client| {
+        let rows = client
+            .select(
+                &sql,
+                None,
+                &[collection.collection_id.into(), point_ids.to_vec().into()],
+            )
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    format!("failed to load owned late-interaction ANN candidates: {error}"),
+                )
+            });
+        late_interaction_rows_from_spi(rows, query_vectors)
+    });
+    scored_rows.sort_by(|left, right| {
+        right
+            .2
+            .partial_cmp(&left.2)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    scored_rows.truncate(limit.get());
+    scored_rows
+}
+
 /// Experimental ANN candidate generation for table-backed late interaction.
 ///
 /// The token table supplies approximate candidate source keys using a
 /// `pgcontext_hnsw` index over one token vector per row. Final ordering still
 /// hydrates the authoritative collection source table and applies exact MaxSim.
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern(schema = "pgcontext", name = "search_late_interaction_ann")]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::too_many_arguments,
     reason = "SQL surface keeps the source and token table contract explicit"
 )]
-pub fn search_late_interaction_ann(
+pub fn search_legacy_late_interaction_ann(
     collection: String,
     query_vectors: Vec<Vector>,
     vector_column: String,
@@ -131,14 +651,14 @@ pub fn search_late_interaction_ann(
 }
 
 /// Explains experimental ANN candidate generation for late interaction.
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern(schema = "pgcontext", name = "explain_late_interaction_ann")]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::too_many_arguments,
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-pub fn explain_late_interaction_ann(
+pub fn explain_legacy_late_interaction_ann(
     collection: String,
     query_vectors: Vec<Vector>,
     vector_column: String,

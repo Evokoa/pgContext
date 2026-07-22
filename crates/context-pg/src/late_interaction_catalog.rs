@@ -1,5 +1,7 @@
 //! Registration and materialization for pgContext-owned late-interaction tokens.
 
+use core::mem::size_of;
+
 use context_core::{CollectionName, QualifiedTableName, SqlIdentifier};
 use pgrx::prelude::*;
 
@@ -10,6 +12,8 @@ use crate::{
 
 const REGISTRATION_BATCH_SIZE: i64 = 512;
 const MAX_TOKENS_PER_POINT: usize = 16_384;
+const MAX_MATERIALIZATION_BATCH_BYTES: usize = 16 * 1024 * 1024;
+const ESTIMATED_VECTOR_OVERHEAD_BYTES: usize = 32;
 
 #[derive(Debug, Clone)]
 struct LateInteractionRegistrationSource {
@@ -26,6 +30,13 @@ struct LateInteractionRegistrationSource {
 struct SourceTokenRow {
     source_key: String,
     token_vectors: Vec<Vector>,
+}
+
+#[derive(Debug)]
+struct SourceTokenMetadata {
+    source_key: String,
+    token_count: Option<i32>,
+    dimensions: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -163,7 +174,22 @@ fn resolve_registration_source(
                         token_attribute.attnum,
                         token_attribute.atttypid = 'public.vector[]'::regtype AS token_type_valid,
                         token_attribute.attnotnull,
-                        id_attribute.attname IS NOT NULL AS id_exists
+                        id_attribute.attname IS NOT NULL AS id_exists,
+                        id_attribute.attnotnull AND EXISTS (
+                            SELECT 1
+                              FROM pg_catalog.pg_index AS identity_index
+                             WHERE identity_index.indrelid = source_class.oid
+                               AND identity_index.indisunique
+                               AND identity_index.indisvalid
+                               AND identity_index.indisready
+                               AND identity_index.indimmediate
+                               AND identity_index.indpred IS NULL
+                               AND identity_index.indexprs IS NULL
+                               AND identity_index.indnkeyatts = 1
+                               AND identity_index.indnatts = 1
+                               AND identity_index.indkey[0] = id_attribute.attnum
+                        ) AS id_is_valid_identity,
+                        source_class.relkind::text
                    FROM pgcontext._collection_acl AS collections
                    JOIN pgcontext._visible_collections AS visible_collections
                      USING (collection_id)
@@ -183,8 +209,7 @@ fn resolve_registration_source(
                     AND NOT id_attribute.attisdropped
                   WHERE collections.collection_name = $1
                     AND source_namespace.nspname = $2
-                    AND source_class.relname = $3
-                    AND source_class.relkind IN ('r', 'p')",
+                    AND source_class.relname = $3",
                 Some(1),
                 &[
                     collection.as_str().into(),
@@ -253,6 +278,20 @@ fn resolve_registration_source(
                 ),
             );
         }
+        if spi_optional_column::<bool>(&row, 10) != Some(true) {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!(
+                    "late-interaction source key must be a NOT NULL single-column immediate unique key: {schema_name}.{table_name}.id"
+                ),
+            );
+        }
+        if spi_required_column::<String>(&row, 11, "source_relation_kind") != "r" {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+                "late-interaction registration requires an ordinary table source; partitioned tables are not supported",
+            );
+        }
 
         LateInteractionRegistrationSource {
             collection_id: spi_required_column(&row, 1, "collection_id"),
@@ -279,7 +318,22 @@ fn resolve_repair_source(collection: &CollectionName) -> LateInteractionRegistra
                         token_attribute.attnum,
                         token_attribute.atttypid = 'public.vector[]'::regtype AS token_type_valid,
                         token_attribute.attnotnull,
-                        id_attribute.attname IS NOT NULL AS id_exists
+                        id_attribute.attname IS NOT NULL AS id_exists,
+                        id_attribute.attnotnull AND EXISTS (
+                            SELECT 1
+                              FROM pg_catalog.pg_index AS identity_index
+                             WHERE identity_index.indrelid = source_class.oid
+                               AND identity_index.indisunique
+                               AND identity_index.indisvalid
+                               AND identity_index.indisready
+                               AND identity_index.indimmediate
+                               AND identity_index.indpred IS NULL
+                               AND identity_index.indexprs IS NULL
+                               AND identity_index.indnkeyatts = 1
+                               AND identity_index.indnatts = 1
+                               AND identity_index.indkey[0] = id_attribute.attnum
+                        ) AS id_is_valid_identity,
+                        source_class.relkind::text
                    FROM pgcontext._collection_acl AS acl
                    JOIN pgcontext._visible_collection_late_interaction AS registrations
                      USING (collection_id)
@@ -288,7 +342,6 @@ fn resolve_repair_source(collection: &CollectionName) -> LateInteractionRegistra
                    JOIN pg_catalog.pg_class AS source_class
                      ON source_class.relnamespace = source_namespace.oid
                     AND source_class.relname = registrations.source_table_name
-                    AND source_class.relkind IN ('r', 'p')
                    LEFT JOIN pg_catalog.pg_attribute AS token_attribute
                      ON token_attribute.attrelid = source_class.oid
                     AND token_attribute.attname = registrations.token_column_name
@@ -352,6 +405,20 @@ fn resolve_repair_source(collection: &CollectionName) -> LateInteractionRegistra
                 format!(
                     "late-interaction source key column does not exist: {schema_name}.{table_name}.id"
                 ),
+            );
+        }
+        if spi_optional_column::<bool>(&row, 11) != Some(true) {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!(
+                    "late-interaction source key must be a NOT NULL single-column immediate unique key: {schema_name}.{table_name}.id"
+                ),
+            );
+        }
+        if spi_required_column::<String>(&row, 12, "source_relation_kind") != "r" {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+                "late-interaction repair requires an ordinary table source; partitioned tables are not supported",
             );
         }
 
@@ -469,24 +536,65 @@ fn materialize_source_tokens(
 ) -> MaterializationSummary {
     let table_name = quote_qualified_identifier(&source.schema_name, &source.table_name);
     let token_column = quote_identifier(&source.token_column_name);
-    let sql = format!(
+    let metadata_sql = format!(
+        "SELECT id::text,
+                pg_catalog.cardinality({token_column}),
+                CASE
+                    WHEN pg_catalog.cardinality({token_column}) > 0
+                    THEN pgcontext.vector_dims({token_column}[1])
+                    ELSE NULL
+                END
+           FROM {table_name}
+          WHERE $1 = '' OR id::text > $1
+          ORDER BY id::text
+          LIMIT $2"
+    );
+    let row_sql = format!(
         "SELECT id::text, {token_column}
            FROM {table_name}
-          ORDER BY id::text
-          LIMIT $1
-         OFFSET $2"
+          WHERE id::text = $1"
     );
-    let mut offset = 0_i64;
+    let mut last_source_key = String::new();
     let mut dimensions = None;
     let mut point_count = 0_i64;
     let mut token_count = 0_i64;
     let mut batch_count = 0_i64;
 
     loop {
-        let batch = load_source_token_batch(&sql, offset, batch_size);
-        if batch.is_empty() {
+        let metadata =
+            load_source_token_metadata_batch(&metadata_sql, &last_source_key, batch_size);
+        if metadata.is_empty() {
             break;
         }
+        let mut selected_keys = Vec::new();
+        let mut estimated_batch_bytes = 0_usize;
+        for row in metadata {
+            let estimated_row_bytes = estimate_source_token_row_bytes(&row);
+            if estimated_row_bytes > MAX_MATERIALIZATION_BATCH_BYTES {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+                    format!(
+                        "late-interaction source row exceeds materialization byte budget {MAX_MATERIALIZATION_BATCH_BYTES} for source key {}",
+                        row.source_key
+                    ),
+                );
+            }
+            if !selected_keys.is_empty()
+                && estimated_batch_bytes.saturating_add(estimated_row_bytes)
+                    > MAX_MATERIALIZATION_BATCH_BYTES
+            {
+                break;
+            }
+            estimated_batch_bytes = estimated_batch_bytes.saturating_add(estimated_row_bytes);
+            selected_keys.push(row.source_key);
+        }
+        let Some(next_last_source_key) = selected_keys.last().cloned() else {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                "late-interaction materialization made no keyset progress",
+            );
+        };
+        let batch = load_source_token_batch(&row_sql, &selected_keys);
         batch_count = batch_count.checked_add(1).unwrap_or_else(|| {
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
@@ -526,7 +634,7 @@ fn materialize_source_tokens(
                 )
             });
         }
-        offset = point_count;
+        last_source_key = next_last_source_key;
     }
 
     MaterializationSummary {
@@ -537,23 +645,88 @@ fn materialize_source_tokens(
     }
 }
 
-fn load_source_token_batch(sql: &str, offset: i64, batch_size: i64) -> Vec<SourceTokenRow> {
+fn load_source_token_metadata_batch(
+    sql: &str,
+    last_source_key: &str,
+    batch_size: i64,
+) -> Vec<SourceTokenMetadata> {
     Spi::connect(|client| {
         let rows = client
-            .select(sql, None, &[batch_size.into(), offset.into()])
+            .select(sql, None, &[last_source_key.into(), batch_size.into()])
             .unwrap_or_else(|error| {
                 raise_sql_error(
                     PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                    format!("failed to scan late-interaction source rows: {error}"),
+                    format!("failed to scan late-interaction source metadata: {error}"),
                 )
             });
         rows.into_iter()
-            .map(|row| SourceTokenRow {
+            .map(|row| SourceTokenMetadata {
                 source_key: spi_iter_required_column(&row, 1, "source_key"),
-                token_vectors: spi_iter_required_column(&row, 2, "token_vectors"),
+                token_count: row.get::<i32>(2).unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                        format!("failed to read late-interaction token cardinality: {error}"),
+                    )
+                }),
+                dimensions: row.get::<i32>(3).unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                        format!("failed to read late-interaction token dimensions: {error}"),
+                    )
+                }),
             })
             .collect()
     })
+}
+
+fn estimate_source_token_row_bytes(row: &SourceTokenMetadata) -> usize {
+    let token_count = row
+        .token_count
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(1);
+    let dimensions = row
+        .dimensions
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(1);
+    token_count
+        .checked_mul(
+            dimensions
+                .checked_mul(size_of::<f32>())
+                .and_then(|bytes| bytes.checked_add(ESTIMATED_VECTOR_OVERHEAD_BYTES))
+                .unwrap_or(usize::MAX),
+        )
+        .unwrap_or(usize::MAX)
+}
+
+fn load_source_token_batch(sql: &str, source_keys: &[String]) -> Vec<SourceTokenRow> {
+    source_keys
+        .iter()
+        .map(|source_key| {
+            Spi::connect(|client| {
+                let rows = client
+                    .select(sql, Some(1), &[source_key.as_str().into()])
+                    .unwrap_or_else(|error| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                            format!("failed to load late-interaction source row: {error}"),
+                        )
+                    });
+                if rows.is_empty() {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                        format!(
+                            "late-interaction source row changed during materialization: {source_key}"
+                        ),
+                    );
+                }
+                let row = rows.first();
+                SourceTokenRow {
+                    source_key: spi_required_column(&row, 1, "source_key"),
+                    token_vectors: spi_required_column(&row, 2, "token_vectors"),
+                }
+            })
+        })
+        .collect()
 }
 
 fn validate_source_token_row(row: &SourceTokenRow) -> i32 {
@@ -606,12 +779,8 @@ fn validate_source_token_row(row: &SourceTokenRow) -> i32 {
 
 fn store_source_token_row(collection_id: i64, row: &SourceTokenRow) {
     Spi::run_with_args(
-        "SELECT pgcontext._store_late_interaction_tokens($1, $2, $3)",
-        &[
-            collection_id.into(),
-            row.source_key.as_str().into(),
-            row.token_vectors.clone().into(),
-        ],
+        "SELECT pgcontext._store_late_interaction_tokens($1, $2)",
+        &[collection_id.into(), row.source_key.as_str().into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
