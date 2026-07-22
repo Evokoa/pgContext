@@ -194,6 +194,15 @@ fn hnsw_relopt_parse_elt(
         optname: optname.as_ptr(),
         opttype,
         offset: usize_to_pg_i32(offset, "HNSW reloption struct offset"),
+        // PostgreSQL 18 added `isset_offset` to `relopt_parse_elt`: an optional
+        // offset to a bool in the parse target that PostgreSQL sets when the
+        // option is supplied explicitly rather than defaulted. PostgreSQL only
+        // honours it when the value is greater than zero, so 0 disables that
+        // write. pgContext does not track "was this explicitly set" (it
+        // validates HNSW reloptions itself), so 0 is both correct and inert.
+        // The field does not exist before PG18, hence the cfg gate.
+        #[cfg(feature = "pg18")]
+        isset_offset: 0,
     }
 }
 
