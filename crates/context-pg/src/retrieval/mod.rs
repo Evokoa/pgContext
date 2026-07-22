@@ -296,10 +296,11 @@ pub(crate) fn run_query(
             candidate_limit(&query, adapter),
         );
     }
-    let filter_fields = query
-        .filter()
-        .map(|_| load_filter_fields(collection.collection_id))
-        .unwrap_or_default();
+    let filter_fields = if query.has_filter_in_subtree() {
+        load_filter_fields(collection.collection_id)
+    } else {
+        Vec::new()
+    };
 
     let outcome = execute_prepared_query(
         collection.collection_id,
@@ -330,9 +331,9 @@ fn execute_prepared_query(
         candidate_limit,
         filter_candidate_limit,
         candidate_limit,
-        3,
-        1,
-        query.limit(),
+        context_core::policy::MAX_QUERY_STAGES,
+        context_core::policy::MAX_QUERY_EXPANSIONS,
+        query.max_node_limit(),
     )?;
     let mut exact;
     let mut hnsw;
@@ -352,8 +353,8 @@ fn execute_prepared_query(
         filter_fields,
     };
     let filter_port = query
-        .filter()
-        .map(|_| &mut filter as &mut dyn FilterCandidateSource);
+        .has_filter_in_subtree()
+        .then_some(&mut filter as &mut dyn FilterCandidateSource);
     let mut rechecker = SpiSourceRechecker {
         collection_id,
         registered_vector,
@@ -373,7 +374,7 @@ fn execute_prepared_query(
 
 fn effective_candidate_adapter(query: &QueryIr, adapter: CandidateAdapter) -> CandidateAdapter {
     if adapter == CandidateAdapter::Hnsw
-        && query.filter().is_some()
+        && query.has_filter_in_subtree()
         && crate::settings::hnsw_mask_candidate_limit_from_guc() == 0
     {
         CandidateAdapter::Exact
@@ -384,9 +385,9 @@ fn effective_candidate_adapter(query: &QueryIr, adapter: CandidateAdapter) -> Ca
 
 fn candidate_limit(query: &QueryIr, adapter: CandidateAdapter) -> usize {
     match adapter {
-        CandidateAdapter::Exact => query.limit(),
+        CandidateAdapter::Exact => query.max_node_limit(),
         CandidateAdapter::Hnsw => {
-            crate::settings::hnsw_candidate_budget_from_guc().max(query.limit())
+            crate::settings::hnsw_candidate_budget_from_guc().max(query.max_node_limit())
         }
     }
 }

@@ -188,7 +188,9 @@ impl QueryIr {
         self.score_order
     }
 
-    pub(crate) fn has_filter_in_subtree(&self) -> bool {
+    /// Reports whether this node or any descendant executable leaf has a filter.
+    #[must_use]
+    pub fn has_filter_in_subtree(&self) -> bool {
         self.filter.is_some()
             || match &self.kind {
                 QueryKind::Prefetch { branches } => {
@@ -204,6 +206,28 @@ impl QueryIr {
                 | QueryKind::Discover { .. }
                 | QueryKind::Lookup { .. } => false,
             }
+    }
+
+    /// Returns the largest result limit requested by any node in this tree.
+    #[must_use]
+    pub fn max_node_limit(&self) -> usize {
+        let child_maximum = match &self.kind {
+            QueryKind::Prefetch { branches } => branches
+                .iter()
+                .map(Self::max_node_limit)
+                .max()
+                .unwrap_or_default(),
+            QueryKind::Weighted { query, .. }
+            | QueryKind::ScoreThreshold { query, .. }
+            | QueryKind::Formula { query, .. }
+            | QueryKind::Rerank { query } => query.max_node_limit(),
+            QueryKind::Nearest { .. }
+            | QueryKind::SparseNearest { .. }
+            | QueryKind::Recommend { .. }
+            | QueryKind::Discover { .. }
+            | QueryKind::Lookup { .. } => 0,
+        };
+        self.limit().max(child_maximum)
     }
 
     pub(crate) fn validate(&self) -> Result<()> {

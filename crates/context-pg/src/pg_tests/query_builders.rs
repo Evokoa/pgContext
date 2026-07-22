@@ -33,6 +33,45 @@ fn query_builders_construct_nested_query_json() {
 }
 
 #[pg_test]
+fn execute_query_runs_nested_constructor_plan() {
+    create_dense_hnsw_adapter_collection(
+        "stage_g_execute_plan",
+        "l2",
+        "vector_hnsw_ops",
+    );
+    let rows = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_execute_plan',
+               pgcontext.query_rerank(
+                   pgcontext.query_prefetch(ARRAY[
+                       pgcontext.query_nearest('[1,0]'::vector, 2),
+                       pgcontext.query_nearest('[0,1]'::vector, 2)
+                   ]),
+                   2
+               )
+           )",
+    );
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].1, "20");
+    assert_eq!(rows[1].1, "10");
+}
+
+#[pg_test]
+fn execute_query_rejects_unknown_plan_fields() {
+    shared_assert_sql_failure(
+        "SELECT * FROM pgcontext.execute_query(
+            'missing',
+            '{\"kind\":\"nearest\",\"vector\":[1],\"limit\":1,\"sql\":\"select 1\"}'::jsonb
+        )",
+        "22023",
+        "query node contains an unknown field",
+        "executable query plan validation",
+    );
+}
+
+#[pg_test]
 #[should_panic(expected = "query limit must be positive: 0")]
 fn query_nearest_rejects_zero_limits() {
     Spi::run("SELECT pgcontext.query_nearest('[1,2]'::vector, 0)")

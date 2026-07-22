@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 263;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 264;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -448,6 +448,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         "product_reconstruct",
         "codes bytea, subvector_dimensions integer, codebooks jsonb",
         SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "execute_query",
+        "collection text, plan jsonb",
+        SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
         "query",

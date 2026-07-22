@@ -109,6 +109,23 @@ fn prefetch_requires_higher_is_better_fusion_order() {
 }
 
 #[test]
+fn composite_tree_reports_the_largest_descendant_limit() {
+    let branch = QueryIr::nearest(None, vec![1.0, 0.0], ScoreOrder::HigherIsBetter, None, 8)
+        .expect("nearest query should be valid");
+    let query = QueryIr::new(
+        QueryKind::Rerank {
+            query: Box::new(branch),
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        2,
+    )
+    .expect("rerank query should be valid");
+
+    assert_eq!(query.max_node_limit(), 8);
+}
+
+#[test]
 fn candidate_scores_must_be_finite() {
     assert!(matches!(
         Candidate::new(PointId::new(1), f64::NAN, CandidateBranch::DenseAnn),
