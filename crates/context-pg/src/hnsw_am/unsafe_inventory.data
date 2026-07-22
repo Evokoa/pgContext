@@ -15,9 +15,7 @@ hnsw_am.rs|extern|pgcontext_hnsw_rescan|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_vacuum_cleanup|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_validate|guarded PostgreSQL AM callback
 hnsw_am.rs|fn|copy_rescan_keys|writes a validated PostgreSQL scan-key destination
-hnsw_am.rs|fn|ensure_hnsw_metric_contract|reads PostgreSQL relation and catalog pointers
 hnsw_am.rs|fn|ensure_hnsw_strategy_operator|reads and releases PostgreSQL syscache tuples
-hnsw_am.rs|fn|ensure_hnsw_support_proc|reads PostgreSQL relation support metadata
 hnsw_am.rs|fn|expand_hnsw_scan|continues a validated live PostgreSQL index scan with a larger bounded candidate budget
 hnsw_am.rs|fn|hnsw_dense_from_datum|decodes a datum using its validated PostgreSQL type OID
 hnsw_am.rs|fn|hnsw_dense_score_metric|reads live dense operator-class metadata
@@ -36,6 +34,7 @@ hnsw_am.rs|fn|hnsw_query_from_orderby_datum|decodes a PostgreSQL scan-key datum
 hnsw_am.rs|fn|hnsw_scan_candidates|reads a live index relation and PostgreSQL pages
 hnsw_am.rs|fn|hnsw_scan_state_ptr|dereferences the AM-owned scan-state slot
 hnsw_am.rs|fn|hnsw_score_metric|reads live relation and operator-class metadata
+hnsw_am.rs|fn|hnsw_score_metric_from_candidates|reads live relation and operator-class metadata candidates
 hnsw_am.rs|fn|hnsw_support_proc_matches|reads PostgreSQL support-procedure metadata
 hnsw_am.rs|fn|hnsw_vector_from_index_values|reads callback-bounded datum and null arrays
 hnsw_am.rs|fn|hnsw_visible_heap_tid|reads a live scan descriptor and heap snapshot

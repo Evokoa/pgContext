@@ -111,10 +111,10 @@ fn mapped_packed_graph_rejects_invalid_inner_image() -> Result<(), Box<dyn std::
     let payload = encode_mapped_packed_graph(IDENTITY, b"invalid packed image");
     write_segment_atomic(&file.0, SegmentKind::HnswGraph, &payload)?;
 
-    assert!(matches!(
-        unsafe { MappedPackedGraphImage::open(&file.0, IDENTITY) },
-        Err(MappedPackedGraphError::Graph(_))
-    ));
+    // SAFETY: this test exclusively owns the immutable malformed file for the
+    // attempted mapping lifetime.
+    let result = unsafe { MappedPackedGraphImage::open(&file.0, IDENTITY) };
+    assert!(matches!(result, Err(MappedPackedGraphError::Graph(_))));
     Ok(())
 }
 
@@ -129,8 +129,11 @@ fn mapped_packed_graph_rejects_a_different_index_identity() -> Result<(), Box<dy
         ..IDENTITY
     };
 
+    // SAFETY: this test exclusively owns the immutable file for the attempted
+    // mapping lifetime.
+    let result = unsafe { MappedPackedGraphImage::open(&file.0, wrong) };
     assert!(matches!(
-        unsafe { MappedPackedGraphImage::open(&file.0, wrong) },
+        result,
         Err(MappedPackedGraphError::IdentityMismatch)
     ));
     Ok(())

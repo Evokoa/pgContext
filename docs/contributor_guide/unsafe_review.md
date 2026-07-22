@@ -58,6 +58,13 @@ inventory whenever the routine gains, removes, or changes a callback.
 RUSTFLAGS="-Zsanitizer=address" cargo +nightly pgrx test -p context-pg pg17
 ```
 
+Mapped-generation changes also run the pure borrowed view under Miri and the
+real file-backed replacement path in a subprocess under ASan and TSan. The
+sanitizer commands use an explicit host target so proc-macro/build-script host
+artifacts are not instrumented, and rebuild `std` for TSan ABI consistency;
+see `scripts/run-unsafe-hardening-report.sh --pg-major 17 --plan` for the exact
+portable manifest.
+
 If sanitizer or Miri cannot run in the local environment, record the toolchain
 or platform blocker in the release report and run the gate in CI or on the
 release host before declaring the release candidate complete.
@@ -74,7 +81,7 @@ tests/shell/run_unsafe_hardening_report_smoke.sh
 ```
 
 `--plan` is side-effect free and emits the canonical TSV rows. `--dry-run`
-writes the same five rows and per-row logs without invoking Cargo, Miri,
+writes the same eight rows and per-row logs without invoking Cargo, Miri,
 sanitizers, or PostgreSQL. The no-flag form executes every row and is owned by
 the frozen-SHA hardening phase. When a later product slice adds an unsafe owner,
 validated mmap view, callback surface, or subprocess harness, extend the runner

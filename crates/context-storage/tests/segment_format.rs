@@ -197,6 +197,7 @@ fn mmap_segment_validation_borrows_payload_bytes() -> Result<(), SegmentError> {
 }
 
 #[test]
+#[cfg_attr(miri, ignore = "Miri does not support file-backed memory mappings")]
 fn mapped_segment_borrows_the_validated_file_payload() -> SegmentTestResult {
     let directory = TempSegmentDir::create()?;
     let path = directory.join("mapped.pgctxseg");
