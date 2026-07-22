@@ -2,47 +2,6 @@
 
 use crate::{QueryError, Result};
 
-/// Maximum formula byte length preserved by the stable query-builder contract.
-pub const MAX_FORMULA_BYTES: usize = 512;
-
-/// Validated bounded formula text.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Formula(String);
-
-impl Formula {
-    /// Creates bounded nonempty formula text without interpreting its grammar.
-    ///
-    /// Query constructors currently produce inspectable JSON plans; formula
-    /// execution semantics are owned by the later executable query pipeline.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`QueryError::InvalidInput`] when the text is empty or exceeds
-    /// [`MAX_FORMULA_BYTES`].
-    pub fn new(formula: impl Into<String>) -> Result<Self> {
-        let formula = formula.into();
-        if formula.is_empty() || formula.len() > MAX_FORMULA_BYTES {
-            return Err(QueryError::InvalidInput {
-                field: "formula",
-                reason: format!("query formula must be 1..={MAX_FORMULA_BYTES} bytes"),
-            });
-        }
-        Ok(Self(formula))
-    }
-
-    /// Returns the validated formula text.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Consumes the wrapper and returns the formula text.
-    #[must_use]
-    pub fn into_string(self) -> String {
-        self.0
-    }
-}
-
 /// Semantic validators shared by JSON-plan adapters.
 pub struct QueryPlanValidator;
 

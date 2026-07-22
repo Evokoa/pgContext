@@ -10,6 +10,7 @@
 mod budget;
 mod error;
 mod executor;
+mod formula;
 mod ir;
 mod policy;
 mod ports;
@@ -21,6 +22,7 @@ pub use budget::{BudgetUsage, ExecutionBudget};
 pub use context_core::PointId;
 pub use error::{QueryError, Result};
 pub use executor::QueryExecutor;
+pub use formula::{CompiledFormula, Formula, MAX_FORMULA_BYTES, MAX_FORMULA_OPERATIONS};
 pub use ir::{QueryIr, QueryKind};
 pub use policy::{
     CandidateExpansionDecision, LateInteractionWork, MAX_LATE_INTERACTION_COMPARISONS,
@@ -39,7 +41,7 @@ pub use types::{
     FilterCandidateBatch, HydratedCandidate, ReadinessReason, ScoreOrder, SourceReadiness,
     StageDiagnostic, StageKind,
 };
-pub use validation::{Formula, MAX_FORMULA_BYTES, QueryPlanValidator};
+pub use validation::QueryPlanValidator;
 
 /// Returns the version of the pure query boundary.
 #[must_use]
