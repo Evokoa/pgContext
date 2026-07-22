@@ -25,23 +25,11 @@ VALUES (10, ARRAY['[1,0]'::vector, '[0,1]'::vector]),
 
 SELECT pgcontext.create_collection('late_ann_docs', 'public.late_ann_docs');
 SELECT pgcontext.upsert_points('late_ann_docs', ARRAY['10', '20', '30', '40']);
-
-CREATE TABLE public.late_ann_tokens (
-    source_key text NOT NULL,
-    token_embedding vector(2) NOT NULL
+SELECT pgcontext.register_late_interaction(
+    'late_ann_docs',
+    'public.late_ann_docs',
+    'token_vectors'
 );
-
-INSERT INTO public.late_ann_tokens (source_key, token_embedding)
-VALUES ('10', '[1,0]'::vector),
-       ('10', '[0,1]'::vector),
-       ('20', '[1,0]'::vector),
-       ('20', '[0,1]'::vector),
-       ('30', '[1,0]'::vector),
-       ('30', '[0,1]'::vector),
-       ('40', '[1,0]'::vector);
-
-CREATE INDEX late_ann_tokens_embedding_idx
-    ON public.late_ann_tokens USING pgcontext_hnsw (token_embedding);
 
 DO $$
 DECLARE
@@ -54,10 +42,6 @@ BEGIN
           FROM pgcontext.search_late_interaction_ann(
               'late_ann_docs',
               ARRAY['[1,0]'::vector, '[0,1]'::vector],
-              'token_vectors',
-              'public.late_ann_tokens',
-              'source_key',
-              'token_embedding',
               3,
               3
           )
@@ -85,10 +69,6 @@ BEGIN
           FROM pgcontext.search_late_interaction_ann(
               'late_ann_docs',
               ARRAY['[1,0]'::vector, '[0,1]'::vector],
-              'token_vectors',
-              'public.late_ann_tokens',
-              'source_key',
-              'token_embedding',
               10,
               3
           )
@@ -114,10 +94,6 @@ BEGIN
           FROM pgcontext.search_late_interaction_ann(
               'late_ann_docs',
               ARRAY['[1,0]'::vector, '[0,1]'::vector],
-              'token_vectors',
-              'public.late_ann_tokens',
-              'source_key',
-              'token_embedding',
               10,
               4
           )
@@ -150,17 +126,11 @@ SELECT pgcontext.create_collection(
     'public.late_ann_budget_docs'
 );
 SELECT pgcontext.upsert_points('late_ann_budget_docs', ARRAY['10']);
-
-CREATE TABLE public.late_ann_budget_tokens (
-    source_key text NOT NULL,
-    token_embedding vector(2) NOT NULL
+SELECT pgcontext.register_late_interaction(
+    'late_ann_budget_docs',
+    'public.late_ann_budget_docs',
+    'token_vectors'
 );
-
-INSERT INTO public.late_ann_budget_tokens (source_key, token_embedding)
-VALUES ('10', '[1,0]'::vector);
-
-CREATE INDEX late_ann_budget_tokens_embedding_idx
-    ON public.late_ann_budget_tokens USING pgcontext_hnsw (token_embedding);
 
 DO $$
 BEGIN
@@ -168,10 +138,6 @@ BEGIN
       FROM pgcontext.search_late_interaction_ann(
           'late_ann_budget_docs',
           array_fill('[1,0]'::vector, ARRAY[1001]),
-          'token_vectors',
-          'public.late_ann_budget_tokens',
-          'source_key',
-          'token_embedding',
           1000,
           1
       );
@@ -184,10 +150,89 @@ EXCEPTION
         END IF;
 END
 $$;
+
+CHECKPOINT;
 SQL
+
+cargo pgrx stop "${PG_VERSION}"
+cargo pgrx start "${PG_VERSION}"
+
+restart_keys="$(psql_db -At <<'SQL' | tail -n 1
+SELECT pg_catalog.string_agg(source_key, ',' ORDER BY score DESC, point_id)
+  FROM pgcontext.search_late_interaction_ann(
+      'late_ann_docs',
+      ARRAY['[1,0]'::vector, '[0,1]'::vector],
+      10,
+      4
+  );
+SQL
+)"
+if [[ "${restart_keys}" != "10,20,40" ]]; then
+    echo "late-interaction owned generation failed restart recheck: ${restart_keys}" >&2
+    exit 1
+fi
+
+psql_db <<'SQL'
+SELECT pgcontext.repair_late_interaction('late_ann_docs', 2);
+DO $$
+DECLARE
+    deleted_point_count bigint;
+BEGIN
+    SELECT pg_catalog.count(*)
+      INTO deleted_point_count
+      FROM pgcontext.search_late_interaction_ann(
+          'late_ann_docs',
+          ARRAY['[1,0]'::vector, '[0,1]'::vector],
+          10,
+          4
+      )
+     WHERE source_key = '30';
+    IF deleted_point_count <> 0 THEN
+        RAISE EXCEPTION 'late-interaction repair reactivated deleted source key 30';
+    END IF;
+END
+$$;
+SQL
+
+storage_measurement="$(psql_db -At <<'SQL' | tail -n 1
+SELECT pg_catalog.concat_ws(
+           '|',
+           registrations.point_count,
+           registrations.token_count,
+           coalesce(pg_catalog.sum(pg_catalog.pg_column_size(tokens)), 0),
+           pg_catalog.pg_relation_size(registrations.hnsw_index_oid)
+       )
+  FROM pgcontext._collection_late_interaction AS registrations
+  JOIN pgcontext._collections AS collections USING (collection_id)
+  LEFT JOIN pgcontext._collection_late_interaction_tokens AS tokens
+    USING (collection_id)
+ WHERE collections.collection_name = 'late_ann_docs'
+ GROUP BY registrations.point_count,
+          registrations.token_count,
+          registrations.hnsw_index_oid;
+SQL
+)"
+
+wal_bytes="$(psql_db -At <<'SQL' | tail -n 1
+CREATE TEMP TABLE late_interaction_measurement_lsn AS
+SELECT pg_catalog.pg_current_wal_insert_lsn() AS before_lsn;
+UPDATE public.late_ann_docs
+   SET token_vectors = ARRAY['[0.25,0.75]'::vector, '[0.75,0.25]'::vector]
+ WHERE id = 40;
+SELECT pg_catalog.pg_wal_lsn_diff(
+           pg_catalog.pg_current_wal_insert_lsn(),
+           before_lsn
+       )::bigint
+  FROM late_interaction_measurement_lsn;
+SQL
+)"
 
 printf 'late_interaction_ann_candidates_deduped\n'
 printf 'late_interaction_ann_exact_rerank_scores\n'
 printf 'late_interaction_ann_source_recheck\n'
 printf 'late_interaction_ann_deleted_recheck\n'
 printf 'late_interaction_ann_budget_rejected\n'
+printf 'late_interaction_owned_restart_recheck\n'
+printf 'late_interaction_owned_repair_preserves_tombstones\n'
+printf 'late_interaction_owned_storage: points|tokens|token_row_bytes|hnsw_index_bytes=%s\n' "${storage_measurement}"
+printf 'late_interaction_owned_update_wal_bytes: %s\n' "${wal_bytes}"

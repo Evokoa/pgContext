@@ -285,6 +285,19 @@ fn owned_late_interaction_soft_delete_and_reactivation_preserve_derived_tokens()
     );
     assert!(deleted_rows.iter().all(|row| row.1 != "1"));
 
+    Spi::run("SELECT pgcontext.repair_late_interaction('m14_owned_reactivate', 1)")
+        .expect("owned late-interaction repair should preserve point tombstones");
+    let remains_deleted = Spi::get_one::<bool>(
+        "SELECT points.deleted_at IS NOT NULL
+           FROM pgcontext._collection_points AS points
+           JOIN pgcontext._collections AS collections USING (collection_id)
+          WHERE collections.collection_name = 'm14_owned_reactivate'
+            AND points.source_key = '1'",
+    )
+    .expect("repaired owned point tombstone query should succeed")
+    .expect("repaired owned point tombstone should exist");
+    assert!(remains_deleted);
+
     Spi::run("SELECT pgcontext.upsert_points('m14_owned_reactivate', ARRAY['1'])")
         .expect("owned late-interaction point should be reactivated");
     let reactivated_rows = hybrid_query_rows(
@@ -327,6 +340,73 @@ fn owned_late_interaction_internal_store_cannot_accept_caller_token_payloads() {
 }
 
 #[pg_test]
+fn owned_late_interaction_invalid_source_update_rolls_back_every_derived_write() {
+    create_owned_late_interaction_fixture("m14_owned_invalid_rollback");
+    register_owned_late_interaction("m14_owned_invalid_rollback");
+    Spi::run(
+        "DO $$
+         DECLARE
+             actual_sqlstate text;
+             actual_message text;
+         BEGIN
+             BEGIN
+                 UPDATE public.m14_owned_invalid_rollback
+                    SET token_vectors = ARRAY[]::vector[]
+                  WHERE id = 1;
+                 RAISE EXCEPTION 'expected invalid source update to fail';
+             EXCEPTION WHEN OTHERS THEN
+                 GET STACKED DIAGNOSTICS
+                     actual_sqlstate = RETURNED_SQLSTATE,
+                     actual_message = MESSAGE_TEXT;
+                 IF actual_sqlstate <> '22023'
+                    OR actual_message <> 'late-interaction token source must contain at least one non-null vector for source key 1' THEN
+                     RAISE EXCEPTION 'unexpected invalid source update error: % %',
+                         actual_sqlstate,
+                         actual_message;
+                 END IF;
+             END;
+         END
+         $$;",
+    )
+    .expect("invalid owned late-interaction source update should roll back");
+    let source_token_count = Spi::get_one::<i32>(
+        "SELECT pg_catalog.cardinality(token_vectors)
+           FROM public.m14_owned_invalid_rollback
+          WHERE id = 1",
+    )
+    .expect("rolled-back source token count query should succeed")
+    .expect("rolled-back source token count should not be null");
+    assert_eq!(source_token_count, 2);
+    assert_eq!(owned_token_count("m14_owned_invalid_rollback", "1"), 2);
+    assert_eq!(
+        owned_registration_counts("m14_owned_invalid_rollback"),
+        (2, 4)
+    );
+}
+
+#[pg_test]
+fn owned_late_interaction_ann_rejects_token_source_schema_drift() {
+    create_owned_late_interaction_fixture("m14_owned_schema_drift");
+    register_owned_late_interaction("m14_owned_schema_drift");
+    Spi::run(
+        "ALTER TABLE public.m14_owned_schema_drift
+         DROP COLUMN token_vectors CASCADE",
+    )
+    .expect("owned late-interaction token source should be dropped");
+    shared_assert_sql_failure(
+        "SELECT pgcontext.search_late_interaction_ann(
+             'm14_owned_schema_drift',
+             ARRAY['[1,0]'::vector],
+             2,
+             2
+         )",
+        "55000",
+        "late-interaction source binding has drifted; run pgcontext.repair_late_interaction",
+        "owned late-interaction token source drift",
+    );
+}
+
+#[pg_test]
 fn owned_late_interaction_ann_search_uses_registration_and_exact_reranks() {
     create_owned_late_interaction_fixture("m14_owned_search");
     register_owned_late_interaction("m14_owned_search");
@@ -360,6 +440,58 @@ fn owned_late_interaction_ann_search_uses_registration_and_exact_reranks() {
     assert!(!explain.contains("points="));
     assert!(!explain.contains("tokens="));
     assert!(explain.contains("owned_hnsw_token_candidates"));
+}
+
+#[pg_test]
+fn owned_late_interaction_ann_matches_exact_maxsim_when_candidate_budget_covers_tokens() {
+    Spi::run(
+        "CREATE TABLE public.m14_owned_exact_oracle (
+             id bigint PRIMARY KEY,
+             token_vectors vector[] NOT NULL
+         );
+         INSERT INTO public.m14_owned_exact_oracle
+         SELECT value,
+                ARRAY[
+                    ARRAY[(value::real / 16::real)::real, 1::real]::vector,
+                    ARRAY[1::real, (value::real / 16::real)::real]::vector,
+                    ARRAY[(value % 3)::real, (value % 5)::real]::vector
+                ]
+           FROM pg_catalog.generate_series(1, 12) AS value;
+         SELECT pgcontext.create_collection(
+             'm14_owned_exact_oracle',
+             'public.m14_owned_exact_oracle'
+         );
+         SELECT pgcontext.register_late_interaction(
+             'm14_owned_exact_oracle',
+             'public.m14_owned_exact_oracle',
+             'token_vectors'
+         );",
+    )
+    .expect("owned late-interaction exact-oracle fixture should be created");
+    let rankings_match = Spi::get_one::<bool>(
+        "WITH exact AS (
+             SELECT pg_catalog.array_agg(source_key ORDER BY score DESC, point_id) AS keys
+               FROM pgcontext.search_late_interaction(
+                   'm14_owned_exact_oracle',
+                   ARRAY['[1,0]'::vector, '[0,1]'::vector],
+                   'token_vectors',
+                   12
+               )
+         ), approximate AS (
+             SELECT pg_catalog.array_agg(source_key ORDER BY score DESC, point_id) AS keys
+               FROM pgcontext.search_late_interaction_ann(
+                   'm14_owned_exact_oracle',
+                   ARRAY['[1,0]'::vector, '[0,1]'::vector],
+                   36,
+                   12
+               )
+         )
+         SELECT exact.keys = approximate.keys
+           FROM exact CROSS JOIN approximate",
+    )
+    .expect("owned late-interaction oracle comparison should succeed")
+    .expect("owned late-interaction oracle comparison should not be null");
+    assert!(rankings_match);
 }
 
 #[pg_test]

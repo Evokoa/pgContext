@@ -374,8 +374,7 @@ BEGIN
     INSERT INTO pgcontext._collection_points (collection_id, source_key)
     VALUES (p_collection_id, p_source_key)
     ON CONFLICT (collection_id, source_key) DO UPDATE
-        SET deleted_at = NULL,
-            updated_at = pg_catalog.now()
+        SET updated_at = pg_catalog.now()
     RETURNING point_id INTO point;
 
     DELETE FROM pgcontext._collection_late_interaction_tokens
