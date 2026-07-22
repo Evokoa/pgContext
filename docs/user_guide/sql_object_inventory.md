@@ -88,6 +88,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"sparsevec_out"`
 - `"vector_in"`
 - `"vector_out"`
+- `pgcontext."_hnsw_candidates"`
 - `pgcontext."_hnsw_masked_candidates"`
 - `pgcontext."adopt_pgvector"`
 - `pgcontext."artifact_segment_diagnostics"`

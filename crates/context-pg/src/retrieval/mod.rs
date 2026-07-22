@@ -502,40 +502,53 @@ fn hnsw_candidate_rows(
     let point_ids = filter
         .map(|filter| sql_point_ids(filter.point_ids().iter().copied()))
         .transpose()?;
-    let (filter_sql, limit_placeholder, index_placeholder) = if point_ids.is_some() {
-        (" AND points.point_id = ANY($3::bigint[])", 4, 5)
-    } else {
-        ("", 3, 4)
-    };
-    let sql = format!(
-        "WITH candidate_mask AS MATERIALIZED (
-             SELECT array_agg(source.ctid ORDER BY source.ctid) AS heap_tids
-               FROM pgcontext._visible_collection_points AS points
-               JOIN {table_name} AS source ON source.id::text = points.source_key
+    let sql = if point_ids.is_some() {
+        format!(
+            "WITH candidate_mask AS MATERIALIZED (
+                 SELECT array_agg(source.ctid ORDER BY source.ctid) AS heap_tids
+                   FROM pgcontext._visible_collection_points AS points
+                   JOIN {table_name} AS source ON source.id::text = points.source_key
+                  WHERE points.collection_id = $2
+                    AND points.deleted_at IS NULL
+                    AND points.point_id = ANY($3::bigint[])
+             ),
+             ann_candidates AS MATERIALIZED (
+                 SELECT ann.heap_tid, ann.score::float8 AS score
+                   FROM candidate_mask
+                  CROSS JOIN LATERAL pgcontext._hnsw_masked_candidates(
+                        $5,
+                        $1,
+                        candidate_mask.heap_tids,
+                        $4
+                    ) AS ann
+             )
+             SELECT points.point_id, ann.score
+               FROM ann_candidates AS ann
+               JOIN {table_name} AS source ON source.ctid::text = ann.heap_tid
+               JOIN pgcontext._visible_collection_points AS points
+                 ON points.source_key = source.id::text
               WHERE points.collection_id = $2
                 AND points.deleted_at IS NULL
-                {filter_sql}
-         ),
-         ann_candidates AS MATERIALIZED (
-             SELECT ann.heap_tid, ann.score::float8 AS score
-               FROM candidate_mask
-              CROSS JOIN LATERAL pgcontext._hnsw_masked_candidates(
-                    ${index_placeholder},
-                    $1,
-                    candidate_mask.heap_tids,
-                    ${limit_placeholder}
-                ) AS ann
-         )
-         SELECT points.point_id, ann.score
-           FROM ann_candidates AS ann
-           JOIN {table_name} AS source ON source.ctid::text = ann.heap_tid
-           JOIN pgcontext._visible_collection_points AS points
-             ON points.source_key = source.id::text
-          WHERE points.collection_id = $2
-            AND points.deleted_at IS NULL
-          ORDER BY ann.score ASC, points.point_id ASC
-          LIMIT ${limit_placeholder}"
-    );
+              ORDER BY ann.score ASC, points.point_id ASC
+              LIMIT $4"
+        )
+    } else {
+        format!(
+            "WITH ann_candidates AS MATERIALIZED (
+                 SELECT ann.heap_tid, ann.score::float8 AS score
+                   FROM pgcontext._hnsw_candidates($4, $1, $3) AS ann
+             )
+             SELECT points.point_id, ann.score
+               FROM ann_candidates AS ann
+               JOIN {table_name} AS source ON source.ctid::text = ann.heap_tid
+               JOIN pgcontext._visible_collection_points AS points
+                 ON points.source_key = source.id::text
+              WHERE points.collection_id = $2
+                AND points.deleted_at IS NULL
+              ORDER BY ann.score ASC, points.point_id ASC
+              LIMIT $3"
+        )
+    };
     let mut args = Vec::<DatumWithOid<'_>>::with_capacity(5);
     args.push(query_vector.into());
     args.push(collection_id.into());

@@ -445,6 +445,30 @@ fn try_scan_counter_to_sql(value: usize) -> Result<i64, usize> {
     i64::try_from(value).map_err(|_| value)
 }
 
+#[pg_extern(schema = "pgcontext", name = "_hnsw_candidates")]
+#[search_path(pg_catalog, pgcontext, public)]
+fn hnsw_candidates(
+    index_relation: PgRelation,
+    query: Vector,
+    limit: i32,
+) -> TableIterator<'static, (name!(heap_tid, String), name!(score, f32))> {
+    let limit = search_limit_from_masked_candidates(limit);
+    let query = match query.to_dense() {
+        Ok(query) => query,
+        Err(error) => raise_core_error(error),
+    };
+    let index_relation = index_relation.as_ptr();
+    ensure_hnsw_candidate_relation(index_relation);
+    // SAFETY: `PgRelation` holds AccessShareLock for a validated index relation;
+    // the page scan owns every buffer pin and returns owned candidate values.
+    let outcome = unsafe { hnsw_scan_candidates(index_relation, Some(&query), Some(limit.get())) };
+    record_hnsw_scan_work(outcome.work);
+    TableIterator::new(outcome.candidates.into_iter().map(|candidate| {
+        let (block, offset) = u64_to_item_pointer_parts(candidate.heap_tid);
+        (format!("({block},{offset})"), candidate.score)
+    }))
+}
+
 #[pg_extern(schema = "pgcontext", name = "_hnsw_masked_candidates")]
 #[search_path(pg_catalog, pgcontext, public)]
 fn hnsw_masked_candidates(
@@ -460,7 +484,7 @@ fn hnsw_masked_candidates(
         Err(error) => raise_core_error(error),
     };
     let index_relation = index_relation.as_ptr();
-    let score_metric = ensure_masked_hnsw_relation(index_relation);
+    let score_metric = ensure_hnsw_candidate_relation(index_relation);
     // SAFETY: The validated relation owns a live versioned metapage.
     let config = unsafe { hnsw_stored_config(index_relation, score_metric) };
     // SAFETY: `PgRelation` holds AccessShareLock and keeps the relation cache
@@ -483,7 +507,7 @@ fn hnsw_masked_candidates(
     }))
 }
 
-fn ensure_masked_hnsw_relation(index_relation: pg_sys::Relation) -> HnswScoreMetric {
+fn ensure_hnsw_candidate_relation(index_relation: pg_sys::Relation) -> HnswScoreMetric {
     // SAFETY: `PgRelation` owns a live relation cache entry for this function.
     // Reading its class form only validates that the SQL caller passed an
     // index relation before HNSW opclass metadata is inspected below.
@@ -495,7 +519,7 @@ fn ensure_masked_hnsw_relation(index_relation: pg_sys::Relation) -> HnswScoreMet
     if !is_index {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            "masked HNSW traversal requires an index relation",
+            "HNSW candidate traversal requires an index relation",
         );
     }
     // SAFETY: the relation was checked as an index above and stays locked by

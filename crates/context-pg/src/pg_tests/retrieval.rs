@@ -84,6 +84,25 @@ fn hnsw_adapter_binds_attached_index_for_every_dense_metric() {
 }
 
 #[pg_test]
+fn unfiltered_hnsw_adapter_does_not_materialize_a_collection_mask() {
+    create_dense_hnsw_adapter_collection(
+        "stage_b_hnsw_unmasked",
+        "l2",
+        "vector_hnsw_ops",
+    );
+    Spi::run("SET LOCAL pgcontext.hnsw_mask_candidate_limit = 2")
+        .expect("mask limit should be lowered below the collection size");
+
+    let snapshot = crate::retrieval::dense_metric_adapter_snapshot_for_test(
+        "stage_b_hnsw_unmasked".to_owned(),
+    );
+
+    assert_eq!(snapshot.hnsw_rows, snapshot.exact_rows);
+    assert!(snapshot.hnsw_complete);
+    assert!(snapshot.hnsw_work_candidates > 0);
+}
+
+#[pg_test]
 #[should_panic(expected = "max_candidate_budget 2 exceeded")]
 fn hnsw_adapter_enforces_strict_collection_candidate_budget() {
     create_dense_hnsw_adapter_collection(
