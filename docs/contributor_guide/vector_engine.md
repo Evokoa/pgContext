@@ -79,7 +79,10 @@ removed by source recheck.
 
 Binary, scalar, and product quantizers plus full-precision reranking are
 implemented as reusable primitives. Scalar encoding uses constant work per
-dimension. The current PostgreSQL-page and mmap navigation records still store
+dimension. Deterministic scalar-range and product-codebook training is owned by
+the pure index crate; identical ordered samples produce identical codebooks,
+and persisted binary codes validate fixed dimensions and padding. The current
+PostgreSQL-page and mmap navigation records still store
 full-precision vectors; stored SQ8 navigation codes are a remaining performance
 gate and must not be inferred from the quantization helper APIs.
 
