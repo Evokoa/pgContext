@@ -142,6 +142,7 @@ dependencies = [
  "context-query",
  "context-storage",
  "libfuzzer-sys",
+ "serde_json",
 ]
 
 [[package]]

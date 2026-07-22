@@ -7,6 +7,10 @@ use context_core::{
     CollectionName, DenseVector, Error as CoreError, QualifiedTableName, SearchLimit, SqlIdentifier,
 };
 use context_query::MultiVectorAnnStrategyKind;
+use context_query::{
+    Candidate, CandidateBranch, CandidatePage, HydratedCandidate, QueryError, QueryIr, QueryKind,
+    ReadinessReason, Result, SourceReadiness,
+};
 use pgrx::{pg_sys, prelude::*};
 
 use crate::error::{raise_core_error, raise_sql_error};
@@ -43,6 +47,141 @@ struct OwnedLateInteractionAnnSource {
     token_count: usize,
     index_oid: Option<pg_sys::Oid>,
     ready: bool,
+}
+
+/// Prepared owned late-interaction source used by composite query ports.
+#[derive(Debug, Clone)]
+pub(crate) struct CompositeLateInteractionSource {
+    collection: super::late_interaction::LateInteractionCollection,
+    ann_source: OwnedLateInteractionAnnSource,
+    query_vectors: Vec<DenseVector>,
+    candidates_per_query: usize,
+}
+
+impl CompositeLateInteractionSource {
+    pub(crate) fn prepare(collection_name: &CollectionName, query: &QueryIr) -> Result<Self> {
+        let QueryKind::LateInteraction {
+            vectors,
+            candidates_per_query,
+        } = query.kind()
+        else {
+            return Err(QueryError::PortFailure {
+                stage: "late_interaction_candidate_source",
+                message: "late-interaction adapter requires a late-interaction query".to_owned(),
+            });
+        };
+        let mut collection = resolve_late_interaction_collection(collection_name);
+        require_late_interaction_collection_owner(&collection, collection_name);
+        let ann_source = resolve_owned_late_interaction_ann_source(collection.collection_id);
+        validate_late_interaction_drift(&mut collection, &ann_source.token_column);
+        require_late_interaction_table_select_privilege(&collection);
+        validate_owned_late_interaction_dimensions(&ann_source, vectors);
+        Ok(Self {
+            collection,
+            ann_source,
+            query_vectors: vectors.clone(),
+            candidates_per_query: candidates_per_query.get(),
+        })
+    }
+
+    pub(crate) fn readiness(&self) -> SourceReadiness {
+        let stats = owned_late_interaction_candidate_stats(&self.ann_source);
+        if stats.point_count == 0 {
+            SourceReadiness::Exact
+        } else if self.ann_source.ready
+            && self.ann_source.index_oid.is_some()
+            && self.ann_source.dimensions.is_some()
+        {
+            SourceReadiness::Ready
+        } else {
+            SourceReadiness::NotReady {
+                reason: ReadinessReason::GenerationMissing,
+            }
+        }
+    }
+
+    pub(crate) fn candidate_limit(&self, remaining: usize) -> usize {
+        late_interaction_projected_candidate_count(
+            self.query_vectors.len(),
+            self.candidates_per_query,
+        )
+        .min(remaining)
+    }
+
+    pub(crate) fn candidates(&self, limit: usize) -> Result<CandidatePage> {
+        if self.ann_source.point_count == 0 {
+            return Ok(
+                CandidatePage::new(Vec::new(), true).with_strategy("owned_late_interaction_empty")
+            );
+        }
+        require_owned_late_interaction_ready(&self.ann_source);
+        let per_query = limit
+            .checked_div(self.query_vectors.len())
+            .unwrap_or_default()
+            .max(1)
+            .min(self.candidates_per_query);
+        let point_ids = owned_late_interaction_ann_point_ids(
+            self.collection.collection_id,
+            &self.query_vectors,
+            per_query,
+        );
+        let candidates = point_ids
+            .into_iter()
+            .map(|point_id| {
+                Candidate::new(
+                    context_core::PointId::from_i64(point_id).ok_or_else(|| {
+                        QueryError::PortFailure {
+                            stage: "late_interaction_candidate_source",
+                            message: format!("invalid PostgreSQL point ID {point_id}"),
+                        }
+                    })?,
+                    0.0,
+                    CandidateBranch::MultiVector,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(CandidatePage::with_scored_count(candidates, limit, true)
+            .with_strategy("owned_late_interaction_ann")
+            .with_expansion_count(1))
+    }
+
+    pub(crate) fn recheck(
+        &self,
+        candidates: &[Candidate],
+        limit: usize,
+    ) -> Result<Vec<HydratedCandidate>> {
+        let point_ids = candidates
+            .iter()
+            .map(|candidate| {
+                i64::try_from(candidate.point_id().get()).map_err(|_| QueryError::PortFailure {
+                    stage: "late_interaction_source_rechecker",
+                    message: "point ID exceeds PostgreSQL bigint".to_owned(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let limit = SearchLimit::new(limit).map_err(QueryError::from)?;
+        search_late_interaction_candidate_points(
+            &self.collection,
+            &self.query_vectors,
+            &self.ann_source.token_column,
+            &point_ids,
+            limit,
+        )
+        .into_iter()
+        .map(|(point_id, source_key, score)| {
+            HydratedCandidate::new(
+                context_core::PointId::from_i64(point_id).ok_or_else(|| {
+                    QueryError::PortFailure {
+                        stage: "late_interaction_source_rechecker",
+                        message: format!("invalid PostgreSQL point ID {point_id}"),
+                    }
+                })?,
+                context_core::SourceKey::new(source_key)?,
+                score,
+            )
+        })
+        .collect()
+    }
 }
 
 /// Searches the collection through its pgContext-owned late-interaction index.

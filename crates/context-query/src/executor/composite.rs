@@ -267,7 +267,7 @@ impl QueryExecutor<'_> {
             budget,
             rows,
             StageKind::Rerank,
-            "exact_rerank",
+            "final_score_order",
         )
     }
 

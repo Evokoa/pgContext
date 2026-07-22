@@ -14,6 +14,8 @@ use serde_json::Value;
 use crate::domain_types::distance_metric_from_catalog;
 use crate::error::{raise_core_error, raise_sql_error};
 use crate::vector::Vector;
+pub(crate) use candidate_recheck::{load_mmap_artifact_candidates, mmap_delta_candidates};
+pub(crate) use named::resolve_registered_vector_by_name;
 use support::{FacetTarget, facet_expression, resolve_facet_target, resolve_filter_plan};
 pub(crate) use support::{
     FilterField, FilterPredicatePlan, load_filter_fields, push_filter_parameter_args,

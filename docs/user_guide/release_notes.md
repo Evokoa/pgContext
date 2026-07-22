@@ -307,7 +307,7 @@ deliberately different feature cannot be mistaken for stable parity.
 | SQL halfvec | `experimental` | Exact SQL and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist. |
 | SQL sparsevec | `experimental` | Exact SQL and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist; named sparse search can attach those indexes for bounded candidates and authoritative exact rerank. |
 | SQL bit vectors | `experimental` | Exact Hamming/Jaccard SQL and stable explicit Hamming/Jaccard HNSW opclass names exist; Jaccard ordering is heap-rechecked exactly. |
-| SQL quantization APIs | `experimental` | Binary, scalar, and product helpers exist; quantized HNSW serving is planned. |
+| SQL quantization APIs | `experimental` | Binary, scalar, and product helpers plus revision-bound mapped-HNSW encoded traversal and exact source rerank are available; index-AM pages remain full precision. |
 | Per-vector dense index and quantization metadata | `experimental` | Validated configuration metadata exists; complete build-and-scan consumption is planned. |
 | Named sparse vectors per collection | `experimental` | Registration, exact fallback, validated HNSW binding, filters, bounded-work explain counters, exact rerank, and exact fusion exist. |
 | Multi-vector and late-interaction query | `experimental` | Exact MaxSim and experimental token candidates exist; internal token-index maintenance is planned. |

@@ -500,7 +500,7 @@ fn mmap_hnsw_artifact_candidates_internal(
     )
 }
 
-fn load_mmap_artifact_candidates(
+pub(crate) fn load_mmap_artifact_candidates(
     collection: &str,
     artifact_name: &str,
     vector: &Vector,
@@ -874,7 +874,7 @@ fn score_quantized_node(
     EncodedCandidate { node_id, score }
 }
 
-fn mmap_delta_candidates(
+pub(crate) fn mmap_delta_candidates(
     collection_id: i64,
     registered_vector: &super::SearchVector,
     query: &Vector,

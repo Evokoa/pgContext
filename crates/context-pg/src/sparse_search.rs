@@ -282,7 +282,7 @@ fn resolve_sparse_collection(collection_name: &context_core::CollectionName) -> 
     })
 }
 
-fn resolve_registered_sparse_vector(
+pub(crate) fn resolve_registered_sparse_vector(
     collection_name: &context_core::CollectionName,
     collection_id: i64,
     vector_name: &str,
@@ -349,7 +349,7 @@ fn resolve_registered_sparse_vector(
     })
 }
 
-fn validate_sparse_vector_drift(
+pub(crate) fn validate_sparse_vector_drift(
     collection_id: i64,
     registered_vector: &mut RegisteredSparseVector,
 ) {
@@ -485,7 +485,7 @@ pub(crate) fn resolve_sparse_hnsw_index(
     .flatten()
 }
 
-fn require_sparse_query_dimensions(
+pub(crate) fn require_sparse_query_dimensions(
     registered_vector: &RegisteredSparseVector,
     query: &SparseVector,
 ) {
@@ -622,7 +622,7 @@ fn require_sparse_collection_owner(
     }
 }
 
-fn require_sparse_table_select_privilege(registered_vector: &RegisteredSparseVector) {
+pub(crate) fn require_sparse_table_select_privilege(registered_vector: &RegisteredSparseVector) {
     let session_user = session_user();
     let has_select = Spi::get_one_with_args::<bool>(
         "SELECT pg_catalog.has_table_privilege($1, $2, 'SELECT')",

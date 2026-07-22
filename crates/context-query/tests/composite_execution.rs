@@ -520,3 +520,101 @@ fn transform_cancellation_never_returns_points() {
     assert_eq!(outcome.completion(), Completion::Cancelled);
     assert!(outcome.points().is_empty());
 }
+
+#[derive(Default)]
+struct PerLeafBudgetSource {
+    requested: Vec<usize>,
+}
+
+impl CandidateSource for PerLeafBudgetSource {
+    fn readiness(&mut self, _query: &QueryIr) -> Result<SourceReadiness, QueryError> {
+        Ok(SourceReadiness::Ready)
+    }
+
+    fn candidate_limit(&mut self, query: &QueryIr, remaining: usize) -> Result<usize, QueryError> {
+        Ok(query.limit().min(remaining))
+    }
+
+    fn candidates(
+        &mut self,
+        query: &QueryIr,
+        _filter: Option<&FilterCandidateBatch>,
+        limit: usize,
+    ) -> Result<CandidatePage, QueryError> {
+        self.requested.push(limit);
+        let offset = if is_second_branch(query) { 100 } else { 0 };
+        Ok(CandidatePage::new(
+            (1..=limit)
+                .map(|point_id| candidate(offset + point_id as u64, 1.0))
+                .collect(),
+            true,
+        ))
+    }
+}
+
+#[test]
+fn prefetch_reserves_candidate_work_per_leaf() {
+    let query = QueryIr::new(
+        QueryKind::Prefetch {
+            branches: vec![branch(1.0), branch(-1.0)],
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("prefetch should be valid");
+    let mut source = PerLeafBudgetSource::default();
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(
+        &query,
+        ExecutionBudget::new(6, 1, 6, 16, 2, 3).expect("budget should be valid"),
+    )
+    .expect("both branches should execute");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(source.requested, vec![3, 3]);
+    assert_eq!(outcome.usage().candidates(), 6);
+}
+
+#[test]
+fn candidate_expansion_work_is_globally_enforced() {
+    struct ExpandingSource;
+    impl CandidateSource for ExpandingSource {
+        fn readiness(&mut self, _query: &QueryIr) -> Result<SourceReadiness, QueryError> {
+            Ok(SourceReadiness::Ready)
+        }
+
+        fn candidates(
+            &mut self,
+            _query: &QueryIr,
+            _filter: Option<&FilterCandidateBatch>,
+            _limit: usize,
+        ) -> Result<CandidatePage, QueryError> {
+            Ok(CandidatePage::new(vec![candidate(1, 1.0)], true).with_expansion_count(3))
+        }
+    }
+
+    let error = QueryExecutor::new(
+        &mut ExpandingSource,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&branch(1.0), budget(8))
+    .expect_err("expansion overrun must fail closed");
+    assert!(matches!(
+        error,
+        QueryError::PortContractViolation {
+            stage: "candidate_expansions",
+            requested: 2,
+            returned: 3,
+        }
+    ));
+}

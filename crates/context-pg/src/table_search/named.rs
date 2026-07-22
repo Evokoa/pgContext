@@ -91,7 +91,7 @@ pub fn search_collection_named_vector_filtered(
     TableIterator::new(rows)
 }
 
-pub(super) fn resolve_registered_vector_by_name(
+pub(crate) fn resolve_registered_vector_by_name(
     collection_name: &CollectionName,
     collection_id: i64,
     vector_name: &VectorName,

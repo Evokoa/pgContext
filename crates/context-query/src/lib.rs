@@ -12,6 +12,7 @@ mod error;
 mod executor;
 mod formula;
 mod ir;
+mod plan;
 mod policy;
 mod ports;
 mod strategy;
@@ -24,6 +25,7 @@ pub use error::{QueryError, Result};
 pub use executor::QueryExecutor;
 pub use formula::{CompiledFormula, Formula, MAX_FORMULA_BYTES, MAX_FORMULA_OPERATIONS};
 pub use ir::{QueryIr, QueryKind};
+pub use plan::parse_query_plan;
 pub use policy::{
     CandidateExpansionDecision, LateInteractionWork, MAX_LATE_INTERACTION_COMPARISONS,
     candidate_expansion_decision,

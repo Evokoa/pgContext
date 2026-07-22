@@ -187,6 +187,10 @@ impl BudgetUsage {
         self.stages = self.stages.saturating_add(1);
     }
 
+    pub(crate) fn add_expansions(&mut self, count: usize) {
+        self.expansions = self.expansions.saturating_add(count);
+    }
+
     pub(crate) fn merge(&mut self, other: Self) {
         self.filter_candidates = self
             .filter_candidates

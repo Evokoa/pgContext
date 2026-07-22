@@ -75,7 +75,9 @@ impl Candidate {
 pub struct CandidatePage {
     candidates: Vec<Candidate>,
     scored_count: usize,
+    expansion_count: usize,
     exhausted: bool,
+    strategy: &'static str,
 }
 
 impl CandidatePage {
@@ -86,7 +88,9 @@ impl CandidatePage {
         Self {
             candidates,
             scored_count,
+            expansion_count: 0,
             exhausted,
+            strategy: "candidate_source",
         }
     }
 
@@ -100,8 +104,24 @@ impl CandidatePage {
         Self {
             candidates,
             scored_count,
+            expansion_count: 0,
             exhausted,
+            strategy: "candidate_source",
         }
+    }
+
+    /// Attaches a cardinality-bounded static serving strategy label.
+    #[must_use]
+    pub const fn with_strategy(mut self, strategy: &'static str) -> Self {
+        self.strategy = strategy;
+        self
+    }
+
+    /// Attaches the number of adaptive candidate expansions performed.
+    #[must_use]
+    pub const fn with_expansion_count(mut self, expansion_count: usize) -> Self {
+        self.expansion_count = expansion_count;
+        self
     }
 
     /// Returns owned candidates in source order.
@@ -122,10 +142,22 @@ impl CandidatePage {
         self.scored_count
     }
 
+    /// Returns the number of adaptive candidate expansions performed.
+    #[must_use]
+    pub const fn expansion_count(&self) -> usize {
+        self.expansion_count
+    }
+
     /// Reports whether the source has no additional candidates.
     #[must_use]
     pub const fn exhausted(&self) -> bool {
         self.exhausted
+    }
+
+    /// Returns the adapter's static serving strategy label.
+    #[must_use]
+    pub const fn strategy(&self) -> &'static str {
+        self.strategy
     }
 }
 
@@ -303,7 +335,7 @@ pub enum StageKind {
     Fusion,
     /// Score threshold, weight, or formula transformation.
     ScoreTransform,
-    /// Final deterministic exact rerank.
+    /// Final deterministic score ordering and result limiting.
     Rerank,
 }
 

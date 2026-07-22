@@ -76,6 +76,8 @@ Search and query:
 - `pgcontext.explore(collection text, context_point_ids bigint[], limit integer)`
 - `pgcontext.query(collection text, vector vector, text_query text, text_column text, limit integer)`
 - `pgcontext.query_nearest(vector vector, limit integer)`
+- `pgcontext.query_nearest(vector_name text, vector vector, filter jsonb, limit integer)`
+- `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, filter jsonb, limit integer)`
 - `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, limit integer)`
 - `pgcontext.query_full_text(text_query text, text_column text, limit integer)`
 - `pgcontext.query_late_interaction(query_vectors vector[], candidates_per_query integer, limit integer)`

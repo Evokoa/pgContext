@@ -352,8 +352,13 @@ Formula text is preserved as an opaque client-plan value. It must contain 1 to
 512 UTF-8 bytes. `execute_query` accepts finite literals, `$score`/`score`,
 parentheses, unary signs, and `+`, `-`, `*`, and `/`; unsupported syntax fails
 before candidate work. Composite execution is depth/node/work bounded, applies
-authoritative source rechecks before fusion, and supports dense (including
-quantized HNSW), named sparse, full-text, and owned late-interaction leaves.
+authoritative source rechecks before fusion, and supports named or filtered
+dense, named sparse, full-text, and owned late-interaction leaves. An unfiltered
+default-vector leaf with quantization configured uses its revision-bound mapped
+HNSW artifact; named or filtered quantized leaves fall back to their validated
+full-precision HNSW binding. `query_rerank` is the final deterministic
+score-order and result-limit stage; exact scoring happens in each retrieval
+leaf's source recheck before fusion.
 
 ## Late-Interaction Rerank
 

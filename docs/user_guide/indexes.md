@@ -138,9 +138,13 @@ fail `CREATE INDEX` with SQLSTATE `22023` (`invalid_parameter_value`).
 These reloptions are catalog-visible configuration today; storing quantized
 metadata in the HNSW metapage records the selected mode, metadata version,
 scalar bounds/levels, PQ subvector width, and a deterministic PQ codebook hash
-so restart and upgrade checks can reject incompatible metadata safely. Serving
-quantized candidates must still pass through exact rerank before rows are
-returned to SQL.
+so restart and upgrade checks can reject incompatible metadata safely. The
+PostgreSQL index-AM page graph remains full precision. Encoded candidate
+traversal is served by revision-bound mapped HNSW artifacts for an unfiltered
+default-vector composite leaf. Named or filtered leaves use their validated
+full-precision HNSW binding until mapped artifacts carry an equally strong
+vector/filter identity. Every candidate still passes through exact source
+rerank before rows are returned to SQL.
 
 The SQL extension registers the `pgcontext_hnsw` index access method and can
 create HNSW indexes on empty or populated `vector` columns. Static builds scan

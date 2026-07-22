@@ -3,8 +3,8 @@
 use context_core::{PointId, SourceKey};
 use context_query::{
     Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateSource, ExecutionBudget,
-    Formula, HydratedCandidate, QueryExecutor, QueryIr, QueryKind, ScoreOrder, SourceReadiness,
-    SourceRechecker, StageDiagnostic, TelemetrySink,
+    HydratedCandidate, QueryExecutor, QueryIr, SourceReadiness, SourceRechecker, StageDiagnostic,
+    TelemetrySink, parse_query_plan,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -74,52 +74,12 @@ impl Cancellation for NeverCancel {
 }
 
 fuzz_target!(|data: &[u8]| {
-    let limit = usize::from(data.first().copied().unwrap_or(1) % 8 + 1);
-    let Ok(mut query) = QueryIr::nearest(
-        None,
-        vec![1.0, 0.0],
-        ScoreOrder::HigherIsBetter,
-        None,
-        limit,
-    ) else {
+    let Ok(value) = serde_json::from_slice(data) else {
         return;
     };
-
-    for byte in data.iter().copied().skip(1).take(24) {
-        let kind = match byte % 6 {
-            0 => QueryKind::Weighted {
-                query: Box::new(query.clone()),
-                weight: f64::from(byte) / 32.0,
-            },
-            1 => QueryKind::ScoreThreshold {
-                query: Box::new(query.clone()),
-                minimum: Some(f64::from(byte % 8)),
-                maximum: None,
-            },
-            2 => QueryKind::Formula {
-                query: Box::new(query.clone()),
-                formula: match Formula::new(if byte & 8 == 0 {
-                    "$score * 2 + 1"
-                } else {
-                    "invalid($score)"
-                }) {
-                    Ok(formula) => formula,
-                    Err(_) => return,
-                },
-            },
-            3 => QueryKind::Rerank {
-                query: Box::new(query.clone()),
-            },
-            4 => QueryKind::Prefetch {
-                branches: vec![query.clone(), query.clone()],
-            },
-            _ => continue,
-        };
-        let Ok(next) = QueryIr::new(kind, ScoreOrder::HigherIsBetter, None, limit) else {
-            break;
-        };
-        query = next;
-    }
+    let Ok(query) = parse_query_plan(&value) else {
+        return;
+    };
 
     let Ok(budget) = ExecutionBudget::new(64, 64, 64, 64, 8, 8) else {
         return;

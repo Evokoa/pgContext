@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 267;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 269;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -491,8 +491,18 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
+        "query_nearest",
+        "vector_name text, vector vector, filter jsonb, \"limit\" integer",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
         "query_sparse_nearest",
         "vector_name text, vector sparsevec, \"limit\" integer",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "query_sparse_nearest",
+        "vector_name text, vector sparsevec, filter jsonb, \"limit\" integer",
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function("query_prefetch", "branches jsonb[]", SqlLifecycle::Stable),

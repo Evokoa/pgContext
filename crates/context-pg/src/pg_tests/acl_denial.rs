@@ -908,6 +908,95 @@ fn sparse_ann_preserves_non_superuser_acl_and_source_rls() {
 }
 
 #[pg_test]
+fn composite_execute_query_preserves_non_superuser_acl_rls_and_mvcc() {
+    acl_create_role("stage_g_composite_rls_owner");
+    acl_grant_api_access("stage_g_composite_rls_owner");
+
+    acl_set_session_user("stage_g_composite_rls_owner");
+    Spi::run(
+        "CREATE TABLE public.stage_g_composite_rls_docs (
+             id bigint PRIMARY KEY,
+             embedding vector(2) NOT NULL,
+             tenant text NOT NULL
+         );
+         INSERT INTO public.stage_g_composite_rls_docs VALUES
+             (1, '[1,0]', 'stage_g_composite_rls_owner'),
+             (2, '[0.9,0.1]', 'other'),
+             (3, '[0,1]', 'other');
+         SELECT pgcontext.create_collection(
+             'stage_g_composite_rls_docs', 'public.stage_g_composite_rls_docs'
+         );
+         SELECT pgcontext.register_vector(
+             'stage_g_composite_rls_docs', 'embedding', 'embedding', 2, 'l2'
+         );
+         SELECT pgcontext.upsert_points(
+             'stage_g_composite_rls_docs', ARRAY['1', '2', '3']
+         );
+         CREATE INDEX stage_g_composite_rls_docs_hnsw
+             ON public.stage_g_composite_rls_docs
+             USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_ops);
+         SELECT pgcontext.attach_hnsw_index(
+             'stage_g_composite_rls_docs', 'embedding',
+             'public.stage_g_composite_rls_docs_hnsw'
+         );
+         ALTER TABLE public.stage_g_composite_rls_docs ENABLE ROW LEVEL SECURITY;
+         ALTER TABLE public.stage_g_composite_rls_docs FORCE ROW LEVEL SECURITY;
+         CREATE POLICY stage_g_composite_rls_tenant
+             ON public.stage_g_composite_rls_docs
+          USING (tenant = SESSION_USER)
+          WITH CHECK (tenant = SESSION_USER);",
+    )
+    .expect("non-superuser composite fixture should be created");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_points", "SELECT"),
+        "composite callers must not need private point-catalog SELECT"
+    );
+    let visible = Spi::get_one::<String>(
+        "SELECT coalesce(string_agg(source_key, ',' ORDER BY source_key), '')
+           FROM pgcontext.execute_query(
+               'stage_g_composite_rls_docs',
+               pgcontext.query_nearest('[1,0]'::vector, 3)
+           )",
+    )
+    .expect("non-superuser composite query should execute")
+    .expect("visible aggregate should not be null");
+    assert_eq!(visible, "1");
+
+    Spi::run(
+        "UPDATE public.stage_g_composite_rls_docs
+            SET embedding = '[0,1]'::vector
+          WHERE id = 1",
+    )
+    .expect("visible source update should succeed");
+    let score = Spi::get_one::<f32>(
+        "SELECT score
+           FROM pgcontext.execute_query(
+               'stage_g_composite_rls_docs',
+               pgcontext.query_nearest('[0,1]'::vector, 1)
+           )",
+    )
+    .expect("updated composite query should execute")
+    .expect("updated visible row should remain searchable");
+    assert_eq!(score, 0.0);
+
+    Spi::run("DELETE FROM public.stage_g_composite_rls_docs WHERE id = 1")
+        .expect("visible source delete should succeed");
+    let remaining = Spi::get_one::<i64>(
+        "SELECT count(*)
+           FROM pgcontext.execute_query(
+               'stage_g_composite_rls_docs',
+               pgcontext.query_nearest('[0,1]'::vector, 3)
+           )",
+    )
+    .expect("post-delete composite query should execute")
+    .expect("post-delete count should not be null");
+    assert_eq!(remaining, 0);
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
 fn drop_collection_denies_non_owner_collections() {
     acl_create_role("m2_acl_collection_owner_d");
     acl_create_role("m2_acl_denied_drop");

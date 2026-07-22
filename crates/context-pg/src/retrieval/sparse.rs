@@ -14,7 +14,9 @@ use super::{
     sql_limit,
 };
 use crate::sparse_search::{
-    RegisteredSparseVector, resolve_sparse_hnsw_index, sparse_distance_function,
+    RegisteredSparseVector, require_sparse_query_dimensions, require_sparse_table_select_privilege,
+    resolve_registered_sparse_vector, resolve_sparse_hnsw_index, sparse_distance_function,
+    validate_sparse_vector_drift,
 };
 use crate::table_search::{
     FilterField, load_filter_fields, push_filter_parameter_args, quote_identifier,
@@ -32,6 +34,126 @@ pub(crate) struct SparseExecution {
     pub(crate) rows: Vec<(i64, String, f32)>,
     pub(crate) outcome: ExecutionOutcome,
     pub(crate) strategy: SparseCandidateStrategy,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CompositeSparseSource {
+    registered_vector: RegisteredSparseVector,
+    strategy: SparseCandidateStrategy,
+}
+
+impl CompositeSparseSource {
+    pub(super) fn prepare(
+        collection_name: &CollectionName,
+        collection_id: i64,
+        query: &QueryIr,
+    ) -> Result<Self> {
+        let QueryKind::SparseNearest {
+            vector_name,
+            vector,
+        } = query.kind()
+        else {
+            return Err(QueryError::PortFailure {
+                stage: "sparse_candidate_source",
+                message: "sparse adapter requires a sparse-nearest query".to_owned(),
+            });
+        };
+        let mut registered_vector =
+            resolve_registered_sparse_vector(collection_name, collection_id, vector_name.as_str());
+        validate_sparse_vector_drift(collection_id, &mut registered_vector);
+        require_sparse_table_select_privilege(&registered_vector);
+        require_sparse_query_dimensions(&registered_vector, vector);
+
+        let mask_limit = crate::settings::hnsw_mask_candidate_limit_from_guc();
+        let strategy = resolve_sparse_hnsw_index(&registered_vector).map_or(
+            SparseCandidateStrategy::Exact,
+            |index_oid| {
+                let visible_size = if mask_limit == 0 || query.filter().is_some() {
+                    None
+                } else {
+                    visible_sparse_mask_size(collection_id, &registered_vector, mask_limit).ok()
+                };
+                if mask_limit == 0
+                    || visible_size.is_some_and(|size| size == 0 || size > mask_limit)
+                {
+                    SparseCandidateStrategy::Exact
+                } else {
+                    SparseCandidateStrategy::Hnsw(index_oid)
+                }
+            },
+        );
+        Ok(Self {
+            registered_vector,
+            strategy,
+        })
+    }
+
+    pub(super) const fn readiness(&self) -> SourceReadiness {
+        match self.strategy {
+            SparseCandidateStrategy::Exact => SourceReadiness::Exact,
+            SparseCandidateStrategy::Hnsw(_) => SourceReadiness::Ready,
+        }
+    }
+
+    pub(super) fn candidate_limit(&self, query: &QueryIr, remaining: usize) -> usize {
+        match self.strategy {
+            SparseCandidateStrategy::Exact => query.limit().min(remaining),
+            SparseCandidateStrategy::Hnsw(_) => crate::settings::hnsw_candidate_budget_from_guc()
+                .max(query.limit())
+                .min(remaining),
+        }
+    }
+
+    pub(super) fn candidates(
+        &self,
+        collection_id: i64,
+        query: &QueryIr,
+        filter: Option<&context_query::FilterCandidateBatch>,
+        limit: usize,
+    ) -> Result<CandidatePage> {
+        let page = match self.strategy {
+            SparseCandidateStrategy::Exact => exact_sparse_candidates(
+                collection_id,
+                &self.registered_vector,
+                query,
+                filter,
+                limit,
+            )?,
+            SparseCandidateStrategy::Hnsw(index_oid) => hnsw_sparse_candidates(
+                collection_id,
+                &self.registered_vector,
+                index_oid,
+                query,
+                filter,
+                limit,
+            )?,
+        };
+        Ok(page
+            .with_strategy(match self.strategy {
+                SparseCandidateStrategy::Exact => "named_sparse_exact",
+                SparseCandidateStrategy::Hnsw(_) => "named_sparse_hnsw",
+            })
+            .with_expansion_count(usize::from(matches!(
+                self.strategy,
+                SparseCandidateStrategy::Hnsw(_)
+            ))))
+    }
+
+    pub(super) fn recheck(
+        &self,
+        collection_id: i64,
+        filter_fields: &[FilterField],
+        query: &QueryIr,
+        candidates: &[Candidate],
+        limit: usize,
+    ) -> Result<Vec<HydratedCandidate>> {
+        SpiSparseSourceRechecker {
+            collection_id,
+            registered_vector: &self.registered_vector,
+            filter_fields,
+        }
+        .recheck(query, candidates, limit)
+    }
 }
 
 pub(crate) fn run_sparse_query(

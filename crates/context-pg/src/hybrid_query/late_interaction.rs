@@ -22,6 +22,7 @@ use super::{
     spi_optional_column, spi_required_column,
 };
 
+#[derive(Debug, Clone)]
 pub(super) struct LateInteractionCollection {
     pub(super) collection_id: i64,
     pub(super) owner_role: pg_sys::Oid,

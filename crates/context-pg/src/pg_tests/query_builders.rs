@@ -59,6 +59,392 @@ fn execute_query_runs_nested_constructor_plan() {
 }
 
 #[pg_test]
+fn execute_query_preserves_lower_is_better_rerank_order() {
+    create_dense_hnsw_adapter_collection("stage_g_lower_rerank", "l2", "vector_hnsw_ops");
+    let rows = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_lower_rerank',
+               pgcontext.query_rerank(
+                   pgcontext.query_nearest('[1,0]'::vector, 3),
+                   1
+               )
+           )",
+    );
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].1, "10");
+}
+
+#[pg_test]
+fn execute_query_allocates_candidate_budget_to_every_prefetch_branch() {
+    Spi::run(
+        "CREATE TABLE public.stage_g_branch_budget (
+             id bigint PRIMARY KEY,
+             embedding vector(2) NOT NULL
+         );
+         INSERT INTO public.stage_g_branch_budget
+         SELECT value,
+                ARRAY[
+                    (value::real / 200::real)::real,
+                    (1::real - value::real / 200::real)::real
+                ]::real[]::vector
+           FROM generate_series(1, 200) AS value;
+         SELECT pgcontext.create_collection(
+             'stage_g_branch_budget', 'public.stage_g_branch_budget'
+         );
+         SELECT pgcontext.register_vector(
+             'stage_g_branch_budget', 'embedding', 'embedding', 2, 'l2'
+         );
+         SELECT pgcontext.backfill_points('stage_g_branch_budget', 500);
+         CREATE INDEX stage_g_branch_budget_hnsw
+             ON public.stage_g_branch_budget
+             USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_ops);
+         SELECT pgcontext.attach_hnsw_index(
+             'stage_g_branch_budget', 'embedding',
+             'public.stage_g_branch_budget_hnsw'
+         );
+         SET LOCAL pgcontext.hnsw_candidate_budget = 32;",
+    )
+    .expect("realistic composite fixture should be created");
+
+    let rows = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_branch_budget',
+               pgcontext.query_rerank(
+                   pgcontext.query_prefetch(ARRAY[
+                       pgcontext.query_nearest('[0,1]'::vector, 10),
+                       pgcontext.query_nearest('[1,0]'::vector, 10)
+                   ]),
+                   10
+               )
+           )",
+    );
+    assert_eq!(rows.len(), 10);
+}
+
+#[pg_test]
+fn execute_query_routes_named_dense_vectors_and_filters() {
+    Spi::run(
+        "CREATE TABLE public.stage_g_named_dense (
+             id bigint PRIMARY KEY,
+             primary_embedding vector(2) NOT NULL,
+             secondary_embedding vector(2) NOT NULL,
+             tenant text NOT NULL
+         );
+         INSERT INTO public.stage_g_named_dense VALUES
+             (1, '[1,0]', '[0,1]', 'acme'),
+             (2, '[0,1]', '[1,0]', 'acme'),
+             (3, '[0,1]', '[1,0]', 'other');
+         SELECT pgcontext.create_collection(
+             'stage_g_named_dense', 'public.stage_g_named_dense'
+         );
+         SELECT pgcontext.register_vector(
+             'stage_g_named_dense', 'primary', 'primary_embedding', 2, 'l2'
+         );
+         SELECT pgcontext.register_vector(
+             'stage_g_named_dense', 'secondary', 'secondary_embedding', 2, 'l2'
+         );
+         SELECT pgcontext.register_filter_column(
+             'stage_g_named_dense', 'tenant', 'tenant'
+         );
+         SELECT pgcontext.backfill_points('stage_g_named_dense', 100);
+         CREATE INDEX stage_g_named_dense_secondary_hnsw
+             ON public.stage_g_named_dense
+             USING pgcontext_hnsw (secondary_embedding pgcontext.vector_hnsw_ops);
+         SELECT pgcontext.attach_hnsw_index(
+             'stage_g_named_dense', 'secondary',
+             'public.stage_g_named_dense_secondary_hnsw'
+         );
+         SELECT pgcontext.configure_vector(
+             'stage_g_named_dense',
+             'secondary',
+             '{}'::jsonb,
+             '{\"mode\":\"scalar\",\"levels\":8}'::jsonb,
+             'ready'
+         );",
+    )
+    .expect("named dense fixture should be created");
+
+    let rows = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_named_dense',
+               pgcontext.query_nearest(
+                   'secondary',
+                   '[1,0]'::vector,
+                   '{\"must\":[{\"key\":\"tenant\",\"match\":\"acme\"}]}'::jsonb,
+                   2
+               )
+           )",
+    );
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].1, "2");
+    assert!(rows.iter().all(|row| row.1 != "3"));
+
+    let unfiltered = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_named_dense',
+               pgcontext.query_nearest(
+                   'secondary', '[1,0]'::vector, NULL::jsonb, 2
+               )
+           )",
+    );
+    assert_eq!(unfiltered.len(), 2);
+    assert_eq!(unfiltered[0].1, "2");
+}
+
+#[pg_test]
+fn execute_query_non_dense_leaves_do_not_require_a_dense_registration() {
+    Spi::run(
+        "CREATE TABLE public.stage_g_non_dense_only (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL,
+             body text NOT NULL,
+             token_vectors vector[] NOT NULL
+         );
+         INSERT INTO public.stage_g_non_dense_only VALUES
+             (1, '{1:1}/2'::sparsevec, 'rust postgres', ARRAY['[1,0]'::vector]),
+             (2, '{2:1}/2'::sparsevec, 'hybrid search', ARRAY['[0,1]'::vector]);
+         SELECT pgcontext.create_collection(
+             'stage_g_non_dense_only', 'public.stage_g_non_dense_only'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'stage_g_non_dense_only', 'keywords', 'lexical', 2, 'cosine'
+         );
+         SELECT pgcontext.upsert_points(
+             'stage_g_non_dense_only', ARRAY['1', '2']
+         );
+         SELECT * FROM pgcontext.register_late_interaction(
+             'stage_g_non_dense_only',
+             'public.stage_g_non_dense_only',
+             'token_vectors'
+         );",
+    )
+    .expect("non-dense-only fixture should be created");
+
+    let sparse = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_non_dense_only',
+               pgcontext.query_sparse_nearest(
+                   'keywords', '{1:1}/2'::sparsevec, 2
+               )
+           )",
+    );
+    assert_eq!(sparse.len(), 2);
+    assert_eq!(sparse[0].1, "1");
+
+    let full_text = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_non_dense_only',
+               pgcontext.query_full_text('postgres', 'body', 2)
+           )",
+    );
+    assert_eq!(full_text.len(), 1);
+    assert_eq!(full_text[0].1, "1");
+
+    let point_id = Spi::get_one::<i64>(
+        "SELECT point_id
+           FROM pgcontext._visible_collection_points
+          WHERE collection_id = (
+                    SELECT collection_id
+                      FROM pgcontext._collection_acl
+                     WHERE collection_name = 'stage_g_non_dense_only'
+                )
+            AND source_key = '2'",
+    )
+    .expect("lookup point query should execute")
+    .expect("lookup point should exist");
+    let lookup = table_search_rows(&format!(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_non_dense_only',
+               pgcontext.query_lookup(ARRAY[{point_id}]::bigint[])
+           )"
+    ));
+    assert_eq!(lookup.len(), 1);
+    assert_eq!(lookup[0].1, "2");
+
+    let late = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_non_dense_only',
+               pgcontext.query_late_interaction(
+                   ARRAY['[1,0]'::vector], 2, 2
+               )
+           )",
+    );
+    assert_eq!(late.len(), 2);
+    assert_eq!(late[0].1, "1");
+}
+
+#[pg_test]
+fn execute_query_filtered_quantized_vector_uses_masked_full_precision_hnsw() {
+    Spi::run(
+        "CREATE TABLE public.stage_g_quantized_filter (
+             id bigint PRIMARY KEY,
+             embedding vector(2) NOT NULL,
+             tenant text NOT NULL
+         );
+         INSERT INTO public.stage_g_quantized_filter VALUES
+             (1, '[1,0]', 'other'),
+             (2, '[0.8,0.2]', 'acme'),
+             (3, '[0,1]', 'acme');
+         SELECT pgcontext.create_collection(
+             'stage_g_quantized_filter', 'public.stage_g_quantized_filter'
+         );
+         SELECT pgcontext.register_vector(
+             'stage_g_quantized_filter', 'embedding', 'embedding', 2, 'l2'
+         );
+         SELECT pgcontext.register_filter_column(
+             'stage_g_quantized_filter', 'tenant', 'tenant'
+         );
+         SELECT pgcontext.backfill_points('stage_g_quantized_filter', 100);
+         CREATE INDEX stage_g_quantized_filter_hnsw
+             ON public.stage_g_quantized_filter
+             USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_ops);
+         SELECT pgcontext.attach_hnsw_index(
+             'stage_g_quantized_filter', 'embedding',
+             'public.stage_g_quantized_filter_hnsw'
+         );
+         SELECT pgcontext.configure_vector(
+             'stage_g_quantized_filter',
+             'embedding',
+             '{}'::jsonb,
+             '{\"mode\":\"scalar\",\"levels\":8}'::jsonb,
+             'ready'
+         );",
+    )
+    .expect("filtered quantized fallback fixture should be created");
+
+    let rows = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_quantized_filter',
+               pgcontext.query_nearest(
+                   NULL::text,
+                   '[1,0]'::vector,
+                   '{\"must\":[{\"key\":\"tenant\",\"match\":\"acme\"}]}'::jsonb,
+                   2
+               )
+           )",
+    );
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].1, "2");
+    assert!(rows.iter().all(|row| row.1 != "1"));
+}
+
+#[pg_test]
+fn execute_query_recommendation_matches_the_exact_oracle() {
+    Spi::run(
+        "CREATE TABLE public.stage_g_recommend_order (
+             id bigint PRIMARY KEY,
+             embedding vector(2) NOT NULL
+         );
+         INSERT INTO public.stage_g_recommend_order VALUES
+             (1, '[1,0]'), (2, '[0.9,0.1]'), (3, '[0,1]'), (4, '[-1,0]');
+         SELECT pgcontext.create_collection(
+             'stage_g_recommend_order', 'public.stage_g_recommend_order'
+         );
+         SELECT pgcontext.register_vector(
+             'stage_g_recommend_order', 'embedding', 'embedding', 2, 'l2'
+         );
+         SELECT pgcontext.backfill_points('stage_g_recommend_order', 100);",
+    )
+    .expect("recommendation fixture should be created");
+    let positive = Spi::get_one::<i64>(
+        "SELECT point_id
+           FROM pgcontext._visible_collection_points
+          WHERE collection_id = (
+                    SELECT collection_id
+                      FROM pgcontext._collection_acl
+                     WHERE collection_name = 'stage_g_recommend_order'
+                )
+            AND source_key = '1'",
+    )
+    .expect("positive point lookup should execute")
+    .expect("positive point should exist");
+    let exact = table_search_rows(&format!(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.recommend(
+               'stage_g_recommend_order', ARRAY[{positive}]::bigint[], ARRAY[]::bigint[], 2
+           )"
+    ));
+    let composite = table_search_rows(&format!(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_recommend_order',
+               pgcontext.query_rerank(
+                   pgcontext.query_recommend(
+                       ARRAY[{positive}]::bigint[], ARRAY[]::bigint[], 3
+                   ),
+                   2
+               )
+           )"
+    ));
+    assert_eq!(composite, exact);
+}
+
+#[pg_test]
+fn execute_query_routes_quantized_mapped_hnsw_and_exactly_rechecks() {
+    create_search_collection("stage_g_quantized_composite");
+    Spi::run(
+        "SELECT pgcontext.configure_vector(
+             'stage_g_quantized_composite',
+             'embedding',
+             '{}'::jsonb,
+             '{\"mode\":\"scalar\",\"levels\":8}'::jsonb,
+             'ready'
+         )",
+    )
+    .expect("quantized vector policy should configure");
+    upsert_search_points("stage_g_quantized_composite", &["10", "20", "30"]);
+    let job_id = start_artifact_build_job(
+        "stage_g_quantized_composite",
+        "mmap",
+        "composite-quantized",
+        0,
+    );
+    Spi::run(&format!("SELECT pgcontext.run_build_job({job_id}, 1)"))
+        .expect("quantized composite build should complete");
+    let published = artifact_file_rows(&format!(
+        "SELECT artifact_id,
+                collection_name,
+                build_job_id,
+                artifact_kind,
+                artifact_name,
+                target_name,
+                segment_kind,
+                format_version,
+                payload_bytes,
+                checksum,
+                relative_path,
+                lifecycle_state
+           FROM pgcontext.publish_artifact_segment_file(
+                {job_id},
+                pgcontext.build_mmap_hnsw_artifact({job_id})
+           )"
+    ));
+    assert_eq!(published.len(), 1);
+
+    let rows = table_search_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_quantized_composite',
+               pgcontext.query_nearest('[0,0]'::vector, 2)
+           )",
+    );
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].1, "20");
+    assert_eq!(rows[0].2, 1.0);
+    assert_eq!(rows[1].1, "30");
+    assert_eq!(rows[1].2, 2.0);
+}
+
+#[pg_test]
 fn execute_query_rejects_unknown_plan_fields() {
     shared_assert_sql_failure(
         "SELECT * FROM pgcontext.execute_query(

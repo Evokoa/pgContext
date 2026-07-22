@@ -87,7 +87,7 @@ pub enum QueryKind {
         /// Bounded formula text.
         formula: Formula,
     },
-    /// Final exact rerank request.
+    /// Final deterministic score-ordering and result-limit request.
     Rerank {
         /// Owned child query.
         query: Box<QueryIr>,
