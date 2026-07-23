@@ -23,7 +23,7 @@ case "${1:-}" in
       *"/proc/1/comm"*)
         [[ "${FAKE_NOT_FINAL:-0}" != 1 ]]
         ;;
-      *"SHOW server_version_num"*) echo 170010 ;;
+      *"SHOW server_version_num"*) echo "${FAKE_PG_MAJOR:-17}0010" ;;
       *"string_agg(source_key"*)
         [[ "${FAKE_FILTER_WRONG:-0}" == 1 ]] && echo garden || echo postgres,vectors
         ;;

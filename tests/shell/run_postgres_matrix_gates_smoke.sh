@@ -444,14 +444,14 @@ PATH="${client_only_bin}:${PATH}" \
   --out-dir "${work_dir}/client-only"
 grep -qF $'pg18\tpg_config\tskipped\t0' "${work_dir}/client-only/summary.tsv"
 
-PATH="${default_bin}:${PATH}" \
+PATH="${fake_bin}:${PATH}" PG18_CONFIG="${client_only_bin}/pg_config" \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
   --dry-run \
   --allow-missing \
-  --major 16 \
+  --major 18 \
   --mode fast \
   --out-dir "${work_dir}/missing"
-grep -qF $'pg16\tpg_config\tskipped\t0' "${work_dir}/missing/summary.tsv"
+grep -qF $'pg18\tpg_config\tskipped\t0' "${work_dir}/missing/summary.tsv"
 grep -qF -- '- Approval: `incomplete`' "${work_dir}/missing/report.md"
 grep -qF -- '- Full release scope: `0`' "${work_dir}/missing/report.md"
 grep -qF 'PostgreSQL matrix release evidence requires `--mode all`' "${work_dir}/missing/report.md"
@@ -505,7 +505,7 @@ SH
 chmod +x "${heavy_root}/tests/heavy/upgrade_matrix.sh"
 
 matrix_pg_configs=()
-for major in 15 16 17 18; do
+for major in 17 18; do
   matrix_bin="${work_dir}/pg${major}-matrix/bin"
   mkdir -p "${matrix_bin}"
   cat >"${matrix_bin}/pg_config" <<SH
@@ -528,12 +528,12 @@ env \
   REPO_ROOT="${heavy_root}" \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
     --out-dir "${work_dir}/heavy-skip"
-grep -qF $'pg15\theavy:fresh_install_smoke\tpassed\t0' "${work_dir}/heavy-skip/summary.tsv"
+grep -qF $'pg17\theavy:fresh_install_smoke\tpassed\t0' "${work_dir}/heavy-skip/summary.tsv"
 grep -qF $'pg17\theavy:upgrade_matrix\tskipped\t0' "${work_dir}/heavy-skip/summary.tsv"
 grep -qF $'pg18\theavy:sqlstate_contract\tpassed\t0' "${work_dir}/heavy-skip/summary.tsv"
 grep -qF -- '- Full release scope: `1`' "${work_dir}/heavy-skip/report.md"
-grep -qF -- '- Passed: `100`' "${work_dir}/heavy-skip/report.md"
-grep -qF -- '- Skipped: `4`' "${work_dir}/heavy-skip/report.md"
+grep -qF -- '- Passed: `50`' "${work_dir}/heavy-skip/report.md"
+grep -qF -- '- Skipped: `2`' "${work_dir}/heavy-skip/report.md"
 grep -qF -- '- Approval: `incomplete`' "${work_dir}/heavy-skip/report.md"
 grep -qF 'major: pg17' "${work_dir}/heavy-skip/pg17-heavy-upgrade_matrix.log"
 grep -qF 'gate: heavy:upgrade_matrix' "${work_dir}/heavy-skip/pg17-heavy-upgrade_matrix.log"
@@ -1641,7 +1641,7 @@ env \
     --out-dir "${work_dir}/clean-matrix"
 grep -qF -- '- Worktree: `clean`' "${work_dir}/clean-matrix/report.md"
 grep -qF -- '- Full release scope: `1`' "${work_dir}/clean-matrix/report.md"
-grep -qF -- '- Passed: `104`' "${work_dir}/clean-matrix/report.md"
+grep -qF -- '- Passed: `52`' "${work_dir}/clean-matrix/report.md"
 grep -qF -- '- Skipped: `0`' "${work_dir}/clean-matrix/report.md"
 grep -qF -- '- Failed: `0`' "${work_dir}/clean-matrix/report.md"
 grep -qF -- '- Missing: `0`' "${work_dir}/clean-matrix/report.md"
@@ -1657,7 +1657,7 @@ env \
     --out-dir "${work_dir}/dirty-matrix"
 grep -qF -- '- Worktree: `dirty`' "${work_dir}/dirty-matrix/report.md"
 grep -qF -- '- Full release scope: `1`' "${work_dir}/dirty-matrix/report.md"
-grep -qF -- '- Passed: `104`' "${work_dir}/dirty-matrix/report.md"
+grep -qF -- '- Passed: `52`' "${work_dir}/dirty-matrix/report.md"
 grep -qF -- '- Skipped: `0`' "${work_dir}/dirty-matrix/report.md"
 grep -qF -- '- Failed: `0`' "${work_dir}/dirty-matrix/report.md"
 grep -qF -- '- Missing: `0`' "${work_dir}/dirty-matrix/report.md"
@@ -1704,8 +1704,8 @@ assert_fails() {
   grep -q -- "${expected}" "${work_dir}/${label}.err"
 }
 
-assert_fails unsupported-major 'unsupported PostgreSQL major: 14' \
-  --dry-run --major 14 --out-dir "${work_dir}/bad-major"
+assert_fails unsupported-major 'unsupported PostgreSQL major: 16' \
+  --dry-run --major 16 --out-dir "${work_dir}/bad-major"
 assert_fails duplicate-major 'duplicate PostgreSQL major: 17' \
   --dry-run --major 17 --major 17 --out-dir "${work_dir}/duplicate-major"
 assert_fails bad-mode '--mode must be fast, schema, pgrx, heavy, or all' \

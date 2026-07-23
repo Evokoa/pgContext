@@ -26,6 +26,7 @@ def fail(message: str) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
+    parser.add_argument("--pg-major", choices=("17", "18"), default="17")
     parser.add_argument("--version", required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("archive")
@@ -138,7 +139,7 @@ def main() -> None:
 
         expected_labels = {
             "org.opencontainers.image.licenses": "Apache-2.0",
-            "org.opencontainers.image.postgresql.major": "17",
+            "org.opencontainers.image.postgresql.major": args.pg_major,
             "org.opencontainers.image.revision": args.revision,
             "org.opencontainers.image.source": "https://github.com/evokoa/pgcontext",
             "org.opencontainers.image.version": args.version,

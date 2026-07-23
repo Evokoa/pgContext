@@ -9,11 +9,17 @@ scripts/build-release-image.sh --help | grep -qF 'amd64+arm64 OCI image index'
 scripts/verify-oci-image.py --help | grep -qF -- '--image'
 python3 tests/shell/verify_oci_image_test.py
 
-grep -qF 'postgres:17-bookworm@sha256:' release/docker/Dockerfile
+for pg_major in 17 18; do
+  grep -qF "postgres:${pg_major}-bookworm@sha256:" scripts/build-release-image.sh
+done
+grep -qF 'PG_MAJOR=${{ matrix.pg.major }}' .github/workflows/release.yml
 grep -qF 'org.opencontainers.image.version="${VERSION}"' release/docker/Dockerfile
 grep -qF 'org.opencontainers.image.revision="${REVISION}"' release/docker/Dockerfile
 grep -qF 'org.opencontainers.image.postgresql.major="${PG_MAJOR}"' release/docker/Dockerfile
 grep -qF -- '--platform linux/amd64,linux/arm64' scripts/build-release-image.sh
+grep -qF -- '--pg-major N' scripts/build-release-image.sh
+grep -qF -- '--build-arg "PG_MAJOR=${PG_MAJOR}"' scripts/build-release-image.sh
+grep -qF -- '--build-arg "POSTGRES_IMAGE=${POSTGRES_IMAGE}"' scripts/build-release-image.sh
 grep -qF -- '--provenance mode=max' scripts/build-release-image.sh
 grep -qF 'ARTIFACT_REVISION="${REVISION}-dirty"' scripts/build-release-image.sh
 grep -qF 'DIRTY_SUFFIX="-dirty"' scripts/build-release-image.sh
@@ -24,15 +30,19 @@ cp tests/shell/fixtures/release_image_fake_docker.sh "${tmp}/docker"
 chmod +x "${tmp}/docker"
 touch "${tmp}/candidate.oci.tar"
 export FAKE_DOCKER_LOG="${tmp}/docker.log"
-export FAKE_IMAGE='ghcr.io/evokoa/pgcontext:pg17-v0.1.0-prepared'
-
-for platform in linux/amd64 linux/arm64; do
-  PATH="${tmp}:${PATH}" scripts/verify-release-image.sh \
-    "${tmp}/candidate.oci.tar" "${FAKE_IMAGE}" "${platform}" >/dev/null
+for pg_major in 17 18; do
+  export FAKE_PG_MAJOR="${pg_major}"
+  export FAKE_IMAGE="ghcr.io/evokoa/pgcontext:pg${pg_major}-v0.1.0-prepared"
+  for platform in linux/amd64 linux/arm64; do
+    PATH="${tmp}:${PATH}" scripts/verify-release-image.sh \
+      "${tmp}/candidate.oci.tar" "${FAKE_IMAGE}" "${platform}" "${pg_major}" >/dev/null
+  done
 done
+export FAKE_PG_MAJOR=17
+export FAKE_IMAGE='ghcr.io/evokoa/pgcontext:pg17-v0.1.0-prepared'
 registry_digest="sha256:$(printf 'b%.0s' {1..64})"
 PATH="${tmp}:${PATH}" scripts/verify-release-image.sh --registry \
-  "ghcr.io/evokoa/pgcontext@${registry_digest}" linux/amd64 >/dev/null
+  "ghcr.io/evokoa/pgcontext@${registry_digest}" linux/amd64 17 >/dev/null
 grep -qF "pull --platform linux/amd64 ghcr.io/evokoa/pgcontext@${registry_digest}" \
   "${FAKE_DOCKER_LOG}"
 grep -qF 'run --detach --pull=never --platform linux/amd64' "${FAKE_DOCKER_LOG}"

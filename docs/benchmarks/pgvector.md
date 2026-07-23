@@ -1,10 +1,11 @@
 # pgContext vs. pgvector vs. Qdrant benchmark
 
-All numbers on this page come from clean committed trees (`git_dirty: false`
-in the archived result JSONs) on the same machine: Apple M4 Pro, macOS 26.5
-arm64, PostgreSQL 17.9, Python 3.12.9, pgContext 0.1.0, pgvector 0.8.5, and
-Qdrant 1.18.2 in the official Docker image over its recommended local gRPC
-transport.
+All numbers on this page come from clean committed trees on the same machine:
+Apple M4 Pro, macOS 26.5 arm64, PostgreSQL 17.9, Python 3.12.9, pgContext
+0.1.0, pgvector 0.8.5, and Qdrant 1.18.2 in the official Docker image over its
+recommended local gRPC transport. The cited commit identifies each recorded
+run; raw benchmark result files are not part of the public documentation
+contract.
 
 Headline: on the SciFact warm-cache single-client workload, pgContext's HNSW
 latency/recall curve Pareto-dominates pgvector's — at every measured
@@ -56,15 +57,13 @@ Two honest readings.
 
 Caveats: single trial, warm cache, single client, on an Apple M4 Pro with the
 NEON distance kernels active (x86 AVX2 kernels exist but are not yet
-performance-measured). The harness and archived result JSON are in
+performance-measured). The reproducible harness is in
 `benchmarks/pgvector_comparison/`.
 
 ## Latency vs. recall Pareto sweep (SciFact 5,183 x 384, cosine)
 
 Three-system `ef_search` sweep, 200 queries, 20 warmups, top-10, m=16,
-ef_construction=64. Archived:
-[sweep JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-21eda7ec.json)
-at commit `21eda7ec`.
+ef_construction=64. Recorded at commit `21eda7ec`.
 
 | ef | pgContext p50 / recall@10 | pgvector p50 / recall@10 | Qdrant p50 / recall@10 |
 |---:|---:|---:|---:|
@@ -91,9 +90,7 @@ only.
 ## Three-trial matched-recall run (SciFact)
 
 Rotating trial order, median/combined distribution across three trials,
-pgContext ef=48 vs pgvector/Qdrant ef=40. Archived:
-[three-trial JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-clean-74f083c2.json)
-at commit `74f083c2`.
+pgContext ef=48 vs pgvector/Qdrant ef=40. Recorded at commit `74f083c2`.
 
 | Measurement | pgContext | pgvector | Qdrant |
 |---|---:|---:|---:|
@@ -117,9 +114,7 @@ engineering items, not footnotes.
 ## Filtered ANN across selectivity (SciFact)
 
 `filtered-sweep` lane, 1% / 10% / 50% selectivity predicates, matched
-settings as above. Archived:
-[filtered-sweep JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-filtered-sweep-21eda7ec.json)
-at commit `21eda7ec`.
+settings as above. Recorded at commit `21eda7ec`.
 
 | Selectivity | Strategy | p50 | recall@10 |
 |---|---|---:|---:|
@@ -148,9 +143,7 @@ pgContext's planned adaptive filtered execution.
 
 Seeded synthetic clustered corpus (100,000 x 384, generator in the harness),
 single trial, same settings, `maintenance_work_mem=2GB` for both PostgreSQL
-systems. Archived:
-[100k JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-100k-86330dcd.json)
-at commit `86330dcd`.
+systems. Recorded at commit `86330dcd`.
 
 | Measurement | pgContext | pgvector | Qdrant |
 |---|---:|---:|---:|
@@ -183,10 +176,8 @@ for both systems, and the graceful-build gap is tracked as follow-up work.
 ### Matched-recall sweep at 100k
 
 Because fixed small-ef points are meaningless here, the 100k comparison that
-matters is the high-ef sweep (m=16, ef_construction=64 for all systems).
-Archived:
-[100k sweep JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-100k-531360f5.json)
-at commit `531360f5`.
+matters is the high-ef sweep (m=16, ef_construction=64 for all systems),
+recorded at commit `531360f5`.
 
 | ef | pgContext p50 / recall@10 | pgvector p50 / recall@10 | Qdrant p50 / recall@10 |
 |---:|---:|---:|---:|
@@ -208,8 +199,7 @@ concluding anything about production throughput.
 ## Filtered ANN at 100k across selectivity — pgContext leads pgvector at every band
 
 Filtered ANN across selectivity on the 100k synthetic corpus (200 queries,
-ef_search=48). Archived as
-`apple-m4-pro-pg17.9-2026-07-17-filtered-sweep-100k-1a70f2eb.json`.
+ef_search=48), recorded at commit `1a70f2eb`.
 
 | Selectivity | pgContext adaptive (collection API) | pgContext operator filter | pgvector | Qdrant |
 |---|---:|---:|---:|---:|
@@ -242,9 +232,8 @@ read latency alongside that lane's recall figures).
 
 pgContext serves concurrent backends from a shared packed-base registry (a
 `GetNamedDSMSegment`-backed registry: one backend publishes its packed
-generation, other backends attach it instead of rebuilding). Archived:
-[concurrency-100k-3ea49bb0.json](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-concurrency-100k-3ea49bb0.json)
-at commit `3ea49bb0`.
+generation, other backends attach it instead of rebuilding). Recorded at
+commit `3ea49bb0`.
 
 | Clients | pgContext agg QPS / backend RSS | pgvector agg QPS / backend RSS |
 |---:|---:|---:|
@@ -262,9 +251,7 @@ fallback state; memory parity is a known limitation.
 ## 1M synthetic scale lane
 
 Same generator at 1,000,000 x 384, single trial,
-`maintenance_work_mem=2GB`. Archived:
-[1M JSON](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-1m-f29edac4.json)
-at commit `f29edac4`.
+`maintenance_work_mem=2GB`. Recorded at commit `f29edac4`.
 
 | Measurement | pgContext | pgvector | Qdrant |
 |---|---:|---:|---:|
@@ -285,8 +272,7 @@ What we claim from this lane, and what we do not:
   build), still behind Qdrant's 84 s. The speedup is consistent across
   20k/100k/1M. (The 774 s figure in the table above is a single-worker
   build.)
-- **High-ef 1M sweep** (archived as
-  `apple-m4-pro-pg17.9-2026-07-17-sweep-1m-fdbbf527.json`): pgContext
+- **High-ef 1M sweep** (commit `fdbbf527`): pgContext
   strictly Pareto-dominates pgvector.
 
   | ef_search | pgContext | pgvector | Qdrant |
@@ -323,9 +309,9 @@ What we claim from this lane, and what we do not:
   while a single graph is searched on one thread. Closing that is
   architecture work (segmented serving with per-query fan-out, on the
   roadmap), not graph-construction work. These probe figures are
-  preliminary — 40 queries, single trial. Sweep reports record Qdrant's
-  segment count and per-ef effective candidate totals (`qdrant_effort` in
-  sweep.json) so the comparison can be read effort-matched.
+  preliminary — 40 queries, single trial. The harness records Qdrant's segment
+  count and per-ef effective candidate totals so the comparison can be read
+  effort-matched.
 - The masked-filter candidate ceiling is configurable via
   `pgcontext.hnsw_mask_candidate_limit` (up to 5M points); the filtered
   lane's large-mask economics remain a scale consideration.
@@ -333,9 +319,8 @@ What we claim from this lane, and what we do not:
 ## Update-churn lane (100k corpus) — sustained high-churn writes
 
 The harness's `churn` lane rewrites 5% of vectors per round, VACUUMs, and
-re-measures. Two rounds were measured (archived as
-`apple-m4-pro-pg17.9-2026-07-17-churn-partial-100k-c9ff4d76.json`); the trend
-was already clear:
+re-measures. Two rounds were measured at commit `c9ff4d76`; the trend was
+already clear:
 
 | Round | update throughput | first post-churn query | index size | recall @ ef=48 |
 |---:|---:|---:|---:|---:|
@@ -401,9 +386,7 @@ measuring steady state on a warm, reused connection.
 
 With the shared packed-base registry, only the first backend after a restart
 rebuilds the packed generation; every later backend attaches the published
-image. Archived:
-[cold-cache-100k-0c8129e6.json](../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-cold-cache-100k-0c8129e6.json)
-at commit `0c8129e6`.
+image. Recorded at commit `0c8129e6`.
 
 | Measurement | pgContext | pgvector |
 |---|---:|---:|
@@ -439,8 +422,7 @@ server start. This is a known limitation.
 - Qdrant: Query API with `exact=true` for the oracle, `exact=false` with the
   collection fully indexed for ANN; pinned `qdrant/qdrant:v1.18.2`; client
   prefers gRPC; integer payload indexes created before HNSW construction.
-- Every archived JSON records the git SHA and a clean/dirty flag; only
-  `git_dirty: false` artifacts are cited on this page. Excluding dirty-tree
+- Every cited run comes from a clean committed tree. Excluding dirty-tree
   results is an editorial discipline, not enforced automatically by the
   harness.
 

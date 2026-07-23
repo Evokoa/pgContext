@@ -298,10 +298,10 @@ unsafe fn ensure_hnsw_strategy_operator(
     let tuple = unsafe {
         pg_sys::SearchSysCache4(
             pg_sys::SysCacheIdentifier::AMOPSTRATEGY.cast_signed(),
-            pg_sys::ObjectIdGetDatum(opfamily),
-            pg_sys::ObjectIdGetDatum(type_oid),
-            pg_sys::ObjectIdGetDatum(type_oid),
-            pg_sys::Int16GetDatum(1),
+            pg_sys::Datum::from(opfamily),
+            pg_sys::Datum::from(type_oid),
+            pg_sys::Datum::from(type_oid),
+            pg_sys::Datum::from(1_i16),
         )
     };
     if tuple.is_null() {
@@ -343,7 +343,7 @@ unsafe fn hnsw_operator_namespace(operator_oid: pg_sys::Oid) -> pg_sys::Oid {
     let tuple = unsafe {
         pg_sys::SearchSysCache1(
             pg_sys::SysCacheIdentifier::OPEROID.cast_signed(),
-            pg_sys::ObjectIdGetDatum(operator_oid),
+            pg_sys::Datum::from(operator_oid),
         )
     };
     if tuple.is_null() {
@@ -392,8 +392,8 @@ unsafe fn hnsw_public_type_oid(type_name: &'static CStr) -> pg_sys::Oid {
         pg_sys::GetSysCacheOid(
             pg_sys::SysCacheIdentifier::TYPENAMENSP.cast_signed(),
             type_oid_attribute,
-            pg_sys::NameGetDatum(&name),
-            pg_sys::ObjectIdGetDatum(public_namespace),
+            pg_sys::Datum::from((&raw const name).cast::<pg_sys::NameData>()),
+            pg_sys::Datum::from(public_namespace),
             pg_sys::Datum::from(0),
             pg_sys::Datum::from(0),
         )

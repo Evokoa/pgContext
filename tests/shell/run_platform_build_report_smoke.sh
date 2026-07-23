@@ -494,8 +494,8 @@ assert_fails duplicate-platform 'duplicate platform: macos' \
   --dry-run --platform macos --platform macos --out-dir "${work_dir}/duplicate"
 assert_fails unsupported-platform 'unsupported platform: windows' \
   --dry-run --platform windows --out-dir "${work_dir}/unsupported"
-assert_fails bad-pg-major '--pg-major must be one of: 15, 16, 17, 18' \
-  --dry-run --pg-major 14 --out-dir "${work_dir}/bad-pg"
+assert_fails bad-pg-major '--pg-major must be one of: 17, 18' \
+  --dry-run --pg-major 16 --out-dir "${work_dir}/bad-pg"
 assert_fails root-out-dir '--out-dir must be a non-root path' \
   --dry-run --out-dir /
 assert_fails missing-platform-value '--platform requires a value' \

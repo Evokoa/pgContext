@@ -21,38 +21,6 @@
       "sha256": "fb8152a3a8e66d3d2178745f868869b4cc64190cdf794990a9b52dac6eb4d9ac"
     },
     {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-100k-86330dcd.json",
-      "sha256": "fae630bfdfca3f0680c8e2a338384316098ea44495ffe532b2c981d3f7052263"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-1m-f29edac4.json",
-      "sha256": "599acaf60dde18ac412452108ff889edc1c2f63c0dcca524955766c9540fbeaa"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-clean-74f083c2.json",
-      "sha256": "b580f3da06f24b4105f19a4b96314fdd928808cdfb627dc694dbbc1eea8c9bb8"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-cold-cache-100k-0c8129e6.json",
-      "sha256": "f1bb6e1660d6e3e7161d947d2ebf52d65532db25d22db4ce9680acdc5324208b"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-concurrency-100k-3ea49bb0.json",
-      "sha256": "75c605e19c47ac71da7abca666034179b0a8502b36f3acf53c34237cf4a1ff91"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-filtered-sweep-21eda7ec.json",
-      "sha256": "cc001c979113a9808d9757f30d3bf1a02777f52de053a40ec907feb150bd0f86"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-100k-531360f5.json",
-      "sha256": "d875179d2a7e0cdbcc8d6f1c99adca858fe46e763a98a1a757cea66dfa9adca9"
-    },
-    {
-      "path": "benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-21eda7ec.json",
-      "sha256": "81739eacdda57550d0b355df97548862ebe2884ced49373f2021a41dd43d482f"
-    },
-    {
       "path": "docs/benchmarks/reports/pgcontext-vs-pgvector-vs-qdrant.html",
       "sha256": "6692e1b1c19c3d655d62daf90864d71d1a411cf625f7c0f7866c88112b36f73a"
     },
@@ -69,14 +37,6 @@
   "pages": [
     {
       "links": [
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-100k-86330dcd.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-1m-f29edac4.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-clean-74f083c2.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-cold-cache-100k-0c8129e6.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-concurrency-100k-3ea49bb0.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-filtered-sweep-21eda7ec.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-100k-531360f5.json",
-        "../../benchmarks/pgvector_comparison/results/apple-m4-pro-pg17.9-2026-07-16-sweep-21eda7ec.json",
         "https://github.com/erikbern/ann-benchmarks",
         "https://huggingface.co/datasets/mteb/scifact",
         "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2",
@@ -84,7 +44,7 @@
         "reports/pgcontext-vs-pgvector.html"
       ],
       "path": "benchmarks/pgvector.md",
-      "sha256": "eb5a82b354362c4466c86cf95840858f342b8bfec76994ae26c2bb24e06b8849"
+      "sha256": "8a4f6325cd05c70fa8c6a6355420aeec1250b4f2a0f712978289516df9e6f3cb"
     },
     {
       "links": [
@@ -161,17 +121,17 @@
         "release_process.md"
       ],
       "path": "contributor_guide/release_gates.md",
-      "sha256": "1d87fe4d623829af51bfad64f647b92a554f9c81baf72a26e46d7642a3bef9db"
+      "sha256": "46fcacc10a6bde4956ba04179f59d7aae726e728e93355b6ce4074e125aeaf61"
     },
     {
       "links": [],
       "path": "contributor_guide/release_matrix.md",
-      "sha256": "2f7011f9c39740e85065eb7bf50556fb234a961267d62d1c8a6843154141e851"
+      "sha256": "4ff7ac465fe91e579c715e46e2e36bf52422c0303f66dcbb82abcd09e8e9355e"
     },
     {
       "links": [],
       "path": "contributor_guide/release_process.md",
-      "sha256": "85c529e2351a73a671da9cb06c89322a63db5108a6394bb03893979c47f311d4"
+      "sha256": "20b4a3e8e93021c61a34647dc74ee45a361b7aba130d54d9b64b6e45db8e6e74"
     },
     {
       "links": [],
@@ -188,12 +148,12 @@
         "unsafe_ffi_audit_2026-07-11.md"
       ],
       "path": "contributor_guide/security_review.md",
-      "sha256": "614fe90a5a25839a0ad3db10005c546d992e4b6f15a6d8e73c9bb6bc20c9bd64"
+      "sha256": "5b6a972375bf039fca3cc63e3071a01c7b4079ec161022e200471ade8bcaf371"
     },
     {
       "links": [],
       "path": "contributor_guide/serving_memory_decision.md",
-      "sha256": "09594ec56e578a01dbf74a3125bf639afea0739caad37ca5ff22a43dfbfabef8"
+      "sha256": "591a004e9efcd65da2b46431062ae79ef6d4afb21990823e992fb85dd9626b34"
     },
     {
       "links": [
@@ -267,7 +227,7 @@
         "user_guide/troubleshooting.md"
       ],
       "path": "known_issues.md",
-      "sha256": "7c07412622940284aaf737706aefe6351b5b857a6eddd99835615b7747d691ff"
+      "sha256": "8a340c591b714ad10aa1d594f929da39eeb9ba23f2523da962130642f30393c8"
     },
     {
       "links": [
@@ -397,7 +357,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "632e2c2a67f6adc432e997d757d7a03a5dadb43b7861a9e2697afbc66470ae63"
+      "sha256": "246efab034a1210c22c78a44efec7a2d26d2f7420a2b8316f79b696c3bdb0551"
     },
     {
       "links": [
@@ -458,7 +418,7 @@
         "troubleshooting.md"
       ],
       "path": "user_guide/installation.md",
-      "sha256": "cf3d7e8ba99b90836c8429dd4e09654876f3af142110ec2640ac9d34b522eb18"
+      "sha256": "b1be3485604e05587d6275893e0b4eb7f0cd6d84cfc527dae04e8faa98e9aa9c"
     },
     {
       "links": [
@@ -466,7 +426,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/limitations.md",
-      "sha256": "fb4818b25b66780f3ae75d99721109bd13bcfe8505e31292ecc23993f5da64d7"
+      "sha256": "ea6ce53620a698d292217218275b02018efe762f2601814d9e614acb55dc6f03"
     },
     {
       "links": [
@@ -496,7 +456,7 @@
         "troubleshooting.md"
       ],
       "path": "user_guide/operations.md",
-      "sha256": "d3c26c7c5a82ffd581a1384f72daffdd0fd09411119997547e3a5ea1bcde5b7f"
+      "sha256": "a90aad993c9e4918e9375abb092c9199fcef0eec340b8d646645c0cca4c83821"
     },
     {
       "links": [],
@@ -558,7 +518,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "247b77ce98ea91204b4235e8e9e62f77f796ba5952f8055783ebc7c88231143d"
+      "sha256": "638ad263991d80d64073c1be03a25e899307c1e5270e9c2d14a970004b52cd7e"
     },
     {
       "links": [
@@ -572,7 +532,7 @@
         "https://github.com/evokoa/pggraph"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "c9cb704834ec0a151e0b8dccd5a8a5980eaab90eb7d83fd9f21421042054dc89"
+      "sha256": "e2148347cb3cb712eb9bd198c76119c8df52f3fb7ad61928047daea349fdde12"
     },
     {
       "links": [],
@@ -597,7 +557,7 @@
     {
       "links": [],
       "path": "user_guide/support_policy.md",
-      "sha256": "11f1a375efca7609fe8d9eac977449da0c88e1febe8758c3a9d3e2f4dbc98e47"
+      "sha256": "725b372b2cec8be173c53cb3a6f3646651c535bcf8b2a4b55b36f69321fc607a"
     },
     {
       "links": [],
@@ -657,7 +617,7 @@
         "https://evokoa.com",
         "https://evokoa.com",
         "https://github.com/evokoa/pgcontext/pkgs/container/pgcontext",
-        "https://github.com/evokoa/pgcontext/releases",
+        "https://github.com/evokoa/pgcontext/releases/tag/v0.1.0",
         "https://github.com/evokoa/pgcontext/stargazers",
         "https://github.com/evokoa/pggraph",
         "https://github.com/evokoa/pggraph",
@@ -665,12 +625,13 @@
         "https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&amp;logo=docker",
         "https://img.shields.io/badge/Follow%20on%20Product%20Hunt-DA552E?style=for-the-badge&logo=product-hunt&logoColor=white",
         "https://img.shields.io/badge/Follow%20on%20X-000000?style=for-the-badge&logo=x&logoColor=white",
-        "https://img.shields.io/badge/PostgreSQL-17-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white",
+        "https://img.shields.io/badge/PostgreSQL-17%20%26%2018-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white",
         "https://img.shields.io/badge/docs-pgContext-0ea5e9?style=flat-square",
         "https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square",
         "https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square",
         "https://img.shields.io/discord/1496159762704896022?style=for-the-badge&label=Join%20Discord&logo=discord&logoColor=white&color=5865F2",
         "https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars",
+        "https://pgxn.org/dist/pgcontext/0.1.0/",
         "https://polygres.com",
         "https://polygres.com",
         "https://polygres.com",
@@ -683,7 +644,7 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "cf2d16ca2c7e207e4ea981f48210fa0640ad978c6ab9503f6d288852fca4996e"
+      "sha256": "d9836a16909d85c4241be50661636627983f12426c240c7ec6bd39153aab09d4"
     },
     {
       "links": [],
@@ -695,7 +656,7 @@
         "mailto:team@evokoa.com"
       ],
       "path": "SECURITY.md",
-      "sha256": "843974ea03ca4df15be4c908023ad719c886a8012166f8b18352ad952fe478bb"
+      "sha256": "a82ebb7985bcf90fc4a20052e00bfc2a62e38c00ee1f69d8af6d996bb7d06f42"
     },
     {
       "links": [],
@@ -708,7 +669,7 @@
         "../docs/contributor_guide/release_process.md"
       ],
       "path": "release/README.md",
-      "sha256": "d7765406083d4c8c1d32a6c8247634bd7840be0e2d081f3d584290c55c2016d1"
+      "sha256": "123f48bf1dd09fb0d2e95f19072ff798c528a729100f2a9b3e36b1f9ce2b1eba"
     }
   ],
   "renderer": "github-markdown",

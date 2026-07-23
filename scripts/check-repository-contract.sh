@@ -35,31 +35,26 @@ do
   }
 done
 
-grep -qF 'supported-postgres-versions = ["17"]' Cargo.toml || {
-  echo "supported-postgres-versions must contain only PostgreSQL 17" >&2
+grep -qF 'supported-postgres-versions = ["17", "18"]' Cargo.toml || {
+  echo "supported-postgres-versions must contain PostgreSQL 17 and 18" >&2
   exit 1
 }
-grep -qF 'planned-postgres-versions = ["15", "16", "18"]' Cargo.toml || {
-  echo "planned-postgres-versions must contain PostgreSQL 15, 16, and 18" >&2
+grep -qF 'planned-postgres-versions = []' Cargo.toml || {
+  echo "planned-postgres-versions must be empty" >&2
   exit 1
 }
-grep -qF 'legacy-best-effort-postgres-versions = ["14"]' Cargo.toml || {
-  echo "legacy-best-effort-postgres-versions must contain PostgreSQL 14" >&2
+grep -qF 'legacy-best-effort-postgres-versions = []' Cargo.toml || {
+  echo "legacy-best-effort-postgres-versions must be empty" >&2
   exit 1
 }
 
-grep -qF 'PostgreSQL 17 is the only supported V1 major' \
+grep -qF 'PostgreSQL 17 and 18 are supported release targets' \
   docs/user_guide/support_policy.md || {
-  echo "support policy does not identify PostgreSQL 17 as the V1 target" >&2
+  echo "support policy does not identify PostgreSQL 17 and 18 as release targets" >&2
   exit 1
 }
-grep -qF '15, 16,' docs/user_guide/support_policy.md || {
-  echo "support policy does not name planned PostgreSQL targets" >&2
-  exit 1
-}
-grep -qF 'PostgreSQL 14 is legacy best-effort' \
-  docs/user_guide/support_policy.md || {
-  echo "support policy does not name PostgreSQL 14 as legacy best-effort" >&2
+grep -qF 'linux/amd64 and linux/arm64' docs/user_guide/support_policy.md || {
+  echo "support policy does not name both release image architectures" >&2
   exit 1
 }
 

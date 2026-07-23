@@ -194,6 +194,11 @@ fn hnsw_relopt_parse_elt(
         optname: optname.as_ptr(),
         opttype,
         offset: usize_to_pg_i32(offset, "HNSW reloption struct offset"),
+        // PostgreSQL 18 can optionally record whether a reloption was set
+        // explicitly. pgContext does not need that extra flag, and zero is
+        // the upstream sentinel for leaving it unused.
+        #[cfg(feature = "pg18")]
+        isset_offset: 0,
     }
 }
 

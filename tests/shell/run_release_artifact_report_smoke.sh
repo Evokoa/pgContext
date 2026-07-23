@@ -13,6 +13,24 @@ if [[ -e "${dirty_marker}" ]]; then
 fi
 fake_bin="${work_dir}/bin"
 mkdir -p "${fake_bin}"
+write_matching_fake_cargo() {
+  cat >"${fake_bin}/cargo" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "-V" ]]; then
+  printf 'cargo 1.96.0\n'
+  exit 0
+fi
+if [[ "${1:-}" == "pgrx" && "${2:-}" == "--version" ]]; then
+  printf 'cargo-pgrx 0.19.1\n'
+  exit 0
+fi
+exit 127
+SH
+  chmod +x "${fake_bin}/cargo"
+}
+write_matching_fake_cargo
 cat >"${fake_bin}/gpg" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -285,7 +303,7 @@ cat >"${clean_root}/Cargo.toml" <<'DOC'
 [workspace.metadata.pgcontext]
 rust-toolchain = "1.96.0"
 pgrx-version = "0.19.1"
-supported-postgres-versions = ["15", "16", "17", "18"]
+supported-postgres-versions = ["17", "18"]
 
 [workspace.dependencies]
 pgrx = "=0.19.1"
@@ -308,7 +326,7 @@ DOC
 cat >"${clean_root}/crates/context-pg/pgcontext.control" <<'DOC'
 default_version = '0.1.0'
 DOC
-for major in 15 16 17 18; do
+for major in 17 18; do
   printf 'SQL for PostgreSQL %s\n' "${major}" >"${clean_root}/target/release-sql/pg${major}.sql"
   write_verified_signature "${clean_root}/target/release-sql/pg${major}.sql"
 done
@@ -318,7 +336,7 @@ git -C "${clean_root}" \
   -c user.name='Release Test' \
   -c user.email='release-test@example.invalid' \
   commit -q -m 'initial clean fixture'
-for major in 15 16 17 18; do
+for major in 17 18; do
   write_generation_log "${clean_root}" "${major}"
 done
 
@@ -328,60 +346,54 @@ REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" 
   --out-dir "${work_dir}/clean-partial"
 grep -q -- '- Worktree: `clean`' "${work_dir}/clean-partial/report.md"
 grep -q -- '- Passed: `1`' "${work_dir}/clean-partial/report.md"
-grep -q -- '- Missing supported SQL artifacts: `pg15,pg16,pg18`' \
+grep -q -- '- Missing supported SQL artifacts: `pg18`' \
   "${work_dir}/clean-partial/report.md"
 grep -q -- '- Full release scope: `0`' "${work_dir}/clean-partial/report.md"
 grep -q -- '- Approval: `incomplete`' "${work_dir}/clean-partial/report.md"
 
 mkdir -p "${clean_root}/tmp-sql"
-for major in 15 16 17 18; do
+for major in 17 18; do
   printf 'wrong path SQL for PostgreSQL %s\n' "${major}" >"${clean_root}/tmp-sql/pg${major}.sql"
   write_verified_signature "${clean_root}/tmp-sql/pg${major}.sql"
 done
 
 REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact tmp-sql/pg15.sql \
-  --artifact tmp-sql/pg16.sql \
   --artifact tmp-sql/pg17.sql \
   --artifact tmp-sql/pg18.sql \
   --out-dir "${work_dir}/clean-wrong-path"
 grep -q -- '- Worktree: `clean`' "${work_dir}/clean-wrong-path/report.md"
-grep -q -- '- Passed: `4`' "${work_dir}/clean-wrong-path/report.md"
-grep -q -- '- Missing supported SQL artifacts: `pg15,pg16,pg17,pg18`' \
+grep -q -- '- Passed: `2`' "${work_dir}/clean-wrong-path/report.md"
+grep -q -- '- Missing supported SQL artifacts: `pg17,pg18`' \
   "${work_dir}/clean-wrong-path/report.md"
 grep -q -- '- Full release scope: `0`' "${work_dir}/clean-wrong-path/report.md"
 grep -q -- '- Approval: `incomplete`' "${work_dir}/clean-wrong-path/report.md"
 
 rm -rf "${clean_root}/target/release-sql"
 ln -s ../tmp-sql "${clean_root}/target/release-sql"
-for major in 15 16 17 18; do
+for major in 17 18; do
   write_generation_log "${clean_root}" "${major}"
 done
 
 REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact tmp-sql/pg15.sql \
-  --artifact tmp-sql/pg16.sql \
   --artifact tmp-sql/pg17.sql \
   --artifact tmp-sql/pg18.sql \
   --out-dir "${work_dir}/clean-symlink-wrong-label"
 grep -q -- '- Worktree: `clean`' "${work_dir}/clean-symlink-wrong-label/report.md"
-grep -q -- '- Passed: `4`' "${work_dir}/clean-symlink-wrong-label/report.md"
-grep -q -- '- Missing supported SQL artifacts: `pg15,pg16,pg17,pg18`' \
+grep -q -- '- Passed: `2`' "${work_dir}/clean-symlink-wrong-label/report.md"
+grep -q -- '- Missing supported SQL artifacts: `pg17,pg18`' \
   "${work_dir}/clean-symlink-wrong-label/report.md"
 grep -q -- '- Full release scope: `0`' "${work_dir}/clean-symlink-wrong-label/report.md"
 grep -q -- '- Approval: `incomplete`' "${work_dir}/clean-symlink-wrong-label/report.md"
 
 REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact target/release-sql/pg15.sql \
-  --artifact target/release-sql/pg16.sql \
   --artifact target/release-sql/pg17.sql \
   --artifact target/release-sql/pg18.sql \
   --out-dir "${work_dir}/clean-symlink-target-label"
 grep -q -- '- Worktree: `clean`' "${work_dir}/clean-symlink-target-label/report.md"
-grep -q -- '- Passed: `4`' "${work_dir}/clean-symlink-target-label/report.md"
+grep -q -- '- Passed: `2`' "${work_dir}/clean-symlink-target-label/report.md"
 grep -q -- '- Missing supported SQL artifacts: `none`' \
   "${work_dir}/clean-symlink-target-label/report.md"
 grep -q -- '- Release SQL directory symlink: `1`' \
@@ -392,27 +404,25 @@ grep -q -- '- Approval: `incomplete`' "${work_dir}/clean-symlink-target-label/re
 rm "${clean_root}/target/release-sql"
 rm -rf "${clean_root}/tmp-target"
 mkdir -p "${clean_root}/tmp-target/release-sql"
-for major in 15 16 17 18; do
+for major in 17 18; do
   printf 'parent symlink SQL for PostgreSQL %s\n' "${major}" >"${clean_root}/tmp-target/release-sql/pg${major}.sql"
   write_verified_signature "${clean_root}/tmp-target/release-sql/pg${major}.sql"
 done
 rm -rf "${clean_root}/target"
 ln -s tmp-target "${clean_root}/target"
-for major in 15 16 17 18; do
+for major in 17 18; do
   write_generation_log "${clean_root}" "${major}"
 done
 
 REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --allow-dirty \
   --require-signatures \
-  --artifact target/release-sql/pg15.sql \
-  --artifact target/release-sql/pg16.sql \
   --artifact target/release-sql/pg17.sql \
   --artifact target/release-sql/pg18.sql \
   --out-dir "${work_dir}/clean-symlink-target-parent"
 grep -q -- '- Worktree: `dirty`' "${work_dir}/clean-symlink-target-parent/report.md"
 grep -q -- '- Dirty override: `1`' "${work_dir}/clean-symlink-target-parent/report.md"
-grep -q -- '- Passed: `4`' "${work_dir}/clean-symlink-target-parent/report.md"
+grep -q -- '- Passed: `2`' "${work_dir}/clean-symlink-target-parent/report.md"
 grep -q -- '- Missing supported SQL artifacts: `none`' \
   "${work_dir}/clean-symlink-target-parent/report.md"
 grep -q -- '- Release SQL directory symlink: `1`' \
@@ -423,18 +433,16 @@ grep -q -- '- Approval: `incomplete`' "${work_dir}/clean-symlink-target-parent/r
 rm "${clean_root}/target"
 mkdir -p "${clean_root}/target"
 mkdir -p "${clean_root}/target/release-sql"
-for major in 15 16 17 18; do
+for major in 17 18; do
   ln -s "../../tmp-sql/pg${major}.sql" "${clean_root}/target/release-sql/pg${major}.sql"
   ln -s "../../tmp-sql/pg${major}.sql.asc" "${clean_root}/target/release-sql/pg${major}.sql.asc"
 done
-for major in 15 16 17 18; do
+for major in 17 18; do
   write_generation_log "${clean_root}" "${major}"
 done
 
 if REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact target/release-sql/pg15.sql \
-  --artifact target/release-sql/pg16.sql \
   --artifact target/release-sql/pg17.sql \
   --artifact target/release-sql/pg18.sql \
   --out-dir "${work_dir}/clean-symlink-artifact-files"; then
@@ -443,7 +451,7 @@ if REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.s
 fi
 grep -q -- '- Worktree: `clean`' "${work_dir}/clean-symlink-artifact-files/report.md"
 grep -q -- '- Passed: `0`' "${work_dir}/clean-symlink-artifact-files/report.md"
-grep -q -- '- Failed: `4`' "${work_dir}/clean-symlink-artifact-files/report.md"
+grep -q -- '- Failed: `2`' "${work_dir}/clean-symlink-artifact-files/report.md"
 grep -q -- '- Missing supported SQL artifacts: `none`' \
   "${work_dir}/clean-symlink-artifact-files/report.md"
 grep -q -- '- Supported SQL artifact symlink: `1`' \
@@ -455,24 +463,22 @@ grep -q -- '- Approval: `incomplete`' "${work_dir}/clean-symlink-artifact-files/
 
 rm -rf "${clean_root}/target/release-sql"
 mkdir -p "${clean_root}/target/release-sql"
-for major in 15 16 17 18; do
+for major in 17 18; do
   printf 'SQL for PostgreSQL %s\n' "${major}" >"${clean_root}/target/release-sql/pg${major}.sql"
   write_verified_signature "${clean_root}/target/release-sql/pg${major}.sql"
 done
-for major in 15 16 17 18; do
+for major in 17 18; do
   write_generation_log "${clean_root}" "${major}"
 done
 
 REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact target/release-sql/pg15.sql \
-  --artifact ./target/release-sql/pg15.sql \
-  --artifact target/release-sql/pg16.sql \
   --artifact target/release-sql/pg17.sql \
+  --artifact ./target/release-sql/pg17.sql \
   --artifact target/release-sql/pg18.sql \
   --out-dir "${work_dir}/clean-duplicate-alias"
 grep -q -- '- Worktree: `clean`' "${work_dir}/clean-duplicate-alias/report.md"
-grep -q -- '- Passed: `5`' "${work_dir}/clean-duplicate-alias/report.md"
+grep -q -- '- Passed: `3`' "${work_dir}/clean-duplicate-alias/report.md"
 grep -q -- '- Missing supported SQL artifacts: `none`' \
   "${work_dir}/clean-duplicate-alias/report.md"
 grep -q -- '- Duplicate supported SQL artifacts: `1`' \
@@ -490,8 +496,6 @@ ln -s "${work_dir}/pg17.sql.build.log.real" \
   "${clean_root}/target/release-sql/pg17.sql.build.log"
 if REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact target/release-sql/pg15.sql \
-  --artifact target/release-sql/pg16.sql \
   --artifact target/release-sql/pg17.sql \
   --artifact target/release-sql/pg18.sql \
   --out-dir "${work_dir}/clean-symlink-generation-log"; then
@@ -499,7 +503,7 @@ if REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.s
   exit 1
 fi
 grep -q -- '- Worktree: `clean`' "${work_dir}/clean-symlink-generation-log/report.md"
-grep -q -- '- Passed: `4`' "${work_dir}/clean-symlink-generation-log/report.md"
+grep -q -- '- Passed: `2`' "${work_dir}/clean-symlink-generation-log/report.md"
 grep -q -- '- Invalid generation logs: `1`' \
   "${work_dir}/clean-symlink-generation-log/report.md"
 grep -q -- '- Full release scope: `1`' \
@@ -512,13 +516,11 @@ mv "${work_dir}/pg17.sql.build.log.real" \
 
 REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact target/release-sql/pg15.sql \
-  --artifact target/release-sql/pg16.sql \
   --artifact target/release-sql/pg17.sql \
   --artifact target/release-sql/pg18.sql \
   --out-dir "${work_dir}/clean-full"
 grep -q -- '- Worktree: `clean`' "${work_dir}/clean-full/report.md"
-grep -q -- '- Passed: `4`' "${work_dir}/clean-full/report.md"
+grep -q -- '- Passed: `2`' "${work_dir}/clean-full/report.md"
 grep -q -- '- Missing supported SQL artifacts: `none`' \
   "${work_dir}/clean-full/report.md"
 grep -q -- '- Supported SQL artifact symlink: `0`' "${work_dir}/clean-full/report.md"
@@ -543,8 +545,6 @@ SH
 chmod +x "${fake_bin}/cargo"
 REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact target/release-sql/pg15.sql \
-  --artifact target/release-sql/pg16.sql \
   --artifact target/release-sql/pg17.sql \
   --artifact target/release-sql/pg18.sql \
   --out-dir "${work_dir}/wrong-cargo-pgrx"
@@ -552,12 +552,10 @@ grep -q -- '- Metadata mismatches: `1`' "${work_dir}/wrong-cargo-pgrx/report.md"
 grep -q -- '- Approval: `incomplete`' "${work_dir}/wrong-cargo-pgrx/report.md"
 grep -q 'metadata mismatch: cargo pgrx version does not match pinned pgrx version' \
   "${work_dir}/wrong-cargo-pgrx/metadata.log"
-rm "${fake_bin}/cargo"
+write_matching_fake_cargo
 
 REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact target/release-sql/pg15.sql \
-  --artifact target/release-sql/pg16.sql \
   --artifact target/release-sql/pg17.sql \
   --artifact target/release-sql/pg18.sql \
   --out-dir "${clean_root}/target/release-evidence/artifacts"
@@ -576,8 +574,6 @@ awk -F '\t' '
 
 REPO_ROOT="${clean_root}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact "${clean_root}/target/release-sql/pg15.sql" \
-  --artifact "${clean_root}/target/release-sql/pg16.sql" \
   --artifact "${clean_root}/target/release-sql/pg17.sql" \
   --artifact "${clean_root}/target/release-sql/pg18.sql" \
   --out-dir "${clean_root}/target/release-evidence/absolute-input-artifacts"
@@ -588,7 +584,7 @@ if grep -qF -- "${clean_root}" "${absolute_input_summary}" "${absolute_input_rep
   echo "repo-local absolute artifact inputs should be normalized to repo-relative evidence paths" >&2
   exit 1
 fi
-for major in 15 16 17 18; do
+for major in 17 18; do
   grep -q $'target/release-sql/pg'"${major}"$'.sql\tpassed\t' \
     "${absolute_input_summary}"
 done
@@ -597,8 +593,6 @@ clean_root_link="${work_dir}/clean-root-link"
 ln -s "${clean_root}" "${clean_root_link}"
 REPO_ROOT="${clean_root_link}" "${REPO_ROOT}/scripts/run-release-artifact-report.sh" \
   --require-signatures \
-  --artifact "${clean_root}/target/release-sql/pg15.sql" \
-  --artifact "${clean_root}/target/release-sql/pg16.sql" \
   --artifact "${clean_root}/target/release-sql/pg17.sql" \
   --artifact "${clean_root}/target/release-sql/pg18.sql" \
   --out-dir "${clean_root_link}/target/release-evidence/symlink-root-physical-input-artifacts"
@@ -610,7 +604,7 @@ if grep -qF -- "${clean_root}" "${symlink_root_summary}" "${symlink_root_report}
   echo "symlink-root physical artifact inputs should be normalized to repo-relative evidence paths" >&2
   exit 1
 fi
-for major in 15 16 17 18; do
+for major in 17 18; do
   grep -q $'target/release-sql/pg'"${major}"$'.sql\tpassed\t' \
     "${symlink_root_summary}"
 done

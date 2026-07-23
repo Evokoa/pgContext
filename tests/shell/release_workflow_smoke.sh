@@ -22,16 +22,15 @@ grep -qF -- '- publish' "${workflow}"
 grep -qF 'candidate_sha:' "${workflow}"
 grep -qF 'prepare_run_id:' "${workflow}"
 grep -qF 'source_archive_sha256:' "${workflow}"
-grep -qF 'oci_manifest_digest:' "${workflow}"
+for pg_major in 17 18; do
+  grep -qF "oci_manifest_digest_pg${pg_major}:" "${workflow}"
+done
+grep -qF 'oci_manifest_digests:' "${workflow}"
 grep -qF 'scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-master' "${workflow}"
 grep -qF 'container: pgxn/pgxn-tools@sha256:' "${workflow}"
 grep -qF 'Release tag signature is not verified by GitHub' "${workflow}"
 grep -qF 'Verify GitHub Release is an empty draft' "${workflow}"
 
-if grep -Eq 'pg(14|15|16|18)|postgresql-(14|15|16|18)' "${workflow}"; then
-  echo "release workflow advertises an unsupported PostgreSQL major" >&2
-  exit 1
-fi
 if grep -qF 'repository: Evokoa/homebrew-tap' "${workflow}"; then
   echo "PGXN and Docker workflow unexpectedly publishes Homebrew" >&2
   exit 1
@@ -116,7 +115,12 @@ grep -qF 'linux/amd64' <<<"${docker_build}"
 grep -qF 'linux/arm64' <<<"${docker_build}"
 grep -qF 'ubuntu-24.04-arm' <<<"${docker_build}"
 grep -qF 'file: release/docker/Dockerfile' <<<"${docker_build}"
-grep -qF 'PG_MAJOR=17' <<<"${docker_build}"
+for pg_major in 17 18; do
+  grep -qF "major: ${pg_major}" <<<"${docker_build}"
+  grep -qF "postgres:${pg_major}-bookworm@sha256:" <<<"${docker_build}"
+done
+grep -qF 'PG_MAJOR=${{ matrix.pg.major }}' <<<"${docker_build}"
+grep -qF 'POSTGRES_IMAGE=${{ matrix.pg.image }}' <<<"${docker_build}"
 grep -qF 'push-by-digest=true' <<<"${docker_build}"
 grep -qF 'provenance: mode=max' <<<"${docker_build}"
 grep -qF 'packages: write' <<<"${docker_build}"
@@ -125,8 +129,9 @@ grep -qF -- '- docker' <<<"${docker_merge}"
 grep -qF 'actions/checkout@' <<<"${docker_merge}"
 grep -qF 'ref: ${{ needs.validate.outputs.tag }}' <<<"${docker_merge}"
 grep -qF 'persist-credentials: false' <<<"${docker_merge}"
-grep -qF 'pg17-sha-${{ needs.validate.outputs.short_sha }}' <<<"${docker_merge}"
-grep -qF 'pg17-${{ needs.validate.outputs.tag }}-prepared' <<<"${docker_merge}"
+grep -qF 'pg: [17, 18]' <<<"${docker_merge}"
+grep -qF 'pg${{ matrix.pg }}-sha-${{ needs.validate.outputs.short_sha }}' <<<"${docker_merge}"
+grep -qF 'pg${{ matrix.pg }}-${{ needs.validate.outputs.tag }}-prepared' <<<"${docker_merge}"
 grep -qF 'scripts/resolve-oci-digest.sh' <<<"${docker_merge}"
 grep -qF 'actions/attest@' <<<"${docker_merge}"
 grep -qF 'push-to-registry: true' <<<"${docker_merge}"
@@ -142,23 +147,36 @@ grep -qF 'scripts/verify-release-image.sh --registry' <<<"${docker_verify}"
 grep -qF 'gh attestation verify "oci://' <<<"${docker_verify}"
 grep -qF 'linux/amd64' <<<"${docker_verify}"
 grep -qF 'linux/arm64' <<<"${docker_verify}"
+grep -qF 'pg: [17, 18]' <<<"${docker_verify}"
+grep -qF '"${PLATFORM}" "${PG_MAJOR}"' <<<"${docker_verify}"
 
 grep -qF 'approve-publishing' <<<"${publish_docker}"
 grep -qF 'ref: ${{ needs.validate.outputs.tag }}' <<<"${publish_docker}"
 grep -qF 'scripts/promote-release-image.sh' <<<"${publish_docker}"
-grep -qF 'EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}' <<<"${publish_docker}"
+grep -qF 'pg: [17, 18]' <<<"${publish_docker}"
+grep -qF 'DIGESTS: ${{ needs.validate.outputs.oci_manifest_digests }}' <<<"${publish_docker}"
+grep -qF '"${PG_MAJOR}" "${TAG}" "${COMMIT_SHA}" "${expected_digest}"' <<<"${publish_docker}"
 
-for block in "${published_verify}" "${default_verify}"; do
-  grep -qF 'publish-docker' <<<"${block}"
-  grep -qF 'scripts/resolve-oci-digest.sh' <<<"${block}"
-  grep -qF 'scripts/verify-release-image.sh --registry' <<<"${block}"
-  grep -qF 'EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}' <<<"${block}"
-  grep -qF 'linux/amd64' <<<"${block}"
-  grep -qF 'linux/arm64' <<<"${block}"
-done
+grep -qF 'publish-docker' <<<"${published_verify}"
+grep -qF 'scripts/resolve-oci-digest.sh' <<<"${published_verify}"
+grep -qF 'scripts/verify-release-image.sh --registry' <<<"${published_verify}"
+grep -qF 'DIGESTS: ${{ needs.validate.outputs.oci_manifest_digests }}' <<<"${published_verify}"
+grep -qF 'pg: [17, 18]' <<<"${published_verify}"
+grep -qF 'linux/amd64' <<<"${published_verify}"
+grep -qF 'linux/arm64' <<<"${published_verify}"
+
+grep -qF 'publish-docker' <<<"${default_verify}"
+grep -qF 'scripts/resolve-oci-digest.sh' <<<"${default_verify}"
+grep -qF 'scripts/verify-release-image.sh --registry' <<<"${default_verify}"
+grep -qF 'DIGESTS: ${{ needs.validate.outputs.oci_manifest_digests }}' <<<"${default_verify}"
+grep -qF "jq -r '.pg17'" <<<"${default_verify}"
+grep -qF 'linux/amd64' <<<"${default_verify}"
+grep -qF 'linux/arm64' <<<"${default_verify}"
 
 grep -qF 'pgxn-artifact' <<<"${prepare_summary}"
 grep -qF 'docker-verify' <<<"${prepare_summary}"
+grep -qF 'scripts/resolve-oci-digest.sh' <<<"${prepare_summary}"
+grep -qF 'for pg_major in 17 18' <<<"${prepare_summary}"
 grep -qF 'pgxn-verify' <<<"${publish_summary}"
 grep -qF 'attach-pgxn-artifact' <<<"${publish_summary}"
 grep -qF 'publish-docker-verify' <<<"${publish_summary}"

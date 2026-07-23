@@ -6,19 +6,24 @@ if [[ "${1:-}" == "--plan" ]]; then
   PLAN_ONLY=1
   shift
 fi
-[[ $# -eq 4 ]] || {
-  echo "usage: scripts/promote-release-image.sh [--plan] IMAGE TAG SHA EXPECTED_DIGEST" >&2
+[[ $# -eq 5 ]] || {
+  echo "usage: scripts/promote-release-image.sh [--plan] IMAGE PG_MAJOR TAG SHA EXPECTED_DIGEST" >&2
   exit 2
 }
 IMAGE="$1"
-TAG="$2"
-SHA="$3"
-EXPECTED_DIGEST="$4"
+PG_MAJOR="$2"
+TAG="$3"
+SHA="$4"
+EXPECTED_DIGEST="$5"
 
 [[ "${IMAGE}" =~ ^[a-z0-9.-]+(/[a-z0-9._-]+)+$ ]] || {
   echo "IMAGE must be a lowercase registry/repository name" >&2
   exit 2
 }
+case "${PG_MAJOR}" in
+  17 | 18) ;;
+  *) echo "PG_MAJOR must be 17 or 18" >&2; exit 2 ;;
+esac
 [[ "${TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
   echo "TAG must use vX.Y.Z form" >&2
   exit 2
@@ -34,22 +39,28 @@ EXPECTED_DIGEST="$4"
 
 VERSION="${TAG#v}"
 SHORT_SHA="${SHA:0:12}"
-SHA_SOURCE="${IMAGE}:pg17-sha-${SHORT_SHA}"
-PREPARED_SOURCE="${IMAGE}:pg17-${TAG}-prepared"
+SHA_SOURCE="${IMAGE}:pg${PG_MAJOR}-sha-${SHORT_SHA}"
+PREPARED_SOURCE="${IMAGE}:pg${PG_MAJOR}-${TAG}-prepared"
 TARGETS=(
-  "${IMAGE}:pg17-${TAG}"
-  "${IMAGE}:pg17-${VERSION}"
-  "${IMAGE}:pg17"
-  "${IMAGE}:${TAG}"
-  "${IMAGE}:${VERSION}"
-  "${IMAGE}:latest"
+  "${IMAGE}:pg${PG_MAJOR}-${TAG}"
+  "${IMAGE}:pg${PG_MAJOR}-${VERSION}"
+  "${IMAGE}:pg${PG_MAJOR}"
 )
 IMMUTABLE_TARGETS=(
-  "${IMAGE}:pg17-${TAG}"
-  "${IMAGE}:pg17-${VERSION}"
-  "${IMAGE}:${TAG}"
-  "${IMAGE}:${VERSION}"
+  "${IMAGE}:pg${PG_MAJOR}-${TAG}"
+  "${IMAGE}:pg${PG_MAJOR}-${VERSION}"
 )
+if [[ "${PG_MAJOR}" == 17 ]]; then
+  TARGETS+=(
+    "${IMAGE}:${TAG}"
+    "${IMAGE}:${VERSION}"
+    "${IMAGE}:latest"
+  )
+  IMMUTABLE_TARGETS+=(
+    "${IMAGE}:${TAG}"
+    "${IMAGE}:${VERSION}"
+  )
+fi
 INSPECT_ATTEMPTS="${PGCONTEXT_PROMOTE_INSPECT_ATTEMPTS:-12}"
 INSPECT_DELAY_SECONDS="${PGCONTEXT_PROMOTE_INSPECT_DELAY_SECONDS:-5}"
 [[ "${INSPECT_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || {

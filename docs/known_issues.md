@@ -1,7 +1,8 @@
 # Known Issues and Fit
 
-- PostgreSQL 17 is the only V1 target. Other majors are not supported release
-  configurations yet.
+- PostgreSQL 17 and 18 release images are built and runtime-verified on amd64 and
+  arm64. PostgreSQL 17 remains the primary performance and deep-lifecycle
+  qualification target.
 - Dense HNSW and filtered ANN are implemented but experimental. Rebuild indexes
   after an incompatible on-page format update; do not assume on-disk
   compatibility.

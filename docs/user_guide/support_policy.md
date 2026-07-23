@@ -1,16 +1,18 @@
 # Support, Version, Upgrade, and Deprecation Policy
 
-This policy describes the PostgreSQL 17 V1 contract for prototypes, evaluation,
-and controlled pilots. Broader production certification is post-V1 roadmap work.
+This policy describes the PostgreSQL 17 and 18 V1 contract for prototypes,
+evaluation, and controlled pilots. Broader production certification remains
+post-V1 roadmap work.
 
 ## Supported PostgreSQL Versions
 
-PostgreSQL 17 is the only supported V1 major. Support for it is validated across
-compilation, generated SQL, install, backup/restore, WAL/restart, HNSW
-lifecycle, filtered ANN, ACL/RLS, partition behavior, both advertised install
-paths, PGXN, and multi-architecture GHCR.
-PostgreSQL 15, 16, and 18 are planned targets only after their post-V1
-version-specific and platform gates; PostgreSQL 14 is legacy best-effort.
+PostgreSQL 17 and 18 are supported release targets. Every release container
+is compiled for its matching PostgreSQL major, assembled as a multi-platform
+manifest, and runtime-verified on both linux/amd64 and linux/arm64 before and
+after promotion. PostgreSQL 17 remains the primary development and performance
+qualification target and is used by unqualified Docker aliases. Deeper
+backup/restore, WAL/restart, security, and long-duration lifecycle evidence may
+remain version-specific and is documented separately from the image gate.
 
 ## Extension Versions
 

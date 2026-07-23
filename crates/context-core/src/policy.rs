@@ -6,14 +6,11 @@
 /// PostgreSQL major version used for primary development and release gates.
 pub const PRIMARY_POSTGRES_VERSION: u16 = 17;
 
-/// Lowest PostgreSQL major version planned for first-class support.
-pub const MIN_SUPPORTED_POSTGRES_VERSION: u16 = 15;
+/// Lowest PostgreSQL major version with first-class release support.
+pub const MIN_SUPPORTED_POSTGRES_VERSION: u16 = 17;
 
-/// Maximum PostgreSQL major version planned for first-class support.
+/// Highest PostgreSQL major version with first-class release support.
 pub const MAX_SUPPORTED_POSTGRES_VERSION: u16 = 18;
-
-/// PostgreSQL 14 remains a legacy best-effort target until community EOL.
-pub const LEGACY_BEST_EFFORT_POSTGRES_VERSION: u16 = 14;
 
 /// Default maximum number of nearest-neighbor results returned by one exact search.
 pub const MAX_SEARCH_LIMIT: usize = 10_000;

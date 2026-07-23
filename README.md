@@ -32,7 +32,7 @@
     <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache-2.0 license">
   </a>
   <a href="https://www.postgresql.org/">
-    <img src="https://img.shields.io/badge/PostgreSQL-17-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white" alt="PostgreSQL 17">
+    <img src="https://img.shields.io/badge/PostgreSQL-17%20%26%2018-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white" alt="PostgreSQL 17 and 18">
   </a>
   <a href="https://github.com/evokoa/pgcontext/pkgs/container/pgcontext">
     <img src="https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&amp;logo=docker" alt="Docker image on GHCR">
@@ -66,7 +66,7 @@
   </a>
 </p>
 
-pgContext is an Apache-2.0 **PostgreSQL 17 extension** that turns Postgres into a
+pgContext is an Apache-2.0 **PostgreSQL 17 and 18 extension** that turns Postgres into a
 full AI search engine: dense vector search, metadata-filtered approximate search,
 and hybrid (dense + full-text) retrieval, all inside the database you already run.
 
@@ -227,6 +227,8 @@ Pick whichever install path fits your setup: **Docker** (zero build) or
 **PGXN / source**. The fastest is the pre-built Docker
 image; it is multi-arch (`linux/amd64` and `linux/arm64`) and runs on Linux or
 through Docker Desktop's Linux-container support on macOS and Windows.
+Choose the matching `pgMAJOR-vVERSION` tag; unqualified version tags continue
+to select PostgreSQL 17.
 
 ```sh
 docker pull ghcr.io/evokoa/pgcontext:pg17-v0.1.0
@@ -263,7 +265,7 @@ make install PG_CONFIG=/path/to/postgresql-17/bin/pg_config
 psql -d postgres -c 'CREATE EXTENSION pgcontext;'
 ```
 
-You need Rust 1.96.0, `cargo-pgrx` 0.19.1, PostgreSQL 17, its server development
+You need Rust 1.96.0, `cargo-pgrx` 0.19.1, PostgreSQL 17 or 18, its server development
 headers, and a matching `pg_config`. See the complete
 [installation guide](docs/user_guide/installation.md) for Linux/macOS/Windows
 shell support, verification, uninstall, cleanup, and troubleshooting.
@@ -352,8 +354,7 @@ out of PostgreSQL.
 | Dense L2, inner-product, cosine, and L1 HNSW | Implemented; performance-qualified on PostgreSQL 17 |
 | Metadata-filtered ANN | Implemented with iterative and adaptive masked paths |
 | `halfvec`, `sparsevec`, and `bitvec` wrappers/opclasses | Partial, experimental |
-| PostgreSQL 17 | Supported V1 target |
-| PostgreSQL 15, 16, and 18 | Post-V1 certification roadmap |
+| PostgreSQL 17 and 18 | Supported; release images build and verify on amd64 and arm64 |
 
 ## Comparison and Fit
 
@@ -373,10 +374,10 @@ the [parity matrix](docs/user_guide/parity_matrix.md), and the full
 
 ## Focused V1 Scope
 
-V1 is optimized and release-gated for PostgreSQL 17, with exact retrieval,
+V1 builds and verifies PostgreSQL 17 and 18 release images on amd64 and arm64, with exact retrieval,
 page-native dense HNSW, filtered ANN, and backend-local packed generations.
 Additional vector types are available for evaluation and controlled rollout.
-The roadmap grows that foundation with multi-major certification, quantized
+The roadmap grows that foundation with deeper lifecycle certification, quantized
 navigation, broader non-dense ANN, and more packaging options. See
 [Known Issues](docs/known_issues.md) and the [roadmap](docs/roadmap.md) for
 precise adoption guidance.

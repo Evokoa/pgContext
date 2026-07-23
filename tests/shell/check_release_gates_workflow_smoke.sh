@@ -80,16 +80,12 @@ assert_postgres_matrix_scope() {
     in_include && /^    steps:$/ { exit }
     in_include { print }
   ')"
-  expected='          - pg: "15"
-            feature: pg15
-          - pg: "16"
-            feature: pg16
-          - pg: "17"
+  expected='          - pg: "17"
             feature: pg17
           - pg: "18"
             feature: pg18'
   if [[ "${actual}" != "${expected}" ]]; then
-    echo "release-gates workflow PostgreSQL matrix must contain exactly pg15, pg16, pg17, and pg18 rows" >&2
+    echo "release-gates workflow PostgreSQL matrix must contain exactly pg17 and pg18 rows" >&2
     exit 1
   fi
 }
@@ -129,8 +125,6 @@ assert_workflow_contains "name: Release Gates"
 assert_workflow_contains "run_fuzz_campaign:"
 assert_workflow_contains "fuzz_duration_seconds:"
 assert_workflow_contains "fuzz_jobs:"
-assert_postgres_matrix_entry "15" "pg15"
-assert_postgres_matrix_entry "16" "pg16"
 assert_postgres_matrix_entry "17" "pg17"
 assert_postgres_matrix_entry "18" "pg18"
 assert_postgres_matrix_scope
@@ -159,8 +153,6 @@ assert_block_contains "${release_artifact_summary_block}" "path: target/release-
 assert_block_contains "${postgres_matrix_summary_block}" "postgres-matrix-summary:"
 assert_block_contains "${postgres_matrix_summary_block}" "name: Combined PostgreSQL matrix evidence"
 assert_block_contains "${postgres_matrix_summary_block}" "components: rustfmt, clippy"
-assert_block_contains "${postgres_matrix_summary_block}" "postgresql-15 postgresql-server-dev-15"
-assert_block_contains "${postgres_matrix_summary_block}" "postgresql-16 postgresql-server-dev-16"
 assert_block_contains "${postgres_matrix_summary_block}" "postgresql-17 postgresql-server-dev-17"
 assert_block_contains "${postgres_matrix_summary_block}" "postgresql-18 postgresql-server-dev-18"
 assert_block_contains "${postgres_matrix_summary_block}" 'source release/tool-versions.env'
@@ -199,8 +191,6 @@ assert_block_contains "${fuzz_release_campaign_block}" "--out-dir target/fuzz-ca
 assert_block_contains "${fuzz_release_campaign_block}" "name: release-fuzz-campaign-report"
 assert_block_contains "${fuzz_release_campaign_block}" "path: target/fuzz-campaigns/release-candidate"
 
-assert_artifact_report_command_contains "${release_artifact_summary_block}" "--artifact target/release-sql/pg15.sql"
-assert_artifact_report_command_contains "${release_artifact_summary_block}" "--artifact target/release-sql/pg16.sql"
 assert_artifact_report_command_contains "${release_artifact_summary_block}" "--artifact target/release-sql/pg17.sql"
 assert_artifact_report_command_contains "${release_artifact_summary_block}" "--artifact target/release-sql/pg18.sql"
 

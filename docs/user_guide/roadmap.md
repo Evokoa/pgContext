@@ -381,10 +381,9 @@ is supported by V1.
 
 - verify real upgrade, rollback, dump/restore, `pg_upgrade`, and format
   rejection or migration paths from prior extension releases;
-- certify PostgreSQL 15, 16, and 18 independently with exactly one pgrx feature
-  and a real `pg_config` for each claimed major;
+- deepen PostgreSQL 17 and 18 certification independently with exactly one pgrx
+  feature and a real `pg_config` for each claimed major;
 - run full extension install and smoke gates on real Linux and macOS hosts;
-- keep PostgreSQL 14 as legacy best-effort unless deliberately reselected;
 - publish a support claim only for major/platform pairs backed by preserved
   evidence from the same candidate.
 
@@ -393,9 +392,8 @@ is supported by V1.
 - produce reproducible native install packages only for certified
   major/platform pairs, then test install, uninstall, upgrade, and rollback from
   those packages rather than from a checkout;
-- extend the V1 PostgreSQL 17 GHCR image to additional PostgreSQL majors only
-  after each image, healthcheck, playground, provenance, and vulnerability scan
-  is certified on both supported architectures;
+- preserve per-major healthcheck, playground, provenance, and vulnerability
+  evidence for the PostgreSQL 17 and 18 images on both supported architectures;
 - add maintainer-controlled artifact and container signing with documented
   identity, timestamping, verification, rotation, and revocation procedures;
 - attach signed checksums, SBOMs, provenance, and license inventories to future

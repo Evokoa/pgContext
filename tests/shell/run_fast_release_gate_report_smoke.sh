@@ -37,7 +37,7 @@ cp "${REPO_ROOT}/scripts/run-v1-pgrx-tests.sh" "${fixture_root}/scripts/run-v1-p
 cat >"${fixture_root}/Cargo.toml" <<'DOC'
 [workspace.metadata.pgcontext]
 primary-postgres-version = "17"
-supported-postgres-versions = ["15", "16", "17", "18"]
+supported-postgres-versions = ["17", "18"]
 DOC
 printf 'target/\n' >"${fixture_root}/.gitignore"
 
@@ -67,7 +67,7 @@ case "$*" in
   "clippy -p context-pg --all-targets --features pg17 -- -D warnings") gate="clippy-context-pg" ;;
   "test --workspace --exclude context-pg --all-features") gate="workspace-tests" ;;
   "check -p context-pg --features pg17") gate="context-pg-check" ;;
-  "pgrx test --release -p context-pg pg17 "*) gate="context-pg-pgrx" ;;
+  "pgrx test --release -p context-pg pg17"*) gate="context-pg-pgrx" ;;
   "doc --workspace --no-deps") gate="docs" ;;
   "audit --db target/cargo-audit-advisory-db") gate="cargo-audit" ;;
   "deny check") gate="cargo-deny" ;;
@@ -213,7 +213,7 @@ do
     END { exit(found ? 0 : 1) }
   ' "${summary}"
 done
-grep -q '^pgrx test --release -p context-pg pg17 pg_pgvector_dense$' "${work_dir}/success.log"
+grep -q '^pgrx test --release -p context-pg pg17$' "${work_dir}/success.log"
 grep -q '^audit --db target/cargo-audit-advisory-db$' "${work_dir}/success.log"
 grep -q '^deny check$' "${work_dir}/success.log"
 
@@ -333,4 +333,4 @@ assert_fails() {
 
 assert_fails unknown-option 'unknown argument: --wat' --dry-run --wat
 assert_fails root-out-dir '--out-dir must be a non-root path' --dry-run --out-dir /
-assert_fails unsupported-pg '--pg-major must be one of supported-postgres-versions' --dry-run --pg-major 14
+assert_fails unsupported-pg '--pg-major must be one of supported-postgres-versions' --dry-run --pg-major 16

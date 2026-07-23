@@ -4,7 +4,7 @@ pgContext is an open-source PostgreSQL extension for AI vector and hybrid
 retrieval.
 
 This guide distinguishes stable, implemented behavior from experimental and
-planned paths. pgContext 0.1.0 targets PostgreSQL 17.
+planned paths. pgContext 0.1.0 targets PostgreSQL 17 and 18.
 
 ## Current Status
 
@@ -93,6 +93,6 @@ Their dependency order and acceptance requirements are in the
 
 ## PostgreSQL Support
 
-PostgreSQL 17 is the supported V1 release target. PostgreSQL 15, 16, and
-18 require their later version-specific gates; PostgreSQL 14 is legacy
-best-effort only.
+PostgreSQL 17 and 18 are supported V1 release targets. OCI images are built
+and runtime-verified for linux/amd64 and linux/arm64; PostgreSQL 17 remains the
+primary benchmark and deep-lifecycle qualification target.

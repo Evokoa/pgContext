@@ -233,8 +233,9 @@ and support questions. Do not report vulnerabilities publicly; follow the
 
 ## Support Matrix
 
-PostgreSQL 17 is the supported V1 release target. PostgreSQL 15, 16, and
-18 require later version-specific gates. PostgreSQL 14 is legacy best-effort.
+PostgreSQL 17 and 18 are supported V1 release targets. Release images are
+built and runtime-verified on amd64 and arm64. PostgreSQL 17 remains the primary
+benchmark and deep-lifecycle qualification target.
 
 Current known limitations:
 

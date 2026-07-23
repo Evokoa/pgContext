@@ -4881,4 +4881,3 @@ SET search_path TO pg_catalog, pgcontext
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'run_build_job_wrapper';
 /* </end connected objects> */
-

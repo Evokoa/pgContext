@@ -4,27 +4,33 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE_MODE=archive
 if [[ "${1:-}" == "--registry" ]]; then
-  [[ $# -eq 3 ]] || {
-    echo "usage: scripts/verify-release-image.sh --registry IMAGE@DIGEST PLATFORM" >&2
+  [[ $# -eq 3 || $# -eq 4 ]] || {
+    echo "usage: scripts/verify-release-image.sh --registry IMAGE@DIGEST PLATFORM [PG_MAJOR]" >&2
     exit 2
   }
   SOURCE_MODE=registry
   OCI_ARCHIVE=""
   IMAGE="$2"
   PLATFORM="$3"
+  PG_MAJOR="${4:-17}"
   [[ "${IMAGE}" =~ @sha256:[0-9a-f]{64}$ ]] || {
     echo "registry verification requires an immutable IMAGE@sha256:DIGEST reference" >&2
     exit 2
   }
 else
-  [[ $# -eq 3 ]] || {
-    echo "usage: scripts/verify-release-image.sh OCI_ARCHIVE IMAGE PLATFORM" >&2
+  [[ $# -eq 3 || $# -eq 4 ]] || {
+    echo "usage: scripts/verify-release-image.sh OCI_ARCHIVE IMAGE PLATFORM [PG_MAJOR]" >&2
     exit 2
   }
   OCI_ARCHIVE="$1"
   IMAGE="$2"
   PLATFORM="$3"
+  PG_MAJOR="${4:-17}"
 fi
+case "${PG_MAJOR}" in
+  17 | 18) ;;
+  *) echo "PG_MAJOR must be 17 or 18" >&2; exit 2 ;;
+esac
 case "${PLATFORM}" in
   linux/amd64 | linux/arm64) ;;
   *) echo "PLATFORM must be linux/amd64 or linux/arm64" >&2; exit 2 ;;
@@ -40,7 +46,7 @@ die() {
   exit 1
 }
 
-name="pgcontext-release-${PLATFORM##*/}-$$"
+name="pgcontext-release-pg${PG_MAJOR}-${PLATFORM##*/}-$$"
 cleanup() {
   docker rm -f "${name}" >/dev/null 2>&1 || true
   docker image rm -f "${IMAGE}" >/dev/null 2>&1 || true
@@ -74,7 +80,8 @@ docker exec "${name}" sh -c '[ "$(cat /proc/1/comm)" = postgres ]' \
 health="$(docker inspect --format '{{.State.Health.Status}}' "${name}")"
 [[ "${health}" == "healthy" ]] || die "container health is ${health}"
 server_version="$(docker exec "${name}" psql -U postgres -d pgcontext -Atc 'SHOW server_version_num')"
-[[ "${server_version}" == 17* ]] || die "server is not PostgreSQL 17: ${server_version}"
+[[ "${server_version}" == "${PG_MAJOR}"* ]] || \
+  die "server is not PostgreSQL ${PG_MAJOR}: ${server_version}"
 if ! docker exec -i "${name}" psql -U postgres -d pgcontext -v ON_ERROR_STOP=1 \
   <"${ROOT}/playground/demo.sql"; then
   die "packaged demo failed"

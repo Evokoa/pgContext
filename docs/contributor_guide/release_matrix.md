@@ -1,15 +1,13 @@
 # Release Gate Matrix
 
-V1 supports PostgreSQL 17. PostgreSQL 15, 16, and 18 are post-V1 certification
-targets, and PostgreSQL 14 is legacy best-effort; none is a V1 release blocker.
+V1 supports PostgreSQL 17 and 18. Both majors are release blockers for OCI
+build and runtime verification on amd64 and arm64; PostgreSQL 17 remains the
+primary deep-lifecycle and benchmark target.
 
 | PostgreSQL | Status | Required release gates |
 |---:|---|---|
-| 14 | Best-effort legacy | May run warning-only compatibility checks; failures do not block release. |
-| 15 | First-class planned | Fast Rust tests, `context-pg` check, pgrx SQL tests, heavy lifecycle tests. |
-| 16 | First-class planned | Fast Rust tests, `context-pg` check, pgrx SQL tests, heavy lifecycle tests. |
-| 17 | Primary first-class planned | Fast Rust tests, `context-pg` check, pgrx SQL tests, heavy lifecycle tests, local smoke gates. |
-| 18 | First-class planned | Fast Rust tests, `context-pg` check, pgrx SQL tests, heavy lifecycle tests. |
+| 17 | Primary supported | Full lifecycle gates plus amd64/arm64 OCI build and runtime verification. |
+| 18 | Supported | Compile/schema gates plus amd64/arm64 OCI build and runtime verification. |
 
 ## Gate Tiers
 
@@ -31,7 +29,7 @@ Nightly jobs run fuzz smoke checks, Miri for storage, sanitizer jobs where the
 platform supports them, generated SQL reproducibility checks, and optional
 coverage or unused-dependency checks.
 
-Future multi-major certification jobs run the full PostgreSQL 15-18 matrix:
+Multi-major certification jobs run the PostgreSQL 17 and 18 matrix:
 
 - `cargo test --workspace --exclude context-pg --all-features`;
 - `cargo check -p context-pg --no-default-features --features pgXX`;
@@ -77,7 +75,7 @@ The release-gates workflow also runs the all-major report directly with
 target/postgres-matrix/all-postgres` and uploads it as
 `combined-postgres-matrix-report`. That report is the CI artifact shaped for
 final release-note validation: it must contain every fast, schema, pgrx, and
-heavy row for PostgreSQL 15, 16, 17, and 18 with no skipped, missing, failed, or
+heavy row for PostgreSQL 17 and 18 with no skipped, missing, failed, or
 dry-run rows before the PostgreSQL matrix gate can close.
 
 ## Containerized Linux Gate
@@ -88,7 +86,7 @@ Run the containerized Linux gate before publishing release artifacts:
 PG_MAJOR=17 scripts/release-linux-container-gates.sh
 ```
 
-Repeat with `PG_MAJOR=15`, `16`, `17`, and `18` for the supported matrix. The
+Repeat with `PG_MAJOR=17` and `18` for the supported matrix. The
 container pins Rust and pgrx versions, installs matching PostgreSQL development
 files, runs fast Rust gates, checks `context-pg`, and writes generated extension
 SQL under `target/release-sql/`. It does not replace `cargo pgrx test`; use the
@@ -125,7 +123,7 @@ macOS reports, runs the same merge command, and uploads
 
 ## Release Artifact Report
 
-The current V1 publication payload is PG17-only and unsigned. Build it twice,
+The source publication payload is version-neutral and unsigned. Build it twice,
 verify its complete checksum manifest, SBOM, provenance, and policy:
 
 ```sh
@@ -136,8 +134,8 @@ scripts/verify-release-payload.py \
   target/release-payload
 ```
 
-The older combined report below is retained for post-V1 multi-major and signing
-certification. Pass one generated SQL artifact for every first-class major and any
+The combined report below supplies multi-major and signing certification. Pass
+one generated SQL artifact for every supported major and any
 package/install outputs. Each generated SQL artifact must have a sibling
 `pgXX.sql.build.log` from the `cargo pgrx schema` command that records the
 command, commit, artifact path, and SHA-256 hash. The report records commit SHA,
@@ -145,12 +143,12 @@ clean-tree state, Rust, Cargo, cargo-pgrx, artifact sizes, SHA-256 checksums,
 signature verification status, and version consistency between `context-pg` and
 `pgcontext.control`. Reports stay `incomplete` for dirty trees, dry-runs,
 missing or empty artifacts, toolchain/version mismatches, missing PostgreSQL
-15-18 generated SQL artifacts, missing or invalid generation logs, duplicate
+17 and 18 generated SQL artifacts, missing or invalid generation logs, duplicate
 generated SQL artifacts for the same major, and unsigned or unverifiable
 artifacts when signatures are required. Per-major CI artifact reports are useful
 diagnostics, but the final release-artifact approval requires the combined
 all-major report. The release-gates workflow uploads each generated
-`target/release-sql/pgXX.sql` artifact and build log, downloads the four
+`target/release-sql/pgXX.sql` artifact and build log, downloads the two
 per-major artifacts into one directory, and emits a combined unsigned diagnostic
 report at `target/release-artifacts/all-postgres`. Publishing-host release
 approval still requires rerunning the combined report with signatures when the

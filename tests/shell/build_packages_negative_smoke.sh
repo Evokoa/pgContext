@@ -32,4 +32,4 @@ if release/build-packages.sh --allow-dirty \
 fi
 grep -qF 'TAG must use vX.Y.Z form' "${WORK_DIR}/tag.log"
 
-grep -qF 'pgContext V1 only supports PostgreSQL 17' release/docker/Dockerfile
+grep -qF 'pgContext supports PostgreSQL 17 and 18' release/docker/Dockerfile

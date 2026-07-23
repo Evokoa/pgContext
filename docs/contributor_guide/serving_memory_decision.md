@@ -15,7 +15,8 @@ cause of every negative result in the July 2026 benchmark suite.
 ## Measurements forcing the decision
 
 All from clean commits on Apple M4 Pro, PostgreSQL 17.9, 100k×384 synthetic
-corpus (archived under `benchmarks/pgvector_comparison/results/`):
+corpus. Raw benchmark result files are not part of the public documentation
+contract:
 
 | Failure mode | Evidence | Artifact commit |
 |---|---|---|

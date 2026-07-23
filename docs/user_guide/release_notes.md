@@ -254,11 +254,11 @@ pgContext operates inside PostgreSQL's authority boundary:
 
 ### Installation and distribution
 
-The 0.1.0 release supports PostgreSQL 17 through:
+The 0.1.0 release supports PostgreSQL 17 and 18 through:
 
 - a versioned GitHub source archive (PGXN publication to follow);
 - manual source installation with `cargo-pgrx`;
-- a prebuilt PostgreSQL 17 container for `linux/amd64` and `linux/arm64`;
+- prebuilt per-major containers for `linux/amd64` and `linux/arm64`;
 - a local Docker Compose playground with a runnable dense HNSW and metadata
   filtering example.
 
@@ -319,7 +319,7 @@ broad production certification.
 
 Important current limits:
 
-- PostgreSQL 17 is the only supported V1 major.
+- PostgreSQL 17 and 18 release images are built and runtime-verified on amd64 and arm64.
 - Dense HNSW and filtered ANN remain experimental.
 - IVFFlat is not implemented.
 - The complete non-dense HNSW metric matrix is not implemented.
@@ -437,21 +437,21 @@ justifies maintaining a second ANN index lifecycle.
 ### 9. Broader certification and distribution
 
 Future releases will expand production certification, collection-size and
-performance envelopes, long-running recovery and fuzz campaigns, PostgreSQL
-15/16/18 support, operating-system coverage, native packages, additional
-images, artifact signing, and release-maintenance policy.
+performance envelopes, long-running recovery and fuzz campaigns,
+operating-system coverage, native packages, artifact signing, and
+release-maintenance policy.
 
 The complete roadmap, including dependencies and promotion criteria, is in the
 [product roadmap](roadmap.md).
 
 ## Compatibility and Support
 
-PostgreSQL 17 is the only supported V1 major. PostgreSQL 15, 16, and 18 remain
-future certification targets; PostgreSQL 14 remains legacy best-effort and is
-not a supported 0.1.0 release target.
+PostgreSQL 17 and 18 are supported V1 release targets. Their OCI images are
+built and runtime-verified on amd64 and arm64; PostgreSQL 17 remains the primary
+performance and deep-lifecycle qualification target.
 
-Source builds require Rust `1.96.0`, `cargo-pgrx` `0.19.1`, PostgreSQL 17 server
-development headers, and a matching `pg_config`.
+Source builds require Rust `1.96.0`, `cargo-pgrx` `0.19.1`, PostgreSQL 17 or 18
+server development headers, and a matching `pg_config`.
 
 Stable SQL functions, types, operators, casts, result columns, status values,
 and documented SQLSTATE categories follow semantic extension-version

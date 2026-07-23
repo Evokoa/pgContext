@@ -126,7 +126,7 @@ def main() -> None:
             "workspace.metadata.pgcontext",
             "supported-postgres-versions",
         ),
-        ["17"],
+        ["17", "18"],
     )
     require_equal(
         "repository URL",
@@ -157,7 +157,7 @@ def main() -> None:
         if "origin/master" not in containing:
             fail(f"{args.tag} commit {tag_sha} is not contained in origin/master")
 
-    print(f"release validation passed for {args.tag} (PostgreSQL 17)")
+    print(f"release validation passed for {args.tag} (PostgreSQL 17 and 18)")
 
 
 if __name__ == "__main__":

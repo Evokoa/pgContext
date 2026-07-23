@@ -28,10 +28,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - pg: "15"
-            feature: pg15
-          - pg: "16"
-            feature: pg16
           - pg: "17"
             feature: pg17
           - pg: "18"
@@ -123,8 +119,6 @@ jobs:
       - name: Record combined release artifact report
         run: |
           scripts/run-release-artifact-report.sh \
-            --artifact target/release-sql/pg15.sql \
-            --artifact target/release-sql/pg16.sql \
             --artifact target/release-sql/pg17.sql \
             --artifact target/release-sql/pg18.sql \
             --out-dir target/release-artifacts/all-postgres
@@ -150,8 +144,6 @@ jobs:
           sudo apt-get install -y postgresql-common
           sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
           sudo apt-get install -y \
-            postgresql-15 postgresql-server-dev-15 \
-            postgresql-16 postgresql-server-dev-16 \
             postgresql-17 postgresql-server-dev-17 \
             postgresql-18 postgresql-server-dev-18
       - name: Install cargo-pgrx

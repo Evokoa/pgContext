@@ -498,7 +498,7 @@ fn hnsw_bulk_delete_safe(
             let mut tid = pg_sys::ItemPointerData::default();
             // SAFETY: The stack TID is initialized from validated block/offset
             // parts before being passed to PostgreSQL's callback.
-            unsafe { pg_sys::ItemPointerSet(&mut tid, block, offset) };
+            item_pointer_set_all(&mut tid, block, offset);
             // SAFETY: PostgreSQL supplied the callback and state for the
             // duration of this ambulkdelete invocation.
             if unsafe { callback(&mut tid, callback_state) } {
@@ -541,7 +541,7 @@ fn hnsw_bulk_delete_safe(
                 let mut tid = pg_sys::ItemPointerData::default();
                 // SAFETY: The stack TID is initialized from validated
                 // block/offset parts before being passed to PostgreSQL.
-                unsafe { pg_sys::ItemPointerSet(&mut tid, block, offset) };
+                item_pointer_set_all(&mut tid, block, offset);
                 // SAFETY: PostgreSQL supplied the callback and state for
                 // the duration of this ambulkdelete invocation.
                 if unsafe { callback(&mut tid, callback_state) } {

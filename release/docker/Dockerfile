@@ -1,13 +1,15 @@
 ARG RUST_IMAGE=rust:1.96.0-bookworm@sha256:5e2214abe154fe26e39f64488952e5c991eeed1d6d6da7cc8381ae83927f0cfc
-ARG POSTGRES_IMAGE=postgres:17-bookworm@sha256:41687100ce9a867948d534c52252b4f3edaf3222fcbbc6b46b7bb5a3be4577bb
+ARG POSTGRES_IMAGE=postgres:17-bookworm@sha256:4f736ae292687621d4dbe0d499ffd024a36bd2ee7d8ca6f2ccd4c800f047b394
 
 FROM ${RUST_IMAGE} AS builder
 
 ARG PG_MAJOR=17
 ARG PGRX_VERSION=0.19.1
 
-RUN test "${PG_MAJOR}" = "17" \
-    || { echo "pgContext V1 only supports PostgreSQL 17 (received PG_MAJOR=${PG_MAJOR})" >&2; exit 2; }
+RUN case "${PG_MAJOR}" in \
+      17|18) ;; \
+      *) echo "pgContext supports PostgreSQL 17 and 18 (received PG_MAJOR=${PG_MAJOR})" >&2; exit 2 ;; \
+    esac
 
 RUN apt-get -o Acquire::Retries=3 update \
     && apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
@@ -38,11 +40,15 @@ ARG PG_MAJOR=17
 ARG VERSION=0.1.0
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/evokoa/pgcontext" \
-      org.opencontainers.image.description="PostgreSQL 17 with pgContext installed" \
+      org.opencontainers.image.description="PostgreSQL ${PG_MAJOR} with pgContext installed" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.postgresql.major="${PG_MAJOR}"
+
+RUN server_major="$(postgres --version | awk '{print $3}' | cut -d. -f1)" \
+    && test "${server_major}" = "${PG_MAJOR}" \
+    || { echo "POSTGRES_IMAGE major ${server_major} does not match PG_MAJOR=${PG_MAJOR}" >&2; exit 2; }
 
 COPY --from=builder /package/usr/share/postgresql/${PG_MAJOR}/extension/ \
     /usr/share/postgresql/${PG_MAJOR}/extension/

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-SUPPORTED_MAJORS=(15 16 17 18)
+SUPPORTED_MAJORS=(17 18)
 HEAVY_GATES=(
   tests/heavy/fresh_install_smoke.sh
   tests/heavy/drop_extension_survival.sh

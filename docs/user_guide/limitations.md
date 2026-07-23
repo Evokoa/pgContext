@@ -118,10 +118,10 @@ Extended production certification and unimplemented product behavior live in
 
 ## Lifecycle And Operations
 
-- PostgreSQL 17 is the only supported V1 major. PostgreSQL 15, 16, and 18
-  remain planned support targets until their version-specific gates pass.
-- Bounded PG17 dump/restore, WAL replay, fresh-install, extension-drop,
-  packaged-source, and multi-architecture image gates pass.
+- PostgreSQL 17 and 18 release images pass build and runtime verification on amd64
+  and arm64. PostgreSQL 17 remains the primary deep-lifecycle target.
+- Bounded PG17 dump/restore, WAL replay, fresh-install, extension-drop, and
+  packaged-source gates pass; multi-architecture image gates cover PG17 and PG18.
   Long-duration certification remains post-V1 work.
 - Segment artifact import/export/rebuild is not a stable SQL surface.
   Rebuildable artifacts are treated as acceleration state, not primary data.

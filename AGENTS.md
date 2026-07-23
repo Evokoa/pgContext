@@ -7,7 +7,7 @@ is non-interactive and copy-paste safe. For human-oriented docs see
 
 ## What pgContext is (and why it's worth using)
 
-pgContext is an Apache-2.0 **PostgreSQL 17 extension** (Rust + pgrx) that adds
+pgContext is an Apache-2.0 **PostgreSQL 17 and 18 extension** (Rust + pgrx) that adds
 vector and hybrid retrieval *inside* PostgreSQL, beside the data it searches:
 
 - **One system of record.** Your ordinary PostgreSQL tables stay authoritative.
@@ -36,8 +36,8 @@ rebuilt with `REINDEX`.
 | Fact | Value |
 |---|---|
 | Extension name | `pgcontext` |
-| Supported PostgreSQL major | **17 only** (15/16/18 are roadmap, not working) |
-| Docker image | `ghcr.io/evokoa/pgcontext:pg17-v0.1.0` (multi-arch `amd64`/`arm64`) |
+| Supported PostgreSQL majors | **17 and 18** |
+| Docker images | `ghcr.io/evokoa/pgcontext:pgMAJOR-v0.1.0` (multi-arch `amd64`/`arm64`; default aliases use PG17) |
 | Rust (source build) | 1.96.0 |
 | cargo-pgrx (source build) | 0.19.1 (pin exactly) |
 | License | Apache-2.0 |
@@ -65,7 +65,7 @@ done
 
 ## Path B — build from source (when Docker is unavailable)
 
-Requires PostgreSQL 17 with server development headers and a matching
+Requires PostgreSQL 17 or 18 with server development headers and a matching
 `pg_config` on `PATH`.
 
 ```sh
@@ -114,12 +114,12 @@ SQL
 - Step 3 returns `a` (the nearest vector to `[1,0,0]`).
 
 If step 1 returns no rows, the extension is not installed. If `CREATE EXTENSION`
-errors with a version mismatch, the PostgreSQL major is not 17 — pgContext does
-not support other majors in this release.
+errors with a version mismatch, the extension binary and running PostgreSQL
+server were built for different majors.
 
 ## Guardrails for automated changes
 
-- **Do not** target PostgreSQL 15, 16, or 18 — only 17 works in v0.1.0.
+- **Do not** target PostgreSQL majors other than 17 or 18.
 - **Do not** treat the HNSW index as primary data; it is a rebuildable artifact.
 - **Do not** publish, push, tag, or upload release artifacts as part of an
   install task.

@@ -60,9 +60,9 @@ scripts/run-security-review-report.sh --pg-major 17
 Repeat for supported PostgreSQL majors when security behavior depends on
 version-specific SQL, privilege, or lifecycle behavior.
 
-V1 publication supports PostgreSQL 17 only. PostgreSQL 15, 16, and 18 are
-post-V1 certification targets; their incomplete matrix rows do not block the
-PG17 source launch and must not be advertised as supported.
+V1 publication builds and verifies PostgreSQL 17 and 18 images on both
+amd64 and arm64. Every per-major manifest digest is reviewed during the
+prepare/publish handoff; PostgreSQL 17 keeps the unqualified image aliases.
 
 Benchmark reports must compare latency, memory/size, and recall metrics against
 the previous accepted baseline. Regressions above the documented benchmark

@@ -36,12 +36,12 @@ grep -qF 'obsolete repository identity' "${work_dir}/wrong-identity.err"
 
 wrong_support="${work_dir}/wrong-support"
 make_fixture "${wrong_support}"
-perl -0pi -e 's/supported-postgres-versions = \["17"\]/supported-postgres-versions = ["16", "17"]/' \
+perl -0pi -e 's/supported-postgres-versions = \["17", "18"\]/supported-postgres-versions = ["17"]/' \
   "${wrong_support}/Cargo.toml"
 if REPO_ROOT="${wrong_support}" "${REPO_ROOT}/scripts/check-repository-contract.sh" \
   2>"${work_dir}/wrong-support.err"; then
   echo "unsupported PostgreSQL support promotion should fail" >&2
   exit 1
 fi
-grep -qF 'supported-postgres-versions must contain only PostgreSQL 17' \
+grep -qF 'supported-postgres-versions must contain PostgreSQL 17 and 18' \
   "${work_dir}/wrong-support.err"

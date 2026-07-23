@@ -105,9 +105,9 @@ case "${out_dir}" in
     ;;
 esac
 case "${pg_major}" in
-  15 | 16 | 17 | 18) ;;
+  17 | 18) ;;
   *)
-    echo "--pg-major must be one of: 15, 16, 17, 18" >&2
+    echo "--pg-major must be one of: 17, 18" >&2
     exit 2
     ;;
 esac

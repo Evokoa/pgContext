@@ -1,6 +1,7 @@
 # Installation
 
-pgContext V1 supports PostgreSQL 17 exclusively. Extension binaries, development headers, `pg_config`, and the running server must all use the same major version. Installing a PG17 build into another major is unsupported.
+pgContext V1 supports PostgreSQL 17 and 18. Extension binaries, development
+headers, `pg_config`, and the running server must all use the same major version.
 
 ## Installation Methods
 
@@ -18,7 +19,8 @@ shells. The image itself supports `linux/amd64` and `linux/arm64`.
 
 ## Prebuilt Docker image
 
-The prebuilt image is published with the v0.1.0 release:
+The prebuilt images are published with the v0.1.0 release. Replace `17` with
+`18` to select the other supported server major:
 
 ```sh
 docker pull ghcr.io/evokoa/pgcontext:pg17-v0.1.0
@@ -41,8 +43,9 @@ docker exec -i pgcontext psql -U postgres -d pgcontext -v ON_ERROR_STOP=1 \
 ```
 
 Use the immutable manifest digest from the published release for controlled
-deployments. `pg17-v0.1.0`, `pg17-0.1.0`, `v0.1.0`, and `0.1.0` are immutable
-version aliases. Only `pg17` and `latest` are rolling convenience aliases.
+deployments. Every major has immutable `pgMAJOR-v0.1.0` and
+`pgMAJOR-0.1.0` aliases plus a rolling `pgMAJOR` alias. PostgreSQL 17 also owns
+the unqualified immutable version aliases and rolling `latest` alias.
 
 Cleanup:
 
@@ -60,7 +63,7 @@ Prerequisites:
 
 - Rust 1.96.0;
 - `cargo-pgrx` 0.19.1;
-- PostgreSQL 17 server development headers and `pg_config`;
+- PostgreSQL 17 or 18 server development headers and `pg_config`;
 - a C linker and ordinary build tools;
 - `pgxnclient` for the `pgxn install` command.
 
@@ -80,7 +83,8 @@ psql -d postgres -c 'CREATE EXTENSION pgcontext;'
 
 ## Manual source build
 
-Select the exact PG17 installation when several PostgreSQL versions coexist:
+Select the exact supported PostgreSQL installation when several versions coexist
+(this example uses PostgreSQL 17):
 
 ```sh
 export PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config
@@ -125,10 +129,10 @@ volume for Docker (`scripts/quickstart.sh clean`).
 
 ## Common failures
 
-- `postgres.h: No such file or directory`: install PostgreSQL 17 server
+- `postgres.h: No such file or directory`: install the matching PostgreSQL server
   development headers and confirm `pg_config --includedir-server`.
-- `pg_config must report PostgreSQL 17`: select the PG17 binary explicitly.
-- `cargo pgrx` cannot find PG17: rerun `cargo pgrx init --pg17=...`.
+- `pg_config` reports the wrong major: select the matching binary explicitly.
+- `cargo pgrx` cannot find the selected major: rerun `cargo pgrx init --pgMAJOR=...`.
 - `permission denied` during install: use the filesystem privilege model for
   that PostgreSQL installation while preserving `PG_CONFIG`.
 - image tag not found or PGXN distribution missing: these artifacts are

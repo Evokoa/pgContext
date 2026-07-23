@@ -486,4 +486,3 @@ impl PgHnswGraphRead {
         Some(record)
     }
 }
-

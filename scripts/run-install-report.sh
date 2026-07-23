@@ -227,7 +227,7 @@ negative_installs() {
     echo "Docker build accepted unsupported PG_MAJOR=16" >&2
     return 1
   fi
-  grep -qF 'pgContext V1 only supports PostgreSQL 17' "${docker_log}"
+  grep -qF 'pgContext supports PostgreSQL 17 and 18' "${docker_log}"
   cat "${docker_log}"
 }
 

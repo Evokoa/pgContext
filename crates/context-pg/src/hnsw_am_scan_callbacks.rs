@@ -270,7 +270,7 @@ fn hnsw_get_tuple_safe(
                 else {
                     continue;
                 };
-                pg_sys::ItemPointerSet(
+                item_pointer_set_all(
                     &mut (*scan.as_ptr()).xs_heaptid,
                     block_number,
                     offset_number,
@@ -369,7 +369,7 @@ unsafe fn store_hnsw_orderby_distance(
                 // SAFETY: `xs_orderbyvals` and `xs_orderbynulls` have
                 // `numberOfOrderBys` slots allocated by begin-scan.
                 unsafe {
-                    *(*scan).xs_orderbyvals.add(index) = pg_sys::Int32GetDatum(distance);
+                    *(*scan).xs_orderbyvals.add(index) = pg_sys::Datum::from(distance);
                     *(*scan).xs_orderbynulls.add(index) = false;
                 }
             }
@@ -398,7 +398,7 @@ unsafe fn hnsw_visible_heap_tid(
     let mut tid = pg_sys::ItemPointerData::default();
     // SAFETY: `tid` is a local item pointer initialized through PostgreSQL's
     // shim before being passed to the table AM visibility checker.
-    unsafe { pg_sys::ItemPointerSet(&mut tid, block_number, offset_number) };
+    item_pointer_set_all(&mut tid, block_number, offset_number);
     let mut all_dead = false;
     // SAFETY: `scan` is a live ordered index scan descriptor. The heap relation
     // and snapshot belong to the descriptor, and this helper only asks the table

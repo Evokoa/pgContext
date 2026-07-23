@@ -11,7 +11,7 @@ Detailed policy and evidence requirements live in the
 ## Prerequisites
 
 - the Rust toolchain pinned by `rust-toolchain.toml`;
-- PostgreSQL 17 server development files and its `pg_config`;
+- PostgreSQL 17 and 18 server development files and matching `pg_config` binaries;
 - the versions in `tool-versions.env`, including `cargo-pgrx`, `cargo-audit`,
   `cargo-deny`, and gitleaks;
 - Docker with Compose v2 for configuration and playground validation;
@@ -25,7 +25,7 @@ release entry points must source it rather than selecting the latest tool.
 - `checks/open-source-readiness.sh` runs the bounded clean-source gate.
 - `build-packages.sh` creates and verifies the complete V1 source payload.
 - `ARTIFACT_POLICY.md` defines the signed-tag and attestation verification boundary.
-- `docker/Dockerfile` builds PostgreSQL 17 with pgContext installed.
+- `docker/Dockerfile` builds PostgreSQL 17 and 18 with pgContext installed.
 - `docker/compose.yml` runs the disposable playground.
 - `../scripts/` contains focused contract checks and evidence-report runners.
 - `../scripts/check-public-docs.py` validates the selected GitHub Markdown
@@ -106,10 +106,11 @@ The formula renderer pins the release-asset URL and SHA-256 checksum and stages
 both `pgcontext.rb` and its versioned `pgrx@0.19.1.rb` build dependency for the
 external `Evokoa/homebrew-tap` repository. It does not modify that repository.
 
-Build the local, merged amd64/arm64 OCI release candidate with provenance:
+Build a local, merged amd64/arm64 OCI release candidate with provenance (repeat
+for PostgreSQL majors 17 and 18):
 
 ```sh
-scripts/build-release-image.sh v0.1.0
+scripts/build-release-image.sh --pg-major 17 v0.1.0
 ```
 
 The command writes a SHA-named OCI archive and BuildKit metadata under
@@ -117,8 +118,8 @@ The command writes a SHA-named OCI archive and BuildKit metadata under
 demo, exact filtered results, and HNSW plan on both included platforms:
 
 ```sh
-scripts/verify-release-image.sh OCI_ARCHIVE IMAGE linux/amd64
-scripts/verify-release-image.sh OCI_ARCHIVE IMAGE linux/arm64
+scripts/verify-release-image.sh OCI_ARCHIVE IMAGE linux/amd64 17
+scripts/verify-release-image.sh OCI_ARCHIVE IMAGE linux/arm64 17
 ```
 
 Neither command pushes an image or changes registry tags. A diagnostic
@@ -127,15 +128,16 @@ filename and cannot be mistaken for clean candidate evidence.
 
 After the prepared and SHA tags exist in GHCR, the publish workflow uses
 `scripts/promote-release-image.sh` to require that both resolve to the accepted
-manifest digest before applying the six PG17/version-friendly tags. Its
+manifest digest before applying each major's version tags. PG17 additionally
+receives the unqualified version and `latest` aliases. Its
 `--plan` mode is read-only; tag promotion itself is reserved for the protected
 publish job.
 
 The manual `.github/workflows/release.yml` accepts only `prepare` or
 `publish`, an exact `vX.Y.Z` tag, and its full candidate SHA. Prepare builds,
 tests, and uploads the PGXN, Homebrew, and multi-architecture OCI inputs without
-changing a public registry. Publish names that prepare run and its reviewed
-manifest digest, revalidates the unchanged artifacts behind the protected
+changing a public registry. Publish names that prepare run and its two reviewed
+manifest digests, revalidates the unchanged artifacts behind the protected
 `release` environment, then publishes GHCR, PGXN, the GitHub release asset, and
 the external Homebrew tap in dependency order.
 

@@ -18,7 +18,7 @@ use context_storage::{
     PackedGraphImageView, encode_packed_graph_image,
 };
 use pgrx::datum::{AnyArray, AnyElement};
-use pgrx::itemptr::{item_pointer_to_u64, u64_to_item_pointer_parts};
+use pgrx::itemptr::{item_pointer_set_all, item_pointer_to_u64, u64_to_item_pointer_parts};
 use pgrx::prelude::*;
 use pgrx::{AllocatedByRust, FromDatum, PgBox, PgMemoryContexts, PgRelation};
 use std::cell::{Cell, RefCell};
@@ -594,7 +594,7 @@ fn heap_tid_from_text(value: &str) -> u64 {
     let mut heap_tid = pg_sys::ItemPointerData::default();
     // SAFETY: `block` and nonzero `offset` are validated scalar fields for a
     // PostgreSQL item pointer stored only long enough to encode its identity.
-    unsafe { pg_sys::ItemPointerSet(&mut heap_tid, block, offset) };
+    item_pointer_set_all(&mut heap_tid, block, offset);
     item_pointer_to_u64(heap_tid)
 }
 
