@@ -231,14 +231,58 @@ BEGIN
        AND relkind = 'v'
        AND relname IN (
            '_collection_acl',
-           '_visible_collection_vectors',
-           '_visible_collection_sparse_vectors',
+           '_visible_artifact_segments',
+           '_visible_build_jobs',
+           '_visible_collection_late_interaction',
+           '_visible_collection_limits',
+           '_visible_collection_payload_columns',
            '_visible_collection_points',
-           '_visible_collection_payload_columns'
+           '_visible_collection_sparse_vectors',
+           '_visible_collection_vectors',
+           '_visible_collections',
+           '_visible_pgvector_ownership_conversions',
+           '_visible_query_stats'
        )
        AND NOT pg_catalog.has_table_privilege('m1_upgrade_priv_probe', pg_class.oid, 'SELECT');
     IF missing_visibility_views <> 0 THEN
         RAISE EXCEPTION '% ACL-filtered visibility views are missing SELECT', missing_visibility_views;
+    END IF;
+END
+$$;
+SQL
+}
+
+validate_visibility_barriers() {
+    psql_db <<'SQL'
+DO $$
+DECLARE
+    membership_filtered_views bigint;
+    unbarriered_views text[];
+BEGIN
+    SELECT count(*),
+           pg_catalog.array_agg(relname::text ORDER BY relname)
+               FILTER (
+                   WHERE NOT COALESCE(
+                       reloptions @> ARRAY['security_barrier=true']::text[],
+                       false
+                   )
+               )
+      INTO membership_filtered_views, unbarriered_views
+      FROM pg_catalog.pg_class
+      JOIN pg_catalog.pg_namespace
+        ON pg_namespace.oid = pg_class.relnamespace
+     WHERE pg_namespace.nspname = 'pgcontext'
+       AND relkind = 'v'
+       AND pg_catalog.pg_get_viewdef(pg_class.oid)
+           ILIKE '%pg_has_role(SESSION_USER,%';
+
+    IF membership_filtered_views <> 11 THEN
+        RAISE EXCEPTION 'expected 11 membership-filtered visibility views, found %',
+                        membership_filtered_views;
+    END IF;
+    IF unbarriered_views IS NOT NULL THEN
+        RAISE EXCEPTION 'membership-filtered views lack security barriers: %',
+                        unbarriered_views;
     END IF;
 END
 $$;
@@ -907,6 +951,7 @@ SQL
     fi
 
     validate_lifecycle_state
+    validate_visibility_barriers
     validate_representative_behavior
     psql_db <<SQL
 DO \$\$
@@ -952,6 +997,7 @@ CREATE EXTENSION pgcontext VERSION '${CURRENT_VERSION}';
 SQL
 
 validate_lifecycle_state
+validate_visibility_barriers
 load_representative_state
 validate_representative_behavior
 validate_vector_metadata_compatibility
@@ -1008,6 +1054,7 @@ SQL
     validate_legacy_automatic_reclassification
     validate_upgrade_catalog_transition
     validate_lifecycle_state
+    validate_visibility_barriers
     validate_representative_behavior
     validate_vector_metadata_compatibility
     validate_upgraded_dump_restore

@@ -55,6 +55,30 @@ fn default_privileges_keep_acl_visibility_views_selectable() {
 }
 
 #[pg_test]
+fn membership_filtered_visibility_views_are_security_barriers() {
+    let unbarriered_views = default_privileges_names_from_query(
+        "SELECT relname::text
+           FROM pg_catalog.pg_class
+           JOIN pg_catalog.pg_namespace
+             ON pg_namespace.oid = pg_class.relnamespace
+          WHERE pg_namespace.nspname = 'pgcontext'
+            AND relkind = 'v'
+            AND pg_catalog.pg_get_viewdef(pg_class.oid)
+                ILIKE '%pg_has_role(SESSION_USER,%'
+            AND NOT COALESCE(
+                reloptions @> ARRAY['security_barrier=true']::text[],
+                false
+            )
+          ORDER BY 1",
+        "visibility-view security-barrier query should succeed",
+    );
+    assert!(
+        unbarriered_views.is_empty(),
+        "every membership-filtered visibility view must be a security barrier: {unbarriered_views:?}"
+    );
+}
+
+#[pg_test]
 fn default_privileges_catalog_operators_and_opclasses_are_schema_bound() {
     let misplaced_operators = default_privileges_names_from_query(
         "SELECT oprname::text
@@ -219,13 +243,17 @@ fn default_privileges_visibility_views_without_select(role_name: &str) -> Vec<St
                 AND relkind = 'v'
                 AND relname IN (
                     '_collection_acl',
-                    '_visible_collection_vectors',
-                    '_visible_collection_sparse_vectors',
-                    '_visible_collection_points',
-                    '_visible_query_stats',
-                    '_visible_collection_payload_columns',
+                    '_visible_artifact_segments',
+                    '_visible_build_jobs',
+                    '_visible_collection_late_interaction',
                     '_visible_collection_limits',
-                    '_visible_collections'
+                    '_visible_collection_payload_columns',
+                    '_visible_collection_points',
+                    '_visible_collection_sparse_vectors',
+                    '_visible_collection_vectors',
+                    '_visible_collections',
+                    '_visible_pgvector_ownership_conversions',
+                    '_visible_query_stats'
                 )
                 AND NOT pg_catalog.has_table_privilege($1, pg_class.oid, 'SELECT')
               ORDER BY 1",

@@ -327,6 +327,10 @@ CREATE TABLE pgcontext._artifact_reader_pins (
     PRIMARY KEY (artifact_id, backend_pid, backend_identity)
 );
 
+-- Intentionally unfiltered pre-authorization lookup. Callers need this minimal
+-- collection/alias name, owner-role, and source-binding summary to resolve a
+-- collection before checking membership. It must not expose source-table
+-- identity, source keys, vectors, payload metadata, or operational state.
 CREATE VIEW pgcontext._collection_acl AS
 SELECT collection_id,
        collection_name,
@@ -341,50 +345,58 @@ SELECT collections.collection_id,
   FROM pgcontext._collection_aliases AS aliases
   JOIN pgcontext._collections AS collections USING (collection_id);
 
-CREATE VIEW pgcontext._visible_collection_vectors AS
+CREATE VIEW pgcontext._visible_collection_vectors
+WITH (security_barrier = true) AS
 SELECT vectors.*
   FROM pgcontext._collection_vectors AS vectors
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_collection_sparse_vectors AS
+CREATE VIEW pgcontext._visible_collection_sparse_vectors
+WITH (security_barrier = true) AS
 SELECT vectors.*
   FROM pgcontext._collection_sparse_vectors AS vectors
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_collection_points AS
+CREATE VIEW pgcontext._visible_collection_points
+WITH (security_barrier = true) AS
 SELECT points.*
   FROM pgcontext._collection_points AS points
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_query_stats AS
+CREATE VIEW pgcontext._visible_query_stats
+WITH (security_barrier = true) AS
 SELECT stats.*
   FROM pgcontext._query_stats AS stats
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_collection_payload_columns AS
+CREATE VIEW pgcontext._visible_collection_payload_columns
+WITH (security_barrier = true) AS
 SELECT payload_columns.*
   FROM pgcontext._collection_payload_columns AS payload_columns
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_build_jobs AS
+CREATE VIEW pgcontext._visible_build_jobs
+WITH (security_barrier = true) AS
 SELECT jobs.*
   FROM pgcontext._build_jobs AS jobs
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_artifact_segments AS
+CREATE VIEW pgcontext._visible_artifact_segments
+WITH (security_barrier = true) AS
 SELECT artifacts.*,
        collections.collection_name
   FROM pgcontext._artifact_segments AS artifacts
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_collection_limits AS
+CREATE VIEW pgcontext._visible_collection_limits
+WITH (security_barrier = true) AS
 SELECT collection_id,
        strict_mode,
        max_dimensions,
@@ -398,7 +410,8 @@ SELECT collection_id,
   FROM pgcontext._collections
  WHERE pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_collections AS
+CREATE VIEW pgcontext._visible_collections
+WITH (security_barrier = true) AS
 SELECT collection_id,
        collection_name,
        owner_role,

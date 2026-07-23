@@ -26,12 +26,22 @@ tenant dimensions. Manual cohort labels are caller-controlled bounded ASCII
 operator labels and may intentionally encode an application's tenant/cohort
 dimension, so applications must apply their own PII policy to those labels.
 Visibility is derived from `SESSION_USER` membership through public visibility
-views; callers receive no direct access to the private telemetry table.
+views. Every membership-filtered visibility view is a PostgreSQL security
+barrier, so caller-supplied non-leakproof predicates cannot inspect rows before
+the membership condition is applied. Callers receive no direct access to the
+private telemetry table.
 Query backends enqueue fixed-size numeric/label events without supplying a role
 OID or database identity. The background worker derives its database and
 extension-owner identity from server state and writes the private table directly
 in its own transaction; there is no public security-definer telemetry writer.
 Queue-health counters are database-local and require membership in `pg_monitor`.
+
+The public `_collection_acl` view is intentionally different: it is an
+unfiltered pre-authorization lookup used to resolve a collection or alias before
+membership can be checked. Every collection and alias entry in this minimal
+directory is publicly enumerable, including its collection ID, owner role, and
+whether a source table is bound. Source-table identity, source keys, vectors,
+payload metadata, and operational state remain private or membership-filtered.
 
 ## Security-Definer Review Notes
 

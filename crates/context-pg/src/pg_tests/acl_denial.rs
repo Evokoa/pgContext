@@ -585,6 +585,79 @@ fn hybrid_query_does_not_require_private_catalog_table_grants() {
 }
 
 #[pg_test]
+fn hostile_visibility_predicate_cannot_observe_another_tenants_source_keys() {
+    acl_create_role("m1_visibility_owner");
+    acl_create_role("m1_visibility_outsider");
+    acl_grant_api_access("m1_visibility_owner");
+    acl_grant_api_access("m1_visibility_outsider");
+
+    acl_set_session_user("m1_visibility_owner");
+    Spi::run(
+        "CREATE TABLE public.m1_visibility_docs (
+             id text PRIMARY KEY,
+             embedding vector
+         );
+         INSERT INTO public.m1_visibility_docs (id, embedding)
+         VALUES ('tenant-secret-source-key', '[1,0]'::vector);
+         SELECT pgcontext.create_collection(
+             'm1_visibility_docs', 'public.m1_visibility_docs'
+         );
+         SELECT pgcontext.upsert_points(
+             'm1_visibility_docs', ARRAY['tenant-secret-source-key']
+         );",
+    )
+    .expect("collection owner should seed a private source key");
+    acl_reset_session_user();
+
+    Spi::run(
+        r#"
+        CREATE FUNCTION public.m1_hostile_source_key_predicate(value text)
+        RETURNS boolean
+        LANGUAGE plpgsql
+        IMMUTABLE
+        STRICT
+        COST 0.0001
+        AS $$
+        BEGIN
+            RAISE EXCEPTION 'hostile predicate observed source_key: %', value;
+        END;
+        $$;
+        GRANT EXECUTE ON FUNCTION public.m1_hostile_source_key_predicate(text)
+            TO m1_visibility_outsider;
+        "#,
+    )
+    .expect("hostile non-leakproof predicate should be created");
+
+    acl_set_session_user("m1_visibility_outsider");
+    Spi::run(
+        r#"
+        CREATE TEMP TABLE m1_visibility_probe_result (observed boolean NOT NULL);
+        DO $$
+        BEGIN
+            BEGIN
+                PERFORM 1
+                  FROM pgcontext._visible_collection_points
+                 WHERE public.m1_hostile_source_key_predicate(source_key);
+                INSERT INTO m1_visibility_probe_result VALUES (false);
+            EXCEPTION WHEN raise_exception THEN
+                INSERT INTO m1_visibility_probe_result VALUES (true);
+            END;
+        END;
+        $$;
+        "#,
+    )
+    .expect("outsider visibility probe should execute");
+    let observed = Spi::get_one::<bool>("SELECT bool_or(observed) FROM m1_visibility_probe_result")
+        .expect("probe result query should execute")
+        .expect("probe result should not be null");
+    assert!(
+        !observed,
+        "a non-leakproof predicate must not execute on another tenant's source_key"
+    );
+    acl_reset_session_user();
+}
+
+#[pg_test]
 fn hybrid_query_refreshes_drifted_source_table_without_catalog_writes() {
     acl_create_role("m5_acl_drift_owner");
     acl_grant_api_access("m5_acl_drift_owner");

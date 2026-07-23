@@ -46,7 +46,8 @@ CREATE TABLE pgcontext._collection_late_interaction_tokens (
     UNIQUE (collection_id, point_id, token_ordinal)
 );
 
-CREATE VIEW pgcontext._visible_collection_late_interaction AS
+CREATE VIEW pgcontext._visible_collection_late_interaction
+WITH (security_barrier = true) AS
 SELECT registrations.*
   FROM pgcontext._collection_late_interaction AS registrations
   JOIN pgcontext._collections AS collections USING (collection_id)

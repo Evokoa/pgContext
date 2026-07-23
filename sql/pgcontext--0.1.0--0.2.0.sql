@@ -216,7 +216,8 @@ ALTER TABLE pgcontext._query_stats
     ADD COLUMN completion text NOT NULL DEFAULT 'unspecified'
         CHECK (completion IN ('unspecified','complete','cancelled','budget_exhausted','error'));
 
-CREATE VIEW pgcontext._visible_query_stats AS
+CREATE VIEW pgcontext._visible_query_stats
+WITH (security_barrier = true) AS
 SELECT stats.*
   FROM pgcontext._query_stats AS stats
   JOIN pgcontext._collections AS collections USING (collection_id)
@@ -224,7 +225,8 @@ SELECT stats.*
 
 GRANT SELECT ON pgcontext._visible_query_stats TO PUBLIC;
 
-CREATE VIEW pgcontext._visible_collections AS
+CREATE VIEW pgcontext._visible_collections
+WITH (security_barrier = true) AS
 SELECT collection_id,
        collection_name,
        owner_role,
@@ -235,6 +237,24 @@ SELECT collection_id,
  WHERE pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER');
 
 GRANT SELECT ON pgcontext._visible_collections TO PUBLIC;
+
+-- These visibility views predate 0.2.0. Preserve their definitions and harden
+-- their membership predicates against non-leakproof caller quals during the
+-- in-place upgrade.
+ALTER VIEW pgcontext._visible_collection_vectors
+    SET (security_barrier = true);
+ALTER VIEW pgcontext._visible_collection_sparse_vectors
+    SET (security_barrier = true);
+ALTER VIEW pgcontext._visible_collection_points
+    SET (security_barrier = true);
+ALTER VIEW pgcontext._visible_collection_payload_columns
+    SET (security_barrier = true);
+ALTER VIEW pgcontext._visible_build_jobs
+    SET (security_barrier = true);
+ALTER VIEW pgcontext._visible_artifact_segments
+    SET (security_barrier = true);
+ALTER VIEW pgcontext._visible_collection_limits
+    SET (security_barrier = true);
 
 CREATE FUNCTION pgcontext._refresh_collection_source_table(
     p_collection_id bigint
@@ -1023,7 +1043,8 @@ CREATE TABLE pgcontext._collection_late_interaction_tokens (
     UNIQUE (collection_id, point_id, token_ordinal)
 );
 
-CREATE VIEW pgcontext._visible_collection_late_interaction AS
+CREATE VIEW pgcontext._visible_collection_late_interaction
+WITH (security_barrier = true) AS
 SELECT registrations.*
   FROM pgcontext._collection_late_interaction AS registrations
   JOIN pgcontext._collections AS collections USING (collection_id)
