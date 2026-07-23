@@ -77,6 +77,7 @@ Their dependency order and acceptance requirements are in the
 - [Client-facing examples](client_examples.md)
 - [Filters](filters.md)
 - [Hybrid retrieval](hybrid_retrieval.md)
+- [Retrieval methods overview](retrieval_methods.md)
 - [Indexes](indexes.md)
 - [Rebuildable storage artifacts](storage.md)
 - [Operations and support](operations.md)

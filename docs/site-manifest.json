@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "89ef0a7a896d5e1fc7bb4deec236170b700b13c9fb79e003c69c1377824e4590",
+  "navigation_sha256": "1cbeb62c9b47db31419db3cbe82cbd971cbc98132e443a64dc651d7e5cda2a30",
   "pages": [
     {
       "links": [],
@@ -352,6 +352,7 @@
         "playground.md",
         "quickstart.md",
         "release_notes.md",
+        "retrieval_methods.md",
         "roadmap.md",
         "roadmap.md",
         "rollback.md",
@@ -363,7 +364,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "e378f9ddecd64cce5531c17016d9bf7bbfb3fe07f4837fca2e4dff74a4d450d3"
+      "sha256": "953f22a85a52d68efab69efd940b0a290c36fe5ec72dfa9487bd56f2776f10f2"
     },
     {
       "links": [
@@ -473,14 +474,14 @@
         "pgvector_migration.md#converting-column-ownership"
       ],
       "path": "user_guide/pgvector_coexist.md",
-      "sha256": "35bed9e790919f577f6c47783cb52c6bc826dbc99d546680645a4a4cd5b974d5"
+      "sha256": "f898d21df2e47fe8ba9761a5967950c4661c33f23f2dd1baa8d7b79e44ad285f"
     },
     {
       "links": [
         "pgvector_coexist.md"
       ],
       "path": "user_guide/pgvector_migration.md",
-      "sha256": "1fed386324dc6debc9d55551d72163b8be42e928228483702243d2203855021b"
+      "sha256": "c2b88293f50b0f5fda440f002e4b4f6549aededdc8d6e4280134e4eb3df18a2e"
     },
     {
       "links": [
@@ -528,8 +529,44 @@
     },
     {
       "links": [
+        "#exact-vs-approximate",
+        "#filtered-retrieval",
+        "#sparse-learned-retrieval",
+        "api_reference.md",
+        "api_reference.md",
+        "filters.md",
+        "filters.md",
+        "hybrid_retrieval.md",
+        "hybrid_retrieval.md",
+        "hybrid_retrieval.md",
+        "hybrid_retrieval.md",
+        "indexes.md",
+        "indexes.md",
+        "multi_tenancy.md",
+        "multi_tenancy.md",
+        "roadmap.md",
+        "roadmap.md",
+        "roadmap.md",
+        "sql_object_inventory.md",
+        "vector_search.md",
+        "vector_search.md",
+        "vector_search.md",
+        "vector_search.md",
+        "vector_search.md",
+        "vector_search.md",
+        "vector_search.md",
+        "vector_search.md",
+        "vector_search.md",
+        "vector_search.md"
+      ],
+      "path": "user_guide/retrieval_methods.md",
+      "sha256": "bf9a6b8afdd7cd5aa4114fe30634b90b45cad4e472ae12428a268ac873d3460c"
+    },
+    {
+      "links": [
         "#delivery-phases-post-v1-overview",
         "#delivery-phases-post-v1-overview",
+        "#large-dimension-sparse-vectors",
         "#named-sparse-ann",
         "#non-dense-ann-opclasses",
         "#pgvector-migration-and-compatibility",
@@ -538,7 +575,7 @@
         "https://github.com/evokoa/pggraph"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "21de2ec873c80d84442298923307eacbd0997e1247396dfef2163e34d374e9f6"
+      "sha256": "bfebcc5fdb75d318a8d0ab2c76d75f77ca785d51f28e90cca9ed133b7821ece1"
     },
     {
       "links": [],

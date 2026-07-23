@@ -87,6 +87,10 @@
           "path": "user_guide/hybrid_retrieval.md"
         },
         {
+          "title": "Retrieval methods overview",
+          "path": "user_guide/retrieval_methods.md"
+        },
+        {
           "title": "Client examples",
           "path": "user_guide/client_examples.md"
         },
