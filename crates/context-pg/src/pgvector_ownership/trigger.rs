@@ -4,13 +4,25 @@ use std::num::NonZeroUsize;
 use pgrx::prelude::*;
 
 use crate::error::raise_sql_error;
+use crate::vector_variants::SparseVec;
+use crate::vector_variants::pgvector_sparsevec_datum::{
+    sparse_from_pgvector_datum, sparse_into_pgvector_datum,
+};
 
-/// Copies one certified binary-compatible vector Datum into another column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CertifiedTypePair {
+    BinaryCompatible,
+    PgvectorSparseToCanonical,
+    CanonicalSparseToPgvector,
+}
+
+/// Synchronizes one certified pgvector/pgContext type pair.
 ///
 /// Trigger arguments are the 1-based source and target attribute numbers. The
 /// trigger validates the exact pgvector/pgContext type pair and typmod on every
-/// invocation before performing the raw Datum copy. It fires for every INSERT
-/// or UPDATE so callers cannot corrupt a shadow column by assigning it directly.
+/// invocation before performing either a binary Datum copy or a validated
+/// sparse representation conversion. It fires for every INSERT or UPDATE so
+/// callers cannot corrupt a shadow column by assigning it directly.
 #[pg_trigger]
 fn _sync_pgvector_ownership_columns<'a>(
     trigger: &'a PgTrigger<'a>,
@@ -64,9 +76,8 @@ fn _sync_pgvector_ownership_columns<'a>(
             "pgvector ownership synchronization cannot use a dropped column",
         );
     }
-    if source_attribute.atttypmod != target_attribute.atttypmod
-        || !certified_type_pair(source_attribute.atttypid, target_attribute.atttypid)
-    {
+    let type_pair = certified_type_pair(source_attribute.atttypid, target_attribute.atttypid);
+    if source_attribute.atttypmod != target_attribute.atttypmod || type_pair.is_none() {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
             "pgvector ownership synchronization type or typmod binding is not certified",
@@ -98,11 +109,52 @@ fn _sync_pgvector_ownership_columns<'a>(
         )
     };
     let mut replacement = new_tuple.into_owned();
-    // SAFETY: The exact source/target physical-layout pair and typmod were
-    // certified above. heap_modify_tuple copies the by-reference varlena Datum
-    // into the replacement tuple before the source tuple can be released.
+    let target_datum = if is_null {
+        None
+    } else {
+        let type_pair = type_pair.unwrap_or_else(|| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+                "pgvector ownership synchronization type pair is not certified",
+            )
+        });
+        Some(match type_pair {
+            CertifiedTypePair::BinaryCompatible => source_datum,
+            CertifiedTypePair::PgvectorSparseToCanonical => {
+                // SAFETY: The certified pair proves this is a pgvector-owned
+                // public.sparsevec datum with the matching typmod.
+                let sparse = unsafe { sparse_from_pgvector_datum(source_datum) };
+                SparseVec::from_sparse(sparse)
+                    .into_datum()
+                    .unwrap_or_else(|| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                            "canonical sparsevec trigger conversion unexpectedly returned null",
+                        )
+                    })
+            }
+            CertifiedTypePair::CanonicalSparseToPgvector => {
+                // SAFETY: The certified pair proves this is a canonical
+                // pgcontext.sparsevec datum with the matching typmod.
+                let sparse =
+                    unsafe { SparseVec::from_datum(source_datum, false) }.unwrap_or_else(|| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_NULL_VALUE_NOT_ALLOWED,
+                            "canonical sparsevec trigger source is null",
+                        )
+                    });
+                let sparse = sparse
+                    .to_sparse()
+                    .unwrap_or_else(|error| crate::error::raise_core_error(error));
+                sparse_into_pgvector_datum(&sparse)
+            }
+        })
+    };
+    // SAFETY: The exact source/target pair and typmod were certified above.
+    // For binary-compatible pairs PostgreSQL copies the live source varlena;
+    // sparse pairs use a newly allocated, validated target representation.
     unsafe {
-        replacement.set_by_index_unchecked(target_attnum, (!is_null).then_some(source_datum));
+        replacement.set_by_index_unchecked(target_attnum, target_datum);
     }
     Ok(Some(replacement))
 }
@@ -130,25 +182,34 @@ fn invalid_attnum(label: &str, value: NonZeroUsize) -> ! {
     )
 }
 
-fn certified_type_pair(source: pg_sys::Oid, target: pg_sys::Oid) -> bool {
+fn certified_type_pair(source: pg_sys::Oid, target: pg_sys::Oid) -> Option<CertifiedTypePair> {
     // SAFETY: Static catalog identifiers are used only for syscache lookups.
     let canonical_vector = unsafe { named_type_oid(c"pgcontext", c"vector") };
     // SAFETY: Same static catalog lookup boundary.
     let canonical_halfvec = unsafe { named_type_oid(c"pgcontext", c"halfvec") };
+    // SAFETY: Same static catalog lookup boundary.
+    let canonical_sparsevec = unsafe { named_type_oid(c"pgcontext", c"sparsevec") };
     // SAFETY: pgvector is certified only when its extension-owned public types
     // resolve to these exact OIDs.
     let pgvector_vector = unsafe { certified_pgvector_type_oid(c"vector") };
     // SAFETY: Same certified pgvector lookup boundary.
     let pgvector_halfvec = unsafe { certified_pgvector_type_oid(c"halfvec") };
+    // SAFETY: Same certified pgvector lookup boundary.
+    let pgvector_sparsevec = unsafe { certified_pgvector_type_oid(c"sparsevec") };
 
-    matches!(
-        (source, target),
-        (source, target)
-            if (source == pgvector_vector && target == canonical_vector)
-                || (source == canonical_vector && target == pgvector_vector)
-                || (source == pgvector_halfvec && target == canonical_halfvec)
-                || (source == canonical_halfvec && target == pgvector_halfvec)
-    )
+    if (source == pgvector_vector && target == canonical_vector)
+        || (source == canonical_vector && target == pgvector_vector)
+        || (source == pgvector_halfvec && target == canonical_halfvec)
+        || (source == canonical_halfvec && target == pgvector_halfvec)
+    {
+        Some(CertifiedTypePair::BinaryCompatible)
+    } else if source == pgvector_sparsevec && target == canonical_sparsevec {
+        Some(CertifiedTypePair::PgvectorSparseToCanonical)
+    } else if source == canonical_sparsevec && target == pgvector_sparsevec {
+        Some(CertifiedTypePair::CanonicalSparseToPgvector)
+    } else {
+        None
+    }
 }
 
 unsafe fn certified_pgvector_type_oid(type_name: &'static CStr) -> pg_sys::Oid {

@@ -92,6 +92,13 @@ fn start_pgvector_ownership_conversion(
     let table_oid = target.oid();
     drop(target);
     let mut conversion_target = resolve_conversion_target(table_oid, &column_name);
+    if mode == "fast" && conversion_target.source_type_name == "sparsevec" {
+        crate::error::raise_sql_error(
+            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+            "pgvector sparsevec has a different physical layout from pgContext sparsevec; \
+             use mode => 'restricted_online' for a validated, resumable conversion",
+        );
+    }
     if canonical_opclass(&conversion_target.source_type_name, &metric).is_none() {
         crate::error::raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,

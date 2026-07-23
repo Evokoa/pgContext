@@ -642,9 +642,96 @@ expect_failure_matching "relocated pgvector extension" \
 q "ALTER EXTENSION vector SET SCHEMA public;
    DROP SCHEMA vector_moved" >/dev/null
 
+# pgvector sparsevec uses a different packed representation. It must reject the
+# metadata-only fast path, then preserve values and same-transaction DML through
+# the validated restricted-online rewrite.
+q "CREATE TABLE conversion_sparse (
+     id bigint PRIMARY KEY,
+     embedding public.sparsevec(4) NOT NULL
+   );
+   INSERT INTO conversion_sparse VALUES
+     (1, '{1:1,4:0.5}/4'), (2, '{2:1}/4'), (3, '{3:-2}/4');
+   CREATE INDEX conversion_sparse_source_hnsw
+     ON conversion_sparse USING hnsw (embedding public.sparsevec_cosine_ops);
+   ALTER TABLE conversion_sparse OWNER TO conversion_owner" >/dev/null
+expect_failure_matching "sparsevec fast conversion" \
+  "SET SESSION AUTHORIZATION conversion_owner;
+   SELECT * FROM pgcontext.start_pgvector_ownership_conversion(
+     'conversion_sparse'::pg_catalog.regclass, 'embedding', 'fast', 'cosine',
+     application_dependencies_reviewed => true
+   )" \
+  "use mode => 'restricted_online'"
+sparse_id=$(q_owner "SELECT conversion_id
+                       FROM pgcontext.start_pgvector_ownership_conversion(
+                         'conversion_sparse'::pg_catalog.regclass,
+                         'embedding',
+                         'restricted_online',
+                         'cosine',
+                         application_uses_column_lists => true,
+                         application_dependencies_reviewed => true
+                       )")
+q_owner "INSERT INTO conversion_sparse (id, embedding)
+           VALUES (4, '{1:0.25,2:0.75}/4'::public.sparsevec)" >/dev/null
+for _ in $(seq 1 10); do
+  sparse_status=$(q_owner "SELECT status
+                             FROM pgcontext.run_pgvector_ownership_conversion(${sparse_id}, 1)")
+  [[ "${sparse_status}" == "backfilling" ]] || break
+done
+[[ "${sparse_status}" == "index_pending" ]] \
+  || fail "sparsevec conversion backfill ended in ${sparse_status}"
+sparse_command=$(q_owner "SELECT next_command
+                            FROM pgcontext.run_pgvector_ownership_conversion(${sparse_id})")
+q_owner_top_level "${sparse_command}" >/dev/null
+q_owner "SELECT status
+           FROM pgcontext.run_pgvector_ownership_conversion(${sparse_id})" >/dev/null
+q_owner "SELECT status
+           FROM pgcontext.cutover_pgvector_ownership_conversion(
+             ${sparse_id}, sessions_drained => true
+           )" >/dev/null
+q_owner "INSERT INTO conversion_sparse (id, embedding)
+           VALUES (5, '{2:-0.5,4:1.25}/4'::pgcontext.sparsevec)" >/dev/null
+sparse_status=$(q_owner "SELECT status
+                           FROM pgcontext.finalize_pgvector_ownership_conversion(${sparse_id})")
+[[ "${sparse_status}" == "completed" ]] \
+  || fail "sparsevec finalization ended in ${sparse_status}"
+sparse_result=$(q "SELECT type_namespace.nspname || '.' || type.typname || ':'
+                          || pg_catalog.string_agg(
+                               rows.id || '=' || rows.embedding::text,
+                               ',' ORDER BY rows.id
+                             )
+                     FROM conversion_sparse AS rows
+                     JOIN pg_catalog.pg_attribute AS attribute
+                       ON attribute.attrelid = 'conversion_sparse'::pg_catalog.regclass
+                      AND attribute.attname = 'embedding'
+                     JOIN pg_catalog.pg_type AS type ON type.oid = attribute.atttypid
+                     JOIN pg_catalog.pg_namespace AS type_namespace
+                       ON type_namespace.oid = type.typnamespace
+                    GROUP BY type_namespace.nspname, type.typname")
+[[ "${sparse_result}" == "pgcontext.sparsevec:1={1:1,4:0.5}/4,2={2:1}/4,3={3:-2}/4,4={1:0.25,2:0.75}/4,5={2:-0.5,4:1.25}/4" ]] \
+  || fail "sparsevec ownership conversion changed type or values: ${sparse_result}"
+
+q "CREATE TABLE conversion_sparse_oversized (
+     id bigint PRIMARY KEY,
+     embedding public.sparsevec(16001) NOT NULL
+   );
+   INSERT INTO conversion_sparse_oversized VALUES (1, '{1:1}/16001');
+   ALTER TABLE conversion_sparse_oversized OWNER TO conversion_owner" >/dev/null
+expect_failure_matching "oversized sparsevec ownership conversion" \
+  "SET SESSION AUTHORIZATION conversion_owner;
+   SELECT * FROM pgcontext.start_pgvector_ownership_conversion(
+     'conversion_sparse_oversized'::pg_catalog.regclass,
+     'embedding',
+     'restricted_online',
+     'cosine',
+     application_uses_column_lists => true,
+     application_dependencies_reviewed => true
+   )" \
+  "large-dimension sparse support is planned"
+
 q "DROP TABLE conversion_online, conversion_prepared, conversion_blocked,
               conversion_rls, conversion_renamed, conversion_custom_index,
-              conversion_index_options, conversion_index_comment;
+              conversion_index_options, conversion_index_comment,
+              conversion_sparse_oversized;
    DROP SCHEMA conversion_custom CASCADE;
    DROP SCHEMA conversion_intruder_schema CASCADE;
    DROP OWNED BY conversion_intruder;
@@ -658,6 +745,12 @@ canonical_nearest=$(q "SELECT id FROM conversion_final
                         ORDER BY embedding OPERATOR(pgcontext.<->) '[1,0,0]'::pgcontext.vector
                         LIMIT 1")
 [[ "${canonical_nearest}" == "1" ]] || fail "finalized canonical HNSW failed after pgvector removal"
+sparse_nearest=$(q "SELECT id FROM conversion_sparse
+                      ORDER BY embedding OPERATOR(pgcontext.<=>)
+                               '{1:1,4:0.5}/4'::pgcontext.sparsevec
+                      LIMIT 1")
+[[ "${sparse_nearest}" == "1" ]] \
+  || fail "finalized canonical sparsevec HNSW failed after pgvector removal"
 
 # A finalized database must dump and restore without the bridge or pgvector.
 ${PG_DUMP} -d "${DB}" --format=custom --file="${DUMP_FILE}"
@@ -701,4 +794,4 @@ q "REASSIGN OWNED BY conversion_owner TO CURRENT_USER;
    DROP ROLE conversion_owner" >/dev/null
 
 ${PSQL} -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE ${DB};" >/dev/null
-echo "pgvector ownership conversion verification passed (metric matrix, backend resume, rollback, dump/restore, and pgvector removal)"
+echo "pgvector ownership conversion verification passed (dense metric matrix, sparse rewrite, backend resume, rollback, dump/restore, and pgvector removal)"

@@ -78,10 +78,11 @@ unsafe fn hnsw_dense_from_datum(
 
     // SAFETY: Both identifiers are static pgvector type names; the helper also
     // verifies exact extension ownership before returning either OID.
-    let (pgvector_vector, pgvector_halfvec) = unsafe {
+    let (pgvector_vector, pgvector_halfvec, pgvector_sparsevec) = unsafe {
         (
             hnsw_certified_pgvector_type_oid(c"vector"),
             hnsw_certified_pgvector_type_oid(c"halfvec"),
+            hnsw_certified_pgvector_type_oid(c"sparsevec"),
         )
     };
 
@@ -102,10 +103,23 @@ unsafe fn hnsw_dense_from_datum(
             Ok(vector) => Some(vector),
             Err(error) => raise_core_error(error),
         }
-    } else if type_oid == sparsevec_oid {
-        // SAFETY: The scan key subtype says this argument is a SQL `sparsevec`.
-        let sparsevec = unsafe { SparseVec::from_datum(datum, false) }?;
-        Some(sparsevec_to_dense(sparsevec))
+    } else if type_oid == sparsevec_oid || type_oid == pgvector_sparsevec {
+        let sparsevec = if type_oid == sparsevec_oid {
+            // SAFETY: The scan key subtype says this argument is a canonical SQL `sparsevec`.
+            unsafe { SparseVec::from_datum(datum, false) }?
+                .to_sparse()
+                .unwrap_or_else(|error| raise_core_error(error))
+        } else {
+            // SAFETY: The type OID is certified as pgvector-owned public.sparsevec.
+            unsafe {
+                crate::vector_variants::pgvector_sparsevec_datum::sparse_from_pgvector_datum(datum)
+            }
+        };
+        let mut values = vec![0.0; sparsevec.dimensions()];
+        for entry in sparsevec.entries() {
+            values[entry.index() - 1] = entry.value();
+        }
+        Some(DenseVector::new(values).unwrap_or_else(|error| raise_core_error(error)))
     } else if type_oid == bitvec_oid {
         // SAFETY: The scan key subtype says this argument is a SQL `bitvec`.
         let bitvec = unsafe { BitVec::from_datum(datum, false) }?;
@@ -133,10 +147,11 @@ unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric
         )
     };
     // SAFETY: Both static names are resolved only when owned by pgvector.
-    let (pgvector_vector, pgvector_halfvec) = unsafe {
+    let (pgvector_vector, pgvector_halfvec, pgvector_sparsevec) = unsafe {
         (
             hnsw_certified_pgvector_type_oid(c"vector"),
             hnsw_certified_pgvector_type_oid(c"halfvec"),
+            hnsw_certified_pgvector_type_oid(c"sparsevec"),
         )
     };
     if type_oid == vector_oid {
@@ -242,6 +257,42 @@ unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric
         unsafe {
             hnsw_score_metric_from_bridge_candidates(index_relation, type_oid, &candidates, "halfvec")
         }
+    } else if type_oid == pgvector_sparsevec {
+        let candidates = [
+            (
+                HnswScoreMetric::L2,
+                "_pgvector_sparsevec_l2_support",
+                pg_sys::FLOAT8OID,
+                "<->",
+            ),
+            (
+                HnswScoreMetric::NegativeInnerProduct,
+                "_pgvector_sparsevec_ip_support",
+                pg_sys::FLOAT8OID,
+                "<#>",
+            ),
+            (
+                HnswScoreMetric::Cosine,
+                "_pgvector_sparsevec_cosine_support",
+                pg_sys::FLOAT8OID,
+                "<=>",
+            ),
+            (
+                HnswScoreMetric::L1,
+                "_pgvector_sparsevec_l1_support",
+                pg_sys::FLOAT8OID,
+                "<+>",
+            ),
+        ];
+        // SAFETY: The pgvector sparsevec OID and bridge objects are certified.
+        unsafe {
+            hnsw_score_metric_from_bridge_candidates(
+                index_relation,
+                type_oid,
+                &candidates,
+                "sparsevec",
+            )
+        }
     } else {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
@@ -257,6 +308,7 @@ unsafe fn hnsw_index_uses_certified_pgvector_type(index_relation: pg_sys::Relati
     // ownership is checked by the helpers.
     type_oid == unsafe { hnsw_certified_pgvector_type_oid(c"vector") }
         || type_oid == unsafe { hnsw_certified_pgvector_type_oid(c"halfvec") }
+        || type_oid == unsafe { hnsw_certified_pgvector_type_oid(c"sparsevec") }
 }
 
 unsafe fn hnsw_orderby_contract(index_relation: pg_sys::Relation) -> HnswOrderByContract {
@@ -664,6 +716,7 @@ unsafe fn hnsw_validate_opclass(opclass_oid: pg_sys::Oid) -> bool {
         canonical_bitvec,
         pgvector_vector,
         pgvector_halfvec,
+        pgvector_sparsevec,
         // SAFETY: Every lookup below uses a static catalog identifier; the
         // pgvector variants additionally verify exact extension ownership.
     ) = unsafe {
@@ -674,6 +727,7 @@ unsafe fn hnsw_validate_opclass(opclass_oid: pg_sys::Oid) -> bool {
             hnsw_pgcontext_type_oid(c"bitvec"),
             hnsw_certified_pgvector_type_oid(c"vector"),
             hnsw_certified_pgvector_type_oid(c"halfvec"),
+            hnsw_certified_pgvector_type_oid(c"sparsevec"),
         )
     };
 
@@ -778,6 +832,29 @@ unsafe fn hnsw_validate_opclass(opclass_oid: pg_sys::Oid) -> bool {
             ("_pgvector_halfvec_ip_support", pg_sys::FLOAT8OID, "<#>"),
             ("_pgvector_halfvec_cosine_support", pg_sys::FLOAT8OID, "<=>"),
             ("_pgvector_halfvec_l1_support", pg_sys::FLOAT8OID, "<+>"),
+        ];
+        // SAFETY: Same certified pgvector and static bridge contract above.
+        unsafe {
+            hnsw_validate_opclass_candidates(
+                opclass_oid,
+                family,
+                input_type,
+                &candidates,
+                "pgcontext_pgvector",
+                "public",
+                "vector",
+            )
+        }
+    } else if input_type == pgvector_sparsevec {
+        let candidates = [
+            ("_pgvector_sparsevec_l2_support", pg_sys::FLOAT8OID, "<->"),
+            ("_pgvector_sparsevec_ip_support", pg_sys::FLOAT8OID, "<#>"),
+            (
+                "_pgvector_sparsevec_cosine_support",
+                pg_sys::FLOAT8OID,
+                "<=>",
+            ),
+            ("_pgvector_sparsevec_l1_support", pg_sys::FLOAT8OID, "<+>"),
         ];
         // SAFETY: Same certified pgvector and static bridge contract above.
         unsafe {
@@ -1048,17 +1125,6 @@ unsafe fn hnsw_index_opfamily(index_relation: pg_sys::Relation) -> pg_sys::Oid {
     // SAFETY: `rd_opfamily` points to one OID per index key. This AM registers
     // only single-column opclasses, so the first entry is authoritative.
     unsafe { *opfamily }
-}
-
-fn sparsevec_to_dense(vector: SparseVec) -> DenseVector {
-    let vector = vector
-        .to_sparse()
-        .unwrap_or_else(|error| raise_core_error(error));
-    let mut values = vec![0.0; vector.dimensions()];
-    for entry in vector.entries() {
-        values[entry.index() - 1] = entry.value();
-    }
-    DenseVector::new(values).unwrap_or_else(|error| raise_core_error(error))
 }
 
 fn bitvec_to_dense(vector: BitVec) -> DenseVector {

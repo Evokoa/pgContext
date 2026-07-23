@@ -26,6 +26,19 @@ expect_failure() {
   fi
 }
 
+expect_failure_matching() {
+  local description=$1
+  local sql=$2
+  local expected=$3
+  local output_file=${TMPDIR:-/tmp}/pgcontext-pgvector-bridge-failure.out
+  if ${PSQL} -d "${DB}" -v ON_ERROR_STOP=1 -c "${sql}" >"${output_file}" 2>&1; then
+    fail "${description} unexpectedly succeeded"
+  fi
+  if ! grep -Fq "${expected}" "${output_file}"; then
+    fail "${description} failed for the wrong reason; expected '${expected}'"
+  fi
+}
+
 ${PSQL} -d postgres -v ON_ERROR_STOP=1 \
   -c "DROP DATABASE IF EXISTS ${DB};" \
   -c "CREATE DATABASE ${DB};" >/dev/null
@@ -53,7 +66,7 @@ bridge_opclasses=$(q "SELECT count(*)
                         JOIN pg_catalog.pg_extension AS extension
                           ON extension.oid = dependency.refobjid
                        WHERE extension.extname = 'pgcontext_pgvector'")
-[[ "${bridge_opclasses}" == "8" ]] || fail "bridge owns ${bridge_opclasses} opclasses, expected 8"
+[[ "${bridge_opclasses}" == "12" ]] || fail "bridge owns ${bridge_opclasses} opclasses, expected 12"
 
 invalid_bridge_opclasses=$(q "SELECT count(*)
                                 FROM pg_catalog.pg_opclass AS opclass
@@ -77,7 +90,7 @@ bridge_functions=$(q "SELECT count(*)
                         JOIN pg_catalog.pg_extension AS extension
                           ON extension.oid = dependency.refobjid
                        WHERE extension.extname = 'pgcontext_pgvector'")
-[[ "${bridge_functions}" == "8" ]] || fail "bridge owns ${bridge_functions} support functions, expected 8"
+[[ "${bridge_functions}" == "14" ]] || fail "bridge owns ${bridge_functions} functions, expected 14"
 
 binary_casts=$(q "SELECT count(*)
                     FROM pg_catalog.pg_cast
@@ -88,15 +101,25 @@ binary_casts=$(q "SELECT count(*)
                      AND castmethod = 'b'")
 [[ "${binary_casts}" == "2" ]] || fail "bridge exposes ${binary_casts} certified binary casts, expected 2"
 
-sparse_bridge_objects=$(q "SELECT
-    (SELECT count(*) FROM pg_catalog.pg_cast
-      WHERE castsource = 'public.sparsevec'::pg_catalog.regtype
-        AND casttarget = 'pgcontext.sparsevec'::pg_catalog.regtype)
-  + (SELECT count(*) FROM pg_catalog.pg_opclass
-      WHERE opcname LIKE '%pgvector%'
-        AND opcintype = 'public.sparsevec'::pg_catalog.regtype)")
-[[ "${sparse_bridge_objects}" == "0" ]] \
-  || fail "uncertified sparsevec bridge objects were installed"
+sparse_function_casts=$(q "SELECT count(*)
+                              FROM pg_catalog.pg_cast
+                             WHERE (
+                                      castsource = 'public.sparsevec'::pg_catalog.regtype
+                                  AND casttarget = 'pgcontext.sparsevec'::pg_catalog.regtype
+                                   OR castsource = 'pgcontext.sparsevec'::pg_catalog.regtype
+                                  AND casttarget = 'public.sparsevec'::pg_catalog.regtype
+                                   )
+                               AND castmethod = 'f'
+                               AND castcontext = 'a'")
+[[ "${sparse_function_casts}" == "2" ]] \
+  || fail "bridge exposes ${sparse_function_casts} sparsevec conversion casts, expected 2"
+
+sparse_bridge_opclasses=$(q "SELECT count(*)
+                               FROM pg_catalog.pg_opclass
+                              WHERE opcname LIKE 'sparsevec_hnsw_pgvector_%'
+                                AND opcintype = 'public.sparsevec'::pg_catalog.regtype")
+[[ "${sparse_bridge_opclasses}" == "4" ]] \
+  || fail "bridge exposes ${sparse_bridge_opclasses} sparsevec opclasses, expected 4"
 
 vector_fixture=$(q "WITH fixture(value) AS (
                        VALUES ('[1.25,-2.5,3]'::public.vector),
@@ -121,6 +144,29 @@ halfvec_fixture=$(q "WITH fixture(value) AS (
                                    = pg_catalog.pg_column_size(value::pgcontext.halfvec))
                         FROM fixture")
 [[ "${halfvec_fixture}" == "t" ]] || fail "halfvec cross-extension fixture changed value or size"
+
+sparsevec_fixture=$(q "WITH fixture(value) AS (
+                          VALUES ('{1:1.25,3:-2.5}/4'::public.sparsevec),
+                                 ('{}/4'::public.sparsevec),
+                                 ('{2:-0.125,4:9.75}/4'::public.sparsevec)
+                        )
+                        SELECT pg_catalog.bool_and(
+                                 value::text = (value::pgcontext.sparsevec)::text
+                                 AND value::text =
+                                     ((value::pgcontext.sparsevec)::public.sparsevec)::text)
+                          FROM fixture")
+[[ "${sparsevec_fixture}" == "t" ]] || fail "sparsevec conversion fixture changed values"
+
+q "CREATE TABLE bridge_sparsevec_oversized (
+     id bigint PRIMARY KEY,
+     embedding public.sparsevec(16001) NOT NULL
+   );
+   INSERT INTO bridge_sparsevec_oversized VALUES (1, '{1:1}/16001')" >/dev/null
+expect_failure_matching "oversized sparsevec index" \
+  "CREATE INDEX bridge_sparsevec_oversized_hnsw
+     ON bridge_sparsevec_oversized USING pgcontext_hnsw
+       (embedding pgcontext.sparsevec_hnsw_pgvector_cosine_ops)" \
+  "large-dimension sparse support is planned"
 
 q "CREATE TABLE bridge_vector_docs (
      id bigint PRIMARY KEY,
@@ -150,7 +196,22 @@ q "CREATE TABLE bridge_vector_docs (
    CREATE INDEX bridge_halfvec_cosine ON bridge_halfvec_docs USING pgcontext_hnsw
      (embedding pgcontext.halfvec_hnsw_pgvector_cosine_ops);
    CREATE INDEX bridge_halfvec_l1 ON bridge_halfvec_docs USING pgcontext_hnsw
-     (embedding pgcontext.halfvec_hnsw_pgvector_l1_ops)" >/dev/null
+     (embedding pgcontext.halfvec_hnsw_pgvector_l1_ops);
+
+   CREATE TABLE bridge_sparsevec_docs (
+     id bigint PRIMARY KEY,
+     embedding public.sparsevec(4) NOT NULL
+   );
+   INSERT INTO bridge_sparsevec_docs VALUES
+     (1, '{1:1}/4'), (2, '{2:1}/4'), (3, '{3:1}/4'), (4, '{1:-1}/4');
+   CREATE INDEX bridge_sparsevec_l2 ON bridge_sparsevec_docs USING pgcontext_hnsw
+     (embedding pgcontext.sparsevec_hnsw_pgvector_l2_ops);
+   CREATE INDEX bridge_sparsevec_ip ON bridge_sparsevec_docs USING pgcontext_hnsw
+     (embedding pgcontext.sparsevec_hnsw_pgvector_ip_ops);
+   CREATE INDEX bridge_sparsevec_cosine ON bridge_sparsevec_docs USING pgcontext_hnsw
+     (embedding pgcontext.sparsevec_hnsw_pgvector_cosine_ops);
+   CREATE INDEX bridge_sparsevec_l1 ON bridge_sparsevec_docs USING pgcontext_hnsw
+     (embedding pgcontext.sparsevec_hnsw_pgvector_l1_ops)" >/dev/null
 
 q "INSERT INTO bridge_vector_docs
      SELECT series + 100,
@@ -163,7 +224,16 @@ q "INSERT INTO bridge_vector_docs
    INSERT INTO bridge_halfvec_docs
      SELECT id, embedding::public.halfvec
        FROM bridge_vector_docs
-      WHERE id >= 100" >/dev/null
+      WHERE id >= 100;
+   INSERT INTO bridge_sparsevec_docs
+     SELECT series + 100,
+            ARRAY[
+              pg_catalog.sin(series::double precision)::real,
+              pg_catalog.cos((series * 0.7)::double precision)::real,
+              0::real,
+              ((series % 11) - 5)::real / 7::real
+            ]::public.vector::public.sparsevec
+       FROM pg_catalog.generate_series(1, 64) AS series" >/dev/null
 
 for type_name in vector halfvec; do
   table_name=bridge_${type_name}_docs
@@ -176,6 +246,45 @@ for type_name in vector halfvec; do
     [[ "${nearest}" == "1" ]] \
       || fail "${type_name} ${operator} returned id ${nearest}, expected 1"
   done
+done
+
+for metric_operator in 'l2:<->' 'ip:<#>' 'cosine:<=>' 'l1:<+>'; do
+  metric=${metric_operator%%:*}
+  operator=${metric_operator#*:}
+  exact_ids=$(q "SET LOCAL enable_indexscan = off;
+                 SET LOCAL enable_bitmapscan = off;
+                 SELECT pg_catalog.string_agg(id::text, ',' ORDER BY ordinal)
+                   FROM (
+                     SELECT id, pg_catalog.row_number() OVER () AS ordinal
+                       FROM (
+                         SELECT id FROM bridge_sparsevec_docs
+                          ORDER BY embedding OPERATOR(public.${operator})
+                                   '{1:0.123,2:-0.456,4:0.789}/4'::public.sparsevec
+                          LIMIT 10
+                       ) AS exact_rows
+                   ) AS ordered_exact")
+  indexed_ids=$(q "SET LOCAL enable_seqscan = off;
+                   SELECT pg_catalog.string_agg(id::text, ',' ORDER BY ordinal)
+                     FROM (
+                       SELECT id, pg_catalog.row_number() OVER () AS ordinal
+                         FROM (
+                           SELECT id FROM bridge_sparsevec_docs
+                            ORDER BY embedding OPERATOR(public.${operator})
+                                     '{1:0.123,2:-0.456,4:0.789}/4'::public.sparsevec
+                            LIMIT 10
+                         ) AS indexed_rows
+                     ) AS ordered_indexed")
+  [[ "${indexed_ids}" == "${exact_ids}" ]] \
+    || fail "sparsevec ${operator} indexed order ${indexed_ids} differs from exact oracle ${exact_ids}"
+  plan=$(q "SET LOCAL enable_seqscan = off;
+            EXPLAIN (COSTS OFF)
+            SELECT id FROM bridge_sparsevec_docs
+             ORDER BY embedding OPERATOR(public.${operator})
+                      '{1:0.123,2:-0.456,4:0.789}/4'::public.sparsevec
+             LIMIT 10")
+  expected_index=bridge_sparsevec_${metric}
+  [[ "${plan}" == *"Index Scan using ${expected_index}"* ]] \
+    || fail "sparsevec ${operator} did not select ${expected_index}: ${plan}"
 done
 
 for type_name in vector halfvec; do
@@ -312,6 +421,8 @@ expect_failure "DROP EXTENSION pgcontext with bridge installed" "DROP EXTENSION 
 expect_failure "DROP bridge while bridge indexes exist" "DROP EXTENSION pgcontext_pgvector"
 
 q "DROP TABLE bridge_vector_docs, bridge_halfvec_docs,
+              bridge_sparsevec_docs,
+              bridge_sparsevec_oversized,
               bridge_adopt_docs, bridge_unindexed_docs;
    DROP SCHEMA bridge_attack CASCADE;
    DROP EXTENSION pgcontext_pgvector" >/dev/null
@@ -320,10 +431,14 @@ remaining_bridge_objects=$(q "SELECT
     (SELECT count(*) FROM pg_catalog.pg_opclass WHERE opcname LIKE '%pgvector%')
   + (SELECT count(*) FROM pg_catalog.pg_proc WHERE proname LIKE '_pgvector_%_support')
   + (SELECT count(*) FROM pg_catalog.pg_cast
-      WHERE castsource IN ('public.vector'::pg_catalog.regtype,
-                           'public.halfvec'::pg_catalog.regtype)
-        AND casttarget IN ('pgcontext.vector'::pg_catalog.regtype,
-                           'pgcontext.halfvec'::pg_catalog.regtype))")
+      WHERE (castsource = 'public.vector'::pg_catalog.regtype
+         AND casttarget = 'pgcontext.vector'::pg_catalog.regtype)
+         OR (castsource = 'public.halfvec'::pg_catalog.regtype
+         AND casttarget = 'pgcontext.halfvec'::pg_catalog.regtype)
+         OR (castsource = 'public.sparsevec'::pg_catalog.regtype
+         AND casttarget = 'pgcontext.sparsevec'::pg_catalog.regtype)
+         OR (castsource = 'pgcontext.sparsevec'::pg_catalog.regtype
+         AND casttarget = 'public.sparsevec'::pg_catalog.regtype))")
 [[ "${remaining_bridge_objects}" == "0" ]] \
   || fail "dropping the bridge left ${remaining_bridge_objects} bridge objects"
 
@@ -351,4 +466,4 @@ canonical_nearest=$(q "SELECT id FROM canonical_after_bridge_drop
   || fail "canonical pgContext HNSW failed after bridge and pgvector removal"
 
 ${PSQL} -d postgres -v ON_ERROR_STOP=1 -c "DROP DATABASE ${DB};" >/dev/null
-echo "pgvector bridge verification passed (8 opclasses, binary casts, certification, lifecycle, and clean removal)"
+echo "pgvector bridge verification passed (12 opclasses, dense binary casts, sparse conversion casts, certification, lifecycle, and clean removal)"

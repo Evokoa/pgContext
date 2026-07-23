@@ -31,14 +31,19 @@ For transparency, here is where the capabilities most often requested after
   stable as recorded in
   [Non-Dense ANN Opclasses](#non-dense-ann-opclasses). Named sparse ANN is now
   implemented experimentally under [Named Sparse ANN](#named-sparse-ann).
+  Existing pgvector sparsevec columns can be indexed and converted when their
+  dimensions fit pgContext's current vector policy and HNSW record envelope.
+  Full pgvector sparse coordinate-range compatibility is planned under
+  [Large-Dimension Sparse Vectors](#large-dimension-sparse-vectors).
 - **x86-64 performance** — the AVX2+FMA kernels are implemented and
   correctness-verified, but no x86 speed claim is made until measured on real
   x86 hardware. Every published benchmark is Apple Silicon (NEON). See the
   x86-64 SIMD kernels item under
   [Delivery Phases](#delivery-phases-post-v1-overview).
 - **Drop-in pgvector name compatibility** — the certified companion bridge now
-  builds pgContext indexes on existing `vector` and `halfvec` columns without
-  data movement; full unqualified name compatibility is sequenced later. See
+  builds pgContext indexes on existing `vector`, `halfvec`, and bounded
+  `sparsevec` columns without data movement; full unqualified name
+  compatibility is sequenced later. See
   [pgvector Migration and Compatibility](#pgvector-migration-and-compatibility).
 
 ## Delivery Phases (post-V1 overview)
@@ -48,7 +53,8 @@ order:
 
 1. **pgvector interoperability (implemented in 0.2).** Install
    pgContext alongside an existing pgvector database and build pgContext
-   indexes directly on existing `vector` columns — no data movement — with
+   indexes directly on existing `vector`, `halfvec`, and bounded `sparsevec`
+   columns — no data movement — with
    a side-by-side comparison function and a migration report/adopt
    toolkit. Queries over pgvector-typed columns always return full
    results; an advisory notice (optional, on by default) recommends
@@ -122,6 +128,7 @@ order:
 PG17 V1 freeze
 ├── non-dense ANN opclasses
 │   └── named sparse ANN
+│       └── large-dimension sparse vectors
 ├── quantized HNSW
 │
 ├── non-dense ANN opclasses + quantized HNSW
@@ -225,6 +232,49 @@ Scope:
 
 Validated by an end-to-end serving test with exact-oracle and bounded-work assertions before promotion.
 
+## Large-Dimension Sparse Vectors
+
+Status: planned after the 0.2 bounded sparse compatibility profile; not a 0.2
+release blocker.
+
+Depends on: non-dense ANN opclasses, named sparse ANN, versioned storage, and
+bounded HNSW serving.
+
+Goal: support pgvector's sparsevec coordinate profile—up to 1,000,000,000
+logical dimensions and 16,000 nonzero entries—without allocating memory or
+performing work proportional to the logical dimension count. This enables
+lossless direct indexing and ownership conversion for the full certified
+pgvector sparsevec range rather than only values within pgContext's current
+16,000-dimension policy.
+
+Scope:
+
+- split the shared dense-vector dimension ceiling into representation-specific
+  policies, including a large sparse coordinate limit and a separately bounded
+  nonzero-entry limit;
+- replace every sparse-to-dense HNSW build, insert, query, mapped-serving, and
+  rerank boundary with sparse-native storage and distance/traversal, so a
+  billion-dimensional vector with a handful of entries never creates a
+  billion-element allocation;
+- define a versioned sparse graph/payload format with checked coordinate and
+  offset arithmetic, corruption detection, upgrade behavior, and no silent
+  reinterpretation of existing 0.1/0.2 pgContext sparse values;
+- carry large sparse typmods and dimensions through catalogs, registration,
+  query IR, filters, telemetry, dump/restore, bridge preflight, and resumable
+  ownership conversion without narrowing or truncation;
+- preserve exact scoring as the oracle and enforce explicit budgets for
+  nonzero entries, candidate visits, decoded bytes, build memory, and mapped
+  generations;
+- add boundary fixtures at dimensions 16,000, 16,001, and 1,000,000,000,
+  malformed/overflow/corruption cases, and end-to-end pgvector direct-index and
+  ownership-conversion tests covering DML, rollback, VACUUM, REINDEX, restart,
+  and dump/restore.
+
+Promotion requires exact-oracle parity for every sparse metric, bounded work
+proportional to nonzero entries and visited candidates rather than logical
+dimensions, and a live pgvector compatibility gate at the maximum coordinate
+range.
+
 ## Named Sparse ANN
 
 Status: implemented experimentally.
@@ -282,6 +332,39 @@ Scope:
 - add the query_plan fuzz target and bounded smoke.
 
 Validated by end-to-end serving tests before promotion.
+
+## Lexical Retrieval Enhancements
+
+Status: planned after composite query execution.
+
+Depends on: composite query execution and the shared fusion layer.
+
+Today the full-text branch computes `to_tsvector('simple', column)` on the fly
+and matches `plainto_tsquery('simple', ...)`. That is correct but minimal: a
+fixed `simple` configuration (no stemming, stopwords, or language selection), no
+stored `tsvector` column, no GIN/GiST full-text index in the fused path, and no
+typo tolerance. This item makes lexical retrieval a first-class, configurable,
+indexable fusion branch.
+
+Scope:
+
+- configurable full-text search: select the text-search configuration
+  (language, stemming, stopwords) per registered text field instead of a
+  hardcoded `simple`; accept `websearch_to_tsquery`/`phraseto_tsquery` query
+  forms; and let a collection register a stored `tsvector` column so a GIN/GiST
+  full-text index serves the branch instead of a scan-time `to_tsvector`;
+- trigram fuzzy matching: add a `pg_trgm` similarity candidate source
+  (`word_similarity`/`%`/`similarity`, backed by a GIN or GiST trigram index) so
+  typo-tolerant and partial-token lexical retrieval can be fused alongside the
+  dense, sparse, and full-text branches;
+- expose both as typed query-IR branches composable through reciprocal-rank and
+  weighted fusion, preserving the authoritative exact recheck and
+  ACL/RLS/MVCC contracts on every returned candidate;
+- expose counters proving the branch uses an index rather than scanning the full
+  collection where an index is available.
+
+Validated by an end-to-end serving test with exact-oracle and bounded-work
+assertions before promotion.
 
 ## Mapped HNSW Serving
 

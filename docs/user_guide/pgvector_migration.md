@@ -7,8 +7,9 @@ types. Keep an existing pgvector column in place and install the certified
 `pgcontext_pgvector` companion bridge before building a `pgcontext_hnsw` index
 over it. The bridge profile is PostgreSQL 17 with pgContext 0.2.0 and pgvector
 0.8.x installed in `public`. Dense `vector` and `halfvec` layouts are
-byte-certified; `sparsevec`
-ownership conversion remains fail-closed because its physical layouts differ. See
+byte-certified. Existing `public.sparsevec` columns can be indexed directly,
+and ownership conversion is available through a validated restricted-online
+rewrite because the sparse physical layouts differ. See
 [Trying pgContext on an Existing pgvector Database](pgvector_coexist.md) for
 the live workflow and inventory tools.
 
@@ -88,6 +89,13 @@ must retain `CREATE` on the table schema and on any preserved nondefault
 tablespace needed to rebuild an index.
 The operation is one transaction.
 
+Fast mode deliberately rejects `public.sparsevec`: its packed pgvector layout
+is not binary-compatible with `pgcontext.sparsevec`, so a metadata-only type
+swap would corrupt values. Use restricted-online mode for sparsevec. The bridge
+decodes and validates pgvector's packed indices and values during backfill and
+same-transaction dual writes; conversion fails closed for malformed data or
+dimensions above pgContext's 16,000-dimension limit.
+
 Restricted-online mode is for the narrow supported profile when the long lock
 is unacceptable:
 
@@ -136,11 +144,13 @@ trigger is active under `ACCESS SHARE`; only the final trigger/column DDL uses
 the upgraded exclusive lock.
 
 The release gate exercises `vector` and `halfvec` conversions for L2, inner
-product, cosine, and L1. It compares exact distances before and after each
-conversion, terminates a backend between bounded online batches and resumes
-from the persisted cursor, validates rollback to untouched pgvector objects,
-drops both the bridge and pgvector after finalization, and restores a custom
-format dump into a clean database. A pgvector-derived `pg_regress` profile also
+product, cosine, and L1, plus sparsevec restricted-online conversion and
+same-transaction writes on both sides of cutover. It compares exact distances
+before and after each conversion, terminates a backend between bounded online
+batches and resumes from the persisted cursor, validates rollback to untouched
+pgvector objects, drops both the bridge and pgvector after finalization, and
+restores a custom format dump into a clean database. A pgvector-derived
+`pg_regress` profile also
 keeps the pgvector-owned columns and query operators unchanged while replacing
 only the HNSW access method and opclass. Run the live gates with:
 
@@ -162,8 +172,8 @@ for application SQL or ordinary string-bodied SQL/PLpgSQL functions, so
 that those call sites were inventoried and can accept the type-ownership change.
 The conversion refuses catalog-discoverable unsupported dependencies including
 RLS, comments, custom column statistics/storage, and unsupported index options
-rather than attempting partial rewrites. `sparsevec`, arrays/domains, partitions,
-and composite-row dependencies remain unsupported.
+rather than attempting partial rewrites. Arrays/domains, partitions, and
+composite-row dependencies remain unsupported.
 
 ## Filters and Hybrid Retrieval
 

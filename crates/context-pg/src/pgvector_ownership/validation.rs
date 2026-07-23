@@ -64,7 +64,7 @@ pub(super) fn ensure_certified_bridge() {
                         ON target_namespace.oid = target_type.typnamespace
                      WHERE source_namespace.nspname = 'public'
                        AND target_namespace.nspname = 'pgcontext'
-                       AND source_type.typname IN ('vector', 'halfvec')
+                       AND source_type.typname IN ('vector', 'halfvec', 'sparsevec')
                        AND source_type.typlen = target_type.typlen
                        AND source_type.typbyval = target_type.typbyval
                        AND source_type.typalign = target_type.typalign
@@ -84,7 +84,7 @@ pub(super) fn ensure_certified_bridge() {
                               AND dependency.refobjid = extensions.pgcontext_oid
                               AND dependency.deptype = 'e'
                        )
-                   ) = 2
+                   ) = 3
                 AND (
                     SELECT count(*)
                       FROM pg_catalog.pg_cast AS cast_entry
@@ -105,7 +105,24 @@ pub(super) fn ensure_certified_bridge() {
                        AND cast_entry.castcontext = 'a'
                    ) = 2
                 AND (
-                    SELECT count(*) = 8 AND bool_and(pg_catalog.amvalidate(opclass.oid))
+                    SELECT count(*)
+                      FROM pg_catalog.pg_cast AS cast_entry
+                      JOIN pg_catalog.pg_depend AS dependency
+                        ON dependency.classid = 'pg_catalog.pg_cast'::pg_catalog.regclass
+                       AND dependency.objid = cast_entry.oid
+                       AND dependency.refobjid = extensions.bridge_oid
+                       AND dependency.deptype = 'e'
+                     WHERE (
+                               cast_entry.castsource = pg_catalog.to_regtype('public.sparsevec')
+                           AND cast_entry.casttarget = pg_catalog.to_regtype('pgcontext.sparsevec')
+                           OR  cast_entry.castsource = pg_catalog.to_regtype('pgcontext.sparsevec')
+                           AND cast_entry.casttarget = pg_catalog.to_regtype('public.sparsevec')
+                           )
+                       AND cast_entry.castmethod = 'f'
+                       AND cast_entry.castcontext = 'a'
+                   ) = 2
+                AND (
+                    SELECT count(*) = 12 AND bool_and(pg_catalog.amvalidate(opclass.oid))
                       FROM pg_catalog.pg_opclass AS opclass
                       JOIN pg_catalog.pg_depend AS dependency
                         ON dependency.classid = 'pg_catalog.pg_opclass'::pg_catalog.regclass
@@ -122,7 +139,7 @@ pub(super) fn ensure_certified_bridge() {
                        AND dependency.refobjid = extensions.bridge_oid
                        AND dependency.deptype = 'e'
                      WHERE procedure.proname LIKE '_pgvector_%_support'
-                   ) = 8
+                   ) = 12
          )",
     )
     .unwrap_or(Some(false))
@@ -238,11 +255,29 @@ pub(super) fn resolve_conversion_target(
             "ownership conversion supports permanent ordinary heap tables only",
         );
     }
-    if !pgvector_owned || !matches!(source_type_name.as_str(), "vector" | "halfvec") {
+    if !pgvector_owned
+        || !matches!(
+            source_type_name.as_str(),
+            "vector" | "halfvec" | "sparsevec"
+        )
+    {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
             format!(
-                "conversion target must be a directly pgvector-owned vector or halfvec column, found {source_type_name}"
+                "conversion target must be a directly pgvector-owned vector, halfvec, or sparsevec column, found {source_type_name}"
+            ),
+        );
+    }
+    if source_type_name == "sparsevec"
+        && source_typmod
+            > i32::try_from(context_core::policy::MAX_VECTOR_DIMENSIONS).unwrap_or(i32::MAX)
+    {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            format!(
+                "pgvector sparsevec dimensions {source_typmod} exceed pgContext's current limit {}; \
+                 large-dimension sparse support is planned",
+                context_core::policy::MAX_VECTOR_DIMENSIONS
             ),
         );
     }
@@ -285,29 +320,44 @@ pub(super) fn canonical_opclass(type_name: &str, metric: &str) -> Option<&'stati
         ("halfvec", "inner_product") => Some("pgcontext.halfvec_hnsw_ip_ops"),
         ("halfvec", "cosine") => Some("pgcontext.halfvec_hnsw_cosine_ops"),
         ("halfvec", "l1") => Some("pgcontext.halfvec_hnsw_l1_ops"),
+        ("sparsevec", "l2") => Some("pgcontext.sparsevec_hnsw_ops"),
+        ("sparsevec", "inner_product") => Some("pgcontext.sparsevec_hnsw_ip_ops"),
+        ("sparsevec", "cosine") => Some("pgcontext.sparsevec_hnsw_cosine_ops"),
+        ("sparsevec", "l1") => Some("pgcontext.sparsevec_hnsw_l1_ops"),
         _ => None,
     }
 }
 
 fn source_metric(extension: &str, opclass: &str) -> Option<&'static str> {
     match (extension, opclass) {
-        ("vector", "vector_l2_ops" | "halfvec_l2_ops")
-        | ("pgcontext_pgvector", "vector_hnsw_pgvector_l2_ops" | "halfvec_hnsw_pgvector_l2_ops") => {
-            Some("l2")
-        }
-        ("vector", "vector_ip_ops" | "halfvec_ip_ops")
-        | ("pgcontext_pgvector", "vector_hnsw_pgvector_ip_ops" | "halfvec_hnsw_pgvector_ip_ops") => {
-            Some("inner_product")
-        }
-        ("vector", "vector_cosine_ops" | "halfvec_cosine_ops")
+        ("vector", "vector_l2_ops" | "halfvec_l2_ops" | "sparsevec_l2_ops")
         | (
             "pgcontext_pgvector",
-            "vector_hnsw_pgvector_cosine_ops" | "halfvec_hnsw_pgvector_cosine_ops",
+            "vector_hnsw_pgvector_l2_ops"
+            | "halfvec_hnsw_pgvector_l2_ops"
+            | "sparsevec_hnsw_pgvector_l2_ops",
+        ) => Some("l2"),
+        ("vector", "vector_ip_ops" | "halfvec_ip_ops" | "sparsevec_ip_ops")
+        | (
+            "pgcontext_pgvector",
+            "vector_hnsw_pgvector_ip_ops"
+            | "halfvec_hnsw_pgvector_ip_ops"
+            | "sparsevec_hnsw_pgvector_ip_ops",
+        ) => Some("inner_product"),
+        ("vector", "vector_cosine_ops" | "halfvec_cosine_ops" | "sparsevec_cosine_ops")
+        | (
+            "pgcontext_pgvector",
+            "vector_hnsw_pgvector_cosine_ops"
+            | "halfvec_hnsw_pgvector_cosine_ops"
+            | "sparsevec_hnsw_pgvector_cosine_ops",
         ) => Some("cosine"),
-        ("vector", "vector_l1_ops" | "halfvec_l1_ops")
-        | ("pgcontext_pgvector", "vector_hnsw_pgvector_l1_ops" | "halfvec_hnsw_pgvector_l1_ops") => {
-            Some("l1")
-        }
+        ("vector", "vector_l1_ops" | "halfvec_l1_ops" | "sparsevec_l1_ops")
+        | (
+            "pgcontext_pgvector",
+            "vector_hnsw_pgvector_l1_ops"
+            | "halfvec_hnsw_pgvector_l1_ops"
+            | "sparsevec_hnsw_pgvector_l1_ops",
+        ) => Some("l1"),
         _ => None,
     }
 }

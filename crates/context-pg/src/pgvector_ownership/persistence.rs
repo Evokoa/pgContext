@@ -171,6 +171,12 @@ fn begin_conversion_catalog(
             format!("unsupported pgvector ownership conversion mode: {mode}"),
         );
     }
+    if mode == "fast" && target.source_type_name == "sparsevec" {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+            "pgvector sparsevec ownership conversion requires restricted_online mode",
+        );
+    }
     if super::validation::canonical_opclass(&target.source_type_name, &metric).is_none() {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,

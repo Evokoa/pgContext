@@ -26,11 +26,12 @@ The reverse order is valid as well.
 ## Existing pgvector columns
 
 The main extension does not pretend that a pgvector-owned column has a
-pgContext-owned type. Direct HNSW service over an existing `public.vector` or
-`public.halfvec` column requires the separately installed
+pgContext-owned type. Direct HNSW service over an existing `public.vector`,
+`public.halfvec`, or `public.sparsevec` column requires the separately installed
 `pgcontext_pgvector` companion extension. That privileged bridge owns only the
-certified binary casts and pgvector-operator-bound opclasses; it keeps the main
-extension's dependency boundary clean.
+certified dense binary casts, validated sparse conversion casts, and
+pgvector-operator-bound opclasses; it keeps the main extension's dependency
+boundary clean.
 
 `make install` installs both control/SQL artifacts. If the main extension was
 installed directly with `cargo pgrx install`, install the SQL-only companion
@@ -58,6 +59,26 @@ The bridge exact-rechecks and reranks its bounded ANN candidate set with the
 pgvector heap operator. This preserves pgvector's `double precision` distance
 semantics; the conservative initial lower bound favors correctness over scan
 work until a tighter certified bound is available.
+
+An existing pgvector sparse column is indexed without retyping it:
+
+```sql
+CREATE INDEX items_sparse_pgc
+    ON items USING pgcontext_hnsw
+       (lexical pgcontext.sparsevec_hnsw_pgvector_cosine_ops);
+
+SELECT id
+FROM items
+ORDER BY lexical <=> $1::public.sparsevec
+LIMIT 10;
+```
+
+pgContext currently accepts at most 16,000 sparse dimensions. Bridge index
+builds and conversion casts validate each packed pgvector datum and fail closed
+when a value exceeds that limit or is malformed. The current dense graph-record
+format also imposes a lower index-specific single-page envelope; index builds
+report that bound explicitly. The roadmap's sparse-native graph format removes
+both constraints for pgvector's full coordinate range.
 
 Without the bridge, `pgcontext.migration_report()` remains available
 as a read-only inventory. It discovers pgvector columns and indexes by extension
@@ -87,11 +108,12 @@ application columns; use the inventory and ownership-conversion workflow.
 
 ## Conversion boundary
 
-Dense `vector` and `halfvec` layouts are byte-certified. `sparsevec` ownership
-conversion remains fail-closed because pgContext's sparse representation is not
-pgvector's packed layout. PostgreSQL exposes prepared statements only for the
-current backend, so drain or recycle application sessions at a type-ownership
-cutover.
+Dense `vector` and `halfvec` layouts are byte-certified and support the
+metadata-only `fast` conversion. `sparsevec` has a different physical layout,
+so fast conversion rejects it; use `restricted_online` to rewrite values
+through the validated packed codec in bounded batches. PostgreSQL exposes
+prepared statements only for the current backend, so drain or recycle
+application sessions at a type-ownership cutover.
 
 Use `pgcontext.start_pgvector_ownership_conversion` plus
 `run_pgvector_ownership_conversion` for an atomic metadata-only conversion, or

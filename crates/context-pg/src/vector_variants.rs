@@ -6,6 +6,12 @@
 )]
 #[path = "vector_variants/halfvec_datum.rs"]
 mod halfvec_datum;
+#[allow(
+    unsafe_code,
+    reason = "the pgvector sparsevec packed-varlena codec is an audited PostgreSQL datum boundary"
+)]
+#[path = "vector_variants/pgvector_sparsevec_datum.rs"]
+pub(crate) mod pgvector_sparsevec_datum;
 #[path = "vector_variants/vector_variant_distance.rs"]
 mod vector_variant_distance;
 

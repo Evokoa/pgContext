@@ -51,7 +51,7 @@ BEGIN
       JOIN pg_catalog.pg_namespace AS namespace
         ON namespace.oid = type.typnamespace
      WHERE namespace.nspname = 'public'
-       AND type.typname IN ('vector', 'halfvec')
+       AND type.typname IN ('vector', 'halfvec', 'sparsevec')
        AND type.typlen = -1
        AND NOT type.typbyval
        AND type.typalign = 'i'
@@ -67,8 +67,8 @@ BEGIN
                 AND dependency.deptype = 'e'
                 AND extension.extname = 'vector'
            );
-    IF compatible_type_count <> 2 THEN
-        RAISE EXCEPTION 'pgvector vector/halfvec physical catalog contract is not certified'
+    IF compatible_type_count <> 3 THEN
+        RAISE EXCEPTION 'pgvector vector/halfvec/sparsevec catalog contract is not certified'
             USING ERRCODE = '0A000';
     END IF;
 END
@@ -79,6 +79,24 @@ CREATE CAST (public.vector AS pgcontext.vector)
 
 CREATE CAST (public.halfvec AS pgcontext.halfvec)
     WITHOUT FUNCTION AS ASSIGNMENT;
+
+CREATE FUNCTION pgcontext._pgvector_sparsevec_to_pgcontext(public.sparsevec)
+RETURNS pgcontext.sparsevec
+AS '$libdir/pgcontext', 'pgcontext_pgvector_sparsevec_to_pgcontext'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION pgcontext._pgcontext_sparsevec_to_pgvector(pgcontext.sparsevec)
+RETURNS public.sparsevec
+AS '$libdir/pgcontext', 'pgcontext_pgcontext_sparsevec_to_pgvector'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE CAST (public.sparsevec AS pgcontext.sparsevec)
+    WITH FUNCTION pgcontext._pgvector_sparsevec_to_pgcontext(public.sparsevec)
+    AS ASSIGNMENT;
+
+CREATE CAST (pgcontext.sparsevec AS public.sparsevec)
+    WITH FUNCTION pgcontext._pgcontext_sparsevec_to_pgvector(pgcontext.sparsevec)
+    AS ASSIGNMENT;
 
 CREATE FUNCTION pgcontext._pgvector_vector_l2_support(public.vector, public.vector)
 RETURNS double precision
@@ -128,6 +146,30 @@ LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
 SET search_path = pg_catalog, pg_temp
 RETURN pgcontext.halfvec_l1_distance($1::pgcontext.halfvec, $2::pgcontext.halfvec)::double precision;
 
+CREATE FUNCTION pgcontext._pgvector_sparsevec_l2_support(public.sparsevec, public.sparsevec)
+RETURNS double precision
+LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+RETURN public.l2_distance($1, $2);
+
+CREATE FUNCTION pgcontext._pgvector_sparsevec_ip_support(public.sparsevec, public.sparsevec)
+RETURNS double precision
+LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+RETURN -public.inner_product($1, $2);
+
+CREATE FUNCTION pgcontext._pgvector_sparsevec_cosine_support(public.sparsevec, public.sparsevec)
+RETURNS double precision
+LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+RETURN public.cosine_distance($1, $2);
+
+CREATE FUNCTION pgcontext._pgvector_sparsevec_l1_support(public.sparsevec, public.sparsevec)
+RETURNS double precision
+LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+RETURN public.l1_distance($1, $2);
+
 CREATE OPERATOR CLASS pgcontext.vector_hnsw_pgvector_l2_ops
     FOR TYPE public.vector USING pgcontext_hnsw AS
     OPERATOR 1 public.<-> (public.vector, public.vector) FOR ORDER BY pg_catalog.float_ops,
@@ -176,3 +218,26 @@ CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_pgvector_l1_ops
     FUNCTION 1 pgcontext._pgvector_halfvec_l1_support(public.halfvec, public.halfvec),
     STORAGE pgcontext.vector;
 
+CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_pgvector_l2_ops
+    FOR TYPE public.sparsevec USING pgcontext_hnsw AS
+    OPERATOR 1 public.<-> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext._pgvector_sparsevec_l2_support(public.sparsevec, public.sparsevec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_pgvector_ip_ops
+    FOR TYPE public.sparsevec USING pgcontext_hnsw AS
+    OPERATOR 1 public.<#> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext._pgvector_sparsevec_ip_support(public.sparsevec, public.sparsevec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_pgvector_cosine_ops
+    FOR TYPE public.sparsevec USING pgcontext_hnsw AS
+    OPERATOR 1 public.<=> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext._pgvector_sparsevec_cosine_support(public.sparsevec, public.sparsevec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.sparsevec_hnsw_pgvector_l1_ops
+    FOR TYPE public.sparsevec USING pgcontext_hnsw AS
+    OPERATOR 1 public.<+> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext._pgvector_sparsevec_l1_support(public.sparsevec, public.sparsevec),
+    STORAGE pgcontext.vector;

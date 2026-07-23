@@ -103,6 +103,10 @@ fn map_pgvector_opclass(opclass: &str) -> Option<&'static str> {
         "halfvec_ip_ops" => Some("pgcontext.halfvec_hnsw_pgvector_ip_ops"),
         "halfvec_cosine_ops" => Some("pgcontext.halfvec_hnsw_pgvector_cosine_ops"),
         "halfvec_l1_ops" => Some("pgcontext.halfvec_hnsw_pgvector_l1_ops"),
+        "sparsevec_l2_ops" => Some("pgcontext.sparsevec_hnsw_pgvector_l2_ops"),
+        "sparsevec_ip_ops" => Some("pgcontext.sparsevec_hnsw_pgvector_ip_ops"),
+        "sparsevec_cosine_ops" => Some("pgcontext.sparsevec_hnsw_pgvector_cosine_ops"),
+        "sparsevec_l1_ops" => Some("pgcontext.sparsevec_hnsw_pgvector_l1_ops"),
         _ => None,
     }
 }
@@ -167,9 +171,12 @@ WITH vector_columns AS (
            ARRAY_REMOVE(ARRAY[
              CASE WHEN vc.is_array
                   THEN 'array columns require element-wise conversion' END,
-             CASE WHEN vc.element_type_name NOT IN ('vector', 'halfvec')
+             CASE WHEN vc.element_type_name NOT IN ('vector', 'halfvec', 'sparsevec')
                   THEN format('physical layout for pgvector type %s is not certified',
                               vc.element_type_name) END,
+             CASE WHEN vc.element_type_name = 'sparsevec'
+                       AND vc.dimensions > 16000
+                  THEN 'sparsevec dimensions exceed pgContext limit 16000' END,
              CASE WHEN vc.attgenerated <> ''
                   THEN 'generated columns are not supported' END,
              CASE WHEN vc.atthasdef
@@ -357,6 +364,7 @@ fn suggest_command(
         None => match type_name {
             "vector" => "pgcontext.vector_hnsw_pgvector_cosine_ops",
             "halfvec" => "pgcontext.halfvec_hnsw_pgvector_cosine_ops",
+            "sparsevec" => "pgcontext.sparsevec_hnsw_pgvector_cosine_ops",
             _ => {
                 return format!(
                     "no certified pgContext opclass binding for pgvector type {type_name}"
