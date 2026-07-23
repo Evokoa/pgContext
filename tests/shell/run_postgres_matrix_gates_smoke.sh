@@ -123,7 +123,7 @@ cat >"${client_only_bin}/pg_config" <<'PG_CONFIG'
 #!/usr/bin/env bash
 case "${1:-}" in
   --bindir) dirname "$0" ;;
-  *) printf 'PostgreSQL 16.99-client-only\n' ;;
+  *) printf 'PostgreSQL 18.99-client-only\n' ;;
 esac
 PG_CONFIG
 chmod +x "${client_only_bin}/pg_config"
@@ -504,10 +504,10 @@ PATH="${client_only_bin}:${PATH}" \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
   --dry-run \
   --allow-missing \
-  --major 16 \
+  --major 18 \
   --mode fast \
   --out-dir "${work_dir}/client-only"
-grep -qF $'pg16\tpg_config\tskipped\t0' "${work_dir}/client-only/summary.tsv"
+grep -qF $'pg18\tpg_config\tskipped\t0' "${work_dir}/client-only/summary.tsv"
 
 PATH="${fake_bin}:${PATH}" PG18_CONFIG="${client_only_bin}/pg_config" \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \

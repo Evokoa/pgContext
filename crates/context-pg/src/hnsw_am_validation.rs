@@ -927,7 +927,7 @@ unsafe fn hnsw_validate_opclass_candidates(
     let expected_method = unsafe { pg_sys::get_am_oid(c"pgcontext_hnsw".as_ptr(), true) };
     let support_proc = unsafe { pg_sys::get_opfamily_proc(family, input_type, input_type, 1) };
     if method != expected_method
-        || purpose != pg_sys::AMOP_ORDER.cast_signed()
+        || i16::from(purpose) != i16::from(pg_sys::AMOP_ORDER)
         || support_proc == pg_sys::InvalidOid
     {
         return false;
