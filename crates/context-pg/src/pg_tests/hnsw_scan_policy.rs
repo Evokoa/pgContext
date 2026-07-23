@@ -72,6 +72,52 @@ fn hnsw_access_method_serves_ordered_index_scan() {
         "EXPLAIN should include planner costs:\n{plan}"
     );
 }
+
+#[pg_test]
+fn hnsw_unordered_scan_remains_planner_disabled() {
+    Spi::run(
+        "CREATE TABLE hnsw_unordered_plan_items (
+             embedding vector NOT NULL
+         );
+         INSERT INTO hnsw_unordered_plan_items
+         VALUES ('[1,1]'::vector), ('[2,2]'::vector);
+         CREATE INDEX hnsw_unordered_plan_items_idx
+             ON hnsw_unordered_plan_items USING pgcontext_hnsw (embedding);
+         SET LOCAL enable_seqscan = off;
+         SET LOCAL enable_bitmapscan = off",
+    )
+    .expect("unordered HNSW planner fixture should be created");
+
+    let plan = Spi::connect(|client| {
+        let result = client
+            .select(
+                "EXPLAIN (COSTS TRUE, FORMAT TEXT)
+                 SELECT count(*)
+                   FROM hnsw_unordered_plan_items
+                  WHERE embedding IS NOT NULL",
+                None,
+                &[],
+            )
+            .expect("unordered HNSW EXPLAIN query should succeed");
+
+        let mut lines = Vec::new();
+        for row in result {
+            lines.push(row.get::<String>(1)?.unwrap_or_default());
+        }
+        Ok::<_, spi::Error>(lines.join("\n"))
+    })
+    .expect("unordered HNSW EXPLAIN plan should decode");
+
+    assert!(
+        plan.contains("Seq Scan on hnsw_unordered_plan_items"),
+        "unordered HNSW must remain planner-disabled:\n{plan}"
+    );
+    assert!(
+        !plan.contains("Index Only Scan"),
+        "an AM without amcanreturn must not be selected for index-only scans:\n{plan}"
+    );
+}
+
 #[pg_test]
 fn hnsw_scan_state_memory_context_cleanup_runs_exactly_once() {
     use std::sync::Arc;
@@ -154,4 +200,3 @@ fn caught_error_hint(error: &pg_sys::panic::CaughtError) -> Option<String> {
         }
     }
 }
-

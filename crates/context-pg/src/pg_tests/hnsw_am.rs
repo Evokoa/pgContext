@@ -929,13 +929,17 @@ fn hnsw_access_method_accepts_insert_after_index_build() {
         "SET LOCAL enable_seqscan = off;
          SET LOCAL enable_bitmapscan = off",
     )
-    .expect("unordered scan should force the HNSW index");
+    .expect("ordered scan should force the HNSW index");
     let index_row_count = Spi::get_one::<i64>(
         "SELECT count(*)
-           FROM hnsw_insert_items
-          WHERE embedding IS NOT NULL",
+           FROM (
+                SELECT embedding
+                  FROM hnsw_insert_items
+                 ORDER BY embedding OPERATOR(pgcontext.<->) '[0,0,0]'::vector
+                 LIMIT 2
+           ) indexed",
     )
-    .expect("unordered HNSW scan should include delta inserts");
+    .expect("ordered HNSW scan should include delta inserts");
     assert_eq!(index_row_count, Some(2));
 }
 

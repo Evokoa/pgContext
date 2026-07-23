@@ -5,7 +5,8 @@
 #[pg_guard]
 #[allow(unused_qualifications)]
 // SAFETY: PostgreSQL supplies live planner/path inputs and distinct writable
-// output pointers for the guarded amcostestimate call.
+// output pointers for the guarded amcostestimate call. PostgreSQL 18 also
+// permits the estimator to update the path's disabled-node count.
 #[allow(
     clippy::too_many_arguments,
     reason = "PostgreSQL fixes the amcostestimate callback ABI"
@@ -25,7 +26,7 @@ unsafe extern "C-unwind" fn pgcontext_hnsw_cost_estimate(
     // SAFETY: Guaranteed by the amcostestimate callback contract above.
     let root = unsafe { scope.borrow(root, "PlannerInfo") };
     // SAFETY: Guaranteed by the amcostestimate callback contract above.
-    let path = unsafe { scope.borrow(path, "IndexPath") };
+    let path = unsafe { scope.borrow_mut(path, "IndexPath") };
     // SAFETY: PostgreSQL grants distinct writable output slots for the call.
     let startup = unsafe { scope.borrow_mut(index_startup_cost, "startup cost") };
     // SAFETY: See the output-pointer contract above.
@@ -50,7 +51,7 @@ unsafe extern "C-unwind" fn pgcontext_hnsw_cost_estimate(
 
 fn hnsw_cost_estimate_safe(
     root: PgCallbackRef<'_, pg_sys::PlannerInfo>,
-    path: PgCallbackRef<'_, pg_sys::IndexPath>,
+    path: PgCallbackMut<'_, pg_sys::IndexPath>,
     loop_count: f64,
     mut startup: PgCallbackMut<'_, pg_sys::Cost>,
     mut total: PgCallbackMut<'_, pg_sys::Cost>,
@@ -59,6 +60,14 @@ fn hnsw_cost_estimate_safe(
     mut pages: PgCallbackMut<'_, f64>,
 ) {
     if path.as_ref().indexorderbys.is_null() {
+        #[cfg(feature = "pg18")]
+        {
+            // PostgreSQL 18 compares disabled-node counts before costs. Mark
+            // unordered HNSW paths as less eligible than a disabled sequential
+            // scan so a zero-column query cannot become an index-only scan.
+            let mut path = path;
+            path.as_mut().path.disabled_nodes = 2;
+        }
         startup.write(f64::INFINITY);
         total.write(f64::INFINITY);
         selectivity.write(0.0);
