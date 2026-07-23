@@ -4,7 +4,10 @@ set -euo pipefail
 printf '%s\n' "$*" >>"${FAKE_DOCKER_LOG:?}"
 case "$*" in
   "buildx imagetools inspect "*)
-    if [[ "${FAKE_SHA_MISMATCH:-0}" == 1 && "$*" == *":pg17-sha-"* ]] ||
+    if [[ "${FAKE_TRANSIENT_INSPECT:-0}" == 1 && ! -e "${FAKE_TRANSIENT_STATE:?}" ]]; then
+      touch "${FAKE_TRANSIENT_STATE}"
+      exit 255
+    elif [[ "${FAKE_SHA_MISMATCH:-0}" == 1 && "$*" == *":pg17-sha-"* ]] ||
       [[ "${FAKE_PREPARED_MISMATCH:-0}" == 1 && "$*" == *"-prepared"* ]] ||
       [[ "${FAKE_IMMUTABLE_CONFLICT:-0}" == 1 && "$*" == *":pg17-v"* ]] ||
       [[ "${FAKE_POST_MISMATCH:-0}" == 1 && "$*" == *":latest"* ]]; then

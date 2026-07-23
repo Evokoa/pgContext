@@ -154,7 +154,7 @@ def main() -> None:
     )
     require_equal(
         "documentation URL",
-        meta.get("resources", {}).get("documentation"),
+        meta.get("resources", {}).get("x_documentation"),
         "https://github.com/evokoa/pgcontext/tree/master/docs",
     )
     if "Evokoa Team <team@evokoa.com>" not in meta.get("maintainer", []):

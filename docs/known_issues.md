@@ -43,6 +43,14 @@
   implemented.
 - Standalone native `.deb`, `.rpm`, MSI, and platform tarball packages are not
   V1 distribution methods.
+- `pgcontext.query()` can return `permission denied for table _collection_points`
+  for a valid, correctly-permissioned non-owner role. Collection-metadata
+  resolution reads `_collection_points` directly instead of going through the
+  public visibility view the rest of the retrieval path uses, so a role that
+  should be allowed to query a collection can be blocked from doing so. No
+  cross-tenant data is exposed by this; the effect is an over-strict denial,
+  not a leak. A fix is planned; in the meantime, grant the affected role
+  ownership of the collection or query as the owner role.
 
 For full detail and repair guidance, see [Known Limitations](user_guide/limitations.md)
 and [Troubleshooting](user_guide/troubleshooting.md).

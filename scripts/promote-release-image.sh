@@ -50,6 +50,16 @@ IMMUTABLE_TARGETS=(
   "${IMAGE}:${TAG}"
   "${IMAGE}:${VERSION}"
 )
+INSPECT_ATTEMPTS="${PGCONTEXT_PROMOTE_INSPECT_ATTEMPTS:-12}"
+INSPECT_DELAY_SECONDS="${PGCONTEXT_PROMOTE_INSPECT_DELAY_SECONDS:-5}"
+[[ "${INSPECT_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]] || {
+  echo "PGCONTEXT_PROMOTE_INSPECT_ATTEMPTS must be a positive integer" >&2
+  exit 2
+}
+[[ "${INSPECT_DELAY_SECONDS}" =~ ^[0-9]+$ ]] || {
+  echo "PGCONTEXT_PROMOTE_INSPECT_DELAY_SECONDS must be a non-negative integer" >&2
+  exit 2
+}
 
 if [[ "${PLAN_ONLY}" -eq 1 ]]; then
   printf 'source_sha=%s\nsource_prepared=%s\nexpected_digest=%s\n' \
@@ -61,34 +71,48 @@ fi
 resolve_digest() {
   local reference="$1"
   local digest
-  digest="$(docker buildx imagetools inspect "${reference}" | awk '/^Digest:/ { print $2; exit }')"
-  [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-    echo "could not resolve an OCI manifest digest for ${reference}" >&2
-    exit 1
-  }
-  printf '%s\n' "${digest}"
+  local output
+  local attempt
+  for ((attempt = 1; attempt <= INSPECT_ATTEMPTS; attempt++)); do
+    if output="$(docker buildx imagetools inspect "${reference}" 2>&1)"; then
+      digest="$(awk '/^Digest:/ { print $2; exit }' <<<"${output}")"
+      if [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        printf '%s\n' "${digest}"
+        return 0
+      fi
+    fi
+    if ((attempt < INSPECT_ATTEMPTS)); then
+      sleep "${INSPECT_DELAY_SECONDS}"
+    fi
+  done
+  echo "could not resolve an OCI manifest digest for ${reference}: ${output}" >&2
+  return 1
 }
 
 resolve_optional_digest() {
   local reference="$1"
   local output
   local digest
-  if output="$(docker buildx imagetools inspect "${reference}" 2>&1)"; then
-    digest="$(awk '/^Digest:/ { print $2; exit }' <<<"${output}")"
-    [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-      echo "could not resolve an OCI manifest digest for ${reference}" >&2
-      return 1
-    }
-    printf '%s\n' "${digest}"
-    return 0
-  fi
-  case "${output}" in
-    *"manifest unknown"* | *": not found"* | *"no such manifest"*) return 3 ;;
-    *)
-      echo "failed to inspect immutable tag ${reference}: ${output}" >&2
-      return 1
-      ;;
-  esac
+  local attempt
+  for ((attempt = 1; attempt <= INSPECT_ATTEMPTS; attempt++)); do
+    if output="$(docker buildx imagetools inspect "${reference}" 2>&1)"; then
+      digest="$(awk '/^Digest:/ { print $2; exit }' <<<"${output}")"
+      [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+        echo "could not resolve an OCI manifest digest for ${reference}" >&2
+        return 1
+      }
+      printf '%s\n' "${digest}"
+      return 0
+    fi
+    case "${output}" in
+      *"manifest unknown"* | *": not found"* | *"no such manifest"*) return 3 ;;
+    esac
+    if ((attempt < INSPECT_ATTEMPTS)); then
+      sleep "${INSPECT_DELAY_SECONDS}"
+    fi
+  done
+  echo "failed to inspect immutable tag ${reference}: ${output}" >&2
+  return 1
 }
 
 for source in "${SHA_SOURCE}" "${PREPARED_SOURCE}"; do

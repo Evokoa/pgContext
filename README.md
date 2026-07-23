@@ -25,8 +25,8 @@
   <a href="https://github.com/evokoa/pgcontext/stargazers">
     <img src="https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars" alt="GitHub stars">
   </a>
-  <a href="https://github.com/evokoa/pgcontext/releases">
-    <img src="https://img.shields.io/badge/version-0.2.0-2ea44f?style=flat-square" alt="Version 0.2.0">
+  <a href="https://github.com/evokoa/pgcontext/releases/tag/v0.1.0">
+    <img src="https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square" alt="Version 0.1.0">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache-2.0 license">
@@ -36,18 +36,6 @@
   </a>
   <a href="https://github.com/evokoa/pgcontext/pkgs/container/pgcontext">
     <img src="https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&amp;logo=docker" alt="Docker image on GHCR">
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/evokoa/pgcontext/issues">
-    <img src="https://img.shields.io/github/issues/evokoa/pgcontext?style=flat-square&logo=github&label=issues" alt="GitHub issues">
-  </a>
-  <a href="https://github.com/evokoa/pgcontext/pulls">
-    <img src="https://img.shields.io/github/issues-pr/evokoa/pgcontext?style=flat-square&logo=github&label=PRs" alt="GitHub pull requests">
-  </a>
-  <a href="https://github.com/evokoa/pgcontext/commits/master">
-    <img src="https://img.shields.io/github/last-commit/evokoa/pgcontext?style=flat-square&logo=github&label=last%20commit" alt="Last commit">
   </a>
 </p>
 
@@ -240,8 +228,8 @@ CREATE EXTENSION pgcontext;
 
 Pick whichever install path fits your setup: **Docker** (zero build) or
 **PGXN / source**. The fastest is the pre-built Docker
-image; it is multi-arch (`linux/amd64` and `linux/arm64`) and works on macOS,
-Linux, and Windows via Docker Desktop.
+image; it is multi-arch (`linux/amd64` and `linux/arm64`) and runs on Linux or
+through Docker Desktop's Linux-container support on macOS and Windows.
 
 ```sh
 docker pull ghcr.io/evokoa/pgcontext:pg17-v0.2.0
@@ -253,9 +241,12 @@ docker run -d --rm \
   ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 ```
 
-Verify the extension is loaded (uses `psql` inside the container, so you don't need a local PostgreSQL client):
+Wait for PostgreSQL to accept connections, then verify the extension is loaded
+(this uses `psql` inside the container, so you do not need a local PostgreSQL
+client):
 
 ```sh
+until docker exec pgcontext pg_isready -U postgres -d pgcontext; do sleep 1; done
 docker exec pgcontext psql -U postgres -d pgcontext \
   -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'pgcontext';"
 ```
@@ -265,8 +256,6 @@ If you have `psql` installed locally you can also connect directly:
 ```sh
 psql -h localhost -U postgres -d pgcontext
 ```
-
-*(If the image tag is not yet available for your version, build and run the same demo locally with `scripts/quickstart.sh`.)*
 
 ## Build from Source
 
@@ -282,13 +271,18 @@ headers, and a matching `pg_config`. See the complete
 [installation guide](docs/user_guide/installation.md) for Linux/macOS/Windows
 shell support, verification, uninstall, cleanup, and troubleshooting.
 
-## Coming Soon: Package Registries
+## Package Registries
 
-Package-manager installs are on the way and will be added here once available.
-Until then, use the Docker image or a source build above.
+pgContext 0.1.0 is available from
+[PGXN](https://pgxn.org/dist/pgcontext/0.1.0/). With PostgreSQL 17,
+its server development headers, Rust 1.96.0, and `cargo-pgrx` 0.19.1 installed:
 
-- **PGXN**: `pgxn install pgContext` (distribution `pgContext-0.2.0.zip`).
-- **Homebrew** (macOS): `brew install pgcontext` from the Evokoa tap.
+```sh
+pgxn install pgContext
+```
+
+Homebrew packaging for macOS is still in progress. Until it is published, use
+the Docker image, PGXN, or a source build rather than `brew install pgcontext`.
 
 ## Installing with an AI Agent
 

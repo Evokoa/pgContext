@@ -202,7 +202,13 @@ def main() -> None:
                 fail(f"source archive contains private key material: {info.filename}")
 
     policy = (payload / "ARTIFACT_POLICY.md").read_text().lower()
-    if "unsigned" not in policy or "sha-256" not in policy or "post-v1" not in policy:
+    required_policy_terms = (
+        "signed annotated tag",
+        "sha-256",
+        "sigstore",
+        "immutable",
+    )
+    if any(term not in policy for term in required_policy_terms):
         fail("artifact policy does not state the V1 verification boundary")
     print(f"release payload verification passed: {payload}")
 

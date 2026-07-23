@@ -19,8 +19,14 @@ grep -qF 'group: pgcontext-release' "${workflow}"
 grep -qF 'options:' "${workflow}"
 grep -qF -- '- prepare' "${workflow}"
 grep -qF -- '- publish' "${workflow}"
+grep -qF 'candidate_sha:' "${workflow}"
+grep -qF 'prepare_run_id:' "${workflow}"
+grep -qF 'source_archive_sha256:' "${workflow}"
+grep -qF 'oci_manifest_digest:' "${workflow}"
 grep -qF 'scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-master' "${workflow}"
 grep -qF 'container: pgxn/pgxn-tools@sha256:' "${workflow}"
+grep -qF 'Release tag signature is not verified by GitHub' "${workflow}"
+grep -qF 'Verify GitHub Release is an empty draft' "${workflow}"
 
 if grep -Eq 'pg(14|15|16|18)|postgresql-(14|15|16|18)' "${workflow}"; then
   echo "release workflow advertises an unsupported PostgreSQL major" >&2
@@ -39,7 +45,11 @@ if grep -E '^[[:space:]]+uses:' "${workflow}" | grep -Ev '@[0-9a-f]{40}([[:space
   exit 1
 fi
 
+validate="$(job_block validate)"
+release_draft="$(job_block verify-release-draft)"
+pgxn_meta="$(job_block pgxn-meta)"
 pgxn_artifact="$(job_block pgxn-artifact)"
+source_attestation="$(job_block verify-source-attestation)"
 approval="$(job_block approve-publishing)"
 publish_pgxn="$(job_block publish-pgxn)"
 pgxn_verify="$(job_block pgxn-verify)"
@@ -53,14 +63,40 @@ default_verify="$(job_block docker-verify-default)"
 prepare_summary="$(job_block prepare-summary)"
 publish_summary="$(job_block publish-summary)"
 
+if grep -qF 'contents: write' <<<"${validate}"; then
+  echo "release validation has unnecessary write permission" >&2
+  exit 1
+fi
+grep -qF '[[ "${{ github.sha }}" != "${CANDIDATE_SHA}" ]]' <<<"${validate}"
+
+grep -qF 'contents: write' <<<"${release_draft}"
+grep -qF "needs.validate.outputs.mode == 'publish'" <<<"${release_draft}"
+grep -qF 'test "$(jq -r .draft' <<<"${release_draft}"
+
+grep -qF 'container: pgxn/pgxn-tools@sha256:' <<<"${pgxn_meta}"
+grep -qF 'validate_pgxn_meta META.json' <<<"${pgxn_meta}"
+
 grep -qF "needs.validate.outputs.mode == 'prepare'" <<<"${pgxn_artifact}"
-grep -qF 'scripts/build-pgxn-dist.sh' <<<"${pgxn_artifact}"
-grep -qF 'pgxn-source-${{ needs.validate.outputs.version }}' <<<"${pgxn_artifact}"
+grep -qF -- '- pgxn-meta' <<<"${pgxn_artifact}"
+grep -qF 'release/build-packages.sh' <<<"${pgxn_artifact}"
+grep -qF 'source-payload-${{ needs.validate.outputs.version }}' <<<"${pgxn_artifact}"
+grep -qF 'actions/attest@' <<<"${pgxn_artifact}"
+grep -qF 'subject-path: dist/pgContext-' <<<"${pgxn_artifact}"
+
+grep -qF "needs.validate.outputs.mode == 'publish'" <<<"${source_attestation}"
+grep -qF 'gh attestation verify' <<<"${source_attestation}"
+grep -qF 'source_archive_sha256' <<<"${source_attestation}"
+grep -qF 'prepare_run_id' <<<"${source_attestation}"
 
 grep -qF "needs.validate.outputs.mode == 'publish'" <<<"${approval}"
 grep -qF 'environment: release' <<<"${approval}"
+grep -qF -- '- verify-release-draft' <<<"${approval}"
+grep -qF -- '- pgxn-meta' <<<"${approval}"
 
 grep -qF 'approve-publishing' <<<"${publish_pgxn}"
+grep -qF 'publish-docker-verify' <<<"${publish_pgxn}"
+grep -qF 'docker-verify-default' <<<"${publish_pgxn}"
+grep -qF 'validate_pgxn_meta META.json' <<<"${publish_pgxn}"
 grep -qF 'PGXN_USERNAME' <<<"${publish_pgxn}"
 grep -qF 'PGXN_PASSWORD' <<<"${publish_pgxn}"
 grep -qF 'pgxn-release "dist/pgContext-' <<<"${publish_pgxn}"
@@ -69,7 +105,7 @@ grep -qF 'https://api.pgxn.org/dist/pgcontext/' <<<"${pgxn_verify}"
 grep -qF 'pgxn-verify' <<<"${attach_pgxn}"
 grep -qF 'contents: write' <<<"${attach_pgxn}"
 grep -qF 'gh release upload' <<<"${attach_pgxn}"
-grep -qF 'cmp "${archive}"' <<<"${attach_pgxn}"
+grep -qF 'cmp "${asset}"' <<<"${attach_pgxn}"
 if grep -qF -- '--clobber' <<<"${attach_pgxn}"; then
   echo "GitHub release publication can overwrite an immutable asset" >&2
   exit 1
@@ -86,23 +122,37 @@ grep -qF 'provenance: mode=max' <<<"${docker_build}"
 grep -qF 'packages: write' <<<"${docker_build}"
 
 grep -qF -- '- docker' <<<"${docker_merge}"
+grep -qF 'actions/checkout@' <<<"${docker_merge}"
+grep -qF 'ref: ${{ needs.validate.outputs.tag }}' <<<"${docker_merge}"
+grep -qF 'persist-credentials: false' <<<"${docker_merge}"
 grep -qF 'pg17-sha-${{ needs.validate.outputs.short_sha }}' <<<"${docker_merge}"
 grep -qF 'pg17-${{ needs.validate.outputs.tag }}-prepared' <<<"${docker_merge}"
-grep -qF 'actions/attest-build-provenance@' <<<"${docker_merge}"
+grep -qF 'scripts/resolve-oci-digest.sh' <<<"${docker_merge}"
+grep -qF 'actions/attest@' <<<"${docker_merge}"
+grep -qF 'push-to-registry: true' <<<"${docker_merge}"
+checkout_line="$(grep -nF 'actions/checkout@' <<<"${docker_merge}" | head -n1 | cut -d: -f1)"
+resolve_line="$(grep -nF 'scripts/resolve-oci-digest.sh' <<<"${docker_merge}" | head -n1 | cut -d: -f1)"
+if ((checkout_line >= resolve_line)); then
+  echo "Docker merge must checkout the release tag before resolving its digest" >&2
+  exit 1
+fi
 
 grep -qF 'docker-merge' <<<"${docker_verify}"
 grep -qF 'scripts/verify-release-image.sh --registry' <<<"${docker_verify}"
+grep -qF 'gh attestation verify "oci://' <<<"${docker_verify}"
 grep -qF 'linux/amd64' <<<"${docker_verify}"
 grep -qF 'linux/arm64' <<<"${docker_verify}"
 
 grep -qF 'approve-publishing' <<<"${publish_docker}"
+grep -qF 'ref: ${{ needs.validate.outputs.tag }}' <<<"${publish_docker}"
 grep -qF 'scripts/promote-release-image.sh' <<<"${publish_docker}"
-grep -qF 'pg17-sha-${SHORT_SHA}' <<<"${publish_docker}"
-grep -qF 'pg17-${TAG}-prepared' <<<"${publish_docker}"
+grep -qF 'EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}' <<<"${publish_docker}"
 
 for block in "${published_verify}" "${default_verify}"; do
   grep -qF 'publish-docker' <<<"${block}"
+  grep -qF 'scripts/resolve-oci-digest.sh' <<<"${block}"
   grep -qF 'scripts/verify-release-image.sh --registry' <<<"${block}"
+  grep -qF 'EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}' <<<"${block}"
   grep -qF 'linux/amd64' <<<"${block}"
   grep -qF 'linux/arm64' <<<"${block}"
 done

@@ -13,6 +13,8 @@ bash -n \
   scripts/check-repository-contract.sh \
   scripts/run-install-report.sh \
   scripts/render-homebrew-formula.sh \
+  scripts/resolve-oci-digest.sh \
+  scripts/validate-pgxn-meta.sh \
   scripts/verify-release-image.sh \
   scripts/quickstart.sh \
   tests/shell/build_packages_smoke.sh \

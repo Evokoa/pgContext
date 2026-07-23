@@ -136,7 +136,7 @@
     {
       "links": [],
       "path": "contributor_guide/release_process.md",
-      "sha256": "15e8c4e17d3bdd62b86edf183a69a235cd379cc1a362791820b57c5c22620f66"
+      "sha256": "55b665da096e2f2d0c129a2d763148787abf677c1bbea3a7e2b81a718e6f496d"
     },
     {
       "links": [],
@@ -233,7 +233,7 @@
         "user_guide/troubleshooting.md"
       ],
       "path": "known_issues.md",
-      "sha256": "7c07412622940284aaf737706aefe6351b5b857a6eddd99835615b7747d691ff"
+      "sha256": "21164bd84fbf444a49f7e64419fdc816f3f4357942b4a2394e3938a7613fa6b3"
     },
     {
       "links": [
@@ -623,11 +623,8 @@
         "https://evokoa.com",
         "https://evokoa.com",
         "https://evokoa.com",
-        "https://github.com/evokoa/pgcontext/commits/master",
-        "https://github.com/evokoa/pgcontext/issues",
         "https://github.com/evokoa/pgcontext/pkgs/container/pgcontext",
-        "https://github.com/evokoa/pgcontext/pulls",
-        "https://github.com/evokoa/pgcontext/releases",
+        "https://github.com/evokoa/pgcontext/releases/tag/v0.1.0",
         "https://github.com/evokoa/pgcontext/stargazers",
         "https://github.com/evokoa/pggraph",
         "https://github.com/evokoa/pggraph",
@@ -638,12 +635,10 @@
         "https://img.shields.io/badge/PostgreSQL-17-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white",
         "https://img.shields.io/badge/docs-pgContext-0ea5e9?style=flat-square",
         "https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square",
-        "https://img.shields.io/badge/version-0.2.0-2ea44f?style=flat-square",
+        "https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square",
         "https://img.shields.io/discord/1496159762704896022?style=for-the-badge&label=Join%20Discord&logo=discord&logoColor=white&color=5865F2",
-        "https://img.shields.io/github/issues-pr/evokoa/pgcontext?style=flat-square&logo=github&label=PRs",
-        "https://img.shields.io/github/issues/evokoa/pgcontext?style=flat-square&logo=github&label=issues",
-        "https://img.shields.io/github/last-commit/evokoa/pgcontext?style=flat-square&logo=github&label=last%20commit",
         "https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars",
+        "https://pgxn.org/dist/pgcontext/0.1.0/",
         "https://polygres.com",
         "https://polygres.com",
         "https://polygres.com",
@@ -656,7 +651,7 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "5a02e215810030b9908299d82b30d45e35d926589bf2007e2da4ef4215637a80"
+      "sha256": "a22c72e387ea7ec1aca6ccf2953970fd852088990b675e560f9defd50a2eb5b1"
     },
     {
       "links": [],
@@ -681,7 +676,7 @@
         "../docs/contributor_guide/release_process.md"
       ],
       "path": "release/README.md",
-      "sha256": "f72487ad0f9501e6b9a05b975dbf07fbbd34326f7cfcf775ed7aa6c2755ad4c7"
+      "sha256": "082228c584e45d976b80fc5dd67deba4b2ac9f39d05ac4d3f7ec42aec0401b5c"
     }
   ],
   "renderer": "github-markdown",

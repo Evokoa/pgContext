@@ -14,6 +14,22 @@ on:
         description: Release tag in vX.Y.Z form
         required: true
         type: string
+      candidate_sha:
+        description: Full 40-character commit SHA signed by the release tag
+        required: true
+        type: string
+      prepare_run_id:
+        description: Successful prepare workflow run ID (required for publish)
+        required: false
+        type: string
+      source_archive_sha256:
+        description: Reviewed source archive SHA-256 from the prepare run (required for publish)
+        required: false
+        type: string
+      oci_manifest_digest:
+        description: Reviewed OCI manifest sha256 digest from the prepare run (required for publish)
+        required: false
+        type: string
 
 concurrency:
   group: pgcontext-release
@@ -33,14 +49,21 @@ jobs:
       mode: ${{ steps.release.outputs.mode }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
-      commit_sha: ${{ steps.commit.outputs.commit_sha }}
-      short_sha: ${{ steps.commit.outputs.short_sha }}
+      commit_sha: ${{ steps.release.outputs.candidate_sha }}
+      short_sha: ${{ steps.release.outputs.short_sha }}
+      prepare_run_id: ${{ steps.release.outputs.prepare_run_id }}
+      source_archive_sha256: ${{ steps.release.outputs.source_archive_sha256 }}
+      oci_manifest_digest: ${{ steps.release.outputs.oci_manifest_digest }}
     steps:
       - name: Resolve release input
         id: release
         env:
           MODE: ${{ inputs.mode }}
           TAG: ${{ inputs.tag }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          PREPARE_RUN_ID: ${{ inputs.prepare_run_id }}
+          SOURCE_ARCHIVE_SHA256: ${{ inputs.source_archive_sha256 }}
+          OCI_MANIFEST_DIGEST: ${{ inputs.oci_manifest_digest }}
         run: |
           set -euo pipefail
           if [[ "${MODE}" != prepare && "${MODE}" != publish ]]; then
@@ -51,16 +74,61 @@ jobs:
             echo "Release tag must use vX.Y.Z form: ${TAG}" >&2
             exit 1
           fi
+          if [[ ! "${CANDIDATE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Candidate SHA must be a full lowercase Git commit: ${CANDIDATE_SHA}" >&2
+            exit 1
+          fi
+          if [[ "${{ github.sha }}" != "${CANDIDATE_SHA}" ]]; then
+            echo "Dispatch this workflow from the candidate tag/commit ${CANDIDATE_SHA}" >&2
+            exit 1
+          fi
+          if [[ "${MODE}" == publish ]]; then
+            if [[ ! "${PREPARE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+              echo "Publish mode requires a prepare workflow run ID" >&2
+              exit 1
+            fi
+            if [[ ! "${SOURCE_ARCHIVE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Publish mode requires the reviewed source archive SHA-256" >&2
+              exit 1
+            fi
+            if [[ ! "${OCI_MANIFEST_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "Publish mode requires the reviewed OCI manifest digest" >&2
+              exit 1
+            fi
+          fi
           echo "mode=${MODE}" >>"${GITHUB_OUTPUT}"
           echo "tag=${TAG}" >>"${GITHUB_OUTPUT}"
           echo "version=${TAG#v}" >>"${GITHUB_OUTPUT}"
+          echo "candidate_sha=${CANDIDATE_SHA}" >>"${GITHUB_OUTPUT}"
+          echo "short_sha=${CANDIDATE_SHA:0:12}" >>"${GITHUB_OUTPUT}"
+          echo "prepare_run_id=${PREPARE_RUN_ID}" >>"${GITHUB_OUTPUT}"
+          echo "source_archive_sha256=${SOURCE_ARCHIVE_SHA256}" >>"${GITHUB_OUTPUT}"
+          echo "oci_manifest_digest=${OCI_MANIFEST_DIGEST}" >>"${GITHUB_OUTPUT}"
 
-      - name: Verify GitHub Release exists
-        if: steps.release.outputs.mode == 'publish'
+      - name: Verify signed annotated release tag
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release view "${{ steps.release.outputs.tag }}" >/dev/null
+          TAG: ${{ steps.release.outputs.tag }}
+          CANDIDATE_SHA: ${{ steps.release.outputs.candidate_sha }}
+        run: |
+          set -euo pipefail
+          ref="$(gh api "repos/${GH_REPO}/git/ref/tags/${TAG}")"
+          if [[ "$(jq -r .object.type <<<"${ref}")" != tag ]]; then
+            echo "Release tag must be annotated: ${TAG}" >&2
+            exit 1
+          fi
+          tag_object="$(gh api "repos/${GH_REPO}/git/tags/$(jq -r .object.sha <<<"${ref}")")"
+          if [[ "$(jq -r .verification.verified <<<"${tag_object}")" != true ]]; then
+            echo "Release tag signature is not verified by GitHub: ${TAG}" >&2
+            jq -r '.verification.reason' <<<"${tag_object}" >&2
+            exit 1
+          fi
+          if [[ "$(jq -r .object.type <<<"${tag_object}")" != commit ]] || \
+             [[ "$(jq -r .object.sha <<<"${tag_object}")" != "${CANDIDATE_SHA}" ]]; then
+            echo "Release tag does not point directly to candidate SHA ${CANDIDATE_SHA}" >&2
+            exit 1
+          fi
 
       - name: Checkout release tag
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -69,54 +137,35 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Verify checkout matches candidate SHA
+        run: test "$(git rev-parse HEAD)" = "${{ steps.release.outputs.candidate_sha }}"
+
       - name: Validate release metadata
         run: scripts/validate-release.py --tag "${{ steps.release.outputs.tag }}" --check-master
 
-      - name: Capture release commit
-        id: commit
+  verify-release-draft:
+    name: Verify GitHub Release is an empty draft
+    if: needs.validate.outputs.mode == 'publish'
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Verify empty draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
         run: |
-          echo "commit_sha=$(git rev-parse HEAD)" >>"${GITHUB_OUTPUT}"
-          echo "short_sha=$(git rev-parse --short=12 HEAD)" >>"${GITHUB_OUTPUT}"
+          set -euo pipefail
+          release="$(gh api --paginate "repos/${GH_REPO}/releases" --jq ".[] | select(.tag_name == \"${TAG}\")")"
+          [[ -n "${release}" ]] || { echo "Draft release does not exist: ${TAG}" >&2; exit 1; }
+          test "$(jq -r .draft <<<"${release}")" = true
+          test "$(jq '.assets | length' <<<"${release}")" -eq 0
 
-  pgxn-artifact:
-    name: Build PGXN artifact
-    if: needs.validate.outputs.mode == 'prepare'
+  pgxn-meta:
+    name: Validate PGXN metadata
     needs: validate
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout release tag
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          ref: ${{ needs.validate.outputs.tag }}
-          persist-credentials: false
-
-      - name: Build and verify PGXN source archive
-        run: scripts/build-pgxn-dist.sh --out-dir dist "${{ needs.validate.outputs.tag }}"
-
-      - name: Upload PGXN source archive
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: pgxn-source-${{ needs.validate.outputs.version }}
-          path: dist/pgContext-${{ needs.validate.outputs.version }}.zip
-          if-no-files-found: error
-          retention-days: 7
-
-  approve-publishing:
-    name: Approve package publishing
-    if: needs.validate.outputs.mode == 'publish'
-    needs: validate
-    runs-on: ubuntu-24.04
-    environment: release
-    steps:
-      - name: Approved
-        run: echo "Approved PGXN and Docker package publishing."
-
-  publish-pgxn:
-    name: Publish PGXN package
-    if: needs.validate.outputs.mode == 'publish'
-    needs:
-      - validate
-      - approve-publishing
     runs-on: ubuntu-24.04
     container: pgxn/pgxn-tools@sha256:a54f1e66c563c7e47b34ed08597d0ee5da1168303b61ef47e66a4a9904ab849d
     steps:
@@ -126,8 +175,131 @@ jobs:
           ref: ${{ needs.validate.outputs.tag }}
           persist-credentials: false
 
-      - name: Build and verify PGXN source archive
-        run: scripts/build-pgxn-dist.sh --out-dir dist "${{ needs.validate.outputs.tag }}"
+      - name: Validate canonical PGXN metadata
+        run: validate_pgxn_meta META.json
+
+  pgxn-artifact:
+    name: Build and attest source payload
+    if: needs.validate.outputs.mode == 'prepare'
+    needs:
+      - validate
+      - pgxn-meta
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+
+      - name: Build and verify source payload
+        run: release/build-packages.sh --out-dir dist "${{ needs.validate.outputs.tag }}"
+
+      - name: Attest source archive provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: dist/pgContext-${{ needs.validate.outputs.version }}.zip
+
+      - name: Upload source payload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-payload-${{ needs.validate.outputs.version }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  approve-publishing:
+    name: Approve package publishing
+    if: needs.validate.outputs.mode == 'publish'
+    needs:
+      - validate
+      - pgxn-meta
+      - verify-release-draft
+      - verify-source-attestation
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - name: Approved
+        run: echo "Approved PGXN and Docker package publishing."
+
+  verify-source-attestation:
+    name: Verify prepared source attestation
+    if: needs.validate.outputs.mode == 'publish'
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    steps:
+      - name: Download attested source payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-payload-${{ needs.validate.outputs.version }}
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.validate.outputs.prepare_run_id }}
+
+      - name: Verify source checksum and provenance signature
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EXPECTED_SHA256: ${{ needs.validate.outputs.source_archive_sha256 }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          CANDIDATE_SHA: ${{ needs.validate.outputs.commit_sha }}
+        run: |
+          set -euo pipefail
+          archive="dist/pgContext-${VERSION}.zip"
+          echo "${EXPECTED_SHA256}  ${archive}" | sha256sum --check --strict
+          gh attestation verify "${archive}" \
+            --repo "${GH_REPO}" \
+            --signer-workflow "${GH_REPO}/.github/workflows/release.yml" \
+            --source-digest "${CANDIDATE_SHA}"
+
+  publish-pgxn:
+    name: Publish PGXN package
+    if: needs.validate.outputs.mode == 'publish'
+    needs:
+      - validate
+      - approve-publishing
+      - publish-docker-verify
+      - docker-verify-default
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    container: pgxn/pgxn-tools@sha256:a54f1e66c563c7e47b34ed08597d0ee5da1168303b61ef47e66a4a9904ab849d
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+
+      - name: Download attested source payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-payload-${{ needs.validate.outputs.version }}
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.validate.outputs.prepare_run_id }}
+
+      - name: Verify reviewed source payload
+        env:
+          EXPECTED_SHA256: ${{ needs.validate.outputs.source_archive_sha256 }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          echo "${EXPECTED_SHA256}  dist/pgContext-${VERSION}.zip" | sha256sum --check --strict
+          scripts/verify-release-payload.py \
+            --tag "${{ needs.validate.outputs.tag }}" \
+            --candidate-sha "${{ needs.validate.outputs.commit_sha }}" \
+            dist
+          validate_pgxn_meta META.json
 
       - name: Publish to PGXN
         env:
@@ -175,13 +347,14 @@ jobs:
           PY
 
   attach-pgxn-artifact:
-    name: Attach PGXN artifact to GitHub Release
+    name: Attach source payload to GitHub Release
     if: needs.validate.outputs.mode == 'publish'
     needs:
       - validate
       - pgxn-verify
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: write
     steps:
       - name: Checkout release tag
@@ -190,10 +363,26 @@ jobs:
           ref: ${{ needs.validate.outputs.tag }}
           persist-credentials: false
 
-      - name: Build and verify PGXN source archive
-        run: scripts/build-pgxn-dist.sh --out-dir dist "${{ needs.validate.outputs.tag }}"
+      - name: Download attested source payload
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-payload-${{ needs.validate.outputs.version }}
+          path: dist
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.validate.outputs.prepare_run_id }}
 
-      - name: Attach immutable archive
+      - name: Verify reviewed source payload
+        env:
+          EXPECTED_SHA256: ${{ needs.validate.outputs.source_archive_sha256 }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          echo "${EXPECTED_SHA256}  dist/pgContext-${VERSION}.zip" | sha256sum --check --strict
+          scripts/verify-release-payload.py \
+            --tag "${{ needs.validate.outputs.tag }}" \
+            --candidate-sha "${{ needs.validate.outputs.commit_sha }}" \
+            dist
+
+      - name: Attach reviewed source payload
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -201,15 +390,16 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         run: |
           set -euo pipefail
-          archive="dist/pgContext-${VERSION}.zip"
-          name="$(basename "${archive}")"
-          if gh release view "${TAG}" --json assets --jq '.assets[].name' | grep -Fxq "${name}"; then
-            mkdir -p existing
-            gh release download "${TAG}" --pattern "${name}" --dir existing
-            cmp "${archive}" "existing/${name}"
-          else
-            gh release upload "${TAG}" "${archive}"
-          fi
+          mkdir -p existing
+          while IFS= read -r asset; do
+            name="$(basename "${asset}")"
+            if gh release view "${TAG}" --json assets --jq '.assets[].name' | grep -Fxq "${name}"; then
+              gh release download "${TAG}" --pattern "${name}" --dir existing
+              cmp "${asset}" "existing/${name}"
+            else
+              gh release upload "${TAG}" "${asset}"
+            fi
+          done < <(find dist -maxdepth 1 -type f -print | sort)
 
   docker:
     name: Prepare Docker image PG17 ${{ matrix.platform.name }}
@@ -302,7 +492,14 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+      artifact-metadata: write
     steps:
+      - name: Checkout release tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+          persist-credentials: false
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
 
@@ -358,12 +555,11 @@ jobs:
         run: |
           set -euo pipefail
           image="${{ env.IMAGE_NAME }}:pg17-${{ needs.validate.outputs.tag }}-prepared"
-          digest="$(docker buildx imagetools inspect "${image}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          digest="$(scripts/resolve-oci-digest.sh "${image}")"
           echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
 
       - name: Attest image provenance
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.manifest.outputs.digest }}
@@ -377,6 +573,7 @@ jobs:
       - docker-merge
     runs-on: ${{ matrix.platform.runner }}
     permissions:
+      attestations: read
       contents: read
       packages: read
     strategy:
@@ -406,13 +603,19 @@ jobs:
 
       - name: Pull and verify prepared image
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PLATFORM: ${{ matrix.platform.name }}
           PREPARED_IMAGE: ${{ env.IMAGE_NAME }}:pg17-${{ needs.validate.outputs.tag }}-prepared
         run: |
           set -euo pipefail
-          digest="$(docker buildx imagetools inspect "${PREPARED_IMAGE}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          digest="$(scripts/resolve-oci-digest.sh "${PREPARED_IMAGE}")"
           scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${digest}" "${PLATFORM}"
+          gh attestation verify "oci://${{ env.IMAGE_NAME }}@${digest}" \
+            --bundle-from-oci \
+            --repo "${GH_REPO}" \
+            --signer-workflow "${GH_REPO}/.github/workflows/release.yml" \
+            --source-digest "${{ needs.validate.outputs.commit_sha }}"
 
   publish-docker:
     name: Publish Docker image PG17
@@ -445,20 +648,11 @@ jobs:
         env:
           TAG: ${{ needs.validate.outputs.tag }}
           COMMIT_SHA: ${{ needs.validate.outputs.commit_sha }}
-          SHORT_SHA: ${{ needs.validate.outputs.short_sha }}
+          EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}
         run: |
           set -euo pipefail
-          prepared="${{ env.IMAGE_NAME }}:pg17-${TAG}-prepared"
-          commit="${{ env.IMAGE_NAME }}:pg17-sha-${SHORT_SHA}"
-          prepared_digest="$(docker buildx imagetools inspect "${prepared}" | awk '/^Digest:/ {print $2; exit}')"
-          commit_digest="$(docker buildx imagetools inspect "${commit}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${prepared_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          if [[ "${prepared_digest}" != "${commit_digest}" ]]; then
-            echo "Prepared tag digest does not match commit tag digest" >&2
-            exit 1
-          fi
           scripts/promote-release-image.sh \
-            "${{ env.IMAGE_NAME }}" "${TAG}" "${COMMIT_SHA}" "${prepared_digest}"
+            "${{ env.IMAGE_NAME }}" "${TAG}" "${COMMIT_SHA}" "${EXPECTED_DIGEST}"
 
   publish-docker-verify:
     name: Verify published image PG17 ${{ matrix.platform.name }}
@@ -497,13 +691,14 @@ jobs:
 
       - name: Pull and verify published image
         env:
+          EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}
           PLATFORM: ${{ matrix.platform.name }}
           PUBLISHED_IMAGE: ${{ env.IMAGE_NAME }}:pg17-${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          digest="$(docker buildx imagetools inspect "${PUBLISHED_IMAGE}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${digest}" "${PLATFORM}"
+          digest="$(scripts/resolve-oci-digest.sh "${PUBLISHED_IMAGE}")"
+          test "${digest}" = "${EXPECTED_DIGEST}"
+          scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${EXPECTED_DIGEST}" "${PLATFORM}"
 
   docker-verify-default:
     name: Verify default published image ${{ matrix.platform.name }}
@@ -544,11 +739,12 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform.name }}
           DEFAULT_IMAGE: ${{ env.IMAGE_NAME }}:${{ needs.validate.outputs.tag }}
+          EXPECTED_DIGEST: ${{ needs.validate.outputs.oci_manifest_digest }}
         run: |
           set -euo pipefail
-          digest="$(docker buildx imagetools inspect "${DEFAULT_IMAGE}" | awk '/^Digest:/ {print $2; exit}')"
-          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
-          scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${digest}" "${PLATFORM}"
+          digest="$(scripts/resolve-oci-digest.sh "${DEFAULT_IMAGE}")"
+          test "${digest}" = "${EXPECTED_DIGEST}"
+          scripts/verify-release-image.sh --registry "${{ env.IMAGE_NAME }}@${EXPECTED_DIGEST}" "${PLATFORM}"
 
   publish-summary:
     name: Publish summary
@@ -586,6 +782,6 @@ jobs:
             echo "## Prepared packages"
             echo
             echo "- Commit: ${{ needs.validate.outputs.short_sha }}"
-            echo "- PGXN workflow artifact: pgxn-source-${{ needs.validate.outputs.version }}"
+            echo "- Source workflow artifact: source-payload-${{ needs.validate.outputs.version }}"
             echo "- Docker: ${{ env.IMAGE_NAME }}:pg17-${{ needs.validate.outputs.tag }}-prepared"
           } >>"${GITHUB_STEP_SUMMARY}"
