@@ -380,6 +380,8 @@ fn hnsw_metric_metapage_identity_round_trips_every_dense_metric() -> context_ind
             3,
         ),
         (HnswScoreMetric::L1, DistanceMetric::L1, 4),
+        (HnswScoreMetric::BitHamming, DistanceMetric::Hamming, 5),
+        (HnswScoreMetric::BitJaccard, DistanceMetric::Jaccard, 6),
     ];
 
     for (score_metric, graph_metric, storage_tag) in cases {
@@ -395,6 +397,32 @@ fn hnsw_metric_metapage_identity_round_trips_every_dense_metric() -> context_ind
     }
 
     Ok(())
+}
+
+#[test]
+fn bit_jaccard_orderby_lower_bound_covers_float4_navigation_collisions() {
+    // This 8,001-bit pair is valid under the SQL type policy and pins the
+    // precision hazard for a future multi-page or bit-native graph record.
+    let row_a_exact = 3.0_f64 / 8_000.0;
+    let row_b_exact = 3.0_f64 / 8_001.0;
+    let row_a_navigation = 1.0_f32 - (7_997.0_f32 / 8_000.0_f32);
+    let row_b_navigation = 1.0_f32 - (7_998.0_f32 / 8_001.0_f32);
+
+    assert_eq!(row_a_navigation, row_b_navigation);
+    assert!(row_b_exact < row_a_exact);
+    let (row_a_bound, row_a_recheck) =
+        float8_orderby_distance(HnswScoreMetric::BitJaccard, row_a_navigation);
+    let (row_b_bound, row_b_recheck) =
+        float8_orderby_distance(HnswScoreMetric::BitJaccard, row_b_navigation);
+    assert!(row_a_recheck);
+    assert!(row_b_recheck);
+    assert!(row_a_bound <= row_a_exact);
+    assert!(row_b_bound <= row_b_exact);
+
+    assert_eq!(
+        float8_orderby_distance(HnswScoreMetric::L2, row_a_navigation),
+        (f64::from(row_a_navigation), false)
+    );
 }
 
 #[test]
@@ -469,6 +497,9 @@ fn serving_stats_saturate_instead_of_overflowing() {
             shared_attaches: 0,
             shared_publishes: 0,
             shared_publish_skips: 0,
+            mapped_attaches: 0,
+            mapped_publishes: 0,
+            mapped_publish_skips: 0,
             page_native_fallbacks: 0,
             delta_segment_records: 0,
             delta_segment_scans: 0,

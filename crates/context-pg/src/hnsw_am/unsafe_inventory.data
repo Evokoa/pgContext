@@ -14,14 +14,19 @@ hnsw_am.rs|extern|pgcontext_hnsw_insert_cleanup|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_rescan|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_vacuum_cleanup|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_validate|guarded PostgreSQL AM callback
+hnsw_am.rs|fn|VisibleHeapTidResolver::new|opens PostgreSQL table-AM fetch state for the heap relation owned by a validated index
+hnsw_am.rs|fn|candidate_mask_from_heap_tids|parses PostgreSQL array datums and canonicalizes source TIDs through a validated index relation
+hnsw_am.rs|fn|hot_root_heap_tids|reads share-locked heap pages and maps visible HOT successors to index root TIDs
+hnsw_am.rs|fn|resolve_visible_hnsw_candidates|resolves index candidates through PostgreSQL table-AM visibility under the active snapshot
 hnsw_am.rs|fn|copy_rescan_keys|writes a validated PostgreSQL scan-key destination
-hnsw_am.rs|fn|ensure_hnsw_metric_contract|reads PostgreSQL relation and catalog pointers
+hnsw_am.rs|fn|ensure_hnsw_opclass_owner|certifies bridge opclass extension ownership from a live index relation
 hnsw_am.rs|fn|ensure_hnsw_strategy_operator|reads and releases PostgreSQL syscache tuples
-hnsw_am.rs|fn|ensure_hnsw_support_proc|reads PostgreSQL relation support metadata
 hnsw_am.rs|fn|expand_hnsw_scan|continues a validated live PostgreSQL index scan with a larger bounded candidate budget
 hnsw_am.rs|fn|hnsw_dense_from_datum|decodes a datum using its validated PostgreSQL type OID
 hnsw_am.rs|fn|hnsw_dense_score_metric|reads live dense operator-class metadata
+hnsw_am.rs|fn|hnsw_certified_pgvector_type_oid|resolves an exact public type OID and certifies pgvector extension ownership
 hnsw_am.rs|fn|hnsw_index_opcintype|reads a live relation-cache OID array
+hnsw_am.rs|fn|hnsw_index_uses_certified_pgvector_type|classifies a live opclass input through certified catalog OIDs
 hnsw_am.rs|fn|hnsw_index_opfamily|reads a live relation-cache OID array
 hnsw_am.rs|fn|hnsw_insert_via_delta_safe|appends a bounded delta record to a live PostgreSQL index relation and updates its metapage
 hnsw_am.rs|fn|hnsw_compact_relation|rebuilds a live PostgreSQL index relation's graph onto fresh pages and republishes its metapage
@@ -29,14 +34,24 @@ hnsw_am.rs|fn|lock_hnsw_compaction_table|reads a live index relation's catalog f
 hnsw_am.rs|fn|try_lock_hnsw_compaction_table|locks a live index relation's parent table without waiting, so the write path never blocks
 hnsw_am.rs|fn|hnsw_compaction_table_oid|reads a live index relation's catalog form for its parent table OID
 hnsw_am.rs|fn|hnsw_compact_on_threshold|compacts a live index relation from the insert path once its delta segment fills
-hnsw_am.rs|fn|hnsw_operator_namespace|reads and releases a PostgreSQL syscache tuple
+hnsw_am.rs|fn|hnsw_named_type_oid|resolves a schema-qualified type through PostgreSQL syscache metadata
+hnsw_am.rs|fn|hnsw_object_owned_by_extension|checks exact extension membership for a PostgreSQL catalog object
+hnsw_am.rs|fn|hnsw_operator_oid_matches|certifies an operator owner namespace name and signature from syscache metadata
+hnsw_am.rs|fn|hnsw_orderby_contract|certifies and caches a live index metric and pgvector binding
 hnsw_am.rs|fn|hnsw_orderby_query|reads a live PostgreSQL scan descriptor and key
-hnsw_am.rs|fn|hnsw_public_type_oid|calls PostgreSQL catalog lookup with a C string
+hnsw_am.rs|fn|hnsw_pgcontext_type_oid|calls PostgreSQL catalog lookup with a C string
 hnsw_am.rs|fn|hnsw_query_from_orderby_datum|decodes a PostgreSQL scan-key datum
 hnsw_am.rs|fn|hnsw_scan_candidates|reads a live index relation and PostgreSQL pages
+hnsw_am.rs|fn|hnsw_scan_candidates_with_metric|scans a live index relation with an already certified metric
 hnsw_am.rs|fn|hnsw_scan_state_ptr|dereferences the AM-owned scan-state slot
 hnsw_am.rs|fn|hnsw_score_metric|reads live relation and operator-class metadata
+hnsw_am.rs|fn|hnsw_score_metric_from_bridge_candidates|certifies pgvector bridge operator and support metadata
+hnsw_am.rs|fn|hnsw_score_metric_from_candidates|reads live relation and operator-class metadata candidates
+hnsw_am.rs|fn|hnsw_sort_family_matches|certifies the btree sort family referenced by a strategy operator
+hnsw_am.rs|fn|hnsw_support_proc_oid_matches|certifies support-procedure ownership name and signature
 hnsw_am.rs|fn|hnsw_support_proc_matches|reads PostgreSQL support-procedure metadata
+hnsw_am.rs|fn|hnsw_validate_opclass|validates a catalog opclass OID against the HNSW contract
+hnsw_am.rs|fn|hnsw_validate_opclass_candidates|certifies opfamily strategy support and sort metadata
 hnsw_am.rs|fn|hnsw_vector_from_index_values|reads callback-bounded datum and null arrays
 hnsw_am.rs|fn|hnsw_visible_heap_tid|reads a live scan descriptor and heap snapshot
 hnsw_am.rs|fn|prepare_hnsw_scan|reads a live scan descriptor and mutates owned state
@@ -86,6 +101,7 @@ hnsw_am_graph_read.rs|fn|PgHnswGraphRead::load_packed|builds a backend-local pac
 hnsw_am_graph_read.rs|fn|PgHnswGraphRead::node|reads a graph node from live PostgreSQL pages
 hnsw_am_graph_read.rs|fn|PgHnswGraphRead::with_node_item|visits a validated node item while its PostgreSQL page remains pinned and locked
 hnsw_am_graph_scan.rs|fn|read_hnsw_meta_page|reads typed metadata from a live PostgreSQL page
+hnsw_am_graph_scan.rs|fn|hnsw_unordered_scan_candidates_with_delta|reads base and delta records from a live PostgreSQL index relation
 hnsw_am_page_storage.rs|fn|read_hnsw_delta_records|reads delta records from a live PostgreSQL relation's delta block range
 hnsw_am_page_storage.rs|fn|read_hnsw_vector_records|reads records from a live PostgreSQL relation
 hnsw_am_page_storage.rs|fn|try_append_hnsw_typed_record|appends a typed payload into a locked PostgreSQL page
@@ -99,3 +115,8 @@ hnsw_am/shared_registry.rs|fn|commit_shared_slot|writes a registry slot and the 
 hnsw_am/shared_registry.rs|fn|evict_shared_slot|removes a poisoned registry slot and its byte budget contribution under the header lock
 hnsw_am/shared_registry.rs|fn|lookup_shared_slot|reads a registry slot under the header lock
 hnsw_am/shared_registry.rs|fn|shared_registry_ptr|attaches the fixed-size named DSM segment backing the shared registry header
+hnsw_am/mapped_lifecycle.rs|extern|mapped_graph_object_access_hook|chains PostgreSQL object-drop callbacks and queues copied relation identities
+hnsw_am/mapped_lifecycle.rs|extern|mapped_graph_subxact_callback|promotes or discards queued cleanup identities at subtransaction boundaries
+hnsw_am/mapped_lifecycle.rs|extern|mapped_graph_xact_callback|reclaims exact mapped index directories only after top-level commit
+hnsw_am/mapped_lifecycle.rs|extern|pgcontext_hnsw_mapped_sql_drop|guarded PostgreSQL event-trigger entrypoint over call-bounded FunctionCallInfo
+hnsw_am/mapped_lifecycle.rs|fn|reconcile_mapped_drop_marker|reads PostgreSQL transaction status for a durable drop marker

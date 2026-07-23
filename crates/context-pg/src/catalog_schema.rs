@@ -40,7 +40,7 @@ CREATE TABLE pgcontext._collection_vectors (
     vector_attnum int2 NOT NULL,
     hnsw_index_oid oid,
     dimensions int4 NOT NULL CHECK (dimensions > 0),
-    metric text NOT NULL CHECK (metric IN ('l2', 'inner_product', 'cosine', 'l1')),
+    metric text NOT NULL CHECK (metric IN ('l2', 'inner_product', 'cosine', 'l1', 'hamming', 'jaccard')),
     hnsw_options jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (pg_catalog.jsonb_typeof(hnsw_options) = 'object'),
     quantization_options jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (pg_catalog.jsonb_typeof(quantization_options) = 'object'),
     status text NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'building', 'disabled', 'failed')),
@@ -59,7 +59,7 @@ CREATE TABLE pgcontext._collection_sparse_vectors (
     vector_column_name text NOT NULL,
     vector_attnum int2 NOT NULL,
     dimensions int4 NOT NULL CHECK (dimensions > 0),
-    metric text NOT NULL CHECK (metric IN ('l2', 'inner_product', 'cosine', 'l1')),
+    metric text NOT NULL CHECK (metric IN ('l2', 'inner_product', 'cosine', 'l1', 'hamming', 'jaccard')),
     storage_options jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (pg_catalog.jsonb_typeof(storage_options) = 'object'),
     index_options jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (pg_catalog.jsonb_typeof(index_options) = 'object'),
     status text NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'building', 'disabled', 'failed')),
@@ -115,6 +115,19 @@ CREATE TABLE pgcontext._query_stats (
     recall_achieved double precision CHECK (recall_achieved IS NULL OR (recall_achieved >= 0 AND recall_achieved <= 1)),
     latency_bucket text NOT NULL DEFAULT 'Unspecified' CHECK (latency_bucket IN ('Lt1Ms', 'Lt10Ms', 'Lt100Ms', 'Lt1S', 'Gte1S', 'Unspecified')),
     lifecycle_state text NOT NULL DEFAULT 'Unspecified' CHECK (lifecycle_state IN ('Unspecified', 'Exact', 'Indexed', 'Fallback', 'IndexNotReady', 'IndexCorrupt', 'ArtifactMissing')),
+    strategy text NOT NULL DEFAULT 'unspecified' CHECK (
+        pg_catalog.octet_length(strategy) BETWEEN 1 AND 64
+        AND strategy ~ '^[a-z0-9_]+$'
+    ),
+    visits bigint NOT NULL DEFAULT 0 CHECK (visits >= 0),
+    filter_candidates bigint NOT NULL DEFAULT 0 CHECK (filter_candidates >= 0),
+    candidates bigint NOT NULL DEFAULT 0 CHECK (candidates >= 0),
+    rechecks bigint NOT NULL DEFAULT 0 CHECK (rechecks >= 0),
+    stages bigint NOT NULL DEFAULT 0 CHECK (stages >= 0),
+    expansions bigint NOT NULL DEFAULT 0 CHECK (expansions >= 0),
+    completion text NOT NULL DEFAULT 'unspecified' CHECK (
+        completion IN ('unspecified', 'complete', 'cancelled', 'budget_exhausted', 'error')
+    ),
     latency_ms double precision NOT NULL CHECK (latency_ms >= 0),
     created_at timestamptz NOT NULL DEFAULT pg_catalog.now()
 );
@@ -125,7 +138,7 @@ CREATE TABLE pgcontext._model_versions (
     model_name text NOT NULL CHECK (model_name <> ''),
     model_version text NOT NULL CHECK (model_version <> ''),
     dimensions int4 NOT NULL CHECK (dimensions > 0),
-    metric text NOT NULL CHECK (metric IN ('l2', 'inner_product', 'cosine', 'l1')),
+    metric text NOT NULL CHECK (metric IN ('l2', 'inner_product', 'cosine', 'l1', 'hamming', 'jaccard')),
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
     UNIQUE (collection_id, model_name, model_version)
@@ -314,6 +327,10 @@ CREATE TABLE pgcontext._artifact_reader_pins (
     PRIMARY KEY (artifact_id, backend_pid, backend_identity)
 );
 
+-- Intentionally unfiltered pre-authorization lookup. Callers need this minimal
+-- collection/alias name, owner-role, and source-binding summary to resolve a
+-- collection before checking membership. It must not expose source-table
+-- identity, source keys, vectors, payload metadata, or operational state.
 CREATE VIEW pgcontext._collection_acl AS
 SELECT collection_id,
        collection_name,
@@ -328,44 +345,58 @@ SELECT collections.collection_id,
   FROM pgcontext._collection_aliases AS aliases
   JOIN pgcontext._collections AS collections USING (collection_id);
 
-CREATE VIEW pgcontext._visible_collection_vectors AS
+CREATE VIEW pgcontext._visible_collection_vectors
+WITH (security_barrier = true) AS
 SELECT vectors.*
   FROM pgcontext._collection_vectors AS vectors
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_collection_sparse_vectors AS
+CREATE VIEW pgcontext._visible_collection_sparse_vectors
+WITH (security_barrier = true) AS
 SELECT vectors.*
   FROM pgcontext._collection_sparse_vectors AS vectors
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_collection_points AS
+CREATE VIEW pgcontext._visible_collection_points
+WITH (security_barrier = true) AS
 SELECT points.*
   FROM pgcontext._collection_points AS points
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_collection_payload_columns AS
+CREATE VIEW pgcontext._visible_query_stats
+WITH (security_barrier = true) AS
+SELECT stats.*
+  FROM pgcontext._query_stats AS stats
+  JOIN pgcontext._collections AS collections USING (collection_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
+
+CREATE VIEW pgcontext._visible_collection_payload_columns
+WITH (security_barrier = true) AS
 SELECT payload_columns.*
   FROM pgcontext._collection_payload_columns AS payload_columns
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_build_jobs AS
+CREATE VIEW pgcontext._visible_build_jobs
+WITH (security_barrier = true) AS
 SELECT jobs.*
   FROM pgcontext._build_jobs AS jobs
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_artifact_segments AS
+CREATE VIEW pgcontext._visible_artifact_segments
+WITH (security_barrier = true) AS
 SELECT artifacts.*,
        collections.collection_name
   FROM pgcontext._artifact_segments AS artifacts
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
-CREATE VIEW pgcontext._visible_collection_limits AS
+CREATE VIEW pgcontext._visible_collection_limits
+WITH (security_barrier = true) AS
 SELECT collection_id,
        strict_mode,
        max_dimensions,
@@ -379,14 +410,195 @@ SELECT collection_id,
   FROM pgcontext._collections
  WHERE pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER');
 
+CREATE VIEW pgcontext._visible_collections
+WITH (security_barrier = true) AS
+SELECT collection_id,
+       collection_name,
+       owner_role,
+       source_table_oid,
+       source_schema_name,
+       source_table_name
+  FROM pgcontext._collections
+ WHERE pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER');
+
 GRANT SELECT ON pgcontext._collection_acl TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_vectors TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_sparse_vectors TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_points TO PUBLIC;
+GRANT SELECT ON pgcontext._visible_query_stats TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_payload_columns TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_build_jobs TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_artifact_segments TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_limits TO PUBLIC;
+GRANT SELECT ON pgcontext._visible_collections TO PUBLIC;
+
+-- Drift self-healing writes. Retrieval functions run SECURITY INVOKER so that
+-- source-table SELECT/RLS is enforced against the caller, which means a
+-- non-superuser collection member holds no direct privilege on the private
+-- catalog tables. When a dump/restore or table rewrite changes a source
+-- table's oid, the query path detects the drift and refreshes the stored
+-- metadata through these SECURITY DEFINER helpers so the write succeeds as the
+-- extension owner.
+--
+-- Security: these helpers accept only identifying keys, never a caller-supplied
+-- oid or attnum. Each re-derives the authoritative oid/attnum from pg_catalog
+-- using the schema, table, and column names already stored in the private
+-- catalog, so a call can only ever set the true current binding of the
+-- already-registered source table. This is deliberate: accepting an oid would
+-- let a collection member repoint _collections.source_table_oid at an unrelated
+-- table they control, and the SECURITY DEFINER payload/backfill paths check
+-- privileges by that oid while mutating the real table by name -- a
+-- confused-deputy escalation. Each helper also re-checks owner-role membership
+-- on SESSION_USER (defence in depth for direct calls) and pins search_path.
+CREATE FUNCTION pgcontext._refresh_collection_source_table(
+    p_collection_id bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections
+         WHERE collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'permission denied to refresh collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE pgcontext._collections AS collections
+       SET source_table_oid = source_class.oid,
+           updated_at = pg_catalog.now()
+      FROM pg_catalog.pg_class AS source_class
+      JOIN pg_catalog.pg_namespace AS source_namespace
+        ON source_namespace.oid = source_class.relnamespace
+     WHERE collections.collection_id = p_collection_id
+       AND source_namespace.nspname = collections.source_schema_name
+       AND source_class.relname = collections.source_table_name
+       AND source_class.relkind IN ('r', 'p');
+END;
+$$;
+
+CREATE FUNCTION pgcontext._refresh_vector_source_binding(
+    p_collection_id bigint,
+    p_vector_column_name text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections
+         WHERE collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'permission denied to refresh collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE pgcontext._collection_vectors AS vectors
+       SET source_table_oid = source_class.oid,
+           vector_attnum = source_attribute.attnum,
+           updated_at = pg_catalog.now()
+      FROM pg_catalog.pg_class AS source_class
+      JOIN pg_catalog.pg_namespace AS source_namespace
+        ON source_namespace.oid = source_class.relnamespace
+      JOIN pg_catalog.pg_attribute AS source_attribute
+        ON source_attribute.attrelid = source_class.oid
+     WHERE vectors.collection_id = p_collection_id
+       AND vectors.vector_column_name = p_vector_column_name
+       AND source_namespace.nspname = vectors.source_schema_name
+       AND source_class.relname = vectors.source_table_name
+       AND source_class.relkind IN ('r', 'p')
+       AND source_attribute.attname = vectors.vector_column_name
+       AND source_attribute.attnum > 0
+       AND NOT source_attribute.attisdropped;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._refresh_sparse_vector_source_binding(
+    p_collection_id bigint,
+    p_vector_name text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections
+         WHERE collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'permission denied to refresh collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE pgcontext._collection_sparse_vectors AS sparse_vectors
+       SET source_table_oid = source_class.oid,
+           vector_attnum = source_attribute.attnum,
+           updated_at = pg_catalog.now()
+      FROM pg_catalog.pg_class AS source_class
+      JOIN pg_catalog.pg_namespace AS source_namespace
+        ON source_namespace.oid = source_class.relnamespace
+      JOIN pg_catalog.pg_attribute AS source_attribute
+        ON source_attribute.attrelid = source_class.oid
+     WHERE sparse_vectors.collection_id = p_collection_id
+       AND sparse_vectors.vector_name = p_vector_name
+       AND source_namespace.nspname = sparse_vectors.source_schema_name
+       AND source_class.relname = sparse_vectors.source_table_name
+       AND source_class.relkind IN ('r', 'p')
+       AND source_attribute.attname = sparse_vectors.vector_column_name
+       AND source_attribute.attnum > 0
+       AND NOT source_attribute.attisdropped;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._refresh_payload_source_bindings(
+    p_collection_id bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections
+         WHERE collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'permission denied to refresh collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE pgcontext._collection_payload_columns AS payload_columns
+       SET source_table_oid = source_class.oid,
+           column_attnum = source_attribute.attnum,
+           updated_at = pg_catalog.now()
+      FROM pg_catalog.pg_class AS source_class
+      JOIN pg_catalog.pg_namespace AS source_namespace
+        ON source_namespace.oid = source_class.relnamespace
+      JOIN pg_catalog.pg_attribute AS source_attribute
+        ON source_attribute.attrelid = source_class.oid
+     WHERE payload_columns.collection_id = p_collection_id
+       AND source_namespace.nspname = payload_columns.source_schema_name
+       AND source_class.relname = payload_columns.source_table_name
+       AND source_class.relkind IN ('r', 'p')
+       AND source_attribute.attname = payload_columns.column_name
+       AND source_attribute.attnum > 0
+       AND NOT source_attribute.attisdropped;
+END;
+$$;
 
 SELECT pg_catalog.pg_extension_config_dump('pgcontext._collections', '');
 SELECT pg_catalog.pg_extension_config_dump('pgcontext._collection_vectors', '');
@@ -402,5 +614,5 @@ SELECT pg_catalog.pg_extension_config_dump('pgcontext._build_deltas', '');
 SELECT pg_catalog.pg_extension_config_dump('pgcontext._artifact_segments', '');
 "#,
     name = "create_catalog_tables",
-    requires = [pgcontext]
+    requires = ["pgcontext_bootstrap"]
 );

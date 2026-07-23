@@ -4,6 +4,7 @@ export LC_ALL=C
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 CARGO_BIN="${CARGO_BIN:-cargo}"
+RUSTC_BIN="${RUSTC_BIN:-rustc}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 HNSW_CALLBACK_CHECKER="${HNSW_CALLBACK_CHECKER:-${REPO_ROOT}/scripts/check-hnsw-callback-guards.sh}"
 UNSAFE_COMMENT_CHECKER="${UNSAFE_COMMENT_CHECKER:-${REPO_ROOT}/scripts/check-unsafe-safety-comments.sh}"
@@ -12,15 +13,21 @@ GATES=(
   callback-source-inventory
   unsafe-safety-comments
   storage-segment-miri
+  storage-mapped-view-miri
+  storage-mapped-real-asan
+  storage-mapped-real-tsan
   hnsw-pg17-asan
   hnsw-pg17-tsan
 )
-KINDS=(static static miri asan tsan)
-OWNERS=(context-pg workspace context-storage context-pg context-pg)
+KINDS=(static static miri miri asan tsan asan tsan)
+OWNERS=(context-pg workspace context-storage context-storage context-storage context-storage context-pg context-pg)
 COMMANDS=(
   'scripts/check-hnsw-callback-guards.sh'
   'scripts/check-unsafe-safety-comments.sh'
   'MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p context-storage --test segment_format'
+  'MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p context-storage --test mapped_hnsw_view'
+  'RUSTFLAGS=-Zsanitizer=address cargo +nightly test -Zbuild-std --target <host-target> -p context-storage --test mapped_generation_subprocess'
+  'RUSTFLAGS=-Zsanitizer=thread cargo +nightly test -Zbuild-std --target <host-target> -p context-storage --test mapped_generation_subprocess'
   'PG_CONFIG=<pg17-config> RUSTFLAGS=-Zsanitizer=address cargo +nightly pgrx test -p context-pg pg17 hnsw'
   'PG_CONFIG=<pg17-config> RUSTFLAGS=-Zsanitizer=thread cargo +nightly pgrx test -p context-pg pg17 hnsw'
 )
@@ -133,7 +140,15 @@ printf 'gate\tkind\towner\tstatus\texit_code\tlog\tcommand\n' >"${summary}"
 
 pg_config=""
 pg_config_version="not-required"
+host_target="${RUST_TARGET:-}"
 if [[ "${mode}" == "run" ]]; then
+  if [[ -z "${host_target}" ]]; then
+    host_target="$("${RUSTC_BIN}" -vV | sed -n 's/^host: //p')"
+  fi
+  if [[ -z "${host_target}" ]]; then
+    echo "could not determine Rust host target for sanitizer rows" >&2
+    exit 1
+  fi
   pg_config="${PG_CONFIG:-${PG17_CONFIG:-}}"
   if [[ -z "${pg_config}" ]]; then
     for candidate in \
@@ -173,6 +188,20 @@ run_gate() {
     storage-segment-miri)
       PG_CONFIG= RUSTFLAGS= MIRIFLAGS=-Zmiri-disable-isolation \
         "${CARGO_BIN}" +nightly miri test -p context-storage --test segment_format
+      ;;
+    storage-mapped-view-miri)
+      PG_CONFIG= RUSTFLAGS= MIRIFLAGS=-Zmiri-disable-isolation \
+        "${CARGO_BIN}" +nightly miri test -p context-storage --test mapped_hnsw_view
+      ;;
+    storage-mapped-real-asan)
+      PG_CONFIG= MIRIFLAGS= RUSTFLAGS=-Zsanitizer=address \
+        "${CARGO_BIN}" +nightly test -Zbuild-std --target "${host_target}" \
+          -p context-storage --test mapped_generation_subprocess
+      ;;
+    storage-mapped-real-tsan)
+      PG_CONFIG= MIRIFLAGS= RUSTFLAGS=-Zsanitizer=thread \
+        "${CARGO_BIN}" +nightly test -Zbuild-std --target "${host_target}" \
+          -p context-storage --test mapped_generation_subprocess
       ;;
     hnsw-pg17-asan)
       PG_CONFIG="${pg_config}" MIRIFLAGS= RUSTFLAGS=-Zsanitizer=address \

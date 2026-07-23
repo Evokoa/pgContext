@@ -9,6 +9,8 @@ use crate::{
     types::deterministic_points,
 };
 
+mod composite;
+
 /// Pure executor composed from owned synchronous query ports.
 pub struct QueryExecutor<'a> {
     candidates: &'a mut dyn CandidateSource,
@@ -53,6 +55,25 @@ impl<'a> QueryExecutor<'a> {
         budget: ExecutionBudget,
     ) -> Result<ExecutionOutcome> {
         query.validate()?;
+        if query.limit() > budget.max_results() {
+            return Ok(outcome(
+                Completion::BudgetExhausted,
+                Vec::new(),
+                Vec::new(),
+                BudgetUsage::default(),
+            ));
+        }
+        if is_composite(query) {
+            return self.execute_composite(query, budget);
+        }
+        self.execute_leaf(query, budget)
+    }
+
+    fn execute_leaf(
+        &mut self,
+        query: &QueryIr,
+        budget: ExecutionBudget,
+    ) -> Result<ExecutionOutcome> {
         let mut usage = BudgetUsage::default();
         let mut diagnostics = Vec::new();
 
@@ -84,7 +105,7 @@ impl<'a> QueryExecutor<'a> {
             ));
         }
         match readiness {
-            SourceReadiness::Ready => {}
+            SourceReadiness::Ready | SourceReadiness::Exact => {}
             SourceReadiness::RebuildRequired { reason } => {
                 let diagnostic = StageDiagnostic::new(
                     StageKind::Readiness,
@@ -143,7 +164,17 @@ impl<'a> QueryExecutor<'a> {
                     message: "query has a filter but no filter adapter is available".to_owned(),
                 });
             };
-            let batch = filter.filter_candidates(query, budget.max_filter_candidates())?;
+            let filter_limit = filter.candidate_limit(query, budget.max_filter_candidates())?;
+            if filter_limit == 0 || filter_limit > budget.max_filter_candidates() {
+                return Err(QueryError::PortFailure {
+                    stage: "filter_candidate_source",
+                    message: format!(
+                        "filter candidate request {filter_limit} is outside remaining budget {}",
+                        budget.max_filter_candidates()
+                    ),
+                });
+            }
+            let batch = filter.filter_candidates(query, filter_limit)?;
             if cancelled(self.cancellation)? {
                 return Ok(outcome(
                     Completion::Cancelled,
@@ -152,10 +183,10 @@ impl<'a> QueryExecutor<'a> {
                     usage,
                 ));
             }
-            if batch.point_ids().len() > budget.max_filter_candidates() {
+            if batch.point_ids().len() > filter_limit {
                 return Err(contract_violation(
                     "filter_candidate_source",
-                    budget.max_filter_candidates(),
+                    filter_limit,
                     batch.point_ids().len(),
                 ));
             }
@@ -204,9 +235,21 @@ impl<'a> QueryExecutor<'a> {
             ));
         }
 
-        let page =
-            self.candidates
-                .candidates(query, filter_batch.as_ref(), budget.max_candidates())?;
+        let candidate_limit = self
+            .candidates
+            .candidate_limit(query, budget.max_candidates())?;
+        if candidate_limit == 0 || candidate_limit > budget.max_candidates() {
+            return Err(QueryError::PortFailure {
+                stage: "candidate_source",
+                message: format!(
+                    "candidate request {candidate_limit} is outside remaining budget {}",
+                    budget.max_candidates()
+                ),
+            });
+        }
+        let page = self
+            .candidates
+            .candidates(query, filter_batch.as_ref(), candidate_limit)?;
         if cancelled(self.cancellation)? {
             return Ok(outcome(
                 Completion::Cancelled,
@@ -215,14 +258,22 @@ impl<'a> QueryExecutor<'a> {
                 usage,
             ));
         }
-        if page.candidates().len() > budget.max_candidates() {
+        if page.candidates().len() > candidate_limit {
             return Err(contract_violation(
                 "candidate_source",
-                budget.max_candidates(),
+                candidate_limit,
                 page.candidates().len(),
             ));
         }
+        if page.expansion_count() > budget.max_expansions() {
+            return Err(contract_violation(
+                "candidate_expansions",
+                budget.max_expansions(),
+                page.expansion_count(),
+            ));
+        }
         usage.add_candidates(page.candidates().len());
+        usage.add_expansions(page.expansion_count());
         usage.add_stage();
         let mut completion = if page.exhausted() {
             Completion::Complete
@@ -231,14 +282,8 @@ impl<'a> QueryExecutor<'a> {
         };
         let diagnostic = StageDiagnostic::new(
             StageKind::Candidates,
-            if page.exhausted() {
-                "candidate_source_exhausted"
-            } else {
-                "candidate_source_partial"
-            },
-            filter_batch
-                .as_ref()
-                .map_or(0, |batch| batch.point_ids().len()),
+            page.strategy(),
+            page.scored_count(),
             page.candidates().len(),
             None,
         );
@@ -301,13 +346,16 @@ impl<'a> QueryExecutor<'a> {
                 point_id: row.point_id(),
             });
         }
-        usage.add_rechecks(rows.len());
+        // Recheck work is the number of candidate identities submitted under
+        // the authoritative recheck bound, not only the rows that survive
+        // MVCC/RLS/deletion filtering.
+        usage.add_rechecks(recheck_limit);
         usage.add_stage();
         let points = deterministic_points(rows, query.limit(), query.score_order());
         let diagnostic = StageDiagnostic::new(
             StageKind::SourceRecheck,
             "authoritative_source_recheck",
-            page.candidates().len(),
+            recheck_limit,
             points.len(),
             None,
         );
@@ -325,6 +373,17 @@ impl<'a> QueryExecutor<'a> {
 
         Ok(outcome(completion, points, diagnostics, usage))
     }
+}
+
+fn is_composite(query: &QueryIr) -> bool {
+    matches!(
+        query.kind(),
+        crate::QueryKind::Prefetch { .. }
+            | crate::QueryKind::Weighted { .. }
+            | crate::QueryKind::ScoreThreshold { .. }
+            | crate::QueryKind::Formula { .. }
+            | crate::QueryKind::Rerank { .. }
+    )
 }
 
 fn outcome(

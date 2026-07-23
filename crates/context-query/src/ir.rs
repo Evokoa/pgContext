@@ -1,7 +1,7 @@
 //! Validated query intermediate representation.
 
 use context_core::policy::{MAX_FILTER_DEPTH, MAX_FILTER_NODES, MAX_RECALL_CHECK_POINT_IDS};
-use context_core::{DenseVector, PointId, SearchLimit, VectorName};
+use context_core::{DenseVector, PointId, SearchLimit, SparseVector, VectorName};
 use context_filter::{Filter, parse_filter_json};
 use serde_json::Value as JsonValue;
 
@@ -20,6 +20,27 @@ pub enum QueryKind {
         vector_name: Option<VectorName>,
         /// Validated query vector.
         vector: DenseVector,
+    },
+    /// Nearest-neighbor retrieval over a selected sparse vector.
+    SparseNearest {
+        /// Named sparse-vector selector.
+        vector_name: VectorName,
+        /// Validated sparse query vector.
+        vector: SparseVector,
+    },
+    /// PostgreSQL full-text retrieval over a source column.
+    FullText {
+        /// Validated source-column name.
+        text_column: String,
+        /// Nonempty bounded text query.
+        query: String,
+    },
+    /// Owned late-interaction retrieval over query token vectors.
+    LateInteraction {
+        /// Validated nonempty query token vectors.
+        vectors: Vec<DenseVector>,
+        /// Candidate budget requested per query token.
+        candidates_per_query: SearchLimit,
     },
     /// Positive/negative-example recommendation.
     Recommend {
@@ -66,7 +87,7 @@ pub enum QueryKind {
         /// Bounded formula text.
         formula: Formula,
     },
-    /// Final exact rerank request.
+    /// Final deterministic score-ordering and result-limit request.
     Rerank {
         /// Owned child query.
         query: Box<QueryIr>,
@@ -104,6 +125,95 @@ impl QueryIr {
             filter: parse_filter(filter)?,
             limit: SearchLimit::new(limit)?,
             score_order,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
+    /// Creates a validated sparse nearest-neighbor request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] for an invalid vector name, sparse
+    /// vector, filter shape, or zero limit.
+    pub fn sparse_nearest(
+        vector_name: String,
+        vector: SparseVector,
+        score_order: ScoreOrder,
+        filter: Option<JsonValue>,
+        limit: usize,
+    ) -> Result<Self> {
+        let query = Self {
+            kind: QueryKind::SparseNearest {
+                vector_name: VectorName::new(vector_name)?,
+                vector,
+            },
+            filter: parse_filter(filter)?,
+            limit: SearchLimit::new(limit)?,
+            score_order,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
+    /// Creates a validated full-text leaf request.
+    pub fn full_text(text_column: String, query: String, limit: usize) -> Result<Self> {
+        if text_column.is_empty() || text_column.len() > 63 {
+            return Err(invalid("text_column", "must contain 1..=63 bytes"));
+        }
+        if !text_column
+            .bytes()
+            .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        {
+            return Err(invalid(
+                "text_column",
+                "must contain only identifier characters",
+            ));
+        }
+        if query.is_empty() || query.len() > 4096 {
+            return Err(invalid("text_query", "must contain 1..=4096 bytes"));
+        }
+        let query = Self {
+            kind: QueryKind::FullText { text_column, query },
+            filter: None,
+            limit: SearchLimit::new(limit)?,
+            score_order: ScoreOrder::HigherIsBetter,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
+    /// Creates a validated owned late-interaction leaf request.
+    pub fn late_interaction(
+        vectors: Vec<Vec<f32>>,
+        candidates_per_query: usize,
+        limit: usize,
+    ) -> Result<Self> {
+        if vectors.is_empty() {
+            return Err(invalid("query_vectors", "must contain at least one vector"));
+        }
+        let vectors = vectors
+            .into_iter()
+            .map(DenseVector::new)
+            .collect::<core::result::Result<Vec<_>, _>>()?;
+        let dimensions = vectors[0].dimension();
+        if vectors
+            .iter()
+            .any(|vector| vector.dimension() != dimensions)
+        {
+            return Err(invalid(
+                "query_vectors",
+                "all vectors must have the same dimensions",
+            ));
+        }
+        let query = Self {
+            kind: QueryKind::LateInteraction {
+                vectors,
+                candidates_per_query: SearchLimit::new(candidates_per_query)?,
+            },
+            filter: None,
+            limit: SearchLimit::new(limit)?,
+            score_order: ScoreOrder::HigherIsBetter,
         };
         query.validate()?;
         Ok(query)
@@ -155,6 +265,52 @@ impl QueryIr {
         self.score_order
     }
 
+    /// Reports whether this node or any descendant executable leaf has a filter.
+    #[must_use]
+    pub fn has_filter_in_subtree(&self) -> bool {
+        self.filter.is_some()
+            || match &self.kind {
+                QueryKind::Prefetch { branches } => {
+                    branches.iter().any(Self::has_filter_in_subtree)
+                }
+                QueryKind::Weighted { query, .. }
+                | QueryKind::ScoreThreshold { query, .. }
+                | QueryKind::Formula { query, .. }
+                | QueryKind::Rerank { query } => query.has_filter_in_subtree(),
+                QueryKind::Nearest { .. }
+                | QueryKind::SparseNearest { .. }
+                | QueryKind::FullText { .. }
+                | QueryKind::LateInteraction { .. }
+                | QueryKind::Recommend { .. }
+                | QueryKind::Discover { .. }
+                | QueryKind::Lookup { .. } => false,
+            }
+    }
+
+    /// Returns the largest result limit requested by any node in this tree.
+    #[must_use]
+    pub fn max_node_limit(&self) -> usize {
+        let child_maximum = match &self.kind {
+            QueryKind::Prefetch { branches } => branches
+                .iter()
+                .map(Self::max_node_limit)
+                .max()
+                .unwrap_or_default(),
+            QueryKind::Weighted { query, .. }
+            | QueryKind::ScoreThreshold { query, .. }
+            | QueryKind::Formula { query, .. }
+            | QueryKind::Rerank { query } => query.max_node_limit(),
+            QueryKind::Nearest { .. }
+            | QueryKind::SparseNearest { .. }
+            | QueryKind::FullText { .. }
+            | QueryKind::LateInteraction { .. }
+            | QueryKind::Recommend { .. }
+            | QueryKind::Discover { .. }
+            | QueryKind::Lookup { .. } => 0,
+        };
+        self.limit().max(child_maximum)
+    }
+
     pub(crate) fn validate(&self) -> Result<()> {
         let mut nodes = 0;
         validate_query(self, 1, &mut nodes)
@@ -169,12 +325,38 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
     if *nodes > MAX_QUERY_NODES {
         return Err(invalid("query", "exceeds maximum node count"));
     }
+    if query.filter.is_some()
+        && matches!(
+            query.kind,
+            QueryKind::Prefetch { .. }
+                | QueryKind::Weighted { .. }
+                | QueryKind::ScoreThreshold { .. }
+                | QueryKind::Formula { .. }
+                | QueryKind::Rerank { .. }
+        )
+    {
+        return Err(invalid(
+            "filter",
+            "must be attached to executable leaf branches",
+        ));
+    }
+    if matches!(query.kind, QueryKind::Prefetch { .. })
+        && query.score_order != ScoreOrder::HigherIsBetter
+    {
+        return Err(invalid(
+            "score_order",
+            "prefetch fusion scores must use higher-is-better ordering",
+        ));
+    }
     validate_kind(&query.kind, depth, nodes)
 }
 
 fn validate_kind(kind: &QueryKind, depth: usize, nodes: &mut usize) -> Result<()> {
     match kind {
-        QueryKind::Nearest { .. } => {}
+        QueryKind::Nearest { .. }
+        | QueryKind::SparseNearest { .. }
+        | QueryKind::FullText { .. }
+        | QueryKind::LateInteraction { .. } => {}
         QueryKind::Recommend { positive, negative } => {
             if positive.is_empty() {
                 return Err(invalid("positive", "must contain at least one point"));

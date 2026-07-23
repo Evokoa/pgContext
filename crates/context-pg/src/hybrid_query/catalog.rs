@@ -18,7 +18,7 @@ pub(super) fn resolve_collection(collection_name: &CollectionName) -> QueryColle
                     acl.has_source_table,
                     (
                         SELECT count(*)::bigint
-                          FROM pgcontext._collection_points AS points
+                          FROM pgcontext._visible_collection_points AS points
                          WHERE points.collection_id = acl.collection_id
                            AND points.deleted_at IS NULL
                     )
@@ -179,7 +179,7 @@ pub(super) fn validate_query_vector_drift(collection_id: i64, registered_vector:
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.vector'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.vector'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists
                FROM pg_catalog.pg_class AS class
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
@@ -271,7 +271,7 @@ pub(super) fn validate_query_drift(
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.vector'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.vector'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists,
                     text_attribute.attname IS NOT NULL AS text_exists
                FROM pg_catalog.pg_class AS class
@@ -380,7 +380,7 @@ pub(super) fn validate_sparse_query_drift(
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.sparsevec'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.sparsevec'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists
                FROM pg_catalog.pg_class AS class
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
@@ -475,11 +475,8 @@ fn refresh_restored_query_metadata(
     }
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collections
-            SET source_table_oid = $1,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $2",
-        &[current_table_oid.into(), collection_id.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1)",
+        &[collection_id.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
@@ -489,15 +486,8 @@ fn refresh_restored_query_metadata(
     });
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collection_vectors
-            SET source_table_oid = $1,
-                vector_attnum = $2,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $3
-            AND vector_column_name = $4",
+        "SELECT pgcontext._refresh_vector_source_binding($1, $2)",
         &[
-            current_table_oid.into(),
-            current_vector_attnum.into(),
             collection_id.into(),
             registered_vector.vector_column_name.as_str().into(),
         ],
@@ -526,11 +516,8 @@ fn refresh_restored_sparse_query_metadata(
     }
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collections
-            SET source_table_oid = $1,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $2",
-        &[current_table_oid.into(), collection_id.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1)",
+        &[collection_id.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
@@ -540,15 +527,8 @@ fn refresh_restored_sparse_query_metadata(
     });
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collection_sparse_vectors
-            SET source_table_oid = $1,
-                vector_attnum = $2,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $3
-            AND vector_name = $4",
+        "SELECT pgcontext._refresh_sparse_vector_source_binding($1, $2)",
         &[
-            current_table_oid.into(),
-            current_vector_attnum.into(),
             collection_id.into(),
             registered_vector.vector_name.as_str().into(),
         ],

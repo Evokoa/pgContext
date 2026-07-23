@@ -1,0 +1,5 @@
+comment = 'Test-only pgvector ownership stub for upgrade preflight coverage'
+default_version = '0.8.5'
+relocatable = false
+schema = 'public'
+superuser = true

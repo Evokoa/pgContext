@@ -26,6 +26,8 @@ if [[ "${#heavy_gate_names[@]}" -eq 0 ]]; then
   echo "could not derive HEAVY_GATES from scripts/run-postgres-matrix-gates.sh" >&2
   exit 1
 fi
+supported_major_count=2
+full_matrix_rows=$((supported_major_count * (6 + ${#heavy_gate_names[@]})))
 
 stage_passing_heavy_fixtures() {
   local root="$1"
@@ -121,7 +123,7 @@ cat >"${client_only_bin}/pg_config" <<'PG_CONFIG'
 #!/usr/bin/env bash
 case "${1:-}" in
   --bindir) dirname "$0" ;;
-  *) printf 'PostgreSQL 18.99-client-only\n' ;;
+  *) printf 'PostgreSQL 16.99-client-only\n' ;;
 esac
 PG_CONFIG
 chmod +x "${client_only_bin}/pg_config"
@@ -149,7 +151,7 @@ grep -q -- '- Mode: `all`' "${report}"
 grep -q -- '- Execution: `dry-run`' "${report}"
 grep -Eq -- '^- Started: `[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z`$' "${report}"
 
-expected_rows=$((3 + 1 + 1 + 1 + 20))
+expected_rows=$((3 + 1 + 1 + 1 + ${#heavy_gate_names[@]}))
 actual_rows="$(tail -n +2 "${summary}" | wc -l | tr -d ' ')"
 if [[ "${actual_rows}" != "${expected_rows}" ]]; then
   echo "expected ${expected_rows} dry-run rows, got ${actual_rows}" >&2
@@ -251,9 +253,34 @@ write_crash_restart_hnsw_fixture() {
 set -euo pipefail
 printf 'hnsw_restart_nearest_rechecked: before_restart\n'
 printf 'hnsw_restart_index_scan: before_restart\n'
+printf 'hnsw_mapped_attach: before_restart\n'
 printf 'hnsw_restart_nearest_rechecked: after_restart\n'
 printf 'hnsw_restart_index_scan: after_restart\n'
+printf 'hnsw_mapped_attach: after_restart\n'
 printf 'fake HNSW crash restart gate passed\n'
+SH
+  chmod +x "${script_path}"
+}
+
+write_mapped_hnsw_lifecycle_fixture() {
+  local script_path="$1"
+  cat >"${script_path}" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'mapped_hnsw_drop_rollback_preserved\n'
+printf 'mapped_hnsw_drop_index_reclaimed\n'
+printf 'mapped_hnsw_drop_table_reclaimed\n'
+printf 'mapped_hnsw_prepared_commit_reconciled\n'
+printf 'mapped_hnsw_prepared_abort_preserved\n'
+printf 'mapped_hnsw_drop_marker_restart_preserved\n'
+printf 'mapped_hnsw_concurrent_cursor_progressed\n'
+printf 'mapped_hnsw_current_temps_reclaimed\n'
+printf 'mapped_hnsw_stale_temps_do_not_starve\n'
+printf 'mapped_hnsw_reconcile_window_advanced\n'
+printf 'mapped_hnsw_temp_drop_reclaimed\n'
+printf 'mapped_hnsw_temp_teardown_reclaimed\n'
+printf 'mapped_hnsw_drop_database_reclaimed\n'
+printf 'fake mapped HNSW lifecycle gate passed\n'
 SH
   chmod +x "${script_path}"
 }
@@ -283,6 +310,44 @@ printf 'hnsw_vacuum_index_ready\n'
 printf 'hnsw_vacuum_advice_present\n'
 printf 'hnsw_reindex_ready\n'
 printf 'fake HNSW vacuum gate passed\n'
+SH
+  chmod +x "${script_path}"
+}
+
+write_named_sparse_ann_fixture() {
+  local script_path="$1"
+  cat >"${script_path}" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'named_sparse_ann_vacuum_reindex\n'
+printf 'named_sparse_ann_exact_oracle: before_restart\n'
+printf 'named_sparse_ann_bounded_work: before_restart\n'
+printf 'named_sparse_ann_recall_threshold: before_restart\n'
+printf 'named_sparse_ann_exact_oracle: after_restart\n'
+printf 'named_sparse_ann_bounded_work: after_restart\n'
+printf 'named_sparse_ann_recall_threshold: after_restart\n'
+printf 'named_sparse_ann_hot_visible: before_vacuum\n'
+printf 'named_sparse_ann_hot_visible: after_vacuum\n'
+printf 'named_sparse_ann_restart_complete\n'
+printf 'fake named sparse ANN lifecycle gate passed\n'
+SH
+  chmod +x "${script_path}"
+}
+
+write_automatic_observability_fixture() {
+  local script_path="$1"
+  cat >"${script_path}" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'automatic_observability_success: 1\n'
+printf 'automatic_observability_typed_error: 1\n'
+printf 'automatic_observability_cancelled: 1\n'
+printf 'automatic_observability_latency_gate\n'
+printf 'automatic_observability_queue_health\n'
+printf 'automatic_observability_worker_idled\n'
+printf 'automatic_observability_terminated_producer_reclaimed\n'
+printf 'automatic_observability_worker_crash_recovered\n'
+printf 'fake automatic observability gate passed\n'
 SH
   chmod +x "${script_path}"
 }
@@ -439,10 +504,10 @@ PATH="${client_only_bin}:${PATH}" \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
   --dry-run \
   --allow-missing \
-  --major 18 \
+  --major 16 \
   --mode fast \
   --out-dir "${work_dir}/client-only"
-grep -qF $'pg18\tpg_config\tskipped\t0' "${work_dir}/client-only/summary.tsv"
+grep -qF $'pg16\tpg_config\tskipped\t0' "${work_dir}/client-only/summary.tsv"
 
 PATH="${fake_bin}:${PATH}" PG18_CONFIG="${client_only_bin}/pg_config" \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
@@ -485,8 +550,11 @@ grep -q 'pg17.sql' "${schema_log}"
 heavy_root="${work_dir}/heavy-root"
 stage_passing_heavy_fixtures "${heavy_root}"
 write_crash_restart_hnsw_fixture "${heavy_root}/tests/heavy/crash_restart_hnsw.sh"
+write_mapped_hnsw_lifecycle_fixture "${heavy_root}/tests/heavy/mapped_hnsw_lifecycle_cleanup.sh"
 write_mmap_hnsw_restart_fixture "${heavy_root}/tests/heavy/mmap_hnsw_artifact_restart.sh"
 write_hnsw_vacuum_fixture "${heavy_root}/tests/heavy/hnsw_vacuum.sh"
+write_named_sparse_ann_fixture "${heavy_root}/tests/heavy/named_sparse_ann_lifecycle.sh"
+write_automatic_observability_fixture "${heavy_root}/tests/heavy/automatic_observability.sh"
 write_backup_restore_fixture "${heavy_root}/tests/heavy/backup_restore.sh"
 write_physical_backup_wal_replay_fixture "${heavy_root}/tests/heavy/physical_backup_wal_replay.sh"
 write_concurrent_read_write_fixture "${heavy_root}/tests/heavy/concurrent_read_write.sh"
@@ -521,19 +589,26 @@ SH
   matrix_pg_configs+=("PG${major}_CONFIG=${matrix_bin}/pg_config")
 done
 
-env \
+if ! env \
   PATH="${fake_bin}:${PATH}" \
   FAKE_CARGO_LOG="${work_dir}/heavy-skip-cargo.log" \
   "${matrix_pg_configs[@]}" \
   REPO_ROOT="${heavy_root}" \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
-    --out-dir "${work_dir}/heavy-skip"
+    --out-dir "${work_dir}/heavy-skip"; then
+  cat "${work_dir}/heavy-skip/report.md" >&2
+  exit 1
+fi
 grep -qF $'pg17\theavy:fresh_install_smoke\tpassed\t0' "${work_dir}/heavy-skip/summary.tsv"
 grep -qF $'pg17\theavy:upgrade_matrix\tskipped\t0' "${work_dir}/heavy-skip/summary.tsv"
 grep -qF $'pg18\theavy:sqlstate_contract\tpassed\t0' "${work_dir}/heavy-skip/summary.tsv"
 grep -qF -- '- Full release scope: `1`' "${work_dir}/heavy-skip/report.md"
-grep -qF -- '- Passed: `50`' "${work_dir}/heavy-skip/report.md"
-grep -qF -- '- Skipped: `2`' "${work_dir}/heavy-skip/report.md"
+if ! grep -qF -- "- Passed: \`$((full_matrix_rows - supported_major_count))\`" \
+  "${work_dir}/heavy-skip/report.md"; then
+  cat "${work_dir}/heavy-skip/report.md" >&2
+  exit 1
+fi
+grep -qF -- "- Skipped: \`${supported_major_count}\`" "${work_dir}/heavy-skip/report.md"
 grep -qF -- '- Approval: `incomplete`' "${work_dir}/heavy-skip/report.md"
 grep -qF 'major: pg17' "${work_dir}/heavy-skip/pg17-heavy-upgrade_matrix.log"
 grep -qF 'gate: heavy:upgrade_matrix' "${work_dir}/heavy-skip/pg17-heavy-upgrade_matrix.log"
@@ -908,6 +983,7 @@ cat >"${heavy_root}/tests/heavy/crash_restart_hnsw.sh" <<'SH'
 set -euo pipefail
 printf 'hnsw_restart_nearest_rechecked: before_restart\n'
 printf 'hnsw_restart_index_scan: before_restart\n'
+printf 'hnsw_mapped_attach: before_restart\n'
 printf 'hnsw_restart_nearest_rechecked: after_restart\n'
 printf 'HNSW restart gate passed without after-restart index marker\n'
 SH
@@ -939,6 +1015,7 @@ cat >"${heavy_root}/tests/heavy/crash_restart_hnsw.sh" <<'SH'
 set -euo pipefail
 printf 'hnsw_restart_nearest_rechecked: before_restart\n'
 printf 'hnsw_restart_index_scan: before_restart\n'
+printf 'hnsw_mapped_attach: before_restart\n'
 printf 'hnsw_restart_nearest_rechecked: after_restart\n'
 printf 'hnsw_restart_index_scan: x\n'
 printf 'HNSW restart gate passed with placeholder after-restart index marker\n'
@@ -1606,8 +1683,11 @@ grep -qF -- '- Approval: `incomplete`' \
 clean_matrix_root="${work_dir}/clean-matrix-root"
 stage_passing_heavy_fixtures "${clean_matrix_root}"
 write_crash_restart_hnsw_fixture "${clean_matrix_root}/tests/heavy/crash_restart_hnsw.sh"
+write_mapped_hnsw_lifecycle_fixture "${clean_matrix_root}/tests/heavy/mapped_hnsw_lifecycle_cleanup.sh"
 write_mmap_hnsw_restart_fixture "${clean_matrix_root}/tests/heavy/mmap_hnsw_artifact_restart.sh"
 write_hnsw_vacuum_fixture "${clean_matrix_root}/tests/heavy/hnsw_vacuum.sh"
+write_named_sparse_ann_fixture "${clean_matrix_root}/tests/heavy/named_sparse_ann_lifecycle.sh"
+write_automatic_observability_fixture "${clean_matrix_root}/tests/heavy/automatic_observability.sh"
 write_backup_restore_fixture "${clean_matrix_root}/tests/heavy/backup_restore.sh"
 write_physical_backup_wal_replay_fixture "${clean_matrix_root}/tests/heavy/physical_backup_wal_replay.sh"
 write_concurrent_read_write_fixture "${clean_matrix_root}/tests/heavy/concurrent_read_write.sh"
@@ -1641,7 +1721,7 @@ env \
     --out-dir "${work_dir}/clean-matrix"
 grep -qF -- '- Worktree: `clean`' "${work_dir}/clean-matrix/report.md"
 grep -qF -- '- Full release scope: `1`' "${work_dir}/clean-matrix/report.md"
-grep -qF -- '- Passed: `52`' "${work_dir}/clean-matrix/report.md"
+grep -qF -- "- Passed: \`${full_matrix_rows}\`" "${work_dir}/clean-matrix/report.md"
 grep -qF -- '- Skipped: `0`' "${work_dir}/clean-matrix/report.md"
 grep -qF -- '- Failed: `0`' "${work_dir}/clean-matrix/report.md"
 grep -qF -- '- Missing: `0`' "${work_dir}/clean-matrix/report.md"
@@ -1657,7 +1737,7 @@ env \
     --out-dir "${work_dir}/dirty-matrix"
 grep -qF -- '- Worktree: `dirty`' "${work_dir}/dirty-matrix/report.md"
 grep -qF -- '- Full release scope: `1`' "${work_dir}/dirty-matrix/report.md"
-grep -qF -- '- Passed: `52`' "${work_dir}/dirty-matrix/report.md"
+grep -qF -- "- Passed: \`${full_matrix_rows}\`" "${work_dir}/dirty-matrix/report.md"
 grep -qF -- '- Skipped: `0`' "${work_dir}/dirty-matrix/report.md"
 grep -qF -- '- Failed: `0`' "${work_dir}/dirty-matrix/report.md"
 grep -qF -- '- Missing: `0`' "${work_dir}/dirty-matrix/report.md"

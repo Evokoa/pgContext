@@ -27,7 +27,7 @@ struct TelemetryRow {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "telemetry")]
+#[pg_extern(name = "telemetry")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn telemetry() -> TableIterator<
     'static,

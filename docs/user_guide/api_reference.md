@@ -76,6 +76,11 @@ Search and query:
 - `pgcontext.explore(collection text, context_point_ids bigint[], limit integer)`
 - `pgcontext.query(collection text, vector vector, text_query text, text_column text, limit integer)`
 - `pgcontext.query_nearest(vector vector, limit integer)`
+- `pgcontext.query_nearest(vector_name text, vector vector, filter jsonb, limit integer)`
+- `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, filter jsonb, limit integer)`
+- `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, limit integer)`
+- `pgcontext.query_full_text(text_query text, text_column text, limit integer)`
+- `pgcontext.query_late_interaction(query_vectors vector[], candidates_per_query integer, limit integer)`
 - `pgcontext.query_recommend(positive_point_ids bigint[], negative_point_ids bigint[], limit integer)`
 - `pgcontext.query_discover(context_point_ids bigint[], limit integer)`
 - `pgcontext.query_lookup(point_ids bigint[])`
@@ -84,6 +89,7 @@ Search and query:
 - `pgcontext.query_score_threshold(branch jsonb, min_score double precision, max_score double precision)`
 - `pgcontext.query_formula(branch jsonb, formula text)`
 - `pgcontext.query_rerank(branch jsonb, limit integer)`
+- `pgcontext.execute_query(collection text, plan jsonb)`
 - `pgcontext.explain(collection text, text_column text)`
 - `pgcontext.scroll(collection text, cursor text, limit integer)`
 - `pgcontext.count(collection text)`
@@ -130,11 +136,13 @@ Operations, diagnostics, and telemetry:
 - `pgcontext.hnsw_serving_stats()` — this backend's packed-generation
   serving counters: `pack_builds`, `pack_reuses`, `last_pack_bytes`,
   `last_pack_millis`, `total_pack_millis`, `shared_attaches`,
-  `shared_publishes`, `shared_publish_skips`, `page_native_fallbacks`,
+  `shared_publishes`, `shared_publish_skips`, `mapped_attaches`,
+  `mapped_publishes`, `mapped_publish_skips`, `page_native_fallbacks`,
   `delta_segment_records`, `delta_segment_scans`. Local pack/reuse counters describe the calling
   backend only; `shared_*` counters describe this backend's activity
   against the cross-backend shared registry (see
-  `pgcontext.hnsw_shared_serving`);
+  `pgcontext.hnsw_shared_serving`), while `mapped_*` counters describe
+  immutable file-generation serving (see `pgcontext.hnsw_mmap_serving`);
   `page_native_fallbacks` counts queries served from unpacked directory
   reads because no pack was available and
   `pgcontext.hnsw_pack_on_first_use` was off; `delta_segment_records` and
@@ -150,6 +158,11 @@ Operations, diagnostics, and telemetry:
 - `pgcontext.record_query_stat(collection text, cohort text, query_kind text, result_count bigint, candidate_count bigint, latency_ms double precision)`
 - `pgcontext.record_query_stat(collection text, cohort text, query_kind text, result_count bigint, candidates_considered bigint, rows_rechecked bigint, rows_pruned bigint, recall_threshold double precision, recall_achieved double precision, latency_ms double precision, lifecycle_state pgcontext."QueryLifecycleState")`
 - `pgcontext.query_cohort_stats()`
+- `pgcontext.query_execution_stats()` — membership-filtered automatic rollups
+  by actual strategy, completion, latency bucket, lifecycle state, and bounded
+  executor work counters
+- `pgcontext.query_telemetry_queue_stats()` — `pg_monitor`-restricted health
+  counters for the bounded asynchronous delivery queue
 - `pgcontext.register_model_version(collection text, model_name text, model_version text, dimensions integer, metric text)`
 - `pgcontext.model_versions()`
 - `pgcontext.create_embedding_migration(collection text, source_model_name text, source_model_version text, target_model_name text, target_model_version text, total_points bigint)`
@@ -211,13 +224,23 @@ for semantics and caveats):
 
 - `pgcontext.migration_report()` returns one row per pgvector-typed
   column: `(schema_name text, table_name text, column_name text,
-  dimensions int, pgvector_indexes text[], pgcontext_indexes text[],
-  suggested_command text)`. Read-only.
+  type_name text, dimensions int, pgvector_indexes text[],
+  pgcontext_indexes text[], conversion_supported bool, blockers text[],
+  suggested_command text)`. Read-only. The blockers are a fail-closed
+  inventory for ownership conversion; array, generated, partitioned,
+  dependent-view, defaulted, and complex-index shapes are reported rather
+  than guessed.
 - `pgcontext.adopt_pgvector(target regclass DEFAULT NULL, dry_run bool
   DEFAULT true, drop_old bool DEFAULT false)` returns
   `(index_name text, action text, command text, executed bool)` rows;
   migrates pgvector `hnsw`/`ivfflat` indexes to `pgcontext_hnsw`
-  equivalents. Dry-run by default.
+  equivalents through the `pgcontext_pgvector` companion bridge. Dry-run by
+  default; execution fails closed when the bridge is absent. Only
+  extension-owned, usable, plain
+  single-column indexes are accepted. HNSW build options and tablespace are
+  preserved. If `drop_old` is requested, the replacement must first pass an
+  exact-oracle recall gate; a failure aborts the transaction without dropping
+  the source index.
 - `pgcontext.compare_indexes(table_name text, column_name text,
   queries int DEFAULT 20)` returns one row per ANN index on the column:
   `(index_name text, access_method text, operator text, p50_ms float8,
@@ -225,8 +248,54 @@ for semantics and caveats):
   vectors against an exact same-operator oracle; indexes the planner
   never chose report NULL measurements. Read-only.
 - `pgcontext.enable_pgvector_binding()` always raises
-  `feature_not_supported` with reinstall-order guidance (coexist mode
-  requires pgvector to be installed before pgContext).
+  `feature_not_supported` with companion-bridge guidance. pgContext and
+  pgvector themselves can be installed in either order.
+- `pgcontext.start_pgvector_ownership_conversion(target regclass,
+  column_name text, mode text DEFAULT 'fast', metric text DEFAULT 'cosine',
+  application_uses_column_lists bool DEFAULT false,
+  application_dependencies_reviewed bool DEFAULT false)` starts a persisted
+  conversion for a table-owner role. `mode` is `fast` or
+  `restricted_online`. Online mode immediately adds a canonical shadow column
+  and synchronization trigger, so its explicit column-list attestation is
+  mandatory. Every mode requires the application-dependency attestation
+  because PostgreSQL cannot discover relation references hidden in application
+  SQL or string-bodied SQL/PLpgSQL functions. The caller must have `CREATE` on
+  the target schema (and any preserved nondefault index tablespace) whenever
+  the conversion builds replacement indexes.
+- `pgcontext.run_pgvector_ownership_conversion(conversion_id bigint,
+  batch_size int DEFAULT 1000, sessions_drained bool DEFAULT false)` performs
+  one bounded step. Fast mode requires the session-drain attestation and
+  completes atomically. Online mode backfills at most `batch_size` mismatches;
+  once backfill is complete, `next_command` contains a `CREATE INDEX
+  CONCURRENTLY` command that must be run as its own top-level statement. Call
+  `run_pgvector_ownership_conversion` again to certify that index and advance
+  the job to `ready`.
+- `pgcontext.cutover_pgvector_ownership_conversion(conversion_id bigint,
+  sessions_drained bool DEFAULT false)` performs the locked online name swap
+  after exact row validation and requires all application sessions to have
+  been drained/reprepared. `pgcontext.finalize_pgvector_ownership_conversion`
+  then irreversibly drops the synchronized pgvector rollback column, while
+  `pgcontext.rollback_pgvector_ownership_conversion` restores the original
+  column and indexes before finalization.
+- `pgcontext.pgvector_ownership_conversions()` lists only jobs owned by a role
+  of which `SESSION_USER` is a member. The private job catalog is not dumped;
+  in-flight relation/type OIDs are intentionally never resumed after restore.
+
+Ownership conversion is deliberately restricted to permanent ordinary heap
+tables and directly pgvector-owned `vector`/`halfvec` columns. It refuses
+unsupported defaults, generated/dependent expressions, column ACLs, views,
+catalog-discoverable function dependencies, constraints, RLS policies, user triggers, publications, extended
+statistics, partitions/inheritance, replica identity, composite dependencies,
+column comments/nondefault storage/statistics, and complex or counterfeit
+indexes. Source HNSW indexes with per-index options are refused because the
+current `pgcontext_hnsw` AM cannot represent them; IVFFlat list options are
+intentionally discarded during the documented rebuild-as-HNSW conversion.
+Invalid indexes and indexes with comments are refused rather than silently
+normalizing or losing metadata. Fast conversion uses a binary metadata type
+change and rebuilds certified source ANN indexes as HNSW; for a dimensioned
+source it preserves the dimension invariant with a validated CHECK constraint
+so the heap is not rewritten. Restricted-online conversion supports at most one
+source ANN index and requires its metric to match the requested replacement.
 
 Index maintenance:
 
@@ -421,11 +490,17 @@ validation, and exact scoring outside the stable compatibility promise:
   `pgcontext.sparsevec_ops`, and `pgcontext.bitvec_ops` for deterministic
   equality, comparison, and ordinary PostgreSQL btree indexes
 
-L2 HNSW index classes for `halfvec` and `sparsevec` are SQL-visible
-experimentally. `bitvec` Hamming HNSW is available through the explicit
-`pgcontext.bitvec_hnsw_hamming_ops` opclass. Non-L2 sparse ANN indexing plus
-bit-vector Jaccard ANN indexing remain planned before they are covered by the
-stable compatibility promise.
+The non-dense HNSW operator classes are first-class SQL contracts:
+
+- `halfvec_hnsw_ops`, `halfvec_hnsw_ip_ops`,
+  `halfvec_hnsw_cosine_ops`, and `halfvec_hnsw_l1_ops`
+- `sparsevec_hnsw_ops`, `sparsevec_hnsw_ip_ops`,
+  `sparsevec_hnsw_cosine_ops`, and `sparsevec_hnsw_l1_ops`
+- `bitvec_hnsw_hamming_ops` and `bitvec_hnsw_jaccard_ops`
+
+Each class stores a dense graph payload, traverses with the matching metric,
+and returns the exact operator distance type. The variant types and their
+non-index SQL helpers remain experimental as a broader compatibility surface.
 
 Experimental sparse collection metadata validates table-backed `sparsevec`
 source columns and stores per-vector sparse storage/index/status metadata:
@@ -433,13 +508,20 @@ source columns and stores per-vector sparse storage/index/status metadata:
 - `pgcontext.register_sparse_vector(collection_name text, vector_name text, vector_column text, dimensions integer, metric text)`
 - `pgcontext.collection_sparse_vectors(collection_name text)`
 - `pgcontext.configure_sparse_vector(collection_name text, vector_name text, storage_options jsonb, index_options jsonb, status text)`
+- `pgcontext.attach_sparse_hnsw_index(collection_name text, vector_name text, index_name text)`
+  validates and binds a schema-qualified, metric-matched sparse HNSW index.
 
 - `pgcontext.search_sparse(query sparsevec, point_ids bigint[], vectors sparsevec[], metric text, limit integer)`
   scores explicit sparse candidate arrays with `l2`, `inner_product`,
   `cosine`, or `l1` and returns exact top-k rows with deterministic tie breaks.
 - `pgcontext.search_sparse(collection text, vector_name text, query sparsevec, limit integer)`
-  scores a named sparse source column for active collection points with exact
-  table-backed semantics.
+  serves a validated attached sparse HNSW index with exact source rerank, or
+  falls back to exhaustive exact table-backed scoring when no valid binding exists.
+- `pgcontext.search_sparse(collection text, vector_name text, query sparsevec, filter text, limit integer)`
+  applies registered-field filter JSON through an HNSW candidate mask and the
+  final authoritative source recheck.
+- `pgcontext.explain_sparse(collection text, vector_name text, query sparsevec, limit integer)`
+  reports the actual exact/HNSW strategy and scored/candidate/recheck counters.
 - `pgcontext.query(collection text, vector vector, sparse_vector_name text, sparse_query sparsevec, limit integer)`
   fuses dense exact search with exact sparse search through reciprocal rank
   fusion. Sparse ANN branches remain outside the stable compatibility promise.
@@ -447,6 +529,19 @@ source columns and stores per-vector sparse storage/index/status metadata:
   partitions candidate token vectors by point, scores each point with exact
   MaxSim inner product, enforces a comparison budget, and returns final rerank
   order with deterministic tie breaks.
+- `pgcontext.register_late_interaction(collection text, source_table text, token_source text)`
+  binds a collection's source-table `vector[]` column, materializes one private
+  pgContext token row per array element under invoker ACL/RLS, installs a
+  same-transaction source-DML capture trigger, and builds a collection-scoped
+  inner-product HNSW index. The ordinary-table source must expose `id` as a
+  `NOT NULL`, immediate, single-column unique key. An empty source is registered
+  as `building` until a repair can infer dimensions and publish the index.
+- `pgcontext.repair_late_interaction(collection text, batch_size integer)`
+  atomically replaces the derived token rows with keyset pagination and a
+  per-batch materialization byte budget,
+  refreshes restored table bindings, reinstalls the capture trigger, and
+  rebuilds the HNSW index. A failed statement or savepoint rolls the previous
+  token generation and index back intact.
 - `pgcontext.search_late_interaction(collection text, query_vectors vector[], vector_column text, limit integer)`
   exact-scores active collection points from a table-backed `vector[]` source
   column with MaxSim and returns final SQL order with ACL/deleted-point checks.
@@ -454,7 +549,19 @@ source columns and stores per-vector sparse storage/index/status metadata:
   reports the exact table scan, MaxSim comparison count, comparison budget, and
   typed ANN-planner readiness diagnostics for a table-backed late-interaction
   query without materializing candidate vectors.
+- `pgcontext.search_late_interaction_ann(collection text, query_vectors vector[], candidates_per_query integer, limit integer)`
+  serves approximate candidates from the collection's registered, pgContext-owned
+  token relation and collection-scoped inner-product HNSW generation. The
+  candidate prefix expands geometrically, within collection and comparison
+  budgets, when deleted or RLS-hidden candidates are removed by the invoker-side
+  source recheck. Final ordering always uses exact MaxSim over the current source
+  row; token vectors and source-table identifiers are not caller parameters.
+- `pgcontext.explain_late_interaction_ann(collection text, query_vectors vector[], candidates_per_query integer)`
+  validates the bound source column and exact owned HNSW predicate, expression,
+  dimension, and opclass before reporting the ANN planner strategy. It does not
+  expose raw token vectors or exact global token counts.
 - `pgcontext.search_late_interaction_ann(collection text, query_vectors vector[], vector_column text, token_table text, token_source_key_column text, token_vector_column text, candidates_per_query integer, limit integer)`
+  is the legacy experimental overload for user-maintained companion tables. It
   uses a companion token table with a `pgcontext_hnsw` index to collect
   approximate candidate source keys from a `NOT NULL` source-key column and a
   dimensioned `vector(n) NOT NULL` token column, deduplicates them, and
@@ -468,7 +575,8 @@ source columns and stores per-vector sparse storage/index/status metadata:
   token candidates, and enforces the actual hydrated exact-rerank budget while
   scoring source-table vectors.
 - `pgcontext.explain_late_interaction_ann(collection text, query_vectors vector[], vector_column text, token_table text, token_source_key_column text, token_vector_column text, candidates_per_query integer)`
-  validates the companion token table, `NOT NULL` source-key and token-vector
+  is the legacy companion-table explain overload. It validates the companion
+  token table, `NOT NULL` source-key and token-vector
   columns, declared `vector(n)` dimensions, HNSW index, ACLs, strict collection
   candidate budget, and planner budget before reporting the
   `ann_candidate_serving` planner strategy.
@@ -482,8 +590,8 @@ as final SQL scores.
 
 ## Current Maturity Boundary
 
-Pgvector-compatible non-L2 sparse ANN index classes, SQL `bit` ANN indexing,
-quantized index scan serving, external artifact import/export APIs, sparse ANN
-branch serving, and full multi-vector serving are not stable today. Missing
+Named sparse ANN, SQL `bit` ANN indexing, quantized index scan serving,
+external artifact import/export APIs, and full multi-vector serving are not
+stable today. Missing
 product behavior, longer-duration certification, and broader workload coverage
 are tracked in the public roadmap.

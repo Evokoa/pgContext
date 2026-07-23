@@ -49,11 +49,7 @@ struct ArtifactReaderPin {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "artifact_segment_serving_readiness",
-    security_definer
-)]
+#[pg_extern(name = "artifact_segment_serving_readiness", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn artifact_segment_serving_readiness(
     collection: String,
@@ -84,11 +80,7 @@ pub fn artifact_segment_serving_readiness(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "artifact_segment_mmap_payload",
-    security_definer
-)]
+#[pg_extern(name = "artifact_segment_mmap_payload", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn artifact_segment_mmap_payload(
     collection: String,
@@ -104,6 +96,24 @@ pub fn artifact_segment_mmap_payload(
         name!(payload, Vec<u8>),
     ),
 > {
+    let session_is_superuser = Spi::get_one::<bool>(
+        "SELECT roles.rolsuper
+           FROM pg_catalog.pg_roles AS roles
+          WHERE roles.rolname = SESSION_USER",
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to check mmap payload caller: {error}"),
+        )
+    })
+    .unwrap_or(false);
+    if !session_is_superuser {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            "raw mmap artifact payload access is internal",
+        );
+    }
     validate_non_negative_budget(max_mapped_bytes);
     let row = find_mmap_artifact_row(&collection, &artifact_name);
     lock_artifact_segment_target_shared(&row);
@@ -112,7 +122,7 @@ pub fn artifact_segment_mmap_payload(
     let loaded = match load_serving_ready_segment(&row, max_mapped_bytes) {
         Ok(loaded) => loaded,
         Err(failure) => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            failure.sql_error_code(),
             format!(
                 "mmap artifact is not serving-ready: {} ({})",
                 failure.status, failure.detail
@@ -121,6 +131,36 @@ pub fn artifact_segment_mmap_payload(
     };
     let result = mmap_payload_row(row, loaded);
     TableIterator::once(result)
+}
+
+/// Runs an internal operation while a serving-ready artifact is mapped and
+/// durably pinned to the current backend.
+///
+/// The caller must enter through a SECURITY DEFINER SQL boundary that has
+/// re-derived collection membership. No payload borrow can outlive `action`,
+/// and the reader pin is released only after every borrow has ended.
+pub(crate) fn with_mapped_artifact_payload<R>(
+    collection: &str,
+    artifact_name: &str,
+    max_mapped_bytes: i64,
+    action: impl FnOnce(&[u8]) -> R,
+) -> R {
+    validate_non_negative_budget(max_mapped_bytes);
+    let row = find_mmap_artifact_row(collection, artifact_name);
+    lock_artifact_segment_target_shared(&row);
+    let row = find_mmap_artifact_row(collection, artifact_name);
+    let _pin = acquire_artifact_reader_pin(&row);
+    let loaded = match load_serving_ready_segment(&row, max_mapped_bytes) {
+        Ok(loaded) => loaded,
+        Err(failure) => raise_sql_error(
+            failure.sql_error_code(),
+            format!(
+                "mmap artifact is not serving-ready: {} ({})",
+                failure.status, failure.detail
+            ),
+        ),
+    };
+    action(loaded.segment.payload())
 }
 
 fn find_mmap_artifact_row(collection: &str, artifact_name: &str) -> ArtifactSegmentRow {
@@ -311,7 +351,10 @@ fn load_serving_ready_segment(
     }
 
     let path = artifact_absolute_path(relative_path);
-    let segment = match map_segment_file(&path) {
+    // SAFETY: published artifact generations are immutable. Writers publish a
+    // new inode atomically and retirement only unlinks the old pathname while
+    // reader pins retain its lifetime; neither operation mutates this inode.
+    let segment = match unsafe { map_segment_file(&path) } {
         Ok(segment) => segment,
         Err(SegmentFileError::Io {
             operation: "open",
@@ -371,6 +414,17 @@ fn readiness_failure(
         status: status.into(),
         mapped_bytes,
         detail: detail.into(),
+    }
+}
+
+impl ServingReadinessFailure {
+    fn sql_error_code(&self) -> PgSqlErrorCode {
+        match self.status.as_str() {
+            "checksum_mismatch" | "artifact_corrupt" | "metadata_mismatch" => {
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED
+            }
+            _ => PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+        }
     }
 }
 

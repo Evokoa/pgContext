@@ -29,7 +29,7 @@ full-text branch over one source-table column:
 SELECT point_id, source_key, score
 FROM pgcontext.query(
   'docs',
-  '[0,0]'::vector,
+  '[0,0]'::pgcontext.vector,
   'database internals',
   'body',
   10
@@ -115,9 +115,61 @@ FROM pgcontext.telemetry();
 `MissingArtifacts`, or `StaleCatalog`. Counts are catalog-derived and intended
 for trend monitoring; query-level cohort counters are a separate surface.
 
-## Query Cohort Stats
+## Automatic Query Execution Stats
 
-Use `pgcontext.record_query_stat` to store local SQL-visible query telemetry
+Executor-backed `search` and `execute_query` calls automatically record the
+bounded strategy and work that actually ran. Read the membership-filtered
+rollup with:
+
+```sql
+SELECT collection_name,
+       query_kind,
+       strategy,
+       query_count,
+       total_visits,
+       total_filter_candidates,
+       total_candidates,
+       total_rechecks,
+       total_stages,
+       total_expansions,
+       completion,
+       latency_bucket,
+       lifecycle_state,
+       avg_latency_ms
+FROM pgcontext.query_execution_stats();
+```
+
+`strategy`, `completion`, latency, lifecycle, and work counters are bounded
+labels or numeric values. Apart from the collection association, pgContext
+never writes vectors, payloads, filter values, query text, source keys, role
+names, or caller-provided tenant dimensions into automatic rows.
+
+The query backend performs no telemetry SQL write. It makes a nonblocking
+attempt to enqueue one fixed-size event in a 1,024-entry named shared-memory
+queue, and a database-scoped background worker persists the event in a separate
+transaction. Consequently, terminal errors and cancellations can still be
+observed even though the query transaction aborts. Delivery is bounded and
+best effort and may duplicate: shared-memory allocation/attachment failure, lock contention, a
+full queue, worker-launch failure, or exhaustion of the 64 database slots can
+drop observations, while a worker failure after commit but before
+acknowledgement can duplicate one. Events whose collection
+transaction is not visible yet are retried for 60 seconds and then counted as
+orphaned; the queue itself does not survive a postmaster restart.
+
+Members of PostgreSQL's `pg_monitor` role can inspect transport health without
+seeing query contents:
+
+```sql
+SELECT * FROM pgcontext.query_telemetry_queue_stats();
+```
+
+The worker exits after five idle seconds. A superuser can set
+`pgcontext.query_telemetry_enabled = off` for incident response or a controlled
+latency baseline; disabled queries are intentionally unobserved.
+
+## Manual Query Cohort Stats
+
+Use `pgcontext.record_query_stat` to store application-defined SQL-visible query telemetry
 without storing vector contents, filter values, or literal query text:
 
 ```sql

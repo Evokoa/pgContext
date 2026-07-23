@@ -49,12 +49,17 @@ static HNSW_SHARED_SERVING: GucSetting<bool> = GucSetting::<bool>::new(true);
 const DEFAULT_HNSW_SHARED_SERVING_BUDGET_MB: i32 = 512;
 static HNSW_SHARED_SERVING_BUDGET_MB: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_SHARED_SERVING_BUDGET_MB);
+static HNSW_MMAP_SERVING: GucSetting<bool> = GucSetting::<bool>::new(true);
+const DEFAULT_HNSW_MMAP_SERVING_BUDGET_MB: i32 = 512;
+static HNSW_MMAP_SERVING_BUDGET_MB: GucSetting<i32> =
+    GucSetting::<i32>::new(DEFAULT_HNSW_MMAP_SERVING_BUDGET_MB);
 static HNSW_PACK_ON_FIRST_USE: GucSetting<bool> = GucSetting::<bool>::new(true);
 static HNSW_MASK_CANDIDATE_LIMIT: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_CANDIDATE_MASK_POINTS_I32);
 static HNSW_BUILD_PARALLEL_WORKERS: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_BUILD_PARALLEL_WORKERS_I32);
 static PGVECTOR_COMPAT_WARNINGS: GucSetting<bool> = GucSetting::<bool>::new(true);
+static QUERY_TELEMETRY_ENABLED: GucSetting<bool> = GucSetting::<bool>::new(true);
 const DEFAULT_HNSW_DELTA_SEGMENT_LIMIT: i32 = 10_000;
 static HNSW_DELTA_SEGMENT_LIMIT: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_DELTA_SEGMENT_LIMIT);
@@ -69,6 +74,14 @@ static HNSW_COMPACT_ON_THRESHOLD_MAX_MB: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_COMPACT_ON_THRESHOLD_MAX_MB);
 
 pub(crate) fn init_gucs() {
+    GucRegistry::define_bool_guc(
+        c"pgcontext.query_telemetry_enabled",
+        c"Persist bounded automatic query execution telemetry.",
+        c"When enabled, executor-backed retrieval enqueues strategy, work, outcome, and latency counters for asynchronous persistence. Only superusers may disable it for incident response or controlled latency baselines.",
+        &QUERY_TELEMETRY_ENABLED,
+        GucContext::Suset,
+        GucFlags::default(),
+    );
     GucRegistry::define_int_guc(
         c"pgcontext.hnsw_m",
         c"Default HNSW neighbor count.",
@@ -76,6 +89,28 @@ pub(crate) fn init_gucs() {
         &HNSW_M,
         MIN_HNSW_M_I32,
         MAX_HNSW_M_I32,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+    GucRegistry::define_bool_guc(
+        c"pgcontext.hnsw_mmap_serving",
+        c"Serve immutable HNSW graph generations from mapped files.",
+        c"When enabled, a full-layer packed generation is published as an \
+          identity-bound immutable file and later backends map it before \
+          falling back to shared memory or PostgreSQL pages.",
+        &HNSW_MMAP_SERVING,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+    GucRegistry::define_int_guc(
+        c"pgcontext.hnsw_mmap_serving_budget_mb",
+        c"Per-generation mapped HNSW byte budget in megabytes.",
+        c"Maximum encoded bytes accepted for one mapped HNSW generation. \
+          Over-budget publication and attachment fall back to shared memory \
+          or PostgreSQL pages without failing the query.",
+        &HNSW_MMAP_SERVING_BUDGET_MB,
+        0,
+        i32::MAX,
         GucContext::Userset,
         GucFlags::default(),
     );
@@ -269,6 +304,10 @@ pub(crate) fn init_gucs() {
     );
 }
 
+pub(crate) fn query_telemetry_enabled() -> bool {
+    QUERY_TELEMETRY_ENABLED.get()
+}
+
 pub(crate) fn pgvector_compat_warnings_from_guc() -> bool {
     PGVECTOR_COMPAT_WARNINGS.get()
 }
@@ -334,6 +373,15 @@ pub(crate) fn hnsw_shared_serving_enabled_from_guc() -> bool {
 
 pub(crate) fn hnsw_shared_serving_budget_bytes_from_guc() -> u64 {
     let megabytes = u64::from(HNSW_SHARED_SERVING_BUDGET_MB.get().max(0).unsigned_abs());
+    megabytes * 1024 * 1024
+}
+
+pub(crate) fn hnsw_mmap_serving_enabled_from_guc() -> bool {
+    HNSW_MMAP_SERVING.get()
+}
+
+pub(crate) fn hnsw_mmap_serving_budget_bytes_from_guc() -> u64 {
+    let megabytes = u64::from(HNSW_MMAP_SERVING_BUDGET_MB.get().max(0).unsigned_abs());
     megabytes * 1024 * 1024
 }
 

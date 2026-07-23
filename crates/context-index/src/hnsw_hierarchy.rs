@@ -413,7 +413,9 @@ fn ensure_hnsw_metric(metric: DistanceMetric) -> Result<()> {
         DistanceMetric::L2
         | DistanceMetric::NegativeInnerProduct
         | DistanceMetric::Cosine
-        | DistanceMetric::L1 => Ok(()),
+        | DistanceMetric::L1
+        | DistanceMetric::Hamming
+        | DistanceMetric::Jaccard => Ok(()),
         DistanceMetric::InnerProduct => Err(HnswError::UnsupportedMetric {
             metric: "inner_product",
         }),

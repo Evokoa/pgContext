@@ -11,8 +11,11 @@ HEAVY_GATES=(
   tests/heavy/cross_version_import.sh
   tests/heavy/physical_backup_wal_replay.sh
   tests/heavy/crash_restart_hnsw.sh
+  tests/heavy/mapped_hnsw_lifecycle_cleanup.sh
   tests/heavy/mmap_hnsw_artifact_restart.sh
   tests/heavy/hnsw_vacuum.sh
+  tests/heavy/named_sparse_ann_lifecycle.sh
+  tests/heavy/automatic_observability.sh
   tests/heavy/concurrent_read_write.sh
   tests/heavy/filtered_ann_recall.sh
   tests/heavy/late_interaction_ann_serving.sh
@@ -41,6 +44,28 @@ HNSW_VACUUM_MARKERS=(
   "hnsw_vacuum_advice_present"
   "hnsw_reindex_ready"
 )
+NAMED_SPARSE_ANN_MARKERS=(
+  "named_sparse_ann_vacuum_reindex"
+  "named_sparse_ann_exact_oracle: before_restart"
+  "named_sparse_ann_bounded_work: before_restart"
+  "named_sparse_ann_recall_threshold: before_restart"
+  "named_sparse_ann_exact_oracle: after_restart"
+  "named_sparse_ann_bounded_work: after_restart"
+  "named_sparse_ann_recall_threshold: after_restart"
+  "named_sparse_ann_hot_visible: before_vacuum"
+  "named_sparse_ann_hot_visible: after_vacuum"
+  "named_sparse_ann_restart_complete"
+)
+AUTOMATIC_OBSERVABILITY_MARKERS=(
+  "automatic_observability_success: 1"
+  "automatic_observability_typed_error: 1"
+  "automatic_observability_cancelled: 1"
+  "automatic_observability_latency_gate"
+  "automatic_observability_queue_health"
+  "automatic_observability_worker_idled"
+  "automatic_observability_terminated_producer_reclaimed"
+  "automatic_observability_worker_crash_recovered"
+)
 FILTERED_ANN_RECALL_MARKERS=(
   "filtered_ann_exact_oracle_seqscan"
   "filtered_ann_candidate_indexscan"
@@ -68,8 +93,25 @@ BUILD_JOB_RESUMABILITY_MARKERS=(
 HNSW_RESTART_MARKERS=(
   "hnsw_restart_nearest_rechecked: before_restart"
   "hnsw_restart_index_scan: before_restart"
+  "hnsw_mapped_attach: before_restart"
   "hnsw_restart_nearest_rechecked: after_restart"
   "hnsw_restart_index_scan: after_restart"
+  "hnsw_mapped_attach: after_restart"
+)
+MAPPED_HNSW_LIFECYCLE_MARKERS=(
+  "mapped_hnsw_drop_rollback_preserved"
+  "mapped_hnsw_drop_index_reclaimed"
+  "mapped_hnsw_drop_table_reclaimed"
+  "mapped_hnsw_prepared_commit_reconciled"
+  "mapped_hnsw_prepared_abort_preserved"
+  "mapped_hnsw_drop_marker_restart_preserved"
+  "mapped_hnsw_concurrent_cursor_progressed"
+  "mapped_hnsw_current_temps_reclaimed"
+  "mapped_hnsw_stale_temps_do_not_starve"
+  "mapped_hnsw_reconcile_window_advanced"
+  "mapped_hnsw_temp_drop_reclaimed"
+  "mapped_hnsw_temp_teardown_reclaimed"
+  "mapped_hnsw_drop_database_reclaimed"
 )
 CONCURRENT_READ_WRITE_MARKERS=(
   "concurrent_hnsw_writer_completed"
@@ -256,19 +298,16 @@ pg_config_for_major() {
     return 0
   fi
 
+  candidate="$(command -v pg_config 2>/dev/null || true)"
+  if pg_config_is_usable_for_major "${candidate}" "${major}"; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+
   for candidate in \
     "/opt/homebrew/opt/postgresql@${major}/bin/pg_config" \
     "/usr/local/opt/postgresql@${major}/bin/pg_config" \
-    "/usr/lib/postgresql/${major}/bin/pg_config"
-  do
-    if pg_config_is_usable_for_major "${candidate}" "${major}"; then
-      printf '%s\n' "${candidate}"
-      return 0
-    fi
-  done
-
-  for candidate in \
-    "$(command -v pg_config 2>/dev/null || true)" \
+    "/usr/lib/postgresql/${major}/bin/pg_config" \
     "/opt/homebrew/opt/libpq/bin/pg_config" \
     "/usr/local/opt/libpq/bin/pg_config"
   do
@@ -416,6 +455,30 @@ run_gate() {
         fi
       done
     fi
+    if [[ "${status}" == "passed" && "${gate}" == "heavy:named_sparse_ann_lifecycle" ]]; then
+      local marker
+      for marker in "${NAMED_SPARSE_ANN_MARKERS[@]}"; do
+        if ! grep -qxF "${marker}" "${log_file}"; then
+          status="failed"
+          exit_code=1
+          overall_status=1
+          printf '\nnamed_sparse_ann_lifecycle: failed; missing evidence marker: %s\n' "${marker}" >>"${log_file}"
+          break
+        fi
+      done
+    fi
+    if [[ "${status}" == "passed" && "${gate}" == "heavy:automatic_observability" ]]; then
+      local marker
+      for marker in "${AUTOMATIC_OBSERVABILITY_MARKERS[@]}"; do
+        if ! grep -qxF "${marker}" "${log_file}"; then
+          status="failed"
+          exit_code=1
+          overall_status=1
+          printf '\nautomatic_observability: failed; missing evidence marker: %s\n' "${marker}" >>"${log_file}"
+          break
+        fi
+      done
+    fi
     if [[ "${status}" == "passed" && "${gate}" == "heavy:filtered_ann_recall" ]]; then
       local marker
       for marker in "${FILTERED_ANN_RECALL_MARKERS[@]}"; do
@@ -460,6 +523,18 @@ run_gate() {
           exit_code=1
           overall_status=1
           printf '\ncrash_restart_hnsw: failed; missing evidence marker: %s\n' "${marker}" >>"${log_file}"
+          break
+        fi
+      done
+    fi
+    if [[ "${status}" == "passed" && "${gate}" == "heavy:mapped_hnsw_lifecycle_cleanup" ]]; then
+      local marker
+      for marker in "${MAPPED_HNSW_LIFECYCLE_MARKERS[@]}"; do
+        if ! grep -qxF "${marker}" "${log_file}"; then
+          status="failed"
+          exit_code=1
+          overall_status=1
+          printf '\nmapped_hnsw_lifecycle_cleanup: failed; missing evidence marker: %s\n' "${marker}" >>"${log_file}"
           break
         fi
       done

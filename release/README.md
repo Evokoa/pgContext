@@ -71,7 +71,7 @@ scripts/quickstart.sh clean
 
 The first command builds the local image, starts PostgreSQL, installs pgContext,
 and runs `playground/demo.sql`. `clean` removes the disposable container and
-volume. The prebuilt `pg17-v0.1.0` registry tag becomes live only after the
+volume. The prebuilt `pg17-v0.2.0` registry tag becomes live only after the
 protected publication workflow completes.
 
 ## Prove both install paths
@@ -95,10 +95,10 @@ install targets fail clearly. SHA-named logs and the report are written under
 Validate the tag-shaped release version and PGXN metadata before packaging:
 
 ```sh
-scripts/validate-release.py --tag v0.1.0
-scripts/build-pgxn-dist.sh v0.1.0
+scripts/validate-release.py --tag v0.2.0
+scripts/build-pgxn-dist.sh v0.2.0
 scripts/render-homebrew-formula.sh \
-  --archive dist/pgContext-0.1.0.zip \
+  --archive dist/pgContext-0.2.0.zip \
   --out-dir target/homebrew-formula
 ```
 
@@ -110,7 +110,7 @@ Build a local, merged amd64/arm64 OCI release candidate with provenance (repeat
 for PostgreSQL majors 17 and 18):
 
 ```sh
-scripts/build-release-image.sh --pg-major 17 v0.1.0
+scripts/build-release-image.sh --pg-major 17 v0.2.0
 ```
 
 The command writes a SHA-named OCI archive and BuildKit metadata under
@@ -142,7 +142,7 @@ manifest digests, revalidates the unchanged artifacts behind the protected
 the external Homebrew tap in dependency order.
 
 ```sh
-release/build-packages.sh v0.1.0
+release/build-packages.sh v0.2.0
 ```
 
 Artifacts are written under ignored `dist/` by default. The script refuses a

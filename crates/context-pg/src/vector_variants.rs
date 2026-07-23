@@ -1,10 +1,18 @@
-//! SQL-facing experimental vector variant wrappers.
+// SQL-facing experimental vector variant wrappers.
 
 #[allow(
     unsafe_code,
     reason = "the pgvector-layout halfvec varlena codec is an audited PostgreSQL datum boundary"
 )]
+#[path = "vector_variants/halfvec_datum.rs"]
 mod halfvec_datum;
+#[allow(
+    unsafe_code,
+    reason = "the pgvector sparsevec packed-varlena codec is an audited PostgreSQL datum boundary"
+)]
+#[path = "vector_variants/pgvector_sparsevec_datum.rs"]
+pub(crate) mod pgvector_sparsevec_datum;
+#[path = "vector_variants/vector_variant_distance.rs"]
 mod vector_variant_distance;
 
 use core::ffi::CStr;
@@ -416,7 +424,7 @@ fn input_text<'a>(input: &'a CStr, label: &str) -> &'a str {
 /// Explicitly converts a PostgreSQL `real[]` array into a half vector.
 ///
 /// Values are rounded to half precision.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_from_real_array(values: Vec<f32>) -> HalfVec {
     halfvec_from_values(values)
 }
@@ -424,7 +432,7 @@ pub fn halfvec_from_real_array(values: Vec<f32>) -> HalfVec {
 /// Explicitly converts a PostgreSQL `integer[]` array into a half vector.
 ///
 /// Values are rounded to half precision.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_from_integer_array(values: Vec<i32>) -> HalfVec {
     halfvec_from_numeric_text_values(values)
 }
@@ -432,13 +440,13 @@ pub fn halfvec_from_integer_array(values: Vec<i32>) -> HalfVec {
 /// Explicitly converts a PostgreSQL `double precision[]` array into a half vector.
 ///
 /// Values are rounded to half precision.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_from_double_array(values: Vec<f64>) -> HalfVec {
     halfvec_from_numeric_text_values(values)
 }
 
 /// Converts a half vector into a PostgreSQL `real[]` array.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_to_real_array(vector: HalfVec) -> Vec<f32> {
     match vector.to_half() {
         Ok(vector) => vector.as_slice().to_vec(),
@@ -447,7 +455,7 @@ pub fn halfvec_to_real_array(vector: HalfVec) -> Vec<f32> {
 }
 
 /// Converts a half vector into a dense SQL vector for ANN storage.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_to_vector(vector: HalfVec) -> Vector {
     let values = halfvec_to_real_array(vector);
     let vector = DenseVector::new(values).unwrap_or_else(|error| raise_core_error(error));
@@ -455,7 +463,7 @@ pub fn halfvec_to_vector(vector: HalfVec) -> Vector {
 }
 
 /// Converts a PostgreSQL `boolean[]` array into a bit vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_from_bool_array(bits: Vec<bool>) -> BitVec {
     match BitVector::new(bits) {
         Ok(vector) => BitVec::from_bit(vector),
@@ -464,7 +472,7 @@ pub fn bitvec_from_bool_array(bits: Vec<bool>) -> BitVec {
 }
 
 /// Converts a bit vector into a PostgreSQL `boolean[]` array.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_to_bool_array(vector: BitVec) -> Vec<bool> {
     match vector.to_bit() {
         Ok(vector) => vector.as_slice().to_vec(),
@@ -473,7 +481,7 @@ pub fn bitvec_to_bool_array(vector: BitVec) -> Vec<bool> {
 }
 
 /// Converts a PostgreSQL `real[]` array into a sparse vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_from_real_array(values: Vec<f32>) -> SparseVec {
     let dimensions = values.len();
     let entries = values
@@ -491,7 +499,7 @@ pub fn sparsevec_from_real_array(values: Vec<f32>) -> SparseVec {
 }
 
 /// Converts a sparse vector into a PostgreSQL `real[]` array.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_to_real_array(vector: SparseVec) -> Vec<f32> {
     let vector = sparsevec_to_core(vector);
     let mut values = vec![0.0; vector.dimensions()];
@@ -502,7 +510,7 @@ pub fn sparsevec_to_real_array(vector: SparseVec) -> Vec<f32> {
 }
 
 /// Converts a dense SQL vector into a sparse vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_from_vector(vector: Vector) -> SparseVec {
     let vector = match vector.to_dense() {
         Ok(vector) => vector,
@@ -512,7 +520,7 @@ pub fn sparsevec_from_vector(vector: Vector) -> SparseVec {
 }
 
 /// Converts a sparse vector into a dense SQL vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_to_vector(vector: SparseVec) -> Vector {
     let values = sparsevec_to_real_array(vector);
     let vector = DenseVector::new(values).unwrap_or_else(|error| raise_core_error(error));
@@ -520,7 +528,7 @@ pub fn sparsevec_to_vector(vector: SparseVec) -> Vector {
 }
 
 /// Parses a SQL `halfvec` value from text.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec(input: &str) -> HalfVec {
     match input.parse::<HalfVector>() {
         Ok(vector) => HalfVec::from_half(vector),
@@ -529,7 +537,7 @@ pub fn halfvec(input: &str) -> HalfVec {
 }
 
 /// Parses a SQL `sparsevec` value from text.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec(input: &str) -> SparseVec {
     match input.parse::<SparseVector>() {
         Ok(vector) => SparseVec::from_sparse(vector),
@@ -538,7 +546,7 @@ pub fn sparsevec(input: &str) -> SparseVec {
 }
 
 /// Builds a SQL `sparsevec` value from aligned index and value arrays.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_from_arrays(indices: Vec<i32>, values: Vec<f32>, dimensions: i32) -> SparseVec {
     if indices.len() != values.len() {
         raise_sql_error(
@@ -584,7 +592,7 @@ pub fn sparsevec_from_arrays(indices: Vec<i32>, values: Vec<f32>, dimensions: i3
 }
 
 /// Parses a SQL `bitvec` value from text.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec(input: &str) -> BitVec {
     match input.parse::<BitVector>() {
         Ok(vector) => BitVec::from_bit(vector),
@@ -632,7 +640,7 @@ fn sparsevec_from_dense(vector: DenseVector) -> SparseVec {
 }
 
 /// Returns the number of dimensions in a half vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 #[must_use]
 pub fn halfvec_dims(vector: HalfVec) -> i32 {
     match vector.to_half() {
@@ -642,7 +650,7 @@ pub fn halfvec_dims(vector: HalfVec) -> i32 {
 }
 
 /// Returns the number of dimensions in a sparse vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 #[must_use]
 pub fn sparsevec_dims(vector: SparseVec) -> i32 {
     match vector.to_sparse() {
@@ -652,7 +660,7 @@ pub fn sparsevec_dims(vector: SparseVec) -> i32 {
 }
 
 /// Returns canonical sparse-vector indexes as a PostgreSQL `integer[]` array.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_indices(vector: SparseVec) -> Vec<i32> {
     sparsevec_to_core(vector)
         .entries()
@@ -662,7 +670,7 @@ pub fn sparsevec_indices(vector: SparseVec) -> Vec<i32> {
 }
 
 /// Returns canonical sparse-vector values as a PostgreSQL `real[]` array.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_values(vector: SparseVec) -> Vec<f32> {
     sparsevec_to_core(vector)
         .entries()
@@ -672,7 +680,7 @@ pub fn sparsevec_values(vector: SparseVec) -> Vec<f32> {
 }
 
 /// Returns the number of bits in a bit vector.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 #[must_use]
 pub fn bitvec_dims(vector: BitVec) -> i32 {
     match vector.to_bit() {
@@ -682,67 +690,67 @@ pub fn bitvec_dims(vector: BitVec) -> i32 {
 }
 
 /// Returns L2 distance between two half vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_l2_distance(left: HalfVec, right: HalfVec) -> f32 {
     halfvec_distance(left, right, DistanceMetric::L2)
 }
 
 /// Returns inner product between two half vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_inner_product(left: HalfVec, right: HalfVec) -> f32 {
     halfvec_distance(left, right, DistanceMetric::InnerProduct)
 }
 
 /// Returns negative inner product between two half vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_negative_inner_product(left: HalfVec, right: HalfVec) -> f32 {
     -halfvec_distance(left, right, DistanceMetric::InnerProduct)
 }
 
 /// Returns cosine distance between two half vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_cosine_distance(left: HalfVec, right: HalfVec) -> f32 {
     halfvec_distance(left, right, DistanceMetric::Cosine)
 }
 
 /// Returns L1 distance between two half vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_l1_distance(left: HalfVec, right: HalfVec) -> f32 {
     halfvec_distance(left, right, DistanceMetric::L1)
 }
 
 /// Returns L2 distance between two sparse vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_l2_distance(left: SparseVec, right: SparseVec) -> f32 {
     sparsevec_distance(left, right, SparseDistanceMetric::L2)
 }
 
 /// Returns inner product between two sparse vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_inner_product(left: SparseVec, right: SparseVec) -> f32 {
     sparsevec_distance(left, right, SparseDistanceMetric::InnerProduct)
 }
 
 /// Returns negative inner product between two sparse vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_negative_inner_product(left: SparseVec, right: SparseVec) -> f32 {
     -sparsevec_distance(left, right, SparseDistanceMetric::InnerProduct)
 }
 
 /// Returns cosine distance between two sparse vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_cosine_distance(left: SparseVec, right: SparseVec) -> f32 {
     sparsevec_distance(left, right, SparseDistanceMetric::Cosine)
 }
 
 /// Returns L1 distance between two sparse vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_l1_distance(left: SparseVec, right: SparseVec) -> f32 {
     sparsevec_distance(left, right, SparseDistanceMetric::L1)
 }
 
 /// Returns Hamming distance between two bit vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_hamming_distance(left: BitVec, right: BitVec) -> i32 {
     let left = bitvec_to_core(left);
     let right = bitvec_to_core(right);
@@ -754,7 +762,7 @@ pub fn bitvec_hamming_distance(left: BitVec, right: BitVec) -> i32 {
 }
 
 /// Returns Jaccard distance between two bit vectors.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_jaccard_distance(left: BitVec, right: BitVec) -> f64 {
     let left = bitvec_to_core(left);
     let right = bitvec_to_core(right);
@@ -766,7 +774,7 @@ pub fn bitvec_jaccard_distance(left: BitVec, right: BitVec) -> f64 {
 }
 
 /// Accumulates one half vector into the aggregate state.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_sum_transition(state: Option<Vec<f32>>, value: Option<HalfVec>) -> Option<Vec<f32>> {
     let Some(value) = value else {
         return state;
@@ -807,19 +815,19 @@ pub fn halfvec_sum_transition(state: Option<Vec<f32>>, value: Option<HalfVec>) -
 }
 
 /// Finalizes half vector sum aggregates.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_sum_final(state: Vec<f32>) -> HalfVec {
     halfvec_from_aggregate_state(state, HalfVecAggregateFinal::Sum)
 }
 
 /// Finalizes half vector average aggregates.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_avg_final(state: Vec<f32>) -> HalfVec {
     halfvec_from_aggregate_state(state, HalfVecAggregateFinal::Average)
 }
 
 /// Accumulates one sparse vector into the aggregate state.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_sum_transition(
     state: Option<Vec<f32>>,
     value: Option<SparseVec>,
@@ -860,28 +868,28 @@ pub fn sparsevec_sum_transition(
 }
 
 /// Finalizes sparse vector sum aggregates.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_sum_final(state: Vec<f32>) -> SparseVec {
     sparsevec_from_aggregate_state(state, SparseVecAggregateFinal::Sum)
 }
 
 /// Finalizes sparse vector average aggregates.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_avg_final(state: Vec<f32>) -> SparseVec {
     sparsevec_from_aggregate_state(state, SparseVecAggregateFinal::Average)
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_or_transition(state: Option<Vec<bool>>, value: Option<BitVec>) -> Option<Vec<bool>> {
     bitvec_bool_transition(state, value, BitVecAggregateOp::Or)
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_and_transition(state: Option<Vec<bool>>, value: Option<BitVec>) -> Option<Vec<bool>> {
     bitvec_bool_transition(state, value, BitVecAggregateOp::And)
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_bits_final(state: Vec<bool>) -> BitVec {
     match BitVector::new(state) {
         Ok(vector) => BitVec::from_bit(vector),

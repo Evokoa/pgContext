@@ -16,6 +16,15 @@ pub enum DistanceMetric {
     Cosine,
     /// Manhattan distance `sum(abs(left - right))`, ordered ascending.
     L1,
+    /// Number of unequal binary coordinates, ordered ascending.
+    ///
+    /// Every coordinate must be exactly `0.0` or `1.0`.
+    Hamming,
+    /// Set distance `1 - intersection / union` over binary coordinates,
+    /// ordered ascending. Two empty sets have distance zero.
+    ///
+    /// Every coordinate must be exactly `0.0` or `1.0`.
+    Jaccard,
 }
 
 impl DistanceMetric {
@@ -25,7 +34,8 @@ impl DistanceMetric {
     ///
     /// Returns [`Error::DimensionMismatch`] when the vectors have different
     /// dimensions. Returns [`Error::InvalidVector`] for cosine distance when
-    /// either vector has zero magnitude.
+    /// either vector has zero magnitude, or for a binary metric when a
+    /// coordinate is not exactly zero or one.
     pub fn distance(self, left: &DenseVector, right: &DenseVector) -> Result<f32> {
         self.distance_slices(left.as_slice(), right.as_slice())
     }
@@ -49,6 +59,8 @@ impl DistanceMetric {
             Self::NegativeInnerProduct => Ok(-dot(left, right)),
             Self::Cosine => cosine(left, right),
             Self::L1 => Ok(l1(left, right)),
+            Self::Hamming => binary_distance(left, right, BinaryMetric::Hamming),
+            Self::Jaccard => binary_distance(left, right, BinaryMetric::Jaccard),
         }
     }
 
@@ -58,7 +70,8 @@ impl DistanceMetric {
     ///
     /// Returns [`Error::DimensionMismatch`] when the vectors have different
     /// dimensions. Returns [`Error::InvalidVector`] for cosine distance when
-    /// either vector has zero magnitude.
+    /// either vector has zero magnitude, or for a binary metric when a
+    /// coordinate is not exactly zero or one.
     pub fn distance_half(self, left: &HalfVector, right: &HalfVector) -> Result<f32> {
         ensure_same_dimension(left.dimension(), right.dimension())?;
 
@@ -68,6 +81,12 @@ impl DistanceMetric {
             Self::NegativeInnerProduct => Ok(-dot(left.as_slice(), right.as_slice())),
             Self::Cosine => cosine(left.as_slice(), right.as_slice()),
             Self::L1 => Ok(l1(left.as_slice(), right.as_slice())),
+            Self::Hamming => {
+                binary_distance(left.as_slice(), right.as_slice(), BinaryMetric::Hamming)
+            }
+            Self::Jaccard => {
+                binary_distance(left.as_slice(), right.as_slice(), BinaryMetric::Jaccard)
+            }
         }
     }
 
@@ -76,7 +95,8 @@ impl DistanceMetric {
     /// # Errors
     ///
     /// Returns [`Error::DimensionMismatch`] for unequal declared dimensions and
-    /// [`Error::InvalidVector`] for cosine distance involving a zero vector.
+    /// [`Error::InvalidVector`] for cosine distance involving a zero vector or
+    /// for a binary metric whose stored values are not exactly one.
     pub fn distance_sparse(self, left: &SparseVector, right: &SparseVector) -> Result<f32> {
         ensure_same_dimension(left.dimensions(), right.dimensions())?;
         let dot = sparse_dot(left, right);
@@ -95,7 +115,92 @@ impl DistanceMetric {
                 }
                 Ok(1.0 - (dot / (left_norm * right_norm)))
             }
+            Self::Hamming => sparse_binary_distance(left, right, BinaryMetric::Hamming),
+            Self::Jaccard => sparse_binary_distance(left, right, BinaryMetric::Jaccard),
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BinaryMetric {
+    Hamming,
+    Jaccard,
+}
+
+fn binary_distance(left: &[f32], right: &[f32], metric: BinaryMetric) -> Result<f32> {
+    let (mut intersection, mut union, mut unequal) = (0_u16, 0_u16, 0_u16);
+    for (&left, &right) in left.iter().zip(right) {
+        let left = binary_coordinate(left)?;
+        let right = binary_coordinate(right)?;
+        intersection += u16::from(left && right);
+        union += u16::from(left || right);
+        unequal += u16::from(left != right);
+    }
+    Ok(binary_score(intersection, union, unequal, metric))
+}
+
+fn sparse_binary_distance(
+    left: &SparseVector,
+    right: &SparseVector,
+    metric: BinaryMetric,
+) -> Result<f32> {
+    for entry in left.entries().iter().chain(right.entries()) {
+        if entry.value() != 1.0 {
+            return Err(Error::InvalidVector(
+                "binary distance coordinates must be exactly zero or one".to_owned(),
+            ));
+        }
+    }
+
+    let (mut i, mut j, mut intersection, mut union) = (0, 0, 0_u16, 0_u16);
+    while i < left.entries().len() || j < right.entries().len() {
+        match (left.entries().get(i), right.entries().get(j)) {
+            (Some(a), Some(b)) if a.index() == b.index() => {
+                intersection += 1;
+                union += 1;
+                i += 1;
+                j += 1;
+            }
+            (Some(a), Some(b)) if a.index() < b.index() => {
+                union += 1;
+                i += 1;
+            }
+            (Some(_), Some(_)) => {
+                union += 1;
+                j += 1;
+            }
+            (Some(_), None) => {
+                union += 1;
+                i += 1;
+            }
+            (None, Some(_)) => {
+                union += 1;
+                j += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    let unequal = union - intersection;
+    Ok(binary_score(intersection, union, unequal, metric))
+}
+
+fn binary_coordinate(value: f32) -> Result<bool> {
+    if value == 0.0 {
+        Ok(false)
+    } else if value == 1.0 {
+        Ok(true)
+    } else {
+        Err(Error::InvalidVector(
+            "binary distance coordinates must be exactly zero or one".to_owned(),
+        ))
+    }
+}
+
+fn binary_score(intersection: u16, union: u16, unequal: u16, metric: BinaryMetric) -> f32 {
+    match metric {
+        BinaryMetric::Hamming => f32::from(unequal),
+        BinaryMetric::Jaccard if union == 0 => 0.0,
+        BinaryMetric::Jaccard => 1.0 - (f32::from(intersection) / f32::from(union)),
     }
 }
 

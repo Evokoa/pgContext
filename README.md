@@ -157,7 +157,7 @@ datetime ranges, `is_null` / `is_empty`:
 ```sql
 SELECT source_key, score
 FROM pgcontext.search(
-    'docs', '[ ... ]'::vector,
+    'docs', '[ ... ]'::pgcontext.vector,
     '{
        "must":     [{"key": "tenant_id", "match": "acme"},
                     {"key": "price", "range": {"gte": 10, "lt": 20}}],
@@ -192,27 +192,30 @@ semantics.
 
 ## Roadmap
 
-pgContext 0.1.0 is the foundation, not the finish line. The goal is the most
-powerful AI search engine you can run inside PostgreSQL. On the way:
+pgContext 0.2.0 extends the V1 foundation with the first complete advanced
+retrieval pipeline. It now includes:
 
-- **More vector types and indexing.** First-class `sparsevec` and `bitvec`,
-  quantized in-graph traversal with exact reranking, and non-dense ANN opclasses.
-- **Lower latency and faster builds at scale.** Segmented serving for
-  per-query parallelism, background-worker compaction that keeps writes fast
-  under sustained load, and parallel-build improvements that close the
-  index-build-time gap.
-- **Drop-in pgvector compatibility.** Run pgvector-spelled SQL unmodified, with
-  in-place migration and no data movement.
+- **Broader vector indexing.** First-class non-dense HNSW opclasses, named
+  sparse ANN, and scalar/product/binary quantized traversal with exact rerank.
+- **Composable retrieval.** Typed dense, filtered, sparse, full-text,
+  quantized, recommendation, lookup, and late-interaction branches with
+  weighted or reciprocal-rank fusion.
+- **Owned serving infrastructure.** Internally maintained late-interaction
+  tokens, immutable mapped HNSW generations, and automatic bounded execution
+  telemetry.
+- **pgvector migration.** A certified PostgreSQL 17 bridge, preflight and
+  adoption tooling, and lossless resumable conversion for the supported
+  profile without requiring a new application vector column.
 - **Graph-augmented retrieval.** We plan to bring graph capabilities from our
   sister extension **[pgGraph](https://github.com/evokoa/pggraph)** into
   pgContext, so vector results can expand and re-rank along the relationships in
   your data (the pattern behind GraphRAG), without leaving Postgres or copying
   data between systems.
 
-We're upfront about what isn't here yet: IVFFlat, x86 performance numbers, and
-full drop-in compatibility all live on the roadmap. See
-[what's not in 0.1.0 yet](docs/user_guide/roadmap.md) and the full
-[roadmap](docs/roadmap.md).
+The remaining work includes IVFFlat, measured x86 performance claims, broader
+PostgreSQL-major certification, and full unqualified pgvector-name
+compatibility. See the [known limitations](docs/user_guide/limitations.md),
+[product roadmap](docs/user_guide/roadmap.md), and full [roadmap](docs/roadmap.md).
 
 ## Quickstart
 
@@ -231,13 +234,13 @@ Choose the matching `pgMAJOR-vVERSION` tag; unqualified version tags continue
 to select PostgreSQL 17.
 
 ```sh
-docker pull ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+docker pull ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 docker run -d --rm \
   --name pgcontext \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pgcontext \
   -p 5432:5432 \
-  ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+  ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 ```
 
 Wait for PostgreSQL to accept connections, then verify the extension is loaded
@@ -298,7 +301,7 @@ CREATE EXTENSION pgcontext;
 
 CREATE TABLE docs (
     id text PRIMARY KEY,
-    embedding vector(3) NOT NULL,
+    embedding pgcontext.vector(3) NOT NULL,
     category text NOT NULL,
     metadata jsonb NOT NULL
 );
@@ -315,7 +318,7 @@ SELECT pgcontext.upsert_points('docs', ARRAY['postgres', 'rust', 'vectors']);
 
 SELECT source_key, score
 FROM pgcontext.search(
-    'docs', '[1,0,0]'::vector,
+    'docs', '[1,0,0]'::pgcontext.vector,
     '{"must":[{"key":"category","match":"database"}]}'::jsonb,
     3
 );
@@ -325,9 +328,9 @@ ON docs USING pgcontext_hnsw (
     embedding pgcontext.vector_hnsw_cosine_ops
 );
 
-SELECT id, embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector AS distance
+SELECT id, embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector AS distance
 FROM docs
-ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector
+ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector
 LIMIT 3;
 ```
 

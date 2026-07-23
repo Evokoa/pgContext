@@ -11,11 +11,10 @@ use crate::vector::Vector;
 use super::{
     SearchVector, collection_name_from_sql, distance_function, quote_identifier,
     quote_qualified_identifier, require_collection_owner, require_table_select_privilege,
-    resolve_collection, resolve_registered_vector, search_limit_from_sql,
-    table_search_rows_from_spi, validate_search_drift,
+    resolve_collection, resolve_registered_vector, search_limit_from_sql, validate_search_drift,
 };
 
-#[pg_extern(schema = "pgcontext", name = "recommend")]
+#[pg_extern(name = "recommend")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn recommend_collection_from_points(
     collection: String,
@@ -30,6 +29,23 @@ pub fn recommend_collection_from_points(
         name!(score, f32),
     ),
 > {
+    TableIterator::new(
+        recommend_collection_from_points_scored(
+            collection,
+            positive_point_ids,
+            negative_point_ids,
+            limit,
+        )
+        .rows,
+    )
+}
+
+pub(crate) fn recommend_collection_from_points_scored(
+    collection: String,
+    positive_point_ids: Vec<i64>,
+    negative_point_ids: Vec<i64>,
+    limit: i32,
+) -> ScoredRecommendationRows {
     let context = recommend_context(collection, limit);
     let positive_point_ids = recommendation_point_ids(positive_point_ids);
     let negative_point_ids = recommendation_point_ids(negative_point_ids);
@@ -42,14 +58,10 @@ pub fn recommend_collection_from_points(
         .copied()
         .collect::<BTreeSet<_>>();
 
-    TableIterator::new(search_recommendation_table(
-        &context,
-        query,
-        excluded_point_ids,
-    ))
+    search_recommendation_table(&context, query, excluded_point_ids)
 }
 
-#[pg_extern(schema = "pgcontext", name = "recommend")]
+#[pg_extern(name = "recommend")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn recommend_collection_from_vectors(
     collection: String,
@@ -69,14 +81,10 @@ pub fn recommend_collection_from_vectors(
     let negative_vectors = dense_vectors_from_sql(negative_vectors);
     let query = recommendation_query_vector(&positive_vectors, &negative_vectors);
 
-    TableIterator::new(search_recommendation_table(
-        &context,
-        query,
-        BTreeSet::new(),
-    ))
+    TableIterator::new(search_recommendation_table(&context, query, BTreeSet::new()).rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "discover")]
+#[pg_extern(name = "discover")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn discover_collection(
     collection: String,
@@ -90,10 +98,12 @@ pub fn discover_collection(
         name!(score, f32),
     ),
 > {
-    discover_or_explore_collection(collection, context_point_ids, limit)
+    TableIterator::new(
+        discover_or_explore_collection_scored(collection, context_point_ids, limit).rows,
+    )
 }
 
-#[pg_extern(schema = "pgcontext", name = "explore")]
+#[pg_extern(name = "explore")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn explore_collection(
     collection: String,
@@ -107,7 +117,9 @@ pub fn explore_collection(
         name!(score, f32),
     ),
 > {
-    discover_or_explore_collection(collection, context_point_ids, limit)
+    TableIterator::new(
+        discover_or_explore_collection_scored(collection, context_point_ids, limit).rows,
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -117,18 +129,16 @@ struct RecommendContext {
     limit: i64,
 }
 
-fn discover_or_explore_collection(
+pub(crate) struct ScoredRecommendationRows {
+    pub(crate) rows: Vec<(i64, String, f32)>,
+    pub(crate) scored_count: usize,
+}
+
+pub(crate) fn discover_or_explore_collection_scored(
     collection: String,
     context_point_ids: Vec<i64>,
     limit: i32,
-) -> TableIterator<
-    'static,
-    (
-        name!(point_id, i64),
-        name!(source_key, String),
-        name!(score, f32),
-    ),
-> {
+) -> ScoredRecommendationRows {
     let context = recommend_context(collection, limit);
     let context_point_ids = recommendation_point_ids(context_point_ids);
     if context_point_ids.is_empty() {
@@ -140,7 +150,7 @@ fn discover_or_explore_collection(
     let context_vectors = load_example_vectors(&context, &context_point_ids);
     let query = recommendation_query_vector(&context_vectors, &[]);
     let excluded_point_ids = context_point_ids.into_iter().collect::<BTreeSet<_>>();
-    TableIterator::new(search_discovery_table(&context, query, excluded_point_ids))
+    search_discovery_table(&context, query, excluded_point_ids)
 }
 
 fn recommend_context(collection: String, limit: i32) -> RecommendContext {
@@ -308,7 +318,7 @@ fn search_recommendation_table(
     context: &RecommendContext,
     query: Vector,
     excluded_point_ids: BTreeSet<i64>,
-) -> Vec<(i64, String, f32)> {
+) -> ScoredRecommendationRows {
     let table_name = quote_qualified_identifier(
         &context.registered_vector.schema_name,
         &context.registered_vector.table_name,
@@ -318,7 +328,8 @@ fn search_recommendation_table(
     let sql = format!(
         "SELECT points.point_id,
                 points.source_key,
-                pgcontext.{distance_function}(source.{vector_column}, $1) AS score
+                pgcontext.{distance_function}(source.{vector_column}, $1) AS score,
+                count(*) OVER ()::bigint AS scored_count
            FROM pgcontext._visible_collection_points AS points
            JOIN {table_name} AS source ON source.id::text = points.source_key
           WHERE points.collection_id = $2
@@ -345,7 +356,7 @@ fn search_recommendation_table(
                 format!("failed to recommendation-search registered table: {error}"),
             ),
         };
-        table_search_rows_from_spi(rows, "recommendation search")
+        scored_recommendation_rows(rows, "recommendation search")
     })
 }
 
@@ -353,7 +364,7 @@ fn search_discovery_table(
     context: &RecommendContext,
     query: Vector,
     excluded_point_ids: BTreeSet<i64>,
-) -> Vec<(i64, String, f32)> {
+) -> ScoredRecommendationRows {
     let table_name = quote_qualified_identifier(
         &context.registered_vector.schema_name,
         &context.registered_vector.table_name,
@@ -363,7 +374,8 @@ fn search_discovery_table(
     let sql = format!(
         "SELECT points.point_id,
                 points.source_key,
-                pgcontext.{distance_function}(source.{vector_column}, $1) AS score
+                pgcontext.{distance_function}(source.{vector_column}, $1) AS score,
+                count(*) OVER ()::bigint AS scored_count
            FROM pgcontext._visible_collection_points AS points
            JOIN {table_name} AS source ON source.id::text = points.source_key
           WHERE points.collection_id = $2
@@ -390,8 +402,29 @@ fn search_discovery_table(
                 format!("failed to discovery-search registered table: {error}"),
             ),
         };
-        table_search_rows_from_spi(rows, "discovery search")
+        scored_recommendation_rows(rows, "discovery search")
     })
+}
+
+fn scored_recommendation_rows(
+    rows: spi::SpiTupleTable<'_>,
+    context: &'static str,
+) -> ScoredRecommendationRows {
+    let mut output = Vec::new();
+    let mut scored_count = 0;
+    for row in rows {
+        let row_count = recommend_iter_column::<i64>(&row, 4, "scored_count");
+        scored_count = usize::try_from(row_count).unwrap_or(usize::MAX);
+        output.push((
+            recommend_iter_column::<i64>(&row, 1, "point_id"),
+            recommend_iter_column::<String>(&row, 2, "source_key"),
+            recommend_iter_column::<f32>(&row, 3, context),
+        ));
+    }
+    ScoredRecommendationRows {
+        rows: output,
+        scored_count,
+    }
 }
 
 fn recommend_iter_column<T>(

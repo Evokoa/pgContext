@@ -1,10 +1,10 @@
-# pgContext 0.1.0 — Vector and Hybrid Retrieval for PostgreSQL
+# pgContext 0.2.0 — Composable Retrieval for PostgreSQL
 
-Today we are releasing pgContext 0.1.0, an Apache-2.0 PostgreSQL extension for
+Today we are releasing pgContext 0.2.0, an Apache-2.0 PostgreSQL extension for
 vector search, metadata filtering, HNSW indexing, and hybrid retrieval over the
 data you already keep in PostgreSQL.
 
-This first release is for prototypes, evaluation, and controlled pilots on
+This release is for prototypes, evaluation, and controlled pilots on
 PostgreSQL 17. It already provides a broad retrieval surface, including exact
 and approximate vector search, filtered search, collections, hybrid full-text
 retrieval, recommendation, discovery, grouping, facets, and operational
@@ -42,7 +42,7 @@ Our goal is not to disguise a remote vector database behind SQL. Our goal is to
 make PostgreSQL itself a capable retrieval engine while preserving the reasons
 teams chose PostgreSQL in the first place.
 
-## What Ships in 0.1.0
+## What Ships in 0.2.0
 
 ### Dense vector SQL
 
@@ -140,7 +140,7 @@ The dense HNSW surface includes:
 - scan-work counters and recall comparison against exact search;
 - index memory estimates, lifecycle status, diagnostics, and vacuum advice.
 
-Dense HNSW is implemented and usable, but remains experimental in 0.1.0. We do
+Dense HNSW is implemented and usable, but remains experimental in 0.2.0. We do
 not yet promise a stable on-disk HNSW format across extension versions or a
 broad production workload envelope. Plan to rebuild HNSW indexes when moving
 between early releases.
@@ -154,7 +154,7 @@ as traversal connectors, and then rechecks the source rows and exact distances.
 
 This gives applications one public filter language across exact search and ANN
 without making a copied payload store authoritative. Filtered ANN is also
-experimental in 0.1.0 while we expand workload certification and tune the
+experimental in 0.2.0 while we expand workload certification and tune the
 strategy across selective and broad filters.
 
 ### Hybrid retrieval with PostgreSQL full-text search
@@ -179,20 +179,23 @@ semantics in the same database.
 
 ### Half, sparse, and bit vectors
 
-0.1.0 also exposes experimental SQL types for additional vector
+0.2.0 also exposes experimental SQL types for additional vector
 representations:
 
 - `halfvec` with dimensions, typmods, numeric-array casts, exact metrics,
-  aggregates, ordering, and an experimental L2 HNSW operator class;
+  aggregates, ordering, and explicit L2, inner-product, cosine, and L1 HNSW
+  operator classes;
 - `sparsevec` with canonical sparse input, structured construction, dense
   conversions, exact L2/inner-product/cosine/L1 metrics, aggregates, exact
-  top-k, named sparse registration/search, and an experimental L2 HNSW class;
+  top-k, named sparse registration/search, and explicit L2, inner-product,
+  cosine, and L1 HNSW classes;
 - `bitvec` with dimensions, boolean-array and PostgreSQL `bit` casts,
-  Hamming/Jaccard metrics, bitwise aggregates, ordering, and an experimental
-  Hamming HNSW operator class.
+  Hamming/Jaccard metrics, bitwise aggregates, ordering, and explicit Hamming
+  and Jaccard HNSW operator classes.
 
-These types are useful for experimentation and migration work, but their full
-ANN metric matrix is not yet part of the stable promise.
+These types are useful for experimentation and migration work. Their HNSW
+opclass names and metric bindings are stable, while the SQL types and HNSW
+on-disk format remain experimental.
 
 ### Quantization building blocks
 
@@ -231,6 +234,8 @@ and indexes:
 - index memory estimation;
 - vacuum and rebuild advice;
 - cohort summaries;
+- automatic executor strategy, visit, candidate, recheck, budget, completion,
+  lifecycle, and latency rollups;
 - backend-local build progress, cancellation, retry, and stale-owner metadata;
 - versioned acceleration-artifact metadata and readiness validation;
 - snapshot, export, import, retirement, and rebuild primitives for generated
@@ -254,7 +259,7 @@ pgContext operates inside PostgreSQL's authority boundary:
 
 ### Installation and distribution
 
-The 0.1.0 release supports PostgreSQL 17 and 18 through:
+The 0.2.0 release supports PostgreSQL 17 and 18 through:
 
 - a versioned GitHub source archive (PGXN publication to follow);
 - manual source installation with `cargo-pgrx`;
@@ -297,16 +302,16 @@ The pgvector/Qdrant parity matrix remains the source of truth for parity claims.
 Every non-stable capability is repeated here so that an experimental or
 deliberately different feature cannot be mistaken for stable parity.
 
-| Capability | Parity status | What that means in 0.1.0 |
+| Capability | Parity status | What that means in 0.2.0 |
 |---|---|---|
-| HNSW access method | `experimental` | Dense L2, inner-product, cosine, and L1 HNSW are implemented; format stability and broad certification remain open. |
+| HNSW access method | `experimental` | Dense, half, sparse, and bit metric-bound HNSW are implemented; format stability, the single-page node envelope, and broad certification remain open. |
 | Filtered ANN serving | `experimental` | Persisted HNSW, candidate masks, and authoritative source rechecks are implemented; broader workload tuning remains open. |
-| SQL halfvec | `experimental` | Exact SQL and an L2 HNSW path exist; the complete non-dense opclass matrix is planned. |
-| SQL sparsevec | `experimental` | Exact SQL, named search, and an L2 HNSW path exist; other sparse ANN metrics are planned. |
-| SQL bit vectors | `experimental` | Exact Hamming/Jaccard SQL and Hamming HNSW exist; Jaccard ANN is planned. |
-| SQL quantization APIs | `experimental` | Binary, scalar, and product helpers exist; quantized HNSW serving is planned. |
+| SQL halfvec | `experimental` | Exact SQL and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist. |
+| SQL sparsevec | `experimental` | Exact SQL and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist; named sparse search can attach those indexes for bounded candidates and authoritative exact rerank. |
+| SQL bit vectors | `experimental` | Exact Hamming/Jaccard SQL and stable explicit Hamming/Jaccard HNSW opclass names exist; Jaccard ordering is heap-rechecked exactly. |
+| SQL quantization APIs | `experimental` | Binary, scalar, and product helpers plus revision-bound mapped-HNSW encoded traversal and exact source rerank are available; index-AM pages remain full precision. |
 | Per-vector dense index and quantization metadata | `experimental` | Validated configuration metadata exists; complete build-and-scan consumption is planned. |
-| Named sparse vectors per collection | `experimental` | Registration, exact search, and exact fusion exist; sparse ANN serving is planned. |
+| Named sparse vectors per collection | `experimental` | Registration, exact fallback, validated HNSW binding, filters, bounded-work explain counters, exact rerank, and exact fusion exist. |
 | Multi-vector and late-interaction query | `experimental` | Exact MaxSim and experimental token candidates exist; internal token-index maintenance is planned. |
 | IVFFlat | `intentionally different` | IVFFlat is not implemented; retain pgvector IVFFlat, use exact search, or rebuild as HNSW. |
 | PostgreSQL-native ACL, RLS, transactions, and backups | `intentionally different` | pgContext uses PostgreSQL's authority instead of recreating it in another service. |
@@ -314,7 +319,7 @@ deliberately different feature cannot be mistaken for stable parity.
 
 ## What pgContext Is Not Yet
 
-pgContext 0.1.0 is not a drop-in replacement for pgvector and is not claiming
+pgContext 0.2.0 is not a drop-in replacement for pgvector and is not claiming
 broad production certification.
 
 Important current limits:
@@ -322,16 +327,44 @@ Important current limits:
 - PostgreSQL 17 and 18 release images are built and runtime-verified on amd64 and arm64.
 - Dense HNSW and filtered ANN remain experimental.
 - IVFFlat is not implemented.
-- The complete non-dense HNSW metric matrix is not implemented.
-- Quantized HNSW build and serving are not implemented.
-- Named sparse search is exact unless an explicitly supported experimental
-  index path is selected.
-- Late-interaction token indexes are not maintained automatically.
-- Typed composite query plans are constructed and validated, but not every
-  candidate-source combination executes as one pipeline.
-- Mapped-file HNSW traversal is not part of the serving path.
+- Non-dense SQL types and the HNSW on-disk format remain experimental, and
+  densified node records must fit the documented 8,064-byte page envelope.
+- Quantized and mapped HNSW serving remain experimental and require
+  revision-bound generated artifacts plus exact source reranking.
+- Named sparse ANN is experimental, explicitly attached, and densifies graph
+  traversal while retaining exact sparse source rerank and exact fallback.
+- Internally maintained late-interaction and typed composite execution are
+  experimental and retain the documented lifecycle and budget limits.
+- Automatic execution telemetry is bounded and fail-open, not an audit log;
+  pending events can be lost or a committed event duplicated at documented
+  worker and postmaster failure boundaries.
 - Full pgvector helper, expression-index, subvector, iterative-scan/GUC,
   parallel-build, and progress-reporting compatibility is not implemented.
+
+The expanded automatic-observability columns, visibility view, and queue-health
+function ship in the 0.2.0 base install and in the supported standalone
+`0.1.0 -> 0.2.0` extension update. Both fresh installation and this update
+require a PostgreSQL superuser because pgContext installs an access method and
+the version-pinned update repairs PostgreSQL extension-namespace catalogs. The
+update preserves catalog rows, moves
+the four pgContext-owned physical vector type OIDs and support functions into
+the fixed extension schema without rewriting user tables, repairs the extension
+namespace for dump/restore, and reclassifies historical client-written
+`automatic` cohorts as `legacy_automatic` before reserving `automatic` for
+internal observations. After the move, standalone applications must either use
+qualified types such as `pgcontext.vector(1536)` or explicitly add `pgcontext`
+to their session/role/database `search_path`; unqualified `vector` no longer
+resolves under PostgreSQL's default `"$user", public` path.
+
+A pgvector-first 0.1.0 coexist install is detected before mutation and refused
+with SQLSTATE `0A000`: its public vector types belong to pgvector and must never
+be moved by pgContext. Before using `DROP EXTENSION pgcontext CASCADE`, export
+collection registrations and inventory every dependent view, function, and
+index because CASCADE can remove all of them. Install 0.2.0 plus
+`pgcontext_pgvector`, recreate registrations and application dependents, then
+rebuild pgContext indexes over the unchanged pgvector columns. The upgrade
+matrix proves the refusal is atomic and preserves a real pgvector-typed user
+value and type OID.
 
 See [Known Limitations](limitations.md) and the
 [pgvector migration guide](pgvector_migration.md) for the detailed boundary.
@@ -366,14 +399,14 @@ model.
 ## Roadmap
 
 The roadmap is dependency-ordered. Listing a feature here means it is planned,
-not that it is partially promised by 0.1.0.
+not that it is partially promised by 0.2.0.
 
-### 1. Complete non-dense ANN coverage
+### Completed foundation: non-dense ANN coverage
 
-Expand half-vector, sparse-vector, and bit-vector HNSW across the metrics whose
-ordering and pruning semantics are valid. This includes full insert, update,
-delete, VACUUM, REINDEX, restart, dimension, cast, and exact-oracle behavior for
-each promoted operator class.
+Half-vector and sparse-vector HNSW now cover L2, inner product, cosine, and L1;
+bit-vector HNSW covers Hamming and exact-rechecked Jaccard ordering. Bounded
+insert, update, delete, VACUUM, REINDEX, restart, dimension, cast, plan, work,
+and exact-oracle gates own the promoted operator classes.
 
 ### 2. Quantized HNSW serving
 
@@ -382,11 +415,15 @@ bounded traversal, then rerank against authoritative source vectors. The work
 also includes codebook/configuration revisions, corruption handling,
 replacement, recall, and serving diagnostics.
 
-### 3. Named sparse ANN
+### Completed: named sparse ANN
 
-Add a real sparse candidate source for registered sparse vectors, with exact
-sparse scoring as the final oracle, bounded-work counters, filter masks, and a
-complete update/VACUUM/REINDEX/restart lifecycle.
+Registered sparse vectors can bind validated metric-matched HNSW indexes, use
+filtered candidate masks, and expose bounded scored/candidate/recheck work.
+Authoritative exact sparse rerank, exact fallback, ACL/RLS, DML, VACUUM,
+REINDEX, configuration-change, and restart gates own the experimental path.
+Raw dense and sparse candidate helpers are backend-capability guarded, HOT
+successors resolve through PostgreSQL's table AM before source recheck, and
+scored-work counters include exact live-delta scans.
 
 ### 4. Internally maintained late interaction
 
@@ -412,9 +449,12 @@ are part of this work.
 
 ### 7. Automatic observability
 
-Record the strategy that actually ran—visits, candidates, filters, rechecks,
-quantization, fallback, latency, cancellation, and budget outcome—while keeping
-telemetry bounded and excluding application data and secrets.
+Implemented with a bounded nonblocking shared-memory queue and an independent
+database worker. Executor-backed retrieval records the strategy that actually
+ran—visits, candidates, filters, rechecks, quantization, fallback, latency,
+cancellation, and budget outcome—while excluding application data and secrets.
+Delivery health is visible to `pg_monitor`; the queue is explicitly fail-open
+and best-effort/may-duplicate rather than an audit log.
 
 ### 8. pgvector coexistence and migration
 
@@ -446,7 +486,7 @@ The complete roadmap, including dependencies and promotion criteria, is in the
 
 ## Compatibility and Support
 
-PostgreSQL 17 and 18 are supported V1 release targets. Their OCI images are
+PostgreSQL 17 and 18 are supported 0.2.0 release targets. Their OCI images are
 built and runtime-verified on amd64 and arm64; PostgreSQL 17 remains the primary
 performance and deep-lifecycle qualification target.
 

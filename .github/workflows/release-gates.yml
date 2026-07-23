@@ -294,7 +294,13 @@ jobs:
       - name: Fuzz campaign report smoke
         run: tests/shell/run_fuzz_campaigns_smoke.sh
       - name: Storage Miri smoke
-        run: env MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p context-storage --test segment_format
+        run: |
+          env MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p context-storage --test segment_format
+          env MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p context-storage --test mapped_hnsw_view
+      - name: Mapped generation AddressSanitizer subprocess
+        run: env RUSTFLAGS=-Zsanitizer=address cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p context-storage --test mapped_generation_subprocess
+      - name: Mapped generation ThreadSanitizer subprocess
+        run: env RUSTFLAGS=-Zsanitizer=thread cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu -p context-storage --test mapped_generation_subprocess
 
   fuzz-release-campaign:
     name: Release fuzz campaign

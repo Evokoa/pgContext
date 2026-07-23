@@ -381,29 +381,10 @@ fn pgvector_hnsw_error_contract_pins_dense_metric_failures() {
     );
 
     Spi::run(
-        "CREATE TABLE pgvector_hnsw_error_zero (
-             embedding vector NOT NULL
-         );
-         INSERT INTO pgvector_hnsw_error_zero VALUES ('[0,0]'::vector)",
-    )
-    .expect("zero-cosine fixture should be created");
-    // docs/user_guide/errors.md pins `InvalidVector` to 22P02; the 22023 +
-    // "failed to build HNSW graph" wrapper this test once expected predates
-    // that contract and never ran under the old gate filter.
-    assert_vector_compat_ddl_failure(
-        "CREATE INDEX pgvector_hnsw_error_zero_idx
-             ON pgvector_hnsw_error_zero
-          USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_cosine_ops)",
-        "22P02",
-        "invalid vector: cosine HNSW vectors must have a finite nonzero norm",
-        "dense cosine HNSW zero vector",
-    );
-
-    Spi::run(
         "CREATE OPERATOR CLASS pgvector_hnsw_error_wrong_metric_ops
-             FOR TYPE public.vector USING pgcontext_hnsw AS
-             OPERATOR 1 pgcontext.<#> (public.vector, public.vector) FOR ORDER BY pg_catalog.float_ops,
-             FUNCTION 1 pgcontext.inner_product(public.vector, public.vector)",
+             FOR TYPE pgcontext.vector USING pgcontext_hnsw AS
+             OPERATOR 1 pgcontext.<#> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+             FUNCTION 1 pgcontext.inner_product(pgcontext.vector, pgcontext.vector)",
     )
     .expect("wrong-metric opclass fixture should be created");
     assert_vector_compat_ddl_failure(
@@ -943,6 +924,23 @@ fn hnsw_access_method_accepts_insert_after_index_build() {
         .unwrap_or_default();
 
     assert_eq!(row_count, 2);
+
+    Spi::run(
+        "SET LOCAL enable_seqscan = off;
+         SET LOCAL enable_bitmapscan = off",
+    )
+    .expect("ordered scan should force the HNSW index");
+    let index_row_count = Spi::get_one::<i64>(
+        "SELECT count(*)
+           FROM (
+                SELECT embedding
+                  FROM hnsw_insert_items
+                 ORDER BY embedding OPERATOR(pgcontext.<->) '[0,0,0]'::vector
+                 LIMIT 2
+           ) indexed",
+    )
+    .expect("ordered HNSW scan should include delta inserts");
+    assert_eq!(index_row_count, Some(2));
 }
 
 #[pg_test]

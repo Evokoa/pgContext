@@ -74,11 +74,19 @@ impl Drop for MappedSegment {
 
 /// Maps and validates an immutable segment file without copying its payload.
 ///
+/// # Safety
+///
+/// The caller must guarantee that no process can modify or truncate the file
+/// represented by `path` until the returned [`MappedSegment`] is dropped.
+/// Read-only `MAP_PRIVATE` prevents writes through this mapping, but it cannot
+/// make concurrent writes through another file descriptor safe for Rust
+/// borrows and cannot prevent truncation from producing a `SIGBUS`.
+///
 /// # Errors
 ///
 /// Returns [`SegmentFileError`] when the file cannot be opened, is outside the
 /// segment size policy, cannot be mapped, or fails format/checksum validation.
-pub fn map_segment_file(path: impl AsRef<Path>) -> Result<MappedSegment, SegmentFileError> {
+pub unsafe fn map_segment_file(path: impl AsRef<Path>) -> Result<MappedSegment, SegmentFileError> {
     let path = path.as_ref();
     let file = File::open(path).map_err(|source| io_error("open", path, source))?;
     let metadata = file

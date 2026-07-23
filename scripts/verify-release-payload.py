@@ -11,7 +11,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -178,19 +178,26 @@ def main() -> None:
         [str(ROOT / "scripts/verify-pgxn-dist.py"), "--tag", args.tag, str(archive)],
         check=True,
     )
-    archive_prefix = f"pgContext-{version}/"
     with zipfile.ZipFile(archive) as package:
         for info in package.infolist():
             if info.is_dir():
                 continue
             contents = package.read(info)
             if b"\0" in contents:
-                relative = info.filename.removeprefix(archive_prefix)
-                expected_signature = ALLOWED_BINARY_SIGNATURES.get(relative)
+                relative = PurePosixPath(info.filename).relative_to(
+                    f"pgContext-{version}"
+                )
+                expected_signature = ALLOWED_BINARY_SIGNATURES.get(relative.as_posix())
                 if expected_signature is None:
-                    fail(f"source archive contains unexpected binary content: {info.filename}")
+                    fail(
+                        "source archive contains unexpected binary content: "
+                        f"{info.filename}"
+                    )
                 if not contents.startswith(expected_signature):
-                    fail(f"allowlisted binary has an unexpected signature: {info.filename}")
+                    fail(
+                        "allowlisted source binary has an unexpected signature: "
+                        f"{info.filename}"
+                    )
             if any(pattern in contents for pattern in SECRET_PATTERNS):
                 fail(f"source archive contains private key material: {info.filename}")
 

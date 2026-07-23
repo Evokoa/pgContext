@@ -7,7 +7,7 @@ SELECT pgcontext.drop_collection('playground_docs');
 DROP TABLE IF EXISTS public.pgcontext_playground_docs CASCADE;
 CREATE TABLE public.pgcontext_playground_docs (
     id text PRIMARY KEY,
-    embedding vector(3) NOT NULL,
+    embedding pgcontext.vector(3) NOT NULL,
     category text NOT NULL,
     metadata jsonb NOT NULL,
     body text NOT NULL
@@ -45,14 +45,14 @@ USING pgcontext_hnsw (
 \echo ''
 \echo 'Exact collection search'
 SELECT source_key, score
-FROM pgcontext.search('playground_docs', '[1,0,0]'::vector, 4);
+FROM pgcontext.search('playground_docs', '[1,0,0]'::pgcontext.vector, 4);
 
 \echo ''
 \echo 'Metadata-filtered search'
 SELECT source_key, score
 FROM pgcontext.search(
     'playground_docs',
-    '[1,0,0]'::vector,
+    '[1,0,0]'::pgcontext.vector,
     '{"must":[{"key":"category","match":"database"}]}',
     4
 );
@@ -60,8 +60,8 @@ FROM pgcontext.search(
 \echo ''
 \echo 'Persisted HNSW ordered scan'
 SET enable_seqscan = off;
-SELECT id, embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector AS distance
+SELECT id, embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector AS distance
 FROM public.pgcontext_playground_docs
-ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector
+ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector
 LIMIT 3;
 RESET enable_seqscan;

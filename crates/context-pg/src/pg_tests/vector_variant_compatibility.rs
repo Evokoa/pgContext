@@ -742,12 +742,25 @@ fn pgvector_variant_btree_ordering_cases() {
 
 #[pg_test]
 fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
+    let builtin_validation = Spi::get_two::<i64, bool>(
+        "SELECT count(*), bool_and(pg_catalog.amvalidate(opclass.oid))
+           FROM pg_catalog.pg_opclass AS opclass
+           JOIN pg_catalog.pg_am AS access_method
+             ON access_method.oid = opclass.opcmethod
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = opclass.opcnamespace
+          WHERE access_method.amname = 'pgcontext_hnsw'
+            AND namespace.nspname = 'pgcontext'",
+    )
+    .expect("built-in HNSW opclass validation query failed");
+    assert_eq!(builtin_validation, (Some(14), Some(true)));
+
     Spi::run(
         "CREATE TEMP TABLE pgcontext_variant_hnsw_items (
             id integer PRIMARY KEY,
-            half_value public.halfvec NOT NULL,
-            sparse_value public.sparsevec NOT NULL,
-            bit_value public.bitvec NOT NULL
+            half_value pgcontext.halfvec NOT NULL,
+            sparse_value pgcontext.sparsevec NOT NULL,
+            bit_value pgcontext.bitvec NOT NULL
         )",
     )
     .expect("variant HNSW unsupported table creation failed");
@@ -781,16 +794,16 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
         let result = client
             .select(
                 "SELECT opcname::text,
-                        opcintype = 'public.halfvec'::regtype,
-                        opcintype = 'public.sparsevec'::regtype,
-                        opcintype = 'public.bitvec'::regtype,
-                        opckeytype = 'public.vector'::regtype
+                        opcintype = 'pgcontext.halfvec'::regtype,
+                        opcintype = 'pgcontext.sparsevec'::regtype,
+                        opcintype = 'pgcontext.bitvec'::regtype,
+                        opckeytype = 'pgcontext.vector'::regtype
                    FROM pg_catalog.pg_opclass opclass
                    JOIN pg_catalog.pg_am am
                      ON am.oid = opclass.opcmethod
                   WHERE am.amname = 'pgcontext_hnsw'
                     AND (
-                        opcintype IN ('public.halfvec'::regtype, 'public.sparsevec'::regtype, 'public.bitvec'::regtype)
+                        opcintype IN ('pgcontext.halfvec'::regtype, 'pgcontext.sparsevec'::regtype, 'pgcontext.bitvec'::regtype)
                         OR opcname IN ('halfvec_hnsw_ops', 'sparsevec_hnsw_ops', 'bitvec_hnsw_hamming_ops')
                     )
                   ORDER BY 1",
@@ -816,7 +829,14 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
         variant_hnsw_opclasses,
         vec![
             ("bitvec_hnsw_hamming_ops".to_owned(), false, false, true, true),
+            ("bitvec_hnsw_jaccard_ops".to_owned(), false, false, true, true),
+            ("halfvec_hnsw_cosine_ops".to_owned(), true, false, false, true),
+            ("halfvec_hnsw_ip_ops".to_owned(), true, false, false, true),
+            ("halfvec_hnsw_l1_ops".to_owned(), true, false, false, true),
             ("halfvec_hnsw_ops".to_owned(), true, false, false, true),
+            ("sparsevec_hnsw_cosine_ops".to_owned(), false, true, false, true),
+            ("sparsevec_hnsw_ip_ops".to_owned(), false, true, false, true),
+            ("sparsevec_hnsw_l1_ops".to_owned(), false, true, false, true),
             ("sparsevec_hnsw_ops".to_owned(), false, true, false, true)
         ],
         "promoted dense-storage variant HNSW opclasses should be present"
@@ -1012,21 +1032,21 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
         "expected bitvec Hamming HNSW index scan for order-by query:\n{bit_plan}"
     );
 
-    // Hamming kNN *serving* is deliberately gated until the metric-serving
-    // checkpoint: the opclass, index build, and planner integration above are
-    // real, but executing the ordered scan raises. This block once asserted
-    // served results — an aspiration, not the contract, and it never ran
-    // under the old gate filter. Pin the gate error instead so shipping
-    // Hamming serving requires consciously updating this expectation.
-    shared_assert_sql_failure(
-        "SELECT id
-           FROM pgcontext_variant_hnsw_items
-          ORDER BY bit_value OPERATOR(pgcontext.<~>) pgcontext.bitvec('00'), id
-          LIMIT 3",
-        "0A000",
-        "HNSW Hamming kNN serving is not available until the metric-serving checkpoint",
-        "bitvec Hamming HNSW serving gate",
-    );
+    let bit_rows = Spi::connect(|client| {
+        let result = client.select(
+            "SELECT id, bit_value OPERATOR(pgcontext.<~>) pgcontext.bitvec('00') AS exact_score
+               FROM pgcontext_variant_hnsw_items
+              ORDER BY bit_value OPERATOR(pgcontext.<~>) pgcontext.bitvec('00'), id
+              LIMIT 3",
+            None,
+            &[],
+        )?;
+        result
+            .map(|row| Ok((row.get::<i32>(1)?.unwrap(), row.get::<i32>(2)?.unwrap())))
+            .collect::<Result<Vec<_>, spi::Error>>()
+    })
+    .expect("bitvec Hamming HNSW serving rows failed");
+    assert_eq!(bit_rows, vec![(10, 1), (20, 1), (30, 2)]);
 
     Spi::run(
         "UPDATE pgcontext_variant_hnsw_items
@@ -1156,18 +1176,21 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
             .collect::<Vec<_>>()
     );
 
-    // As above: Hamming kNN serving stays gated, including after index
-    // maintenance, so the ordered scan pins the gate error rather than
-    // served rows.
-    shared_assert_sql_failure(
-        "SELECT id
-           FROM pgcontext_variant_hnsw_items
-          ORDER BY bit_value OPERATOR(pgcontext.<~>) pgcontext.bitvec('00'), id
-          LIMIT 3",
-        "0A000",
-        "HNSW Hamming kNN serving is not available until the metric-serving checkpoint",
-        "bitvec Hamming HNSW maintained serving gate",
-    );
+    let bit_maintained_rows = Spi::connect(|client| {
+        let result = client.select(
+            "SELECT id, bit_value OPERATOR(pgcontext.<~>) pgcontext.bitvec('00') AS exact_score
+               FROM pgcontext_variant_hnsw_items
+              ORDER BY bit_value OPERATOR(pgcontext.<~>) pgcontext.bitvec('00'), id
+              LIMIT 3",
+            None,
+            &[],
+        )?;
+        result
+            .map(|row| Ok((row.get::<i32>(1)?.unwrap(), row.get::<i32>(2)?.unwrap())))
+            .collect::<Result<Vec<_>, spi::Error>>()
+    })
+    .expect("bitvec Hamming maintained HNSW rows failed");
+    assert_eq!(bit_maintained_rows, vec![(30, 0), (10, 1), (40, 1)]);
 
     assert_vector_compat_ddl_failure(
         "INSERT INTO pgcontext_variant_hnsw_items (id, half_value, sparse_value, bit_value)
@@ -1219,16 +1242,14 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
            FROM pgcontext_variant_hnsw_items
           ORDER BY bit_value OPERATOR(pgcontext.<~>) pgcontext.bitvec('1')
           LIMIT 1",
-        // The Hamming serving gate fires before any dimension check can run,
-        // so until metric serving lands this pins the gate, not the mismatch.
-        "0A000",
-        "HNSW Hamming kNN serving is not available until the metric-serving checkpoint",
+        "22023",
+        "failed to search persisted HNSW pages: dimension mismatch: left has 2 dimensions, right has 1",
         "bitvec Hamming HNSW query dimension mismatch",
     );
 
     Spi::run(
         "CREATE TEMP TABLE pgcontext_variant_hnsw_bad_half_items (
-            half_value public.halfvec NOT NULL
+            half_value pgcontext.halfvec NOT NULL
         )",
     )
     .expect("bad halfvec HNSW fixture table creation failed");
@@ -1248,7 +1269,7 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
 
     Spi::run(
         "CREATE TEMP TABLE pgcontext_variant_hnsw_bad_sparse_items (
-            sparse_value public.sparsevec NOT NULL
+            sparse_value pgcontext.sparsevec NOT NULL
         )",
     )
     .expect("bad sparsevec HNSW fixture table creation failed");
@@ -1268,7 +1289,7 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
 
     Spi::run(
         "CREATE TEMP TABLE pgcontext_variant_hnsw_bad_bit_items (
-            bit_value public.bitvec NOT NULL
+            bit_value pgcontext.bitvec NOT NULL
         )",
     )
     .expect("bad bitvec Hamming HNSW fixture table creation failed");
@@ -1287,59 +1308,36 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
         "bitvec Hamming HNSW dimension mismatch",
     );
     Spi::run(
-        "CREATE OPERATOR CLASS pgcontext_variant_halfvec_hnsw_bad_cosine_ops
-            FOR TYPE public.halfvec USING pgcontext_hnsw AS
-            OPERATOR 1 pgcontext.<=> (public.halfvec, public.halfvec) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 pgcontext.halfvec_cosine_distance(public.halfvec, public.halfvec),
-            STORAGE public.vector",
-    )
-    .expect("bad halfvec cosine HNSW opclass fixture creation failed");
-    assert_vector_compat_ddl_failure(
-        "CREATE INDEX pgcontext_variant_hnsw_bad_half_cosine_idx
-            ON pgcontext_variant_hnsw_items
-         USING pgcontext_hnsw (half_value pgcontext_variant_halfvec_hnsw_bad_cosine_ops)",
-        "42P17",
-        "HNSW opclass must use pgcontext.halfvec_l2_distance",
-        "halfvec HNSW unsupported opclass",
-    );
-    Spi::run(
         "CREATE OPERATOR CLASS pgcontext_variant_halfvec_hnsw_bad_cosine_operator_ops
-            FOR TYPE public.halfvec USING pgcontext_hnsw AS
-            OPERATOR 1 pgcontext.<=> (public.halfvec, public.halfvec) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 pgcontext.halfvec_l2_distance(public.halfvec, public.halfvec),
-            STORAGE public.vector",
+            FOR TYPE pgcontext.halfvec USING pgcontext_hnsw AS
+            OPERATOR 1 pgcontext.<=> (pgcontext.halfvec, pgcontext.halfvec) FOR ORDER BY pg_catalog.float_ops,
+            FUNCTION 1 pgcontext.halfvec_l2_distance(pgcontext.halfvec, pgcontext.halfvec),
+            STORAGE pgcontext.vector",
     )
     .expect("bad halfvec cosine-operator HNSW opclass fixture creation failed");
+    assert_eq!(
+        Spi::get_one::<bool>(
+            "SELECT pg_catalog.amvalidate(opclass.oid)
+               FROM pg_catalog.pg_opclass AS opclass
+              WHERE opclass.opcname = 'pgcontext_variant_halfvec_hnsw_bad_cosine_operator_ops'",
+        )
+        .expect("bad custom HNSW opclass validation query failed"),
+        Some(false),
+    );
     assert_vector_compat_ddl_failure(
         "CREATE INDEX pgcontext_variant_hnsw_bad_half_cosine_operator_idx
             ON pgcontext_variant_hnsw_items
          USING pgcontext_hnsw (half_value pgcontext_variant_halfvec_hnsw_bad_cosine_operator_ops)",
         "42P17",
-        "HNSW opclass must use pgcontext.<->",
+        "HNSW opclass must use certified pgcontext.<->",
         "halfvec HNSW unsupported strategy operator",
     );
     Spi::run(
-        "CREATE OPERATOR CLASS pgcontext_variant_sparsevec_hnsw_bad_cosine_ops
-            FOR TYPE public.sparsevec USING pgcontext_hnsw AS
-            OPERATOR 1 pgcontext.<=> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 pgcontext.sparsevec_cosine_distance(public.sparsevec, public.sparsevec),
-            STORAGE public.vector",
-    )
-    .expect("bad sparsevec cosine HNSW opclass fixture creation failed");
-    assert_vector_compat_ddl_failure(
-        "CREATE INDEX pgcontext_variant_hnsw_bad_sparse_cosine_idx
-            ON pgcontext_variant_hnsw_items
-         USING pgcontext_hnsw (sparse_value pgcontext_variant_sparsevec_hnsw_bad_cosine_ops)",
-        "42P17",
-        "HNSW opclass must use pgcontext.sparsevec_l2_distance",
-        "sparsevec HNSW unsupported opclass",
-    );
-    Spi::run(
         "CREATE OPERATOR CLASS pgcontext_variant_sparsevec_hnsw_bad_cosine_operator_ops
-            FOR TYPE public.sparsevec USING pgcontext_hnsw AS
-            OPERATOR 1 pgcontext.<=> (public.sparsevec, public.sparsevec) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 pgcontext.sparsevec_l2_distance(public.sparsevec, public.sparsevec),
-            STORAGE public.vector",
+            FOR TYPE pgcontext.sparsevec USING pgcontext_hnsw AS
+            OPERATOR 1 pgcontext.<=> (pgcontext.sparsevec, pgcontext.sparsevec) FOR ORDER BY pg_catalog.float_ops,
+            FUNCTION 1 pgcontext.sparsevec_l2_distance(pgcontext.sparsevec, pgcontext.sparsevec),
+            STORAGE pgcontext.vector",
     )
     .expect("bad sparsevec cosine-operator HNSW opclass fixture creation failed");
     assert_vector_compat_ddl_failure(
@@ -1347,31 +1345,53 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
             ON pgcontext_variant_hnsw_items
          USING pgcontext_hnsw (sparse_value pgcontext_variant_sparsevec_hnsw_bad_cosine_operator_ops)",
         "42P17",
-        "HNSW opclass must use pgcontext.<->",
+        "HNSW opclass must use certified pgcontext.<->",
         "sparsevec HNSW unsupported strategy operator",
     );
     Spi::run(
         "CREATE OPERATOR CLASS pgcontext_variant_bitvec_hnsw_bad_jaccard_ops
-            FOR TYPE public.bitvec USING pgcontext_hnsw AS
-            OPERATOR 1 pgcontext.<%> (public.bitvec, public.bitvec) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 pgcontext.bitvec_jaccard_distance(public.bitvec, public.bitvec),
-            STORAGE public.vector",
+            FOR TYPE pgcontext.bitvec USING pgcontext_hnsw AS
+            OPERATOR 1 pgcontext.<%> (pgcontext.bitvec, pgcontext.bitvec) FOR ORDER BY pg_catalog.float_ops,
+            FUNCTION 1 pgcontext.bitvec_jaccard_distance(pgcontext.bitvec, pgcontext.bitvec),
+            STORAGE pgcontext.vector",
     )
-    .expect("bad bitvec Jaccard HNSW opclass fixture creation failed");
-    assert_vector_compat_ddl_failure(
-        "CREATE INDEX pgcontext_variant_hnsw_bad_jaccard_idx
-            ON pgcontext_variant_hnsw_items
-         USING pgcontext_hnsw (bit_value pgcontext_variant_bitvec_hnsw_bad_jaccard_ops)",
-        "42P17",
-        "HNSW opclass must use pgcontext.bitvec_hamming_distance",
-        "bitvec HNSW unsupported opclass",
+    .expect("bitvec Jaccard HNSW opclass fixture creation failed");
+    assert_eq!(
+        Spi::get_one::<bool>(
+            "SELECT pg_catalog.amvalidate(opclass.oid)
+               FROM pg_catalog.pg_opclass AS opclass
+              WHERE opclass.opcname = 'pgcontext_variant_bitvec_hnsw_bad_jaccard_ops'",
+        )
+        .expect("valid custom HNSW opclass validation query failed"),
+        Some(true),
     );
     Spi::run(
+        "CREATE INDEX pgcontext_variant_hnsw_jaccard_idx
+            ON pgcontext_variant_hnsw_items
+         USING pgcontext_hnsw (bit_value pgcontext_variant_bitvec_hnsw_bad_jaccard_ops)",
+    )
+    .expect("bitvec Jaccard HNSW index creation failed");
+    let jaccard_rows = Spi::connect(|client| {
+        let result = client.select(
+            "SELECT id, bit_value OPERATOR(pgcontext.<%>) pgcontext.bitvec('10') AS exact_score
+               FROM pgcontext_variant_hnsw_items
+              ORDER BY bit_value OPERATOR(pgcontext.<%>) pgcontext.bitvec('10'), id
+              LIMIT 3",
+            None,
+            &[],
+        )?;
+        result
+            .map(|row| Ok((row.get::<i32>(1)?.unwrap(), row.get::<f64>(2)?.unwrap())))
+            .collect::<Result<Vec<_>, spi::Error>>()
+    })
+    .expect("bitvec Jaccard HNSW serving rows failed");
+    assert_eq!(jaccard_rows, vec![(10, 0.0), (40, 0.0), (30, 1.0)]);
+    Spi::run(
         "CREATE OPERATOR CLASS pgcontext_variant_bitvec_hnsw_bad_jaccard_operator_ops
-            FOR TYPE public.bitvec USING pgcontext_hnsw AS
-            OPERATOR 1 pgcontext.<%> (public.bitvec, public.bitvec) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 pgcontext.bitvec_hamming_distance(public.bitvec, public.bitvec),
-            STORAGE public.vector",
+            FOR TYPE pgcontext.bitvec USING pgcontext_hnsw AS
+            OPERATOR 1 pgcontext.<%> (pgcontext.bitvec, pgcontext.bitvec) FOR ORDER BY pg_catalog.float_ops,
+            FUNCTION 1 pgcontext.bitvec_hamming_distance(pgcontext.bitvec, pgcontext.bitvec),
+            STORAGE pgcontext.vector",
     )
     .expect("bad bitvec Jaccard-operator HNSW opclass fixture creation failed");
     assert_vector_compat_ddl_failure(
@@ -1379,7 +1399,7 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
             ON pgcontext_variant_hnsw_items
          USING pgcontext_hnsw (bit_value pgcontext_variant_bitvec_hnsw_bad_jaccard_operator_ops)",
         "42P17",
-        "HNSW opclass must use pgcontext.<~>",
+        "HNSW opclass must use certified pgcontext.<~>",
         "bitvec HNSW unsupported strategy operator",
     );
 
@@ -1395,6 +1415,287 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
 
     for (sql, sqlstate, message, context) in cases {
         assert_vector_compat_ddl_failure(sql, sqlstate, message, context);
+    }
+}
+
+#[pg_test]
+fn non_dense_hnsw_opclasses_match_exact_oracles_with_bounded_candidates() {
+    Spi::run(
+        "SET LOCAL pgcontext.hnsw_m = 16;
+         SET LOCAL pgcontext.hnsw_ef_construction = 256;
+         SET LOCAL pgcontext.hnsw_ef_search = 240;
+         SET LOCAL pgcontext.hnsw_shared_serving = off;
+         CREATE TEMP TABLE pgcontext_non_dense_hnsw_oracle (
+             id integer PRIMARY KEY,
+             half_value pgcontext.halfvec NOT NULL,
+             sparse_value pgcontext.sparsevec NOT NULL,
+             bit_value pgcontext.bitvec NOT NULL
+         );
+         INSERT INTO pgcontext_non_dense_hnsw_oracle
+         SELECT id,
+                format('[%s,%s,%s,%s]', id % 17 + 1, id % 19 + 1, id % 23 + 1, id % 29 + 1)::halfvec,
+                format('{1:%s,2:%s,3:%s,4:%s}/4', id % 17 + 1, id % 19 + 1, id % 23 + 1, id % 29 + 1)::sparsevec,
+                (id::bit(16))::bitvec
+           FROM generate_series(1, 256) AS id",
+    )
+    .expect("non-dense HNSW oracle fixture should build");
+
+    let cases = [
+        ("half_l2", "half_value", "halfvec_hnsw_ops", "<->", "pgcontext.halfvec('[3,5,7,11]')"),
+        ("half_ip", "half_value", "halfvec_hnsw_ip_ops", "<#>", "pgcontext.halfvec('[3,5,7,11]')"),
+        ("half_cosine", "half_value", "halfvec_hnsw_cosine_ops", "<=>", "pgcontext.halfvec('[3,5,7,11]')"),
+        ("half_l1", "half_value", "halfvec_hnsw_l1_ops", "<+>", "pgcontext.halfvec('[3,5,7,11]')"),
+        ("sparse_l2", "sparse_value", "sparsevec_hnsw_ops", "<->", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
+        ("sparse_ip", "sparse_value", "sparsevec_hnsw_ip_ops", "<#>", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
+        ("sparse_cosine", "sparse_value", "sparsevec_hnsw_cosine_ops", "<=>", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
+        ("sparse_l1", "sparse_value", "sparsevec_hnsw_l1_ops", "<+>", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
+        ("bit_hamming", "bit_value", "bitvec_hnsw_hamming_ops", "<~>", "pgcontext.bitvec('0000000010101010')"),
+        ("bit_jaccard", "bit_value", "bitvec_hnsw_jaccard_ops", "<%>", "pgcontext.bitvec('0000000010101010')"),
+    ];
+
+    for (suffix, column, opclass, operator, query) in cases {
+        let index_name = format!("pgcontext_non_dense_hnsw_{suffix}_idx");
+        Spi::run(&format!(
+            "CREATE INDEX {index_name}
+                ON pgcontext_non_dense_hnsw_oracle
+             USING pgcontext_hnsw ({column} pgcontext.{opclass})"
+        ))
+        .expect("non-dense HNSW opclass should build");
+
+        Spi::run(
+            "SET LOCAL enable_indexscan = off;
+             SET LOCAL enable_bitmapscan = off;
+             SET LOCAL enable_seqscan = on",
+        )
+        .expect("exact oracle should use a sequential scan");
+        let exact = Spi::get_one::<Vec<i32>>(&format!(
+            "SELECT array_agg(id)
+               FROM (
+                    SELECT id
+                      FROM pgcontext_non_dense_hnsw_oracle
+                     ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}, id
+                     LIMIT 10
+               ) oracle"
+        ))
+        .expect("non-dense exact oracle should execute")
+        .unwrap_or_default();
+
+        Spi::run(
+            "SET LOCAL enable_indexscan = on;
+             SET LOCAL enable_bitmapscan = off;
+             SET LOCAL enable_seqscan = off",
+        )
+        .expect("non-dense ANN query should use an index scan");
+        let plan = Spi::connect(|client| {
+            let result = client.select(
+                &format!(
+                    "EXPLAIN (COSTS FALSE, FORMAT TEXT)
+                     SELECT id
+                       FROM pgcontext_non_dense_hnsw_oracle
+                      ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}, id
+                      LIMIT 10"
+                ),
+                None,
+                &[],
+            )?;
+            result
+                .map(|row| Ok(row.get::<String>(1)?.unwrap_or_default()))
+                .collect::<Result<Vec<_>, spi::Error>>()
+                .map(|lines| lines.join("\n"))
+        })
+        .expect("non-dense HNSW plan should be readable");
+        assert!(
+            plan.contains(&format!("Index Scan using {index_name}")),
+            "{suffix} query did not use its HNSW index:\n{plan}"
+        );
+        let indexed = Spi::get_one::<Vec<i32>>(&format!(
+            "SELECT array_agg(id)
+               FROM (
+                    SELECT id
+                      FROM pgcontext_non_dense_hnsw_oracle
+                     ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}, id
+                     LIMIT 10
+               ) approximate"
+        ))
+        .expect("non-dense HNSW query should execute")
+        .unwrap_or_default();
+        assert_eq!(indexed, exact, "{suffix} HNSW order diverged from its exact oracle");
+
+        let candidate_count = Spi::get_one::<i64>(
+            "SELECT candidates FROM pgcontext.hnsw_last_scan_work()",
+        )
+        .expect("non-dense HNSW work counters should be readable")
+        .unwrap_or_default();
+        assert!(candidate_count > 0, "{suffix} HNSW scan produced no candidates");
+        assert!(
+            candidate_count < 256,
+            "{suffix} HNSW scan scored the full collection: {candidate_count}"
+        );
+    }
+}
+
+#[pg_test]
+fn bitvec_jaccard_hnsw_rechecks_overlapping_float4_bounds() {
+    Spi::run(
+        "SET LOCAL pgcontext.hnsw_shared_serving = off;
+         CREATE TEMP TABLE pgcontext_bit_jaccard_recheck (
+             id integer PRIMARY KEY,
+             bit_value pgcontext.bitvec NOT NULL
+         );
+         INSERT INTO pgcontext_bit_jaccard_recheck VALUES
+             (1, pgcontext.bitvec(repeat('1', 1998))),
+             (2, pgcontext.bitvec(repeat('1', 1996) || '00'));
+         CREATE INDEX pgcontext_bit_jaccard_recheck_idx
+             ON pgcontext_bit_jaccard_recheck
+          USING pgcontext_hnsw (bit_value pgcontext.bitvec_hnsw_jaccard_ops);
+         SET LOCAL enable_indexscan = on;
+         SET LOCAL enable_bitmapscan = off;
+         SET LOCAL enable_seqscan = off",
+    )
+    .expect("bitvec Jaccard reorder fixture should build");
+
+    let query = "pgcontext.bitvec(repeat('1', 1997) || '0')";
+    let plan = Spi::connect(|client| {
+        let result = client.select(
+            &format!(
+                "EXPLAIN (COSTS FALSE, FORMAT TEXT)
+                 SELECT id
+                   FROM pgcontext_bit_jaccard_recheck
+                  ORDER BY bit_value OPERATOR(pgcontext.<%>) {query}
+                  LIMIT 1"
+            ),
+            None,
+            &[],
+        )?;
+        result
+            .map(|row| Ok(row.get::<String>(1)?.unwrap_or_default()))
+            .collect::<Result<Vec<_>, spi::Error>>()
+            .map(|lines| lines.join("\n"))
+    })
+    .expect("bitvec Jaccard reorder plan should be readable");
+    assert!(
+        plan.contains("Index Scan using pgcontext_bit_jaccard_recheck_idx"),
+        "bitvec Jaccard reorder query did not use its HNSW index:\n{plan}"
+    );
+
+    let nearest = Spi::get_one::<i32>(&format!(
+        "SELECT id
+           FROM pgcontext_bit_jaccard_recheck
+          ORDER BY bit_value OPERATOR(pgcontext.<%>) {query}
+          LIMIT 1"
+    ))
+    .expect("bitvec Jaccard reorder query should execute");
+    assert_eq!(nearest, Some(1));
+
+    let rechecks = Spi::get_one::<i64>("SELECT rechecks FROM pgcontext.hnsw_last_scan_work()")
+        .expect("bitvec Jaccard reorder work should be readable")
+        .unwrap_or_default();
+    assert!(
+        rechecks >= 2,
+        "bitvec Jaccard exact reorder did not consume both overlapping bounds: {rechecks}"
+    );
+}
+
+#[pg_test]
+fn non_dense_hnsw_rejects_records_above_the_single_page_envelope() {
+    Spi::run(
+        "CREATE TEMP TABLE pgcontext_non_dense_hnsw_oversized (
+             bit_value pgcontext.bitvec NOT NULL
+         );
+         INSERT INTO pgcontext_non_dense_hnsw_oversized
+         VALUES (pgcontext.bitvec(repeat('1', 8001)))",
+    )
+    .expect("oversized non-dense HNSW fixture should build");
+
+    assert_vector_compat_ddl_failure(
+        "CREATE INDEX pgcontext_non_dense_hnsw_oversized_idx
+            ON pgcontext_non_dense_hnsw_oversized
+         USING pgcontext_hnsw (bit_value pgcontext.bitvec_hnsw_jaccard_ops)",
+        "54000",
+        "HNSW vector record exceeds single-page storage limit: 32032 bytes (maximum 8064); reduce vector dimensions or hnsw_m",
+        "non-dense HNSW single-page record envelope",
+    );
+}
+
+#[pg_test]
+fn non_dense_hnsw_indexes_ignore_null_source_values() {
+    Spi::run(
+        "CREATE TEMP TABLE pgcontext_non_dense_hnsw_nullable (
+             id integer PRIMARY KEY,
+             half_value pgcontext.halfvec,
+             sparse_value pgcontext.sparsevec,
+             bit_value pgcontext.bitvec
+         );
+         INSERT INTO pgcontext_non_dense_hnsw_nullable VALUES
+             (1, '[1,0]'::halfvec, '{1:1}/2'::sparsevec, '10'::bitvec),
+             (2, NULL, NULL, NULL);
+         CREATE INDEX pgcontext_non_dense_hnsw_nullable_half_idx
+             ON pgcontext_non_dense_hnsw_nullable
+          USING pgcontext_hnsw (half_value pgcontext.halfvec_hnsw_ops);
+         CREATE INDEX pgcontext_non_dense_hnsw_nullable_sparse_idx
+             ON pgcontext_non_dense_hnsw_nullable
+          USING pgcontext_hnsw (sparse_value pgcontext.sparsevec_hnsw_ops);
+         CREATE INDEX pgcontext_non_dense_hnsw_nullable_bit_idx
+             ON pgcontext_non_dense_hnsw_nullable
+          USING pgcontext_hnsw (bit_value pgcontext.bitvec_hnsw_hamming_ops);
+         SET LOCAL enable_seqscan = off;
+         SET LOCAL enable_bitmapscan = off",
+    )
+    .expect("non-dense HNSW indexes should ignore NULL values while building");
+
+    for (column, operator, query, expected_index) in [
+        (
+            "half_value",
+            "<->",
+            "'[1,0]'::halfvec",
+            "pgcontext_non_dense_hnsw_nullable_half_idx",
+        ),
+        (
+            "sparse_value",
+            "<->",
+            "'{1:1}/2'::sparsevec",
+            "pgcontext_non_dense_hnsw_nullable_sparse_idx",
+        ),
+        (
+            "bit_value",
+            "<~>",
+            "'10'::bitvec",
+            "pgcontext_non_dense_hnsw_nullable_bit_idx",
+        ),
+    ] {
+        let plan = Spi::connect(|client| {
+            let result = client.select(
+                &format!(
+                    "EXPLAIN (COSTS FALSE, FORMAT TEXT)
+                     SELECT id
+                       FROM pgcontext_non_dense_hnsw_nullable
+                      ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}
+                      LIMIT 1"
+                ),
+                None,
+                &[],
+            )?;
+            result
+                .map(|row| Ok(row.get::<String>(1)?.unwrap_or_default()))
+                .collect::<Result<Vec<_>, spi::Error>>()
+                .map(|lines| lines.join("\n"))
+        })
+        .expect("nullable non-dense HNSW plan should execute");
+        assert!(
+            plan.contains(expected_index),
+            "nullable non-dense HNSW query did not use {expected_index}: {plan}"
+        );
+
+        assert_eq!(
+            Spi::get_one::<i32>(&format!(
+                "SELECT id
+                   FROM pgcontext_non_dense_hnsw_nullable
+                  ORDER BY {column} OPERATOR(pgcontext.{operator}) {query}
+                  LIMIT 1"
+            ))
+            .expect("nullable non-dense HNSW query should execute"),
+            Some(1)
+        );
     }
 }
 

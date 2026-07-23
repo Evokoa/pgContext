@@ -2,6 +2,18 @@
 // pg_tests split from `hnsw_am.rs` to satisfy the source-hygiene size
 // target.
 
+fn mapped_am_generation_paths(index_name: &str) -> Vec<std::path::PathBuf> {
+    let index_name = index_name.replace('\'', "''");
+    let index_oid = Spi::get_one::<i64>(&format!(
+        "SELECT '{index_name}'::regclass::oid::bigint"
+    ))
+    .expect("mapped AM index OID lookup should succeed")
+    .expect("mapped AM index should exist");
+    crate::hnsw_am::mapped_generation_paths_for_test(
+        u32::try_from(index_oid).expect("mapped AM index OID should fit u32"),
+    )
+}
+
 #[pg_test]
 fn hnsw_serving_stats_observe_pack_build_and_reuse() {
     Spi::run(
@@ -47,6 +59,131 @@ fn hnsw_serving_stats_observe_pack_build_and_reuse() {
     assert!(builds >= 1, "expected at least one pack build, saw {builds}");
     assert!(reuses >= 1, "expected at least one pack reuse, saw {reuses}");
     Spi::run("RESET enable_seqscan").expect("seqscan should reset");
+}
+
+#[pg_test]
+fn hnsw_mapped_serving_publishes_attaches_and_matches_exact_oracle() {
+    Spi::run(
+        "CREATE TABLE mapped_am_probe (id bigint PRIMARY KEY, embedding vector(8) NOT NULL);
+         INSERT INTO mapped_am_probe
+         SELECT n,
+                (SELECT '[' || string_agg(((n * 19 + d) % 37)::text, ',') || ']'
+                   FROM generate_series(1, 8) d)::vector
+           FROM generate_series(1, 128) n;
+         CREATE INDEX mapped_am_probe_hnsw ON mapped_am_probe
+         USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_cosine_ops);
+         SET enable_seqscan = off;
+         SET pgcontext.hnsw_shared_serving = off;
+         SET pgcontext.hnsw_ef_search = 256;",
+    )
+    .expect("mapped AM fixture should be created");
+    let ann = "SELECT array_agg(id ORDER BY distance, id)
+                 FROM (
+                     SELECT id, embedding OPERATOR(pgcontext.<=>)
+                                '[1,2,3,4,5,6,7,8]'::vector AS distance
+                       FROM mapped_am_probe
+                      ORDER BY distance, id
+                      LIMIT 12
+                 ) ranked";
+    let first = Spi::get_one::<Vec<i64>>(ann)
+        .expect("mapped AM publication query should succeed")
+        .expect("mapped AM publication query should return ids");
+    Spi::run("SELECT pgcontext.test_clear_hnsw_packed_cache()")
+        .expect("backend packed cache should clear");
+    let mapped = Spi::get_one::<Vec<i64>>(ann)
+        .expect("mapped AM attachment query should succeed")
+        .expect("mapped AM attachment query should return ids");
+    let mapped_work = Spi::get_one::<String>(
+        "SELECT format('%s,%s,%s', page_visits, node_reads, candidates)
+           FROM pgcontext.hnsw_last_scan_work()",
+    )
+    .expect("mapped AM work evidence should be readable")
+    .expect("mapped AM work evidence should exist");
+    let counters = mapped_work
+        .split(',')
+        .map(str::parse::<i64>)
+        .collect::<Result<Vec<_>, _>>()
+        .expect("mapped AM work counters should be integers");
+    let [page_visits, node_reads, candidates] = counters.as_slice() else {
+        panic!("unexpected mapped AM work evidence: {mapped_work}");
+    };
+    assert_eq!(*page_visits, 0, "mapped traversal must not read graph pages");
+    let maximum_node_reads = 128_i64
+        * (i64::try_from(context_index::MAX_GRAPH_LAYERS).unwrap_or(i64::MAX) + 1);
+    assert!((1..=maximum_node_reads).contains(node_reads));
+    assert!((1..=128).contains(candidates));
+    Spi::run("SET enable_indexscan = off; SET enable_bitmapscan = off")
+        .expect("mapped AM exact oracle should disable index scans");
+    let exact = Spi::get_one::<Vec<i64>>(
+        "SELECT array_agg(id ORDER BY distance, id)
+           FROM (
+               SELECT id, embedding OPERATOR(pgcontext.<=>)
+                          '[1,2,3,4,5,6,7,8]'::vector AS distance
+                 FROM mapped_am_probe
+                ORDER BY distance, id
+                LIMIT 12
+           ) ranked",
+    )
+    .expect("mapped AM exact oracle should succeed")
+    .expect("mapped AM exact oracle should return ids");
+    Spi::run("RESET enable_indexscan; RESET enable_bitmapscan")
+        .expect("mapped AM exact oracle settings should reset");
+    assert_eq!(first, exact);
+    assert_eq!(mapped, exact);
+    let initial_paths = mapped_am_generation_paths("mapped_am_probe_hnsw");
+    assert_eq!(initial_paths.len(), 1, "one mapped generation should be live");
+
+    // Drop every in-process owner before corrupting the file. The next scan
+    // must reject the checksum, rebuild from relation pages, and atomically
+    // replace the corrupt cache without failing or changing the exact answer.
+    Spi::run("SELECT pgcontext.test_clear_hnsw_packed_cache()")
+        .expect("mapped owner should drop before corruption");
+    let mut corrupted = std::fs::read(&initial_paths[0])
+        .expect("mapped generation should be readable for corruption test");
+    let last = corrupted
+        .len()
+        .checked_sub(1)
+        .expect("mapped generation should not be empty");
+    corrupted[last] ^= 0x5a;
+    std::fs::write(&initial_paths[0], corrupted)
+        .expect("mapped generation corruption fixture should be written");
+    let after_corruption = Spi::get_one::<Vec<i64>>(ann)
+        .expect("corrupt mapped generation should fall back")
+        .expect("corruption fallback should return ids");
+    assert_eq!(after_corruption, exact);
+
+    // REINDEX changes the physical identity. The old generation must never be
+    // attached, the rebuilt answer remains exact, and successful publication
+    // retires its stale pathname.
+    Spi::run(
+        "REINDEX INDEX mapped_am_probe_hnsw;
+         SELECT pgcontext.test_clear_hnsw_packed_cache();",
+    )
+    .expect("mapped AM index should reindex and clear the backend cache");
+    let after_reindex = Spi::get_one::<Vec<i64>>(ann)
+        .expect("post-REINDEX mapped AM query should succeed")
+        .expect("post-REINDEX mapped AM query should return ids");
+    assert_eq!(after_reindex, exact);
+    let replacement_paths = mapped_am_generation_paths("mapped_am_probe_hnsw");
+    assert_eq!(
+        replacement_paths.len(),
+        1,
+        "successful replacement should retire stale generations"
+    );
+    assert_ne!(replacement_paths, initial_paths);
+    let evidence = Spi::get_one::<bool>(
+        "SELECT mapped_publishes >= 1 AND mapped_attaches >= 1
+           FROM pgcontext.hnsw_serving_stats()",
+    )
+    .expect("mapped AM serving evidence should be readable")
+    .expect("mapped AM serving evidence should exist");
+    assert!(evidence);
+    Spi::run(
+        "RESET pgcontext.hnsw_shared_serving;
+         RESET pgcontext.hnsw_ef_search;
+         RESET enable_seqscan;",
+    )
+    .expect("mapped AM settings should reset");
 }
 
 #[pg_test]
@@ -404,8 +541,9 @@ fn hnsw_mask_candidate_limit_guc_raises_the_masked_scan_budget_above_the_default
     )
     .expect("mask-budget probe table should be created");
     Spi::run(
-        "INSERT INTO mask_budget_probe \
-         VALUES (1, '[1,2,3,4]'::vector), (2, '[5,6,7,8]'::vector)",
+        "INSERT INTO mask_budget_probe
+         SELECT n, ('[' || n || ',2,3,4]')::vector
+           FROM generate_series(1, 10001) AS n",
     )
     .expect("mask-budget probe rows should insert");
     Spi::run(
@@ -414,28 +552,30 @@ fn hnsw_mask_candidate_limit_guc_raises_the_masked_scan_budget_above_the_default
     )
     .expect("mask-budget probe index should build");
 
-    // A mask larger than the default candidate-mask budget (10,000 points):
-    // synthetic TIDs are enough because the budget check runs before any
-    // point in the mask is resolved against the graph.
+    // A real source-row mask larger than the default candidate-mask budget
+    // (10,000 points). Real TIDs also exercise the HOT-root canonicalizer.
     let over_default_budget_sql =
-        "WITH candidates AS (
-             SELECT ('(' || n || ',1)')::tid AS heap_tid
-               FROM generate_series(0, 10000) AS n
-         )
-         SELECT * FROM pgcontext._hnsw_masked_candidates(
+        "SELECT * FROM pgcontext._hnsw_masked_candidates(
              'mask_budget_probe_hnsw'::regclass,
              '[1,2,3,4]'::vector,
-             (SELECT array_agg(heap_tid) FROM candidates),
+             (SELECT array_agg(ctid ORDER BY ctid) FROM mask_budget_probe),
              5
          )";
+    let index_oid = Spi::get_one::<pg_sys::Oid>(
+        "SELECT 'mask_budget_probe_hnsw'::regclass::oid",
+    )
+    .expect("mask-budget index OID should load")
+    .expect("mask-budget index should exist");
 
-    let rejected_at_default = PgTryBuilder::new(|| {
-        Spi::run(over_default_budget_sql)
-            .expect("over-default-budget masked scan should fail before raising the GUC");
-        false
-    })
-    .catch_when(PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED, |_| true)
-    .execute();
+    let rejected_at_default = crate::hnsw_am::with_hnsw_candidate_helper_capability(index_oid, || {
+        PgTryBuilder::new(|| {
+            Spi::run(over_default_budget_sql)
+                .expect("over-default-budget masked scan should fail before raising the GUC");
+            false
+        })
+        .catch_when(PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED, |_| true)
+        .execute()
+    });
     assert!(
         rejected_at_default,
         "masked scan above the default budget must fail with SQLSTATE 54000 by default"
@@ -443,8 +583,11 @@ fn hnsw_mask_candidate_limit_guc_raises_the_masked_scan_budget_above_the_default
 
     Spi::run("SET pgcontext.hnsw_mask_candidate_limit = 20000")
         .expect("mask-candidate-limit GUC should be settable above the default");
-    Spi::run(over_default_budget_sql)
-        .expect("masked scan should succeed once the GUC raises the budget above 10,001 points");
+    crate::hnsw_am::with_hnsw_candidate_helper_capability(index_oid, || {
+        Spi::run(over_default_budget_sql).expect(
+            "masked scan should succeed once the GUC raises the budget above 10,001 points",
+        );
+    });
     Spi::run("RESET pgcontext.hnsw_mask_candidate_limit")
         .expect("mask-candidate-limit GUC should reset");
 }

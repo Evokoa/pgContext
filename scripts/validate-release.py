@@ -109,8 +109,22 @@ def main() -> None:
         meta.get("provides", {}).get("pgcontext", {}).get("file"),
         "pgcontext.control",
     )
+    require_equal(
+        "META.json provides.pgcontext_pgvector.version",
+        meta.get("provides", {}).get("pgcontext_pgvector", {}).get("version"),
+        version,
+    )
+    require_equal(
+        "META.json provides.pgcontext_pgvector.file",
+        meta.get("provides", {}).get("pgcontext_pgvector", {}).get("file"),
+        "pgcontext_pgvector.control",
+    )
     if not (ROOT / f"sql/pgcontext--{version}.sql").is_file():
         fail(f"generated SQL sql/pgcontext--{version}.sql is missing")
+    if version == "0.2.0" and not (ROOT / "sql/pgcontext--0.1.0--0.2.0.sql").is_file():
+        fail("upgrade SQL sql/pgcontext--0.1.0--0.2.0.sql is missing")
+    if not (ROOT / f"sql/pgcontext_pgvector--{version}.sql").is_file():
+        fail(f"bridge SQL sql/pgcontext_pgvector--{version}.sql is missing")
 
     require_equal("META.json name", meta.get("name"), "pgContext")
     require_equal("META.json license", meta.get("license"), "apache_2_0")

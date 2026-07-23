@@ -4,7 +4,7 @@ pgContext is an open-source PostgreSQL extension for AI vector and hybrid
 retrieval.
 
 This guide distinguishes stable, implemented behavior from experimental and
-planned paths. pgContext 0.1.0 targets PostgreSQL 17 and 18.
+planned paths. pgContext 0.2.0 targets PostgreSQL 17 and 18.
 
 ## Current Status
 
@@ -22,7 +22,8 @@ experimental. Named sparse vector registration and
 storage/index/status metadata are also SQL-visible experimentally. Exact sparse
 top-k over explicit arrays and named sparse source columns is available through
 `pgcontext.search_sparse`, and exact dense+sparse RRF fusion is available
-through `pgcontext.query`; sparse ANN/index serving remains planned.
+through `pgcontext.query`. Named sparse search can bind a metric-matched HNSW
+index for bounded candidates with exact source rerank and exact fallback.
 Experimental SQL wrappers expose `halfvec`, `sparsevec`, and `bitvec`
 input/output, typmods, dimension helpers, exact distance helpers, and distance
 operators. `halfvec` also has explicit rounding numeric-array casts and aggregates; `sparsevec`
@@ -30,12 +31,11 @@ also has structured construction, dense `real[]`/`vector` casts, and aggregates.
 `bitvec` also has `boolean[]`, PostgreSQL `bit`, and PostgreSQL `bit varying` casts plus
 pgvector-compatible built-in `bit` distance functions/operators and bitwise
 OR/AND aggregates. All three variant types also install default btree ordering
-opclasses. `halfvec` and `sparsevec` also expose experimental L2
-`pgcontext_hnsw` opclasses backed by dense vector storage, and `bitvec` exposes
-an explicit experimental `pgcontext.bitvec_hnsw_hamming_ops` opclass for
-Hamming order. Non-L2 sparse ANN indexing and bit-vector Jaccard ANN indexing
-remain planned; default `pgcontext_hnsw` attempts on `bitvec` columns fail with
-SQLSTATE `42704`.
+opclasses. The first-class non-dense HNSW surface covers L2, inner product,
+cosine, and L1 for both `halfvec` and `sparsevec`, plus explicit Hamming and
+Jaccard opclasses for `bitvec`. Default `pgcontext_hnsw` attempts on `bitvec`
+columns still fail with SQLSTATE `42704`, requiring callers to select the
+intended bit metric.
 
 ## Capability Areas
 
@@ -48,15 +48,18 @@ SQLSTATE `42704`.
   fusion.
 - Experimental persisted dense HNSW indexes and adaptive filtered ANN, with
   exact source rechecks and bounded PostgreSQL 17 lifecycle evidence.
+- Stable metric-bound HNSW opclass names for half and sparse L2, inner product,
+  cosine, and L1, plus bit Hamming and Jaccard; their SQL types and the HNSW
+  on-disk format remain experimental.
 
-## Explicitly Not Implemented
+## Advanced and Intentionally Different Capabilities
 
-V1 does not implement complete non-dense ANN metric coverage, quantized HNSW
-serving, named sparse ANN serving, internally maintained late-interaction token
-indexes, complete composite-query-plan execution, memory-mapped HNSW graph
-traversal, or complete automatic query telemetry. IVFFlat is intentionally not
-part of pgContext's V1 product. Existing helper APIs, metadata containers, or
-artifact readers do not imply that these serving paths exist.
+Named sparse ANN, revision-bound quantized candidate traversal with exact
+reranking, internally maintained late-interaction tokens, typed composite query
+execution, immutable mapped graph generations, and bounded automatic executor
+telemetry are implemented. These advanced paths retain the maturity labels and
+operational limits documented in their individual guides. IVFFlat is
+intentionally not part of pgContext's V1 product.
 
 Their dependency order and acceptance requirements are in the
 [post-V1 product roadmap](roadmap.md).
@@ -74,6 +77,7 @@ Their dependency order and acceptance requirements are in the
 - [Client-facing examples](client_examples.md)
 - [Filters](filters.md)
 - [Hybrid retrieval](hybrid_retrieval.md)
+- [Retrieval methods overview](retrieval_methods.md)
 - [Indexes](indexes.md)
 - [Rebuildable storage artifacts](storage.md)
 - [Operations and support](operations.md)

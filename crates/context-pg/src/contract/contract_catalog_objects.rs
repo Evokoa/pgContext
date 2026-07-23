@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 128;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 143;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -54,9 +54,16 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::pgcontext_operator_class("vector_hnsw_ip_ops", "pgcontext_hnsw, vector", SqlLifecycle::Experimental),
     SqlContractObject::pgcontext_operator_class("vector_hnsw_cosine_ops", "pgcontext_hnsw, vector", SqlLifecycle::Experimental),
     SqlContractObject::pgcontext_operator_class("vector_hnsw_l1_ops", "pgcontext_hnsw, vector", SqlLifecycle::Experimental),
-    SqlContractObject::pgcontext_operator_class("halfvec_hnsw_ops", "pgcontext_hnsw, halfvec", SqlLifecycle::Experimental),
-    SqlContractObject::pgcontext_operator_class("sparsevec_hnsw_ops", "pgcontext_hnsw, sparsevec", SqlLifecycle::Experimental),
-    SqlContractObject::pgcontext_operator_class("bitvec_hnsw_hamming_ops", "pgcontext_hnsw, bitvec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("halfvec_hnsw_ops", "pgcontext_hnsw, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_hnsw_ip_ops", "pgcontext_hnsw, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_hnsw_cosine_ops", "pgcontext_hnsw, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_hnsw_l1_ops", "pgcontext_hnsw, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("sparsevec_hnsw_ops", "pgcontext_hnsw, sparsevec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("sparsevec_hnsw_ip_ops", "pgcontext_hnsw, sparsevec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("sparsevec_hnsw_cosine_ops", "pgcontext_hnsw, sparsevec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("sparsevec_hnsw_l1_ops", "pgcontext_hnsw, sparsevec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("bitvec_hnsw_hamming_ops", "pgcontext_hnsw, bitvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("bitvec_hnsw_jaccard_ops", "pgcontext_hnsw, bitvec", SqlLifecycle::Stable),
     SqlContractObject::pgcontext_operator("<->", "vector, vector", SqlLifecycle::Stable),
     SqlContractObject::pgcontext_operator("<#>", "vector, vector", SqlLifecycle::Stable),
     SqlContractObject::pgcontext_operator("<=>", "vector, vector", SqlLifecycle::Stable),
@@ -264,6 +271,18 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::object(
         SqlObjectKind::Table,
         Some("pgcontext"),
+        "_collection_late_interaction",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Table,
+        Some("pgcontext"),
+        "_collection_late_interaction_tokens",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Table,
+        Some("pgcontext"),
         "_collection_aliases",
         SqlLifecycle::Internal,
     ),
@@ -294,6 +313,12 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::object(
         SqlObjectKind::Table,
         Some("pgcontext"),
+        "_pgvector_ownership_conversions",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Table,
+        Some("pgcontext"),
         "_build_jobs",
         SqlLifecycle::Internal,
     ),
@@ -301,6 +326,12 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
         SqlObjectKind::Trigger,
         Some("pgcontext"),
         "_collection_points.pgcontext_capture_build_point_delta",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Trigger,
+        Some("pgcontext"),
+        "_collections.pgcontext_cleanup_late_interaction_registration",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::object(
@@ -343,6 +374,18 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::object(
         SqlObjectKind::View,
         Some("pgcontext"),
+        "_visible_query_stats",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::View,
+        Some("pgcontext"),
+        "_visible_collection_late_interaction",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::View,
+        Some("pgcontext"),
         "_visible_collection_payload_columns",
         SqlLifecycle::Internal,
     ),
@@ -354,4 +397,11 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     ),
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_artifact_segments", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_collection_limits", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_collections", SqlLifecycle::Internal),
+    SqlContractObject::object(
+        SqlObjectKind::View,
+        Some("pgcontext"),
+        "_visible_pgvector_ownership_conversions",
+        SqlLifecycle::Internal,
+    ),
 ];

@@ -3,11 +3,15 @@
 use super::{
     SqlContractObject, SqlLifecycle,
     contract_catalog_objects::{CATALOG_SQL_CONTRACT_OBJECTS, CATALOG_SQL_CONTRACT_OBJECTS_LEN},
+    contract_pgvector_ownership_objects::{
+        PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS, PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN,
+    },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 235;
-const SQL_CONTRACT_OBJECTS_LEN: usize =
-    CATALOG_SQL_CONTRACT_OBJECTS_LEN + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 271;
+const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
+    + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
+    + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
 
 static SQL_CONTRACT_OBJECTS_ARRAY: [SqlContractObject; SQL_CONTRACT_OBJECTS_LEN] =
     build_sql_contract_objects();
@@ -31,6 +35,13 @@ const fn build_sql_contract_objects() -> [SqlContractObject; SQL_CONTRACT_OBJECT
     }
 
     input_index = 0;
+    while input_index < PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN {
+        objects[output_index] = PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS[input_index];
+        output_index += 1;
+        input_index += 1;
+    }
+
+    input_index = 0;
     while input_index < FUNCTION_SQL_CONTRACT_OBJECTS_LEN {
         objects[output_index] = FUNCTION_SQL_CONTRACT_OBJECTS[input_index];
         output_index += 1;
@@ -42,6 +53,74 @@ const fn build_sql_contract_objects() -> [SqlContractObject; SQL_CONTRACT_OBJECT
 
 #[rustfmt::skip]
 const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_OBJECTS_LEN] = &[
+    SqlContractObject::function("bitvec_in", "input cstring", SqlLifecycle::Internal),
+    SqlContractObject::function("bitvec_out", "input bitvec", SqlLifecycle::Internal),
+    SqlContractObject::function("halfvec_in", "input cstring", SqlLifecycle::Internal),
+    SqlContractObject::function("halfvec_out", "input halfvec", SqlLifecycle::Internal),
+    SqlContractObject::function("sparsevec_in", "input cstring", SqlLifecycle::Internal),
+    SqlContractObject::function("sparsevec_out", "input sparsevec", SqlLifecycle::Internal),
+    SqlContractObject::function("vector_in", "input cstring", SqlLifecycle::Internal),
+    SqlContractObject::function("vector_out", "input vector", SqlLifecycle::Internal),
+    SqlContractObject::function(
+        "_mmap_hnsw_artifact_candidates",
+        "collection text, artifact_name text, vector vector, max_mapped_bytes bigint, candidate_limit integer, \"limit\" integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_capture_late_interaction_tokens",
+        "",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_begin_late_interaction_registration",
+        "p_collection_id bigint, p_source_table_oid oid, p_source_schema_name text, p_source_table_name text, p_token_column_name text, p_token_attnum smallint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_store_late_interaction_tokens",
+        "p_collection_id bigint, p_source_key text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_finish_late_interaction_registration",
+        "p_collection_id bigint, p_dimensions integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_late_interaction_ann_candidate_points",
+        "p_collection_id bigint, p_query vector, p_limit integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_prepare_late_interaction_repair",
+        "p_collection_id bigint, p_source_table_oid oid, p_token_attnum smallint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_cleanup_late_interaction_registration",
+        "",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "register_late_interaction",
+        "collection text, source_table text, token_source text",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "repair_late_interaction",
+        "collection text, batch_size integer",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "search_late_interaction_ann",
+        "collection text, query_vectors vector[], candidates_per_query integer, \"limit\" integer",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "explain_late_interaction_ann",
+        "collection text, query_vectors vector[], candidates_per_query integer",
+        SqlLifecycle::Experimental,
+    ),
     SqlContractObject::function(
         "collection_info",
         "collection_name text",
@@ -371,6 +450,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(
+        "execute_query",
+        "collection text, plan jsonb",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
         "query",
         "collection text, vector vector, text_query text, text_column text, \"limit\" integer",
         SqlLifecycle::Stable,
@@ -390,11 +474,36 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         "branch jsonb, formula text",
         SqlLifecycle::Stable,
     ),
+    SqlContractObject::function(
+        "query_full_text",
+        "text_query text, text_column text, \"limit\" integer",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "query_late_interaction",
+        "query_vectors vector[], candidates_per_query integer, \"limit\" integer",
+        SqlLifecycle::Experimental,
+    ),
     SqlContractObject::function("query_lookup", "point_ids bigint[]", SqlLifecycle::Stable),
     SqlContractObject::function(
         "query_nearest",
         "vector vector, \"limit\" integer",
         SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "query_nearest",
+        "vector_name text, vector vector, filter jsonb, \"limit\" integer",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "query_sparse_nearest",
+        "vector_name text, vector sparsevec, \"limit\" integer",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "query_sparse_nearest",
+        "vector_name text, vector sparsevec, filter jsonb, \"limit\" integer",
+        SqlLifecycle::Experimental,
     ),
     SqlContractObject::function("query_prefetch", "branches jsonb[]", SqlLifecycle::Stable),
     SqlContractObject::function(
@@ -428,6 +537,8 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function("query_cohort_stats", "", SqlLifecycle::Stable),
+    SqlContractObject::function("query_execution_stats", "", SqlLifecycle::Stable),
+    SqlContractObject::function("query_telemetry_queue_stats", "", SqlLifecycle::Stable),
     SqlContractObject::function(
         "recall_check",
         "exact_point_ids bigint[], candidate_point_ids bigint[], min_recall double precision",
@@ -455,7 +566,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function(
         "record_query_stat",
-        "collection text, cohort text, query_kind text, result_count bigint, candidates_considered bigint, rows_rechecked bigint, rows_pruned bigint, recall_threshold double precision, recall_achieved double precision, latency_ms double precision, lifecycle_state pgcontext.querylifecyclestate",
+        "collection text, cohort text, query_kind text, result_count bigint, candidates_considered bigint, rows_rechecked bigint, rows_pruned bigint, recall_threshold double precision, recall_achieved double precision, latency_ms double precision, lifecycle_state querylifecyclestate",
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
@@ -670,6 +781,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(
+        "search_sparse",
+        "collection text, vector_name text, query sparsevec, filter text, \"limit\" integer",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
         "rerank_quantized_candidates",
         "query vector, point_ids bigint[], original_vectors vector[], metric text, \"limit\" integer",
         SqlLifecycle::Experimental,
@@ -691,6 +807,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "validate_hnsw_graph_artifact",
         "segment bytea",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "explain_sparse",
+        "collection text, vector_name text, query sparsevec, \"limit\" integer",
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(
@@ -797,8 +918,33 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     // accumulated without a lifecycle decision; classified retroactively.
     SqlContractObject::function("_capture_build_point_delta", "", SqlLifecycle::Internal),
     SqlContractObject::function(
+        "_refresh_collection_source_table",
+        "p_collection_id bigint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_refresh_vector_source_binding",
+        "p_collection_id bigint, p_vector_column_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_refresh_sparse_vector_source_binding",
+        "p_collection_id bigint, p_vector_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_refresh_payload_source_bindings",
+        "p_collection_id bigint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
         "_cosine_distance_fast",
         "vector, vector",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_hnsw_candidates",
+        "index_relation regclass, query vector, \"limit\" integer",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
@@ -806,6 +952,17 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         "index_relation regclass, query vector, allowed_heap_tids anyarray, \"limit\" integer",
         SqlLifecycle::Internal,
     ),
+    SqlContractObject::function(
+        "_hnsw_sparse_candidates",
+        "index_relation regclass, query sparsevec, \"limit\" integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_hnsw_sparse_masked_candidates",
+        "index_relation regclass, query sparsevec, allowed_heap_tids anyarray, \"limit\" integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function("_mapped_hnsw_sql_drop", "", SqlLifecycle::Internal),
     SqlContractObject::function("_l1_distance_fast", "vector, vector", SqlLifecycle::Internal),
     SqlContractObject::function("_l2_distance_fast", "vector, vector", SqlLifecycle::Internal),
     SqlContractObject::function("_l2_distance_fast8", "vector, vector", SqlLifecycle::Internal),
@@ -815,8 +972,8 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
-        "adopt_pgvector",
-        "target regclass, dry_run boolean, drop_old boolean",
+        "attach_sparse_hnsw_index",
+        "collection_name text, vector_name text, index_name text",
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(
@@ -831,20 +988,13 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function("compact", "index regclass", SqlLifecycle::Experimental),
     SqlContractObject::function(
-        "compare_indexes",
-        "table_name text, column_name text, queries integer",
-        SqlLifecycle::Experimental,
-    ),
-    SqlContractObject::function(
         "current_vector_config_revision",
         "collection bigint",
         SqlLifecycle::Internal,
     ),
-    SqlContractObject::function("enable_pgvector_binding", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_build_stats", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_last_scan_work", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_serving_stats", "", SqlLifecycle::Experimental),
-    SqlContractObject::function("migration_report", "", SqlLifecycle::Experimental),
     // Failpoint setters exist only in pg_test builds; the classification test
     // that reads this registry runs only in those builds, so listing them
     // unconditionally keeps the const array length fixed without ever
@@ -862,6 +1012,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "test_set_hnsw_physical_failpoint",
         "name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "test_clear_hnsw_packed_cache",
+        "",
         SqlLifecycle::Internal,
     ),
 ];

@@ -219,6 +219,10 @@ fn hnsw_insert_lock_keys_are_namespaced_per_index() {
 fn hnsw_scan_state_rescan_discards_position_and_candidates() {
     let mut state = HnswScanState {
         prepared: true,
+        orderby_contract: Some(HnswOrderByContract {
+            metric: HnswScoreMetric::Cosine,
+            pgvector_binding: true,
+        }),
         position: 1,
         candidate_limit: 2,
         candidates: vec![
@@ -239,6 +243,7 @@ fn hnsw_scan_state_rescan_discards_position_and_candidates() {
     state.reset();
 
     assert!(!state.prepared);
+    assert_eq!(state.orderby_contract, None);
     assert_eq!(state.position, 0);
     assert!(state.candidates.is_empty());
     assert!(state.next().is_none());

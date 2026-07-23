@@ -8,7 +8,9 @@ insertion descends existing upper layers, explores at most the configured
 `ef_construction` candidate frontier per layer, and retains reciprocal
 neighbor lists bounded by `m`.
 
-Quantized HNSW and mapped HNSW serving are tracked in the [post-V1 roadmap](roadmap.md); metadata and helpers below do not imply those serving paths exist just yet.
+Quantized traversal and mapped HNSW serving are available for pgContext HNSW
+indexes. Approximate candidates are still resolved to live heap tuples by the
+PostgreSQL executor, so MVCC visibility and source ACL/RLS remain authoritative.
 
 `m` is limited to `2..=128`. The lower bound is required because a reciprocal
 graph with more than two nodes cannot remain connected with degree one.
@@ -68,7 +70,7 @@ whole-graph reconstruction for traversal. The current in-memory adapter is a
 contract fixture, not evidence that PostgreSQL page writes are WAL-safe or that
 the experimental SQL access method is ready to serve production queries.
 Both in-memory and persisted-port traversal use the selected ascending-distance
-kernel for L2, negative inner product, cosine, or L1. Raw inner product is
+kernel for L2, negative inner product, cosine, L1, Hamming, or Jaccard. Raw inner product is
 rejected before traversal because nearest-first HNSW requires its negative
 ascending form. Result ties are ordered by stable point ID, and only the
 bounded traversal candidate set is sorted.
@@ -136,9 +138,13 @@ fail `CREATE INDEX` with SQLSTATE `22023` (`invalid_parameter_value`).
 These reloptions are catalog-visible configuration today; storing quantized
 metadata in the HNSW metapage records the selected mode, metadata version,
 scalar bounds/levels, PQ subvector width, and a deterministic PQ codebook hash
-so restart and upgrade checks can reject incompatible metadata safely. Serving
-quantized candidates must still pass through exact rerank before rows are
-returned to SQL.
+so restart and upgrade checks can reject incompatible metadata safely. The
+PostgreSQL index-AM page graph remains full precision. Encoded candidate
+traversal is served by revision-bound mapped HNSW artifacts for an unfiltered
+default-vector composite leaf. Named or filtered leaves use their validated
+full-precision HNSW binding until mapped artifacts carry an equally strong
+vector/filter identity. Every candidate still passes through exact source
+rerank before rows are returned to SQL.
 
 The SQL extension registers the `pgcontext_hnsw` index access method and can
 create HNSW indexes on empty or populated `vector` columns. Static builds scan
@@ -155,6 +161,32 @@ promise a long-term on-disk compatibility window or broad workload
 certification. Bounded tests cover insert, update, delete, abort, HOT/TID reuse,
 VACUUM, REINDEX, restart, forced index plans, exact-oracle ordering, and all four
 dense metrics.
+
+Non-dense operator-class names and metric bindings are stable within the PG17
+SQL contract even while the access method's on-disk compatibility remains
+experimental:
+
+| Input | Metrics and opclasses |
+| --- | --- |
+| `halfvec` | L2 `halfvec_hnsw_ops`; inner product `halfvec_hnsw_ip_ops`; cosine `halfvec_hnsw_cosine_ops`; L1 `halfvec_hnsw_l1_ops` |
+| `sparsevec` | L2 `sparsevec_hnsw_ops`; inner product `sparsevec_hnsw_ip_ops`; cosine `sparsevec_hnsw_cosine_ops`; L1 `sparsevec_hnsw_l1_ops` |
+| `bitvec` | Hamming `bitvec_hnsw_hamming_ops`; Jaccard `bitvec_hnsw_jaccard_ops` |
+
+The bit opclasses use bit-aware graph metrics. In particular, Jaccard never
+substitutes L2 over densified coordinates because that does not preserve result
+ordering. Jaccard graph navigation remains `real` precision, but its ordered
+scan value is a conservative lower bound and PostgreSQL rechecks the visible
+heap value with the exact `double precision` operator before final ordering.
+End-to-end tests compare every pair with a forced exact oracle, assert the
+metric-specific index plan, and require candidate work below collection
+cardinality.
+
+The SQL vector types accept up to 16,000 dimensions, but this experimental
+HNSW format stores each densified node and its graph links in a single page.
+The encoded record ceiling is 8,064 bytes, so the effective indexable dimension
+also depends on `hnsw_m` and the node's layers. Oversized builds fail with
+SQLSTATE `54000`; reduce dimensions or `pgcontext.hnsw_m`. A future bit-native
+or multi-page record format may raise this index-specific ceiling.
 
 ## IVFFlat
 
@@ -185,15 +217,31 @@ HNSW tuning uses PostgreSQL GUCs with defaults checked against shared
 | `pgcontext.hnsw_candidate_budget` | `32` | Default candidate budget for filtered or iterative HNSW search. |
 | `pgcontext.hnsw_iterative_expansion_limit` | `10000` | Maximum candidate batch size for iterative HNSW recheck. |
 | `pgcontext.hnsw_recall_threshold` | `0.95` | Default minimum recall target for approximate HNSW health checks. |
+| `pgcontext.hnsw_mmap_serving` | `on` | Publish full-layer packed generations as immutable, physical-index-bound files and attach them before falling back to the shared registry or PostgreSQL pages. Corrupt, stale, missing, or over-budget files fail closed to the fallback ladder. |
+| `pgcontext.hnsw_mmap_serving_budget_mb` | `512` | Maximum encoded bytes for one mapped generation. Publication and attachment above this limit are skipped without failing the query. |
 | `pgcontext.hnsw_shared_serving` | `on` | Publish packed HNSW graph generations to a shared registry so other backends attach instead of rebuilding. |
 | `pgcontext.hnsw_shared_serving_budget_mb` | `512` | Total shared-registry bytes across all indexes; a publish that would exceed this is skipped. |
 | `pgcontext.hnsw_pack_on_first_use` | `on` | When off and no pack is available anywhere, serve queries from unpacked directory reads instead of paying a full pack inline. |
-| `pgcontext.hnsw_mask_candidate_limit` | `10000` | Maximum distinct point IDs a filter-aware HNSW scan (`pgcontext._hnsw_masked_candidates` and the collection-search masked path) accepts as its candidate mask. Independent of `pgcontext.hnsw_iterative_expansion_limit`; raise it to serve larger filtered result sets through the masked scan instead of falling back to an exact scan. |
+| `pgcontext.hnsw_mask_candidate_limit` | `10000` | Maximum distinct point IDs a visibility/filter-aware HNSW scan (`pgcontext._hnsw_masked_candidates` and named sparse collection search) accepts as its candidate mask. Independent of `pgcontext.hnsw_iterative_expansion_limit`; raise it to serve larger caller-visible or filtered result sets through the masked scan instead of falling back to exact search, or set it to `0` to select exact fallback for masked named retrieval. |
 | `pgcontext.hnsw_build_parallel_workers` | `1` | Threads used to construct the in-memory HNSW graph during `CREATE INDEX`/`REINDEX`. `1` (default) builds single-threaded and deterministic. Raising this parallelizes graph construction across threads in the building backend using per-node locking; the resulting graph is structurally valid but not bit-identical to a sequential build of the same rows. Measured 2-3.5x faster at 2-8 workers on a 20k-row/384-dim corpus. |
-| `pgcontext.pgvector_compat_warnings` | `on` | In pgvector coexist mode, emit one advisory `NOTICE` per backend and index when serving a pgvector-typed column, recommending `pgcontext.migration_report()`. Results are always complete either way; see [pgvector_coexist.md](pgvector_coexist.md). |
+| `pgcontext.pgvector_compat_warnings` | `on` | With the certified pgvector companion bridge installed, emit one advisory `NOTICE` per backend and index serving a pgvector-owned column, recommending `pgcontext.migration_report()`. See [pgvector_coexist.md](pgvector_coexist.md). |
 | `pgcontext.hnsw_delta_segment_limit` | `10000` | Rows an HNSW index absorbs through the segmented-write delta region before falling back to inline graph-splice inserts. Inserts append a small fixed-format record instead of splicing into the graph; scans merge an exact scan over the region with base-graph results. `0` disables the delta region (every insert splices inline). |
 | `pgcontext.hnsw_compact_on_threshold` | `on` | Whether the insert that fills the delta segment compacts the index in place before appending, draining the segment so later inserts stay on the fast path. That insert pays for a full rebuild, so turn this off if uniform insert latency matters more than sustained throughput and schedule `pgcontext.compact()` yourself. Ignored when the delta region is disabled (`hnsw_delta_segment_limit = 0`) or was never opened. Compaction declines, leaving the insert on the inline path, if the parent-table lock is not immediately available or the rebuilt graph would exceed `maintenance_work_mem`. |
 | `pgcontext.hnsw_compact_on_threshold_max_mb` | `1024` | Largest index an insert may compact by itself, in megabytes of projected vectors (rows x dimensions x 4). Bounds how long a single `INSERT` can block, because compaction runs synchronously on the write path and its cost grows with the graph: on a 100,000-row 384-dimension index (~146MB of vectors) a compaction takes roughly a minute, so the 1GB default admits stalls of several minutes on the largest index it accepts. The default is deliberately permissive so ordinary workloads keep self-maintaining; lower it when bounded write latency matters more than sustained throughput. Above the bound the insert declines and takes the inline path, leaving the rebuild to `pgcontext.compact()` or `REINDEX`. `maintenance_work_mem` applies independently and is often the tighter limit. `0` removes this bound. |
+
+Mapped generations live below the physical database directory in one numeric
+directory per index. PostgreSQL therefore removes them with `DROP DATABASE`;
+committed `DROP INDEX` and cascading `DROP TABLE` reclaim the exact index
+directory after transaction commit, while rolled-back DDL leaves it intact.
+Each drop first publishes a small fsynced transaction marker through a durably
+linked directory hierarchy. Later HNSW scans reconcile one of 16 marker buckets
+and at most 16 entries apiece. Per-bucket pending and retry lanes let terminal
+work drain before unresolved prepared transactions are retried, so a large
+prepared queue or a stale pre-rename temp cannot starve committed cleanup.
+Committed drops are retried after backend crashes or transient filesystem
+errors, and aborted drops preserve the live index generation. Temporary indexes
+use only the backend-local packed cache and never publish a filesystem
+generation.
 
 Set these with `SET LOCAL` inside controlled build or validation sessions, then
 validate approximate paths with `pgcontext.recall_check` before any controlled

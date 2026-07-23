@@ -801,15 +801,15 @@ fn create_search_collection(collection_name: &str) {
     Spi::run(&format!(
         "CREATE TABLE public.{collection_name} (
              id bigint PRIMARY KEY,
-             embedding public.vector NOT NULL
+             embedding pgcontext.vector NOT NULL
          )"
     ))
     .expect("search source table should be created");
     Spi::run(&format!(
         "INSERT INTO public.{collection_name} (id, embedding)
-         VALUES (10, '[3,0]'::public.vector),
-                (20, '[1,0]'::public.vector),
-                (30, '[2,0]'::public.vector)"
+         VALUES (10, '[3,0]'::pgcontext.vector),
+                (20, '[1,0]'::pgcontext.vector),
+                (30, '[2,0]'::pgcontext.vector)"
     ))
     .expect("search source rows should be inserted");
     Spi::run(&format!(

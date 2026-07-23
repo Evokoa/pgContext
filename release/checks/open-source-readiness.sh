@@ -84,6 +84,6 @@ package_args=(--out-dir "${package_out}")
 if [[ "${allow_dirty}" == true ]]; then
   package_args+=(--allow-dirty)
 fi
-release/build-packages.sh "${package_args[@]}" v0.1.0
+release/build-packages.sh "${package_args[@]}" v0.2.0
 
 echo "open-source readiness gates passed"

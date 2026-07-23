@@ -3,18 +3,18 @@
 This document describes pgContext's product direction and release-engineering
 plans following the installable GitHub V1 launch.
 
-It outlines broad product direction, not an implementation checklist. Each
-item below is planned for a release after 0.1.0.
+It outlines broad product direction, not an implementation checklist. Items
+marked complete are implemented for 0.2.0; remaining items describe later work.
 
 A feature listed here remains "planned" until its public capability row and
-release notes announce its arrival. Everything below is deliberately scoped
-as post-V1. A roadmap item only becomes release-blocking once it is
+release notes announce its arrival. The document began as a post-V1 plan and
+now records completed 0.2 work and remaining direction. A roadmap item only becomes release-blocking once it is
 selected into a future dependency-ordered build or release plan.
 
-## Frequently asked: not in 0.1.0 yet
+## Frequently asked since 0.1.0
 
-For transparency, here are the capabilities most often asked about that 0.1.0
-does **not** yet ship, and where each is headed:
+For transparency, here is where the capabilities most often requested after
+0.1.0 stand in 0.2.0 and where the remaining work is headed:
 
 - **Faster index builds** — pgvector currently builds HNSW indexes faster.
   Closing that gap is planned through parallel-build efficiency and
@@ -26,19 +26,24 @@ does **not** yet ship, and where each is headed:
   and the planned migration tooling already detects IVFFlat indexes and
   proposes an explicit retain, exact-search, or rebuild-as-HNSW plan. See
   [pgvector Migration and Compatibility](#pgvector-migration-and-compatibility).
-- **`halfvec`, `sparsevec`, and `bitvec` maturity** — `halfvec` leads and
-  `sparsevec`/`bitvec` are experimental today; promotion to first-class HNSW
-  opclasses is planned through
-  [Non-Dense ANN Opclasses](#non-dense-ann-opclasses) (including bit-vector
-  Hamming and Jaccard) and [Named Sparse ANN](#named-sparse-ann).
+- **`halfvec`, `sparsevec`, and `bitvec` maturity** — their SQL types remain
+  experimental, while the complete metric-bound HNSW opclass names are now
+  stable as recorded in
+  [Non-Dense ANN Opclasses](#non-dense-ann-opclasses). Named sparse ANN is now
+  implemented experimentally under [Named Sparse ANN](#named-sparse-ann).
+  Existing pgvector sparsevec columns can be indexed and converted when their
+  dimensions fit pgContext's current vector policy and HNSW record envelope.
+  Full pgvector sparse coordinate-range compatibility is planned under
+  [Large-Dimension Sparse Vectors](#large-dimension-sparse-vectors).
 - **x86-64 performance** — the AVX2+FMA kernels are implemented and
   correctness-verified, but no x86 speed claim is made until measured on real
   x86 hardware. Every published benchmark is Apple Silicon (NEON). See the
   x86-64 SIMD kernels item under
   [Delivery Phases](#delivery-phases-post-v1-overview).
-- **Drop-in pgvector name compatibility** — coexist mode (build pgContext
-  indexes on existing `vector` columns, no data movement) is in active
-  engineering; full drop-in name compatibility is sequenced later. See
+- **Drop-in pgvector name compatibility** — the certified companion bridge now
+  builds pgContext indexes on existing `vector`, `halfvec`, and bounded
+  `sparsevec` columns without data movement; full unqualified name
+  compatibility is sequenced later. See
   [pgvector Migration and Compatibility](#pgvector-migration-and-compatibility).
 
 ## Delivery Phases (post-V1 overview)
@@ -46,9 +51,10 @@ does **not** yet ship, and where each is headed:
 The detailed sections below are grouped into broad delivery phases, in
 order:
 
-1. **pgvector interoperability (in active engineering).** Install
+1. **pgvector interoperability (implemented in 0.2).** Install
    pgContext alongside an existing pgvector database and build pgContext
-   indexes directly on existing `vector` columns — no data movement — with
+   indexes directly on existing `vector`, `halfvec`, and bounded `sparsevec`
+   columns — no data movement — with
    a side-by-side comparison function and a migration report/adopt
    toolkit. Queries over pgvector-typed columns always return full
    results; an advisory notice (optional, on by default) recommends
@@ -93,16 +99,19 @@ order:
    5. **Memory and quality features.** A target-recall setting that
       auto-tunes search effort per index, quantized in-graph traversal
       with exact reranking, statistics-driven filtered search, and
-      memory-budgeted external index builds for very large tables.
-4. **Drop-in pgvector compatibility.** When pgvector is not installed,
+      memory-budgeted external index builds for very large tables. Quantized
+      traversal with exact rerank is implemented; the remaining tuning and
+      external-build work is planned.
+4. **Broader pgvector compatibility.** The 0.2 bridge and resumable ownership
+   conversion cover the certified PG17 profile. When pgvector is not installed,
    pgvector-spelled SQL (types, operators, opclasses, `USING hnsw`,
    familiar settings) runs unmodified, validated by running the pgvector
    regression suite in CI, plus an in-place adoption tool that converts
    columns without rewriting tables.
-5. **Advanced retrieval features.** Sparse-vector indexing with exact
-   top-k pruning, server-side hybrid fusion (RRF and distribution-based
-   scoring), a fuller quantization surface, and late-interaction
-   (multivector) reranking.
+5. **Advanced retrieval features (implemented experimentally in 0.2).** Named
+   sparse ANN with exact recheck, typed composite fusion, quantized candidates,
+   internally maintained late interaction, mapped HNSW, and automatic
+   observability now have bounded serving paths. Further certification remains.
 6. **Production certification.** Model-checked and fuzz-tested
    concurrency, crash-recovery and replication test matrices, additional
    PostgreSQL major versions, progress reporting, and removal of
@@ -119,6 +128,7 @@ order:
 PG17 V1 freeze
 ├── non-dense ANN opclasses
 │   └── named sparse ANN
+│       └── large-dimension sparse vectors
 ├── quantized HNSW
 │
 ├── non-dense ANN opclasses + quantized HNSW
@@ -135,7 +145,7 @@ PG17 V1 freeze
 
 ## Non-Dense ANN Opclasses
 
-Status: planned after V1.
+Status: complete.
 
 Depends on: PG17 V1 freeze, dense pgvector HNSW, and the shared metric
 semantics.
@@ -151,11 +161,12 @@ Scope:
 - cover create, scan, insert, update, delete, VACUUM, REINDEX, restart,
   dimensions, casts, NULL/non-finite rules, SQLSTATEs, and exact oracles.
 
-Validated by an end-to-end serving test with exact-oracle and bounded-work assertions before promotion.
+Validated by end-to-end serving tests for every representation/metric pair with
+exact-oracle and bounded-work assertions.
 
 ## Quantized HNSW
 
-Status: planned after V1.
+Status: implemented experimentally for the PostgreSQL 17 profile.
 
 Depends on: PG17 V1 freeze, dense HNSW, and resumable generation
 infrastructure.
@@ -183,8 +194,8 @@ Validated by an end-to-end serving test with exact-oracle and bounded-work asser
 > deliverable, while full drop-in name compatibility is sequenced later as
 > described below.
 
-Status: coexist mode in active engineering; the remaining scope below is
-planned after non-dense ANN opclasses and quantized HNSW.
+Status: the bounded PostgreSQL 17 coexistence and migration profile is
+implemented and certified; IVFFlat remains an explicit detect-and-plan path.
 
 Depends on: PG17 V1 freeze, non-dense ANN opclasses, and quantized HNSW.
 
@@ -221,13 +232,56 @@ Scope:
 
 Validated by an end-to-end serving test with exact-oracle and bounded-work assertions before promotion.
 
+## Large-Dimension Sparse Vectors
+
+Status: planned after the 0.2 bounded sparse compatibility profile; not a 0.2
+release blocker.
+
+Depends on: non-dense ANN opclasses, named sparse ANN, versioned storage, and
+bounded HNSW serving.
+
+Goal: support pgvector's sparsevec coordinate profile—up to 1,000,000,000
+logical dimensions and 16,000 nonzero entries—without allocating memory or
+performing work proportional to the logical dimension count. This enables
+lossless direct indexing and ownership conversion for the full certified
+pgvector sparsevec range rather than only values within pgContext's current
+16,000-dimension policy.
+
+Scope:
+
+- split the shared dense-vector dimension ceiling into representation-specific
+  policies, including a large sparse coordinate limit and a separately bounded
+  nonzero-entry limit;
+- replace every sparse-to-dense HNSW build, insert, query, mapped-serving, and
+  rerank boundary with sparse-native storage and distance/traversal, so a
+  billion-dimensional vector with a handful of entries never creates a
+  billion-element allocation;
+- define a versioned sparse graph/payload format with checked coordinate and
+  offset arithmetic, corruption detection, upgrade behavior, and no silent
+  reinterpretation of existing 0.1/0.2 pgContext sparse values;
+- carry large sparse typmods and dimensions through catalogs, registration,
+  query IR, filters, telemetry, dump/restore, bridge preflight, and resumable
+  ownership conversion without narrowing or truncation;
+- preserve exact scoring as the oracle and enforce explicit budgets for
+  nonzero entries, candidate visits, decoded bytes, build memory, and mapped
+  generations;
+- add boundary fixtures at dimensions 16,000, 16,001, and 1,000,000,000,
+  malformed/overflow/corruption cases, and end-to-end pgvector direct-index and
+  ownership-conversion tests covering DML, rollback, VACUUM, REINDEX, restart,
+  and dump/restore.
+
+Promotion requires exact-oracle parity for every sparse metric, bounded work
+proportional to nonzero entries and visited candidates rather than logical
+dimensions, and a live pgvector compatibility gate at the maximum coordinate
+range.
+
 ## Named Sparse ANN
 
-Status: planned after non-dense sparse opclasses.
+Status: implemented experimentally.
 
 Depends on: non-dense ANN opclasses and metadata-filtered ANN.
 
-Scope:
+Implemented scope:
 
 - add a real sparse ANN candidate source through the query-owned port;
 - retain exact sparse scoring as the correctness oracle and final recheck;
@@ -239,7 +293,7 @@ Validated by an end-to-end serving test with exact-oracle and bounded-work asser
 
 ## Internally Maintained Late Interaction
 
-Status: planned after V1.
+Status: implemented experimentally for the PostgreSQL 17 profile.
 
 Depends on: execution ports, resumable generations, and persisted HNSW
 serving.
@@ -261,7 +315,7 @@ Validated by end-to-end serving tests before promotion.
 
 ## Composite Query Execution
 
-Status: planned after all advanced candidate sources.
+Status: implemented for the PostgreSQL 17 profile.
 
 Depends on: metadata-filtered ANN, quantized HNSW, named sparse ANN, and late
 interaction.
@@ -279,9 +333,43 @@ Scope:
 
 Validated by end-to-end serving tests before promotion.
 
+## Lexical Retrieval Enhancements
+
+Status: planned after composite query execution.
+
+Depends on: composite query execution and the shared fusion layer.
+
+Today the full-text branch computes `to_tsvector('simple', column)` on the fly
+and matches `plainto_tsquery('simple', ...)`. That is correct but minimal: a
+fixed `simple` configuration (no stemming, stopwords, or language selection), no
+stored `tsvector` column, no GIN/GiST full-text index in the fused path, and no
+typo tolerance. This item makes lexical retrieval a first-class, configurable,
+indexable fusion branch.
+
+Scope:
+
+- configurable full-text search: select the text-search configuration
+  (language, stemming, stopwords) per registered text field instead of a
+  hardcoded `simple`; accept `websearch_to_tsquery`/`phraseto_tsquery` query
+  forms; and let a collection register a stored `tsvector` column so a GIN/GiST
+  full-text index serves the branch instead of a scan-time `to_tsvector`;
+- trigram fuzzy matching: add a `pg_trgm` similarity candidate source
+  (`word_similarity`/`%`/`similarity`, backed by a GIN or GiST trigram index) so
+  typo-tolerant and partial-token lexical retrieval can be fused alongside the
+  dense, sparse, and full-text branches;
+- expose both as typed query-IR branches composable through reciprocal-rank and
+  weighted fusion, preserving the authoritative exact recheck and
+  ACL/RLS/MVCC contracts on every returned candidate;
+- expose counters proving the branch uses an index rather than scanning the full
+  collection where an index is available.
+
+Validated by an end-to-end serving test with exact-oracle and bounded-work
+assertions before promotion.
+
 ## Mapped HNSW Serving
 
-Status: planned after V1.
+Status: implemented experimentally and lifecycle-gated for the PostgreSQL 17
+profile.
 
 Depends on: resumable generation publication, metadata-filtered ANN, and the
 shared graph-read port.
@@ -304,7 +392,7 @@ Validated by an end-to-end serving test with exact-oracle and bounded-work asser
 
 ## Expanded Automatic Observability
 
-Status: planned after composite query execution and mapped serving.
+Status: implemented and lifecycle-gated for the PostgreSQL 17 profile.
 
 Depends on: executable query outcomes and every serving strategy that it
 reports.
@@ -318,7 +406,13 @@ Scope:
 - cover success, typed error, cancellation, concurrent updates,
   rebuild-required, not-ready, and corruption.
 
-Validated by end-to-end serving tests before promotion.
+The query backend uses a bounded nonblocking named-DSM queue; a database-scoped
+worker commits observations independently so aborted statements can be
+reported without adding a synchronous catalog write to query latency. Queue
+health is restricted to `pg_monitor`, and delivery limitations are documented
+as best-effort, may-duplicate, and fail-open. The PostgreSQL 17 gate covers the complete
+outcome matrix above, privacy, strategy/work accuracy, disabled-vs-enabled
+latency, queue health, and worker reclamation.
 
 ## Reproducible Public Benchmarks
 

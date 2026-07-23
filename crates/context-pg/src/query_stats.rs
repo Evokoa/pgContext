@@ -1,11 +1,16 @@
 //! SQL-facing query cohort telemetry.
 
+use context_query::{
+    Completion, ExecutionOutcome, ExecutionState, QueryError, QueryIr, QueryKind, ReadinessReason,
+    StageDiagnostic, StageKind,
+};
 use pgrx::prelude::*;
 
 use crate::error::raise_sql_error;
 use crate::pgcontext::{QueryCohortStatus, QueryLatencyBucket, QueryLifecycleState};
 
 const MAX_COHORT_LENGTH: usize = 128;
+const AUTOMATIC_COHORT: &str = "automatic";
 
 #[derive(Debug, Clone, Copy)]
 struct QueryStatsCollection {
@@ -26,6 +31,209 @@ struct QueryStatDetail {
     lifecycle_state: QueryLifecycleState,
 }
 
+pub(crate) fn record_automatic_query_stat(
+    observation: Option<crate::query_stats_async::ObservationToken>,
+    diagnostics: &[StageDiagnostic],
+    outcome: Result<&ExecutionOutcome, &QueryError>,
+    used_fallback: bool,
+) {
+    let strategy = automatic_strategy_label(diagnostics, used_fallback, outcome.is_err());
+    let visits = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.stage() == StageKind::Candidates)
+        .fold(0usize, |total, diagnostic| {
+            total.saturating_add(diagnostic.input_count())
+        });
+    let (result_count, filter_candidates, candidates, rechecks, stages, expansions, completion) =
+        match outcome {
+            Ok(outcome) => {
+                let usage = outcome.usage();
+                let completion = if outcome.state() == &ExecutionState::Ready {
+                    completion_label(outcome.completion())
+                } else if outcome.completion() == Completion::Cancelled {
+                    "cancelled"
+                } else {
+                    "error"
+                };
+                (
+                    outcome.points().len(),
+                    usage.filter_candidates(),
+                    usage.candidates(),
+                    usage.rechecks(),
+                    usage.stages(),
+                    usage.expansions(),
+                    completion,
+                )
+            }
+            Err(error) => {
+                let filter_candidates = diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.stage() == StageKind::FilterCandidates)
+                    .fold(0usize, |total, diagnostic| {
+                        total.saturating_add(diagnostic.output_count())
+                    });
+                let candidates = diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.stage() == StageKind::Candidates)
+                    .fold(0usize, |total, diagnostic| {
+                        total.saturating_add(diagnostic.output_count())
+                    });
+                let rechecks = diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.stage() == StageKind::SourceRecheck)
+                    .fold(0usize, |total, diagnostic| {
+                        total.saturating_add(diagnostic.input_count())
+                    });
+                (
+                    0,
+                    filter_candidates,
+                    candidates,
+                    rechecks,
+                    diagnostics.len(),
+                    0,
+                    if matches!(
+                        error,
+                        QueryError::WorkBudgetExceeded { .. }
+                            | QueryError::ArithmeticOverflow { .. }
+                    ) {
+                        "budget_exhausted"
+                    } else {
+                        "error"
+                    },
+                )
+            }
+        };
+    let lifecycle = lifecycle_label(outcome, strategy, used_fallback);
+    let Some(observation) = observation else {
+        return;
+    };
+    crate::query_stats_async::finish(
+        observation,
+        crate::query_stats_async::AutomaticQuerySummary {
+            result_count,
+            visits,
+            filter_candidates,
+            candidates,
+            rechecks,
+            stages,
+            expansions,
+            completion,
+            lifecycle,
+            strategy,
+        },
+    );
+}
+
+pub(crate) fn begin_automatic_query_stat(
+    collection_id: i64,
+    query: &QueryIr,
+    used_fallback: bool,
+) -> Option<crate::query_stats_async::ObservationToken> {
+    crate::query_stats_async::begin(collection_id, query_kind_label(query), used_fallback)
+}
+
+fn query_kind_label(query: &QueryIr) -> &'static str {
+    if matches!(
+        query.kind(),
+        QueryKind::Prefetch { .. }
+            | QueryKind::Weighted { .. }
+            | QueryKind::ScoreThreshold { .. }
+            | QueryKind::Formula { .. }
+            | QueryKind::Rerank { .. }
+    ) {
+        "hybrid"
+    } else if query.has_filter_in_subtree() {
+        "search_filtered"
+    } else {
+        "search"
+    }
+}
+
+pub(crate) fn completion_label(completion: Completion) -> &'static str {
+    match completion {
+        Completion::Complete => "complete",
+        Completion::Cancelled => "cancelled",
+        Completion::BudgetExhausted => "budget_exhausted",
+    }
+}
+
+pub(crate) fn lifecycle_label(
+    outcome: Result<&ExecutionOutcome, &QueryError>,
+    strategy: &str,
+    used_fallback: bool,
+) -> &'static str {
+    match outcome {
+        Ok(outcome) => lifecycle_state_label(outcome.state(), strategy, used_fallback),
+        // QueryError intentionally carries no serving-readiness category.
+        // PostgreSQL ERROR paths are classified from their typed SQLSTATE by
+        // the asynchronous error hook; never infer lifecycle from message text.
+        Err(_) => "Unspecified",
+    }
+}
+
+pub(crate) fn lifecycle_state_label(
+    state: &ExecutionState,
+    strategy: &str,
+    used_fallback: bool,
+) -> &'static str {
+    match state {
+        ExecutionState::Ready if used_fallback => "Fallback",
+        ExecutionState::Ready if strategy.contains("hnsw") || strategy.ends_with("_ann") => {
+            "Indexed"
+        }
+        ExecutionState::Ready => "Exact",
+        ExecutionState::RebuildRequired { reason } | ExecutionState::NotReady { reason } => {
+            match reason {
+                ReadinessReason::GenerationMissing => "ArtifactMissing",
+                ReadinessReason::ValidationFailed => "IndexCorrupt",
+                _ => "IndexNotReady",
+            }
+        }
+    }
+}
+
+fn automatic_strategy_label(
+    diagnostics: &[StageDiagnostic],
+    used_fallback: bool,
+    executor_failed: bool,
+) -> &'static str {
+    if used_fallback {
+        return "dense_exact_fallback";
+    }
+    let candidate_strategies = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.stage() == StageKind::Candidates)
+        .map(StageDiagnostic::strategy)
+        .collect::<Vec<_>>();
+    let has_fusion = diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.stage() == StageKind::Fusion);
+    if has_fusion {
+        if candidate_strategies
+            .iter()
+            .any(|strategy| strategy.contains("quantized"))
+        {
+            "composite_quantized_hnsw"
+        } else if candidate_strategies
+            .iter()
+            .any(|strategy| strategy.contains("hnsw") || strategy.ends_with("_ann"))
+        {
+            "composite_hnsw"
+        } else {
+            "composite_exact"
+        }
+    } else {
+        candidate_strategies
+            .last()
+            .copied()
+            .unwrap_or(if executor_failed {
+                "executor_error"
+            } else {
+                "unspecified"
+            })
+    }
+}
+
 /// Records one local query statistic sample.
 ///
 /// This function is intended for local SQL-visible telemetry. It stores only
@@ -37,7 +245,7 @@ struct QueryStatDetail {
 /// Raises `undefined_object` for missing collections, `insufficient_privilege`
 /// for non-owner callers, and `invalid_parameter_value` for invalid counters,
 /// latency, cohort, or query kind.
-#[pg_extern(schema = "pgcontext", name = "record_query_stat", security_definer)]
+#[pg_extern(name = "record_query_stat", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn record_query_stat(
     collection: String,
@@ -47,6 +255,7 @@ pub fn record_query_stat(
     candidate_count: Option<i64>,
     latency_ms: f64,
 ) -> bool {
+    reject_reserved_automatic_cohort(&cohort);
     validate_query_stat_input(
         &cohort,
         &query_kind,
@@ -87,7 +296,7 @@ pub fn record_query_stat(
 /// Raises `undefined_object` for missing collections, `insufficient_privilege`
 /// for non-owner callers, and `invalid_parameter_value` for invalid counters,
 /// recall values, latency, cohort, or query kind.
-#[pg_extern(schema = "pgcontext", name = "record_query_stat", security_definer)]
+#[pg_extern(name = "record_query_stat", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::too_many_arguments,
@@ -106,6 +315,7 @@ pub fn record_query_stat_detailed(
     latency_ms: f64,
     lifecycle_state: QueryLifecycleState,
 ) -> bool {
+    reject_reserved_automatic_cohort(&cohort);
     validate_query_stat_input(
         &cohort,
         &query_kind,
@@ -145,7 +355,7 @@ pub fn record_query_stat_detailed(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "query_cohort_stats")]
+#[pg_extern(name = "query_cohort_stats")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_cohort_stats() -> TableIterator<
     'static,
@@ -167,6 +377,84 @@ pub fn query_cohort_stats() -> TableIterator<
     ),
 > {
     TableIterator::new(resolve_query_cohort_stats())
+}
+
+/// Returns cardinality-bounded rollups for automatically observed executions.
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx SQL generation requires the explicit table row tuple"
+)]
+#[pg_extern(name = "query_execution_stats")]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn query_execution_stats() -> TableIterator<
+    'static,
+    (
+        name!(collection_name, String),
+        name!(query_kind, String),
+        name!(strategy, String),
+        name!(query_count, i64),
+        name!(total_visits, i64),
+        name!(total_filter_candidates, i64),
+        name!(total_candidates, i64),
+        name!(total_rechecks, i64),
+        name!(total_stages, i64),
+        name!(total_expansions, i64),
+        name!(completion, String),
+        name!(latency_bucket, QueryLatencyBucket),
+        name!(lifecycle_state, QueryLifecycleState),
+        name!(avg_latency_ms, f64),
+    ),
+> {
+    TableIterator::new(resolve_query_execution_stats())
+}
+
+/// Returns bounded health counters for this database's asynchronous telemetry queue.
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx SQL generation requires the explicit table row tuple"
+)]
+#[pg_extern(name = "query_telemetry_queue_stats")]
+pub fn query_telemetry_queue_stats() -> TableIterator<
+    'static,
+    (
+        name!(transport, String),
+        name!(delivery, String),
+        name!(enqueued, i64),
+        name!(persisted, i64),
+        name!(dropped_contention, i64),
+        name!(dropped_full, i64),
+        name!(dropped_orphaned, i64),
+        name!(database_slot_exhausted, i64),
+        name!(worker_launch_failures, i64),
+        name!(pending, i64),
+        name!(worker_pid, Option<i32>),
+    ),
+> {
+    let can_monitor =
+        Spi::get_one::<bool>("SELECT pg_catalog.pg_has_role(SESSION_USER, 'pg_monitor', 'MEMBER')")
+            .unwrap_or_default()
+            .unwrap_or_default();
+    if !can_monitor {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            "query telemetry queue health requires membership in pg_monitor",
+        );
+    }
+    let snapshot = crate::query_stats_async::snapshot();
+    let count = |value: u64| i64::try_from(value).unwrap_or(i64::MAX);
+    TableIterator::once((
+        "named_dsm_background_worker".to_owned(),
+        "best_effort_may_duplicate".to_owned(),
+        count(snapshot.enqueued),
+        count(snapshot.persisted),
+        count(snapshot.dropped_contention),
+        count(snapshot.dropped_full),
+        count(snapshot.dropped_orphaned),
+        count(snapshot.database_slot_exhausted),
+        count(snapshot.worker_launch_failures),
+        count(snapshot.pending),
+        snapshot.worker_pid,
+    ))
 }
 
 fn validate_query_stat_input(
@@ -217,6 +505,15 @@ fn validate_query_stat_input(
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
             format!("latency_ms must be finite and non-negative: {latency_ms}"),
+        );
+    }
+}
+
+fn reject_reserved_automatic_cohort(cohort: &str) {
+    if cohort == AUTOMATIC_COHORT {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            "query cohort 'automatic' is reserved for executor telemetry",
         );
     }
 }
@@ -392,8 +689,8 @@ fn resolve_query_cohort_stats() -> Vec<(
                     avg(stats.recall_threshold)::double precision,
                     avg(stats.recall_achieved)::double precision,
                     avg(stats.latency_ms)::double precision
-               FROM pgcontext._query_stats AS stats
-               JOIN pgcontext._collections AS collections USING (collection_id)
+               FROM pgcontext._visible_query_stats AS stats
+               JOIN pgcontext._visible_collections AS collections USING (collection_id)
               GROUP BY collections.collection_name,
                        stats.cohort,
                        stats.query_kind,
@@ -432,6 +729,89 @@ fn resolve_query_cohort_stats() -> Vec<(
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             format!("query cohort stats lookup failed: {error}"),
+        )
+    })
+}
+
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx SQL generation requires the explicit table row tuple"
+)]
+fn resolve_query_execution_stats() -> Vec<(
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    String,
+    QueryLatencyBucket,
+    QueryLifecycleState,
+    f64,
+)> {
+    Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT collections.collection_name,
+                    stats.query_kind,
+                    stats.strategy,
+                    count(*)::bigint,
+                    sum(stats.visits)::bigint,
+                    sum(stats.filter_candidates)::bigint,
+                    sum(stats.candidates)::bigint,
+                    sum(stats.rechecks)::bigint,
+                    sum(stats.stages)::bigint,
+                    sum(stats.expansions)::bigint,
+                    stats.completion,
+                    stats.latency_bucket,
+                    stats.lifecycle_state,
+                    avg(stats.latency_ms)::double precision
+               FROM pgcontext._visible_query_stats AS stats
+               JOIN pgcontext._visible_collections AS collections USING (collection_id)
+              WHERE stats.cohort = 'automatic'
+              GROUP BY collections.collection_name,
+                       stats.query_kind,
+                       stats.strategy,
+                       stats.completion,
+                       stats.latency_bucket,
+                       stats.lifecycle_state
+              ORDER BY collections.collection_name,
+                       stats.query_kind,
+                       stats.strategy,
+                       stats.completion,
+                       stats.latency_bucket,
+                       stats.lifecycle_state",
+            None,
+            &[],
+        )?;
+        let mut output = Vec::new();
+        for row in rows {
+            output.push((
+                required_column(row.get::<String>(1)?, "collection_name"),
+                required_column(row.get::<String>(2)?, "query_kind"),
+                required_column(row.get::<String>(3)?, "strategy"),
+                required_column(row.get::<i64>(4)?, "query_count"),
+                required_column(row.get::<i64>(5)?, "total_visits"),
+                required_column(row.get::<i64>(6)?, "total_filter_candidates"),
+                required_column(row.get::<i64>(7)?, "total_candidates"),
+                required_column(row.get::<i64>(8)?, "total_rechecks"),
+                required_column(row.get::<i64>(9)?, "total_stages"),
+                required_column(row.get::<i64>(10)?, "total_expansions"),
+                required_column(row.get::<String>(11)?, "completion"),
+                parse_latency_bucket(required_column(row.get::<String>(12)?, "latency_bucket")),
+                parse_lifecycle_state(required_column(row.get::<String>(13)?, "lifecycle_state")),
+                required_column(row.get::<f64>(14)?, "avg_latency_ms"),
+            ));
+        }
+        Ok::<_, spi::Error>(output)
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("automatic query stats lookup failed: {error}"),
         )
     })
 }

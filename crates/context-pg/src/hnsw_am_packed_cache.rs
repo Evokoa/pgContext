@@ -168,6 +168,8 @@ impl PackedHnswGraph {
 #[derive(Clone)]
 enum PackedGraphStore {
     Local(Rc<PackedHnswGraph>),
+    /// A full-layer immutable graph mapped from an index-generation-bound file.
+    Mapped(Rc<MappedPackedGraphImage>),
     /// A read view attached from the shared serving registry:
     /// another backend published this generation, so this backend serves it
     /// without rebuilding from PostgreSQL pages.
@@ -190,6 +192,18 @@ impl PackedGraphStore {
                     PackedNodeInfo {
                         point_id: node.point_id,
                         layer_count: node.layer_count,
+                    },
+                    vector,
+                ))
+            }
+            Self::Mapped(image) => {
+                let node = image.view().node(node_id.get())?;
+                let vector = image.view().node_vector(node)?;
+                let layer_count = usize::try_from(node.layer_count).ok()?;
+                Some((
+                    PackedNodeInfo {
+                        point_id: HnswPointId::new(node.point_id),
+                        layer_count,
                     },
                     vector,
                 ))
@@ -235,6 +249,22 @@ impl PackedGraphStore {
                     neighbors
                         .iter()
                         .copied()
+                        .filter(|neighbor| neighbor.get() < node_count),
+                );
+                Ok(true)
+            }
+            Self::Mapped(image) => {
+                let Some(node) = image.view().node(node_id.get()) else {
+                    output.clear();
+                    return Ok(false);
+                };
+                let Some(neighbors) = image.view().neighbors(node, layer.get()) else {
+                    return Err(context_index::GraphError::LayerNotFound { node_id, layer });
+                };
+                output.clear();
+                output.extend(
+                    neighbors
+                        .filter_map(|id| usize::try_from(id).ok().map(HnswNodeId::new))
                         .filter(|neighbor| neighbor.get() < node_count),
                 );
                 Ok(true)
@@ -325,6 +355,12 @@ pub(crate) struct HnswServingStats {
     /// Backend-local builds whose publish was skipped (GUC off, over
     /// budget, or segment creation failed) — service continued locally.
     pub(crate) shared_publish_skips: u64,
+    /// Generations attached from immutable identity-bound mapped files.
+    pub(crate) mapped_attaches: u64,
+    /// Backend-local packs successfully published as mapped files.
+    pub(crate) mapped_publishes: u64,
+    /// Mapped publication attempts skipped or failed safely.
+    pub(crate) mapped_publish_skips: u64,
     /// Queries served from unpacked directory reads because no pack was
     /// available and `pgcontext.hnsw_pack_on_first_use` was off.
     pub(crate) page_native_fallbacks: u64,
@@ -352,6 +388,9 @@ thread_local! {
             shared_attaches: 0,
             shared_publishes: 0,
             shared_publish_skips: 0,
+            mapped_attaches: 0,
+            mapped_publishes: 0,
+            mapped_publish_skips: 0,
             page_native_fallbacks: 0,
             delta_segment_records: 0,
             delta_segment_scans: 0,
@@ -420,6 +459,26 @@ fn record_hnsw_shared_attach() {
     HNSW_SERVING_STATS.with(|stats| {
         let mut current = stats.get();
         current.shared_attaches = current.shared_attaches.saturating_add(1);
+        stats.set(current);
+    });
+}
+
+fn record_hnsw_mapped_attach() {
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.mapped_attaches = current.mapped_attaches.saturating_add(1);
+        stats.set(current);
+    });
+}
+
+fn record_hnsw_mapped_publish(published: bool) {
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        if published {
+            current.mapped_publishes = current.mapped_publishes.saturating_add(1);
+        } else {
+            current.mapped_publish_skips = current.mapped_publish_skips.saturating_add(1);
+        }
         stats.set(current);
     });
 }

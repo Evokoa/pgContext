@@ -123,6 +123,7 @@ impl SqlContractObject {
 
 mod contract_catalog_objects;
 mod contract_objects;
+mod contract_pgvector_ownership_objects;
 pub(crate) use contract_objects::SQL_CONTRACT_OBJECTS;
 
 #[cfg(test)]

@@ -1,4 +1,6 @@
-pub(super) fn resolve_collection(collection_name: &CollectionName) -> SearchCollection {
+use pgrx::JsonB;
+
+pub(crate) fn resolve_collection(collection_name: &CollectionName) -> SearchCollection {
     Spi::connect(|client| {
         let rows = match client.select(
             "SELECT collection_id, owner_role, has_source_table
@@ -52,7 +54,8 @@ pub(crate) fn resolve_registered_vector(
                     vector_column_name,
                     vector_attnum,
                     hnsw_index_oid,
-                    metric
+                    metric,
+                    quantization_options
                FROM pgcontext._visible_collection_vectors
               WHERE collection_id = $1
               ORDER BY vector_id",
@@ -97,6 +100,7 @@ pub(crate) fn resolve_registered_vector(
                 spi_required_column::<String>(&row, 7, "metric"),
                 "vector",
             ),
+            quantization_options: spi_required_column::<JsonB>(&row, 8, "quantization_options").0,
         }
     })
 }
@@ -129,7 +133,7 @@ pub(crate) fn validate_search_drift(collection_id: i64, registered_vector: &mut 
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
-                    vector_attribute.atttypid = 'public.vector'::regtype AS vector_is_valid,
+                    vector_attribute.atttypid = 'pgcontext.vector'::regtype AS vector_is_valid,
                     id_attribute.attname IS NOT NULL AS id_exists
                FROM pg_catalog.pg_class AS class
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
@@ -223,12 +227,13 @@ fn refresh_restored_search_metadata(
         return;
     }
 
+    // Route metadata writes through SECURITY DEFINER helpers: `search` runs
+    // SECURITY INVOKER, so a non-superuser collection member holds no direct
+    // write privilege on the private catalog tables. The helpers re-derive the
+    // authoritative oid/attnum from the stored source identity.
     Spi::run_with_args(
-        "UPDATE pgcontext._collections
-            SET source_table_oid = $1,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $2",
-        &[current_table_oid.into(), collection_id.into()],
+        "SELECT pgcontext._refresh_collection_source_table($1)",
+        &[collection_id.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(
@@ -238,15 +243,8 @@ fn refresh_restored_search_metadata(
     });
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collection_vectors
-            SET source_table_oid = $1,
-                vector_attnum = $2,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $3
-            AND vector_column_name = $4",
+        "SELECT pgcontext._refresh_vector_source_binding($1, $2)",
         &[
-            current_table_oid.into(),
-            current_vector_attnum.into(),
             collection_id.into(),
             registered_vector.vector_column_name.as_str().into(),
         ],
@@ -259,17 +257,8 @@ fn refresh_restored_search_metadata(
     });
 
     Spi::run_with_args(
-        "UPDATE pgcontext._collection_payload_columns AS payload
-            SET source_table_oid = $1,
-                column_attnum = attribute.attnum,
-                updated_at = pg_catalog.now()
-           FROM pg_catalog.pg_attribute AS attribute
-          WHERE payload.collection_id = $2
-            AND attribute.attrelid = $1
-            AND attribute.attname = payload.column_name
-            AND attribute.attnum > 0
-            AND NOT attribute.attisdropped",
-        &[current_table_oid.into(), collection_id.into()],
+        "SELECT pgcontext._refresh_payload_source_bindings($1)",
+        &[collection_id.into()],
     )
     .unwrap_or_else(|error| {
         raise_sql_error(

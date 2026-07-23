@@ -5,6 +5,7 @@ pub(super) enum HnswCallbackClass {
     Handler,
     AccessMethod,
     BuildVisitor,
+    LifecycleEventTrigger,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +24,14 @@ pub(super) struct HnswCallbackContract {
     pub(super) retention: HnswCallbackRetention,
 }
 
-pub(super) const HNSW_CALLBACK_CONTRACTS: [HnswCallbackContract; 16] = [
+pub(super) const HNSW_CALLBACK_CONTRACTS: [HnswCallbackContract; 17] = [
+    HnswCallbackContract {
+        callback: "pgcontext_hnsw_mapped_sql_drop",
+        safe_inner: "mapped_hnsw_sql_drop_safe",
+        class: HnswCallbackClass::LifecycleEventTrigger,
+        borrowed_inputs: "event-trigger FunctionCallInfo is PostgreSQL-owned for the call",
+        retention: HnswCallbackRetention::None,
+    },
     HnswCallbackContract {
         callback: "pgcontext_hnsw_handler",
         safe_inner: "hnsw_handler_safe",

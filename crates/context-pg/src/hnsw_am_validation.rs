@@ -69,21 +69,31 @@ unsafe fn hnsw_dense_from_datum(
     // active PostgreSQL backend catalog.
     let (vector_oid, halfvec_oid, sparsevec_oid, bitvec_oid) = unsafe {
         (
-            hnsw_public_type_oid(c"vector"),
-            hnsw_public_type_oid(c"halfvec"),
-            hnsw_public_type_oid(c"sparsevec"),
-            hnsw_public_type_oid(c"bitvec"),
+            hnsw_pgcontext_type_oid(c"vector"),
+            hnsw_pgcontext_type_oid(c"halfvec"),
+            hnsw_pgcontext_type_oid(c"sparsevec"),
+            hnsw_pgcontext_type_oid(c"bitvec"),
         )
     };
 
-    if type_oid == vector_oid {
+    // SAFETY: Both identifiers are static pgvector type names; the helper also
+    // verifies exact extension ownership before returning either OID.
+    let (pgvector_vector, pgvector_halfvec, pgvector_sparsevec) = unsafe {
+        (
+            hnsw_certified_pgvector_type_oid(c"vector"),
+            hnsw_certified_pgvector_type_oid(c"halfvec"),
+            hnsw_certified_pgvector_type_oid(c"sparsevec"),
+        )
+    };
+
+    if type_oid == vector_oid || type_oid == pgvector_vector {
         // SAFETY: The scan key subtype says this argument is a SQL `vector`.
         let vector = unsafe { Vector::from_datum(datum, false) }?;
         match vector.to_dense() {
             Ok(vector) => Some(vector),
             Err(error) => raise_core_error(error),
         }
-    } else if type_oid == halfvec_oid {
+    } else if type_oid == halfvec_oid || type_oid == pgvector_halfvec {
         // SAFETY: The scan key subtype says this argument is a SQL `halfvec`.
         let halfvec = unsafe { HalfVec::from_datum(datum, false) }?;
         let halfvec = halfvec
@@ -93,10 +103,23 @@ unsafe fn hnsw_dense_from_datum(
             Ok(vector) => Some(vector),
             Err(error) => raise_core_error(error),
         }
-    } else if type_oid == sparsevec_oid {
-        // SAFETY: The scan key subtype says this argument is a SQL `sparsevec`.
-        let sparsevec = unsafe { SparseVec::from_datum(datum, false) }?;
-        Some(sparsevec_to_dense(sparsevec))
+    } else if type_oid == sparsevec_oid || type_oid == pgvector_sparsevec {
+        let sparsevec = if type_oid == sparsevec_oid {
+            // SAFETY: The scan key subtype says this argument is a canonical SQL `sparsevec`.
+            unsafe { SparseVec::from_datum(datum, false) }?
+                .to_sparse()
+                .unwrap_or_else(|error| raise_core_error(error))
+        } else {
+            // SAFETY: The type OID is certified as pgvector-owned public.sparsevec.
+            unsafe {
+                crate::vector_variants::pgvector_sparsevec_datum::sparse_from_pgvector_datum(datum)
+            }
+        };
+        let mut values = vec![0.0; sparsevec.dimensions()];
+        for entry in sparsevec.entries() {
+            values[entry.index() - 1] = entry.value();
+        }
+        Some(DenseVector::new(values).unwrap_or_else(|error| raise_core_error(error)))
     } else if type_oid == bitvec_oid {
         // SAFETY: The scan key subtype says this argument is a SQL `bitvec`.
         let bitvec = unsafe { BitVec::from_datum(datum, false) }?;
@@ -117,10 +140,18 @@ unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric
     // active PostgreSQL backend catalog.
     let (vector_oid, halfvec_oid, sparsevec_oid, bitvec_oid) = unsafe {
         (
-            hnsw_public_type_oid(c"vector"),
-            hnsw_public_type_oid(c"halfvec"),
-            hnsw_public_type_oid(c"sparsevec"),
-            hnsw_public_type_oid(c"bitvec"),
+            hnsw_pgcontext_type_oid(c"vector"),
+            hnsw_pgcontext_type_oid(c"halfvec"),
+            hnsw_pgcontext_type_oid(c"sparsevec"),
+            hnsw_pgcontext_type_oid(c"bitvec"),
+        )
+    };
+    // SAFETY: Both static names are resolved only when owned by pgvector.
+    let (pgvector_vector, pgvector_halfvec, pgvector_sparsevec) = unsafe {
+        (
+            hnsw_certified_pgvector_type_oid(c"vector"),
+            hnsw_certified_pgvector_type_oid(c"halfvec"),
+            hnsw_certified_pgvector_type_oid(c"sparsevec"),
         )
     };
     if type_oid == vector_oid {
@@ -128,49 +159,164 @@ unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric
         // support-proc and operator-family metadata.
         unsafe { hnsw_dense_score_metric(index_relation) }
     } else if type_oid == halfvec_oid {
-        // SAFETY: The caller passes a valid index relation for the current AM
-        // callback, and halfvec indexes must declare the promoted L2 support
-        // proc to avoid silently scoring another metric as L2.
-        unsafe {
-            ensure_hnsw_metric_contract(
-                index_relation,
-                "halfvec_l2_distance",
+        let candidates = [
+            (HnswScoreMetric::L2, "halfvec_l2_distance", pg_sys::FLOAT4OID, "<->"),
+            (
+                HnswScoreMetric::NegativeInnerProduct,
+                "halfvec_negative_inner_product",
                 pg_sys::FLOAT4OID,
-                "<->",
-            )
-        };
-        HnswScoreMetric::L2
+                "<#>",
+            ),
+            (
+                HnswScoreMetric::Cosine,
+                "halfvec_cosine_distance",
+                pg_sys::FLOAT4OID,
+                "<=>",
+            ),
+            (HnswScoreMetric::L1, "halfvec_l1_distance", pg_sys::FLOAT4OID, "<+>"),
+        ];
+        // SAFETY: The caller provides a live initialized index relation.
+        unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, "halfvec") }
     } else if type_oid == sparsevec_oid {
-        // SAFETY: The caller passes a valid index relation for the current AM
-        // callback, and sparsevec indexes must declare the promoted L2 support
-        // proc to avoid silently scoring another metric as L2.
-        unsafe {
-            ensure_hnsw_metric_contract(
-                index_relation,
-                "sparsevec_l2_distance",
+        let candidates = [
+            (HnswScoreMetric::L2, "sparsevec_l2_distance", pg_sys::FLOAT4OID, "<->"),
+            (
+                HnswScoreMetric::NegativeInnerProduct,
+                "sparsevec_negative_inner_product",
                 pg_sys::FLOAT4OID,
-                "<->",
-            )
-        };
-        HnswScoreMetric::L2
+                "<#>",
+            ),
+            (
+                HnswScoreMetric::Cosine,
+                "sparsevec_cosine_distance",
+                pg_sys::FLOAT4OID,
+                "<=>",
+            ),
+            (HnswScoreMetric::L1, "sparsevec_l1_distance", pg_sys::FLOAT4OID, "<+>"),
+        ];
+        // SAFETY: The caller provides a live initialized index relation.
+        unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, "sparsevec") }
     } else if type_oid == bitvec_oid {
-        // SAFETY: The caller passes a valid index relation for the current AM
-        // callback, and bitvec indexes must declare the promoted Hamming
-        // support proc to avoid silently scoring another bit metric as Hamming.
-        unsafe {
-            ensure_hnsw_metric_contract(
-                index_relation,
+        let candidates = [
+            (
+                HnswScoreMetric::BitHamming,
                 "bitvec_hamming_distance",
                 pg_sys::INT4OID,
                 "<~>",
+            ),
+            (
+                HnswScoreMetric::BitJaccard,
+                "bitvec_jaccard_distance",
+                pg_sys::FLOAT8OID,
+                "<%>",
+            ),
+        ];
+        // SAFETY: The caller provides a live initialized index relation.
+        unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, "bitvec") }
+    } else if type_oid == pgvector_vector {
+        let candidates = [
+            (HnswScoreMetric::L2, "_pgvector_vector_l2_support", pg_sys::FLOAT8OID, "<->"),
+            (
+                HnswScoreMetric::NegativeInnerProduct,
+                "_pgvector_vector_ip_support",
+                pg_sys::FLOAT8OID,
+                "<#>",
+            ),
+            (
+                HnswScoreMetric::Cosine,
+                "_pgvector_vector_cosine_support",
+                pg_sys::FLOAT8OID,
+                "<=>",
+            ),
+            (HnswScoreMetric::L1, "_pgvector_vector_l1_support", pg_sys::FLOAT8OID, "<+>"),
+        ];
+        // SAFETY: The pgvector type OID was certified above and the live index
+        // relation supplies the operator-family objects checked below.
+        unsafe {
+            hnsw_score_metric_from_bridge_candidates(index_relation, type_oid, &candidates, "vector")
+        }
+    } else if type_oid == pgvector_halfvec {
+        let candidates = [
+            (HnswScoreMetric::L2, "_pgvector_halfvec_l2_support", pg_sys::FLOAT8OID, "<->"),
+            (
+                HnswScoreMetric::NegativeInnerProduct,
+                "_pgvector_halfvec_ip_support",
+                pg_sys::FLOAT8OID,
+                "<#>",
+            ),
+            (
+                HnswScoreMetric::Cosine,
+                "_pgvector_halfvec_cosine_support",
+                pg_sys::FLOAT8OID,
+                "<=>",
+            ),
+            (HnswScoreMetric::L1, "_pgvector_halfvec_l1_support", pg_sys::FLOAT8OID, "<+>"),
+        ];
+        // SAFETY: The pgvector type OID was certified above and the live index
+        // relation supplies the operator-family objects checked below.
+        unsafe {
+            hnsw_score_metric_from_bridge_candidates(index_relation, type_oid, &candidates, "halfvec")
+        }
+    } else if type_oid == pgvector_sparsevec {
+        let candidates = [
+            (
+                HnswScoreMetric::L2,
+                "_pgvector_sparsevec_l2_support",
+                pg_sys::FLOAT8OID,
+                "<->",
+            ),
+            (
+                HnswScoreMetric::NegativeInnerProduct,
+                "_pgvector_sparsevec_ip_support",
+                pg_sys::FLOAT8OID,
+                "<#>",
+            ),
+            (
+                HnswScoreMetric::Cosine,
+                "_pgvector_sparsevec_cosine_support",
+                pg_sys::FLOAT8OID,
+                "<=>",
+            ),
+            (
+                HnswScoreMetric::L1,
+                "_pgvector_sparsevec_l1_support",
+                pg_sys::FLOAT8OID,
+                "<+>",
+            ),
+        ];
+        // SAFETY: The pgvector sparsevec OID and bridge objects are certified.
+        unsafe {
+            hnsw_score_metric_from_bridge_candidates(
+                index_relation,
+                type_oid,
+                &candidates,
+                "sparsevec",
             )
-        };
-        HnswScoreMetric::BitHamming
+        }
     } else {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
             format!("unsupported HNSW vector input type oid: {type_oid}"),
         )
+    }
+}
+
+unsafe fn hnsw_index_uses_certified_pgvector_type(index_relation: pg_sys::Relation) -> bool {
+    // SAFETY: The caller provides a live single-column index relation.
+    let type_oid = unsafe { hnsw_index_opcintype(index_relation) };
+    // SAFETY: Static catalog identifiers are resolved and their extension
+    // ownership is checked by the helpers.
+    type_oid == unsafe { hnsw_certified_pgvector_type_oid(c"vector") }
+        || type_oid == unsafe { hnsw_certified_pgvector_type_oid(c"halfvec") }
+        || type_oid == unsafe { hnsw_certified_pgvector_type_oid(c"sparsevec") }
+}
+
+unsafe fn hnsw_orderby_contract(index_relation: pg_sys::Relation) -> HnswOrderByContract {
+    // SAFETY: Both helpers inspect the same live single-column index relation;
+    // score-metric validation also certifies the operator/support pairing.
+    HnswOrderByContract {
+        metric: unsafe { hnsw_score_metric(index_relation) },
+        pgvector_binding: unsafe { hnsw_index_uses_certified_pgvector_type(index_relation) },
     }
 }
 
@@ -201,48 +347,121 @@ unsafe fn hnsw_dense_score_metric(index_relation: pg_sys::Relation) -> HnswScore
             "<+>",
         ),
     ];
-    for (metric, support_name, return_type, operator_name) in candidates {
+    // SAFETY: The caller provides a live initialized index relation.
+    unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, "vector") }
+}
+
+unsafe fn hnsw_score_metric_from_candidates(
+    index_relation: pg_sys::Relation,
+    candidates: &[(
+        HnswScoreMetric,
+        &'static str,
+        pg_sys::Oid,
+        &'static str,
+    )],
+    type_name: &str,
+) -> HnswScoreMetric {
+    for &(metric, support_name, return_type, operator_name) in candidates {
         // SAFETY: The caller provides a live initialized index relation.
-        if unsafe { hnsw_support_proc_matches(index_relation, support_name, return_type) } {
+        let type_oid = unsafe { hnsw_index_opcintype(index_relation) };
+        if unsafe {
+            hnsw_support_proc_matches(
+                index_relation,
+                support_name,
+                return_type,
+                type_oid,
+                "pgcontext",
+            )
+        } {
             // SAFETY: The same relation must bind strategy 1 to the operator
             // paired with the matched metric support function.
-            unsafe { ensure_hnsw_strategy_operator(index_relation, operator_name) };
+            unsafe {
+                ensure_hnsw_strategy_operator(
+                    index_relation,
+                    operator_name,
+                    return_type,
+                    "pgcontext",
+                    "pgcontext",
+                )
+            };
             return metric;
         }
     }
     raise_sql_error(
         PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
-        "HNSW vector opclass must use a supported pgcontext metric function",
+        format!("HNSW {type_name} opclass must use a supported pgcontext metric function"),
     )
 }
 
-unsafe fn ensure_hnsw_metric_contract(
+unsafe fn hnsw_score_metric_from_bridge_candidates(
     index_relation: pg_sys::Relation,
-    expected_support_name: &'static str,
-    expected_support_return_type: pg_sys::Oid,
-    expected_operator_name: &'static str,
-) {
-    // SAFETY: The caller passes a valid index relation for this AM callback.
-    unsafe {
-        ensure_hnsw_support_proc(
-            index_relation,
-            expected_support_name,
-            expected_support_return_type,
-        );
-        ensure_hnsw_strategy_operator(index_relation, expected_operator_name);
+    type_oid: pg_sys::Oid,
+    candidates: &[(HnswScoreMetric, &'static str, pg_sys::Oid, &'static str)],
+    type_name: &str,
+) -> HnswScoreMetric {
+    // SAFETY: Bridge input types may only be used through an opclass that is a
+    // member of the separately removable companion extension.
+    unsafe { ensure_hnsw_opclass_owner(index_relation, "pgcontext_pgvector") };
+    for &(metric, support_name, return_type, operator_name) in candidates {
+        // SAFETY: The caller provides a live initialized index relation and a
+        // type OID already certified as an extension-owned pgvector type.
+        if unsafe {
+            hnsw_support_proc_matches(
+                index_relation,
+                support_name,
+                return_type,
+                type_oid,
+                "pgcontext_pgvector",
+            )
+        } {
+            // SAFETY: Strategy 1 is required to be the matching operator owned
+            // by pgvector, not merely a same-named public object.
+            unsafe {
+                ensure_hnsw_strategy_operator(
+                    index_relation,
+                    operator_name,
+                    return_type,
+                    "public",
+                    "vector",
+                )
+            };
+            return metric;
+        }
     }
+    raise_sql_error(
+        PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
+        format!(
+            "HNSW pgvector {type_name} opclass must use a certified pgcontext_pgvector metric function"
+        ),
+    )
 }
 
-unsafe fn ensure_hnsw_support_proc(
+unsafe fn ensure_hnsw_opclass_owner(
     index_relation: pg_sys::Relation,
-    expected_name: &'static str,
-    expected_return_type: pg_sys::Oid,
+    expected_extension: &'static str,
 ) {
-    // SAFETY: The caller provides a live initialized index relation.
-    if !unsafe { hnsw_support_proc_matches(index_relation, expected_name, expected_return_type) } {
+    if index_relation.is_null() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "HNSW index relation is not initialized",
+        );
+    }
+    // SAFETY: The caller provides a live single-column index relation. Column
+    // one is the only opclass key accepted by this AM.
+    let opclass_oid = unsafe { pg_sys::get_index_column_opclass((*index_relation).rd_id, 1) };
+    if opclass_oid == pg_sys::InvalidOid
+        // SAFETY: The catalog lookup returned an opclass OID or InvalidOid.
+        || !unsafe {
+            hnsw_object_owned_by_extension(
+                pg_sys::OperatorClassRelationId,
+                opclass_oid,
+                expected_extension,
+            )
+        }
+    {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
-            format!("HNSW opclass must use pgcontext.{expected_name}"),
+            format!("HNSW opclass must be owned by extension {expected_extension}"),
         );
     }
 }
@@ -251,6 +470,8 @@ unsafe fn hnsw_support_proc_matches(
     index_relation: pg_sys::Relation,
     expected_name: &'static str,
     expected_return_type: pg_sys::Oid,
+    expected_argument_type: pg_sys::Oid,
+    expected_extension: &'static str,
 ) -> bool {
     // SAFETY: PostgreSQL initializes `rd_support` for index relations. This AM
     // declares one support proc per single-column opclass.
@@ -263,27 +484,80 @@ unsafe fn hnsw_support_proc_matches(
     }
     // SAFETY: `rd_support` has at least one entry for this single-column AM.
     let support_proc = unsafe { *support };
+    // SAFETY: The support OID was read from initialized relcache metadata.
+    unsafe {
+        hnsw_support_proc_oid_matches(
+            support_proc,
+            expected_name,
+            expected_return_type,
+            expected_argument_type,
+            expected_extension,
+        )
+    }
+}
+
+unsafe fn hnsw_support_proc_oid_matches(
+    support_proc: pg_sys::Oid,
+    expected_name: &'static str,
+    expected_return_type: pg_sys::Oid,
+    expected_argument_type: pg_sys::Oid,
+    expected_extension: &'static str,
+) -> bool {
     // SAFETY: `support_proc` is the valid support-function OID read from the
     // live relation cache entry above.
     let support_namespace = unsafe { pg_sys::get_func_namespace(support_proc) };
     // SAFETY: The same valid function OID may be resolved to its catalog name.
     let support_name = unsafe { pg_sys::get_func_name(support_proc) };
-    // SAFETY: The same valid function OID may be resolved to its return type.
-    let support_return_type = unsafe { pg_sys::get_func_rettype(support_proc) };
+    let mut argument_types = ptr::null_mut();
+    let mut argument_count = 0;
+    // SAFETY: The support OID came from initialized relcache metadata. PostgreSQL
+    // returns a palloc'd argument array which is released below.
+    let support_return_type = unsafe {
+        pg_sys::get_func_signature(support_proc, &mut argument_types, &mut argument_count)
+    };
     // SAFETY: The namespace name is a static nul-terminated C string.
     let pgcontext_namespace = unsafe { pg_sys::get_namespace_oid(c"pgcontext".as_ptr(), false) };
     let valid_name = !support_name.is_null()
         // SAFETY: PostgreSQL returned a non-null nul-terminated function name
         // for the live syscache entry.
         && unsafe { CStr::from_ptr(support_name) }.to_bytes() == expected_name.as_bytes();
+    let valid_arguments = argument_count == 2
+        && !argument_types.is_null()
+        // SAFETY: `get_func_signature` returned exactly two argument OIDs.
+        && unsafe {
+            *argument_types == expected_argument_type
+                && *argument_types.add(1) == expected_argument_type
+        };
+    if !argument_types.is_null() {
+        // SAFETY: PostgreSQL allocated the signature array with palloc.
+        unsafe { pg_sys::pfree(argument_types.cast()) };
+    }
+    if !support_name.is_null() {
+        // SAFETY: `get_func_name` allocated this string with palloc.
+        unsafe { pg_sys::pfree(support_name.cast()) };
+    }
+    // SAFETY: Extension membership is checked against a catalog OID read from
+    // the live relation cache.
+    let valid_owner = unsafe {
+        hnsw_object_owned_by_extension(
+            pg_sys::ProcedureRelationId,
+            support_proc,
+            expected_extension,
+        )
+    };
     support_namespace == pgcontext_namespace
         && valid_name
         && support_return_type == expected_return_type
+        && valid_arguments
+        && valid_owner
 }
 
 unsafe fn ensure_hnsw_strategy_operator(
     index_relation: pg_sys::Relation,
     expected_operator_name: &'static str,
+    expected_return_type: pg_sys::Oid,
+    expected_namespace_name: &'static str,
+    expected_extension: &'static str,
 ) {
     // SAFETY: PostgreSQL initializes `rd_opfamily` and `rd_opcintype` for index
     // relations. This AM registers only single-column opclasses, so the first
@@ -319,27 +593,36 @@ unsafe fn ensure_hnsw_strategy_operator(
     // SAFETY: `tuple` must be released after reading the syscache struct.
     unsafe { pg_sys::ReleaseSysCache(tuple) };
 
-    // SAFETY: `operator_oid` was read from the live amop syscache tuple.
-    let operator_namespace = unsafe { hnsw_operator_namespace(operator_oid) };
-    // SAFETY: The same catalog operator OID may be resolved to its name.
-    let operator_name = unsafe { pg_sys::get_opname(operator_oid) };
-    // SAFETY: The namespace name is a static nul-terminated C string.
-    let pgcontext_namespace = unsafe { pg_sys::get_namespace_oid(c"pgcontext".as_ptr(), false) };
-    let valid_name = !operator_name.is_null()
-        // SAFETY: PostgreSQL returned a non-null nul-terminated operator name
-        // for the live syscache entry.
-        && unsafe { CStr::from_ptr(operator_name) }.to_bytes() == expected_operator_name.as_bytes();
-    if operator_namespace != pgcontext_namespace || !valid_name {
+    // SAFETY: `operator_oid` was read from the live AMOP tuple and every
+    // expected identifier is a static certified contract value.
+    if !unsafe {
+        hnsw_operator_oid_matches(
+            operator_oid,
+            type_oid,
+            expected_operator_name,
+            expected_return_type,
+            expected_namespace_name,
+            expected_extension,
+        )
+    } {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
-            format!("HNSW opclass must use pgcontext.{expected_operator_name}"),
+            format!(
+                "HNSW opclass must use certified {expected_namespace_name}.{expected_operator_name}"
+            ),
         );
     }
 }
 
-unsafe fn hnsw_operator_namespace(operator_oid: pg_sys::Oid) -> pg_sys::Oid {
-    // SAFETY: OPEROID syscache is keyed by operator OID and returns a
-    // pg_operator tuple valid until ReleaseSysCache.
+unsafe fn hnsw_operator_oid_matches(
+    operator_oid: pg_sys::Oid,
+    expected_argument_type: pg_sys::Oid,
+    expected_operator_name: &'static str,
+    expected_return_type: pg_sys::Oid,
+    expected_namespace_name: &'static str,
+    expected_extension: &'static str,
+) -> bool {
+    // SAFETY: OPEROID is keyed by the catalog OID supplied by the caller.
     let tuple = unsafe {
         pg_sys::SearchSysCache1(
             pg_sys::SysCacheIdentifier::OPEROID.cast_signed(),
@@ -347,29 +630,445 @@ unsafe fn hnsw_operator_namespace(operator_oid: pg_sys::Oid) -> pg_sys::Oid {
         )
     };
     if tuple.is_null() {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
-            "HNSW opclass strategy 1 operator catalog row is not available",
-        );
+        return false;
     }
-    // SAFETY: `tuple` came from the syscache and is valid until ReleaseSysCache.
-    let operator_namespace = unsafe {
+    // SAFETY: The tuple remains valid until ReleaseSysCache below.
+    let (namespace, left_type, right_type, return_type) = unsafe {
         let operator = pg_sys::GETSTRUCT(tuple) as pg_sys::Form_pg_operator;
-        (*operator).oprnamespace
+        (
+            (*operator).oprnamespace,
+            (*operator).oprleft,
+            (*operator).oprright,
+            (*operator).oprresult,
+        )
     };
-    // SAFETY: `tuple` must be released after reading the syscache struct.
+    // SAFETY: The syscache tuple is no longer needed.
     unsafe { pg_sys::ReleaseSysCache(tuple) };
-    operator_namespace
+
+    // SAFETY: The same valid catalog OID may be resolved to its allocated name.
+    let operator_name = unsafe { pg_sys::get_opname(operator_oid) };
+    let valid_name = !operator_name.is_null()
+        // SAFETY: PostgreSQL returned a nul-terminated operator name.
+        && unsafe { CStr::from_ptr(operator_name) }.to_bytes() == expected_operator_name.as_bytes();
+    if !operator_name.is_null() {
+        // SAFETY: `get_opname` allocated this string with palloc.
+        unsafe { pg_sys::pfree(operator_name.cast()) };
+    }
+    let expected_namespace = match expected_namespace_name {
+        // SAFETY: These are static nul-terminated catalog identifiers.
+        "pgcontext" => unsafe { pg_sys::get_namespace_oid(c"pgcontext".as_ptr(), false) },
+        // SAFETY: Same static-identifier contract as above.
+        "public" => unsafe { pg_sys::get_namespace_oid(c"public".as_ptr(), false) },
+        _ => return false,
+    };
+    namespace == expected_namespace
+        && valid_name
+        && left_type == expected_argument_type
+        && right_type == expected_argument_type
+        && return_type == expected_return_type
+        // SAFETY: Extension membership accepts the live operator OID.
+        && unsafe {
+            hnsw_object_owned_by_extension(
+                pg_sys::OperatorRelationId,
+                operator_oid,
+                expected_extension,
+            )
+        }
 }
 
-unsafe fn hnsw_public_type_oid(type_name: &'static CStr) -> pg_sys::Oid {
-    // SAFETY: `public` is a static null-terminated string and PostgreSQL owns
+unsafe fn hnsw_validate_opclass(opclass_oid: pg_sys::Oid) -> bool {
+    // SAFETY: CLAOID is keyed by the scalar OID passed to amvalidate.
+    let tuple = unsafe {
+        pg_sys::SearchSysCache1(
+            pg_sys::SysCacheIdentifier::CLAOID.cast_signed(),
+            pg_sys::ObjectIdGetDatum(opclass_oid),
+        )
+    };
+    if tuple.is_null() {
+        return false;
+    }
+    // SAFETY: The opclass tuple remains pinned until ReleaseSysCache below.
+    let (method, family, input_type) = unsafe {
+        let opclass = pg_sys::GETSTRUCT(tuple) as pg_sys::Form_pg_opclass;
+        (
+            (*opclass).opcmethod,
+            (*opclass).opcfamily,
+            (*opclass).opcintype,
+        )
+    };
+    // SAFETY: All required scalar fields have been copied.
+    unsafe { pg_sys::ReleaseSysCache(tuple) };
+
+    // SAFETY: The AM identifier is a static catalog name. Canonical custom
+    // opclasses may live in any caller-owned schema; bridge opclasses are
+    // separately constrained by extension ownership below.
+    let expected_method = unsafe { pg_sys::get_am_oid(c"pgcontext_hnsw".as_ptr(), true) };
+    if method == pg_sys::InvalidOid || method != expected_method {
+        return false;
+    }
+
+    // SAFETY: Static type lookups resolve the canonical and optionally
+    // installed pgvector input types for exact OID comparison.
+    let (
+        canonical_vector,
+        canonical_halfvec,
+        canonical_sparsevec,
+        canonical_bitvec,
+        pgvector_vector,
+        pgvector_halfvec,
+        pgvector_sparsevec,
+        // SAFETY: Every lookup below uses a static catalog identifier; the
+        // pgvector variants additionally verify exact extension ownership.
+    ) = unsafe {
+        (
+            hnsw_pgcontext_type_oid(c"vector"),
+            hnsw_pgcontext_type_oid(c"halfvec"),
+            hnsw_pgcontext_type_oid(c"sparsevec"),
+            hnsw_pgcontext_type_oid(c"bitvec"),
+            hnsw_certified_pgvector_type_oid(c"vector"),
+            hnsw_certified_pgvector_type_oid(c"halfvec"),
+            hnsw_certified_pgvector_type_oid(c"sparsevec"),
+        )
+    };
+
+    if input_type == canonical_vector {
+        let candidates = [
+            ("hnsw_l2_distance", pg_sys::FLOAT8OID, "<->"),
+            ("negative_inner_product", pg_sys::FLOAT4OID, "<#>"),
+            ("cosine_distance", pg_sys::FLOAT4OID, "<=>"),
+            ("l1_distance", pg_sys::FLOAT4OID, "<+>"),
+        ];
+        // SAFETY: The copied opclass OIDs and this static canonical contract
+        // are valid for the duration of amvalidate.
+        unsafe {
+            hnsw_validate_opclass_candidates(
+                opclass_oid,
+                family,
+                input_type,
+                &candidates,
+                "pgcontext",
+                "pgcontext",
+                "pgcontext",
+            )
+        }
+    } else if input_type == canonical_halfvec {
+        let candidates = [
+            ("halfvec_l2_distance", pg_sys::FLOAT4OID, "<->"),
+            ("halfvec_negative_inner_product", pg_sys::FLOAT4OID, "<#>"),
+            ("halfvec_cosine_distance", pg_sys::FLOAT4OID, "<=>"),
+            ("halfvec_l1_distance", pg_sys::FLOAT4OID, "<+>"),
+        ];
+        // SAFETY: Same copied catalog-OID and static-contract boundary above.
+        unsafe {
+            hnsw_validate_opclass_candidates(
+                opclass_oid,
+                family,
+                input_type,
+                &candidates,
+                "pgcontext",
+                "pgcontext",
+                "pgcontext",
+            )
+        }
+    } else if input_type == canonical_sparsevec {
+        let candidates = [
+            ("sparsevec_l2_distance", pg_sys::FLOAT4OID, "<->"),
+            ("sparsevec_negative_inner_product", pg_sys::FLOAT4OID, "<#>"),
+            ("sparsevec_cosine_distance", pg_sys::FLOAT4OID, "<=>"),
+            ("sparsevec_l1_distance", pg_sys::FLOAT4OID, "<+>"),
+        ];
+        // SAFETY: Same copied catalog-OID and static-contract boundary above.
+        unsafe {
+            hnsw_validate_opclass_candidates(
+                opclass_oid,
+                family,
+                input_type,
+                &candidates,
+                "pgcontext",
+                "pgcontext",
+                "pgcontext",
+            )
+        }
+    } else if input_type == canonical_bitvec {
+        let candidates = [
+            ("bitvec_hamming_distance", pg_sys::INT4OID, "<~>"),
+            ("bitvec_jaccard_distance", pg_sys::FLOAT8OID, "<%>"),
+        ];
+        // SAFETY: Same copied catalog-OID and static-contract boundary above.
+        unsafe {
+            hnsw_validate_opclass_candidates(
+                opclass_oid,
+                family,
+                input_type,
+                &candidates,
+                "pgcontext",
+                "pgcontext",
+                "pgcontext",
+            )
+        }
+    } else if input_type == pgvector_vector {
+        let candidates = [
+            ("_pgvector_vector_l2_support", pg_sys::FLOAT8OID, "<->"),
+            ("_pgvector_vector_ip_support", pg_sys::FLOAT8OID, "<#>"),
+            ("_pgvector_vector_cosine_support", pg_sys::FLOAT8OID, "<=>"),
+            ("_pgvector_vector_l1_support", pg_sys::FLOAT8OID, "<+>"),
+        ];
+        // SAFETY: The input type was certified as pgvector-owned and the
+        // remaining identifiers are the static bridge contract.
+        unsafe {
+            hnsw_validate_opclass_candidates(
+                opclass_oid,
+                family,
+                input_type,
+                &candidates,
+                "pgcontext_pgvector",
+                "public",
+                "vector",
+            )
+        }
+    } else if input_type == pgvector_halfvec {
+        let candidates = [
+            ("_pgvector_halfvec_l2_support", pg_sys::FLOAT8OID, "<->"),
+            ("_pgvector_halfvec_ip_support", pg_sys::FLOAT8OID, "<#>"),
+            ("_pgvector_halfvec_cosine_support", pg_sys::FLOAT8OID, "<=>"),
+            ("_pgvector_halfvec_l1_support", pg_sys::FLOAT8OID, "<+>"),
+        ];
+        // SAFETY: Same certified pgvector and static bridge contract above.
+        unsafe {
+            hnsw_validate_opclass_candidates(
+                opclass_oid,
+                family,
+                input_type,
+                &candidates,
+                "pgcontext_pgvector",
+                "public",
+                "vector",
+            )
+        }
+    } else if input_type == pgvector_sparsevec {
+        let candidates = [
+            ("_pgvector_sparsevec_l2_support", pg_sys::FLOAT8OID, "<->"),
+            ("_pgvector_sparsevec_ip_support", pg_sys::FLOAT8OID, "<#>"),
+            (
+                "_pgvector_sparsevec_cosine_support",
+                pg_sys::FLOAT8OID,
+                "<=>",
+            ),
+            ("_pgvector_sparsevec_l1_support", pg_sys::FLOAT8OID, "<+>"),
+        ];
+        // SAFETY: Same certified pgvector and static bridge contract above.
+        unsafe {
+            hnsw_validate_opclass_candidates(
+                opclass_oid,
+                family,
+                input_type,
+                &candidates,
+                "pgcontext_pgvector",
+                "public",
+                "vector",
+            )
+        }
+    } else {
+        false
+    }
+}
+
+unsafe fn hnsw_validate_opclass_candidates(
+    opclass_oid: pg_sys::Oid,
+    family: pg_sys::Oid,
+    input_type: pg_sys::Oid,
+    candidates: &[(&'static str, pg_sys::Oid, &'static str)],
+    opclass_and_support_extension: &'static str,
+    operator_namespace: &'static str,
+    operator_extension: &'static str,
+) -> bool {
+    // SAFETY: Extension ownership accepts the catalog OID supplied by
+    // amvalidate. Bridge opclasses, unlike canonical custom opclasses, must be
+    // members of the separately removable companion extension.
+    if opclass_and_support_extension == "pgcontext_pgvector"
+        && !unsafe {
+            hnsw_object_owned_by_extension(
+                pg_sys::OperatorClassRelationId,
+                opclass_oid,
+                opclass_and_support_extension,
+            )
+        }
+    {
+        return false;
+    }
+
+    // SAFETY: AMOPSTRATEGY is keyed by the copied opfamily and input type.
+    let tuple = unsafe {
+        pg_sys::SearchSysCache4(
+            pg_sys::SysCacheIdentifier::AMOPSTRATEGY.cast_signed(),
+            pg_sys::ObjectIdGetDatum(family),
+            pg_sys::ObjectIdGetDatum(input_type),
+            pg_sys::ObjectIdGetDatum(input_type),
+            pg_sys::Int16GetDatum(1),
+        )
+    };
+    if tuple.is_null() {
+        return false;
+    }
+    // SAFETY: The tuple remains valid while its scalar fields are copied.
+    let (operator_oid, method, sort_family, purpose) = unsafe {
+        let amop = pg_sys::GETSTRUCT(tuple) as pg_sys::Form_pg_amop;
+        (
+            (*amop).amopopr,
+            (*amop).amopmethod,
+            (*amop).amopsortfamily,
+            (*amop).amoppurpose,
+        )
+    };
+    // SAFETY: All needed AMOP fields have been copied.
+    unsafe { pg_sys::ReleaseSysCache(tuple) };
+    // SAFETY: Static AM lookup and catalog family/proc helpers accept the
+    // copied OIDs above.
+    let expected_method = unsafe { pg_sys::get_am_oid(c"pgcontext_hnsw".as_ptr(), true) };
+    let support_proc = unsafe { pg_sys::get_opfamily_proc(family, input_type, input_type, 1) };
+    if method != expected_method
+        || purpose != pg_sys::AMOP_ORDER.cast_signed()
+        || support_proc == pg_sys::InvalidOid
+    {
+        return false;
+    }
+
+    candidates.iter().any(|&(support_name, return_type, operator_name)| {
+        // SAFETY: All OIDs come from the same opclass family and every expected
+        // identifier is a static certified contract value.
+        unsafe {
+            hnsw_support_proc_oid_matches(
+                support_proc,
+                support_name,
+                return_type,
+                input_type,
+                opclass_and_support_extension,
+            ) && hnsw_operator_oid_matches(
+                operator_oid,
+                input_type,
+                operator_name,
+                return_type,
+                operator_namespace,
+                operator_extension,
+            ) && hnsw_sort_family_matches(sort_family, return_type)
+        }
+    })
+}
+
+unsafe fn hnsw_sort_family_matches(sort_family: pg_sys::Oid, return_type: pg_sys::Oid) -> bool {
+    let expected_name = if return_type == pg_sys::INT4OID {
+        b"integer_ops".as_slice()
+    } else if return_type == pg_sys::FLOAT4OID || return_type == pg_sys::FLOAT8OID {
+        b"float_ops".as_slice()
+    } else {
+        return false;
+    };
+    // SAFETY: OPFAMILYOID is keyed by the sort-family OID from the AMOP row.
+    let tuple = unsafe {
+        pg_sys::SearchSysCache1(
+            pg_sys::SysCacheIdentifier::OPFAMILYOID.cast_signed(),
+            pg_sys::ObjectIdGetDatum(sort_family),
+        )
+    };
+    if tuple.is_null() {
+        return false;
+    }
+    // SAFETY: The NameData, method, and namespace remain valid until release.
+    let matches = unsafe {
+        let family = pg_sys::GETSTRUCT(tuple) as pg_sys::Form_pg_opfamily;
+        let name = CStr::from_ptr((*family).opfname.data.as_ptr()).to_bytes();
+        let pg_catalog = pg_sys::get_namespace_oid(c"pg_catalog".as_ptr(), false);
+        let btree = pg_sys::get_am_oid(c"btree".as_ptr(), false);
+        name == expected_name
+            && (*family).opfnamespace == pg_catalog
+            && (*family).opfmethod == btree
+    };
+    // SAFETY: The syscache tuple is no longer needed.
+    unsafe { pg_sys::ReleaseSysCache(tuple) };
+    matches
+}
+
+unsafe fn hnsw_object_owned_by_extension(
+    class_id: pg_sys::Oid,
+    object_id: pg_sys::Oid,
+    expected_extension: &str,
+) -> bool {
+    // SAFETY: PostgreSQL accepts arbitrary catalog class/object OIDs and
+    // returns InvalidOid for objects that are not extension members.
+    let extension_oid = unsafe { pg_sys::getExtensionOfObject(class_id, object_id) };
+    if extension_oid == pg_sys::InvalidOid {
+        return false;
+    }
+    // SAFETY: The extension OID came from pg_depend. The returned name is
+    // palloc'd and released after comparison.
+    let extension_name = unsafe { pg_sys::get_extension_name(extension_oid) };
+    if extension_name.is_null() {
+        return false;
+    }
+    // SAFETY: PostgreSQL returned a nul-terminated extension name.
+    let matches = unsafe { CStr::from_ptr(extension_name) }.to_bytes()
+        == expected_extension.as_bytes();
+    // SAFETY: `get_extension_name` allocated this string with palloc.
+    unsafe { pg_sys::pfree(extension_name.cast()) };
+    matches
+}
+
+unsafe fn hnsw_certified_pgvector_type_oid(type_name: &'static CStr) -> pg_sys::Oid {
+    // SAFETY: Both names are static nul-terminated catalog identifiers.
+    let type_oid = unsafe { hnsw_named_type_oid(c"public", type_name) };
+    if type_oid == pg_sys::InvalidOid {
+        return pg_sys::InvalidOid;
+    }
+    // SAFETY: The type OID came from pg_type and is accepted by the extension
+    // membership catalog lookup.
+    if unsafe {
+        hnsw_object_owned_by_extension(pg_sys::TypeRelationId, type_oid, "vector")
+    } {
+        type_oid
+    } else {
+        pg_sys::InvalidOid
+    }
+}
+
+unsafe fn hnsw_named_type_oid(schema_name: &'static CStr, type_name: &'static CStr) -> pg_sys::Oid {
+    // SAFETY: Both identifiers are static and PostgreSQL owns the namespace
+    // catalog lookup for the duration of this callback.
+    let namespace = unsafe { pg_sys::get_namespace_oid(schema_name.as_ptr(), true) };
+    if namespace == pg_sys::InvalidOid {
+        return pg_sys::InvalidOid;
+    }
+
+    let mut name = pg_sys::NameData::default();
+    // SAFETY: The type name is shorter than NAMEDATALEN.
+    unsafe { pg_sys::namestrcpy((&mut name) as pg_sys::Name, type_name.as_ptr()) };
+    let type_oid_attribute = match pg_sys::AttrNumber::try_from(pg_sys::Anum_pg_type_oid) {
+        Ok(attribute) => attribute,
+        Err(_) => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "pg_type OID attribute number is out of range",
+        ),
+    };
+    // SAFETY: The cache key uses initialized catalog identifiers.
+    unsafe {
+        pg_sys::GetSysCacheOid(
+            pg_sys::SysCacheIdentifier::TYPENAMENSP.cast_signed(),
+            type_oid_attribute,
+            pg_sys::NameGetDatum(&name),
+            pg_sys::ObjectIdGetDatum(namespace),
+            pg_sys::Datum::from(0),
+            pg_sys::Datum::from(0),
+        )
+    }
+}
+
+unsafe fn hnsw_pgcontext_type_oid(type_name: &'static CStr) -> pg_sys::Oid {
+    // SAFETY: `pgcontext` is a static null-terminated string and PostgreSQL owns
     // namespace catalog lookups for the duration of this callback.
-    let public_namespace = unsafe { pg_sys::get_namespace_oid(c"public".as_ptr(), false) };
-    if public_namespace == pg_sys::InvalidOid {
+    let pgcontext_namespace = unsafe { pg_sys::get_namespace_oid(c"pgcontext".as_ptr(), false) };
+    if pgcontext_namespace == pg_sys::InvalidOid {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            "public schema is not available for pgContext vector type lookup",
+            "pgcontext schema is not available for pgContext vector type lookup",
         );
     }
 
@@ -386,14 +1085,14 @@ unsafe fn hnsw_public_type_oid(type_name: &'static CStr) -> pg_sys::Oid {
             "pg_type OID attribute number is out of range",
         ),
     };
-    // SAFETY: The cache key uses an initialized NameData and live public
+    // SAFETY: The cache key uses an initialized NameData and live pgcontext
     // namespace OID; PostgreSQL owns the returned catalog datum.
     let type_oid = unsafe {
         pg_sys::GetSysCacheOid(
             pg_sys::SysCacheIdentifier::TYPENAMENSP.cast_signed(),
             type_oid_attribute,
-            pg_sys::Datum::from((&raw const name).cast::<pg_sys::NameData>()),
-            pg_sys::Datum::from(public_namespace),
+            pg_sys::NameGetDatum(&name),
+            pg_sys::ObjectIdGetDatum(pgcontext_namespace),
             pg_sys::Datum::from(0),
             pg_sys::Datum::from(0),
         )
@@ -426,17 +1125,6 @@ unsafe fn hnsw_index_opfamily(index_relation: pg_sys::Relation) -> pg_sys::Oid {
     // SAFETY: `rd_opfamily` points to one OID per index key. This AM registers
     // only single-column opclasses, so the first entry is authoritative.
     unsafe { *opfamily }
-}
-
-fn sparsevec_to_dense(vector: SparseVec) -> DenseVector {
-    let vector = vector
-        .to_sparse()
-        .unwrap_or_else(|error| raise_core_error(error));
-    let mut values = vec![0.0; vector.dimensions()];
-    for entry in vector.entries() {
-        values[entry.index() - 1] = entry.value();
-    }
-    DenseVector::new(values).unwrap_or_else(|error| raise_core_error(error))
 }
 
 fn bitvec_to_dense(vector: BitVec) -> DenseVector {

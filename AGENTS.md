@@ -37,7 +37,7 @@ rebuilt with `REINDEX`.
 |---|---|
 | Extension name | `pgcontext` |
 | Supported PostgreSQL majors | **17 and 18** |
-| Docker images | `ghcr.io/evokoa/pgcontext:pgMAJOR-v0.1.0` (multi-arch `amd64`/`arm64`; default aliases use PG17) |
+| Docker images | `ghcr.io/evokoa/pgcontext:pgMAJOR-v0.2.0` (multi-arch `amd64`/`arm64`; default aliases use PG17) |
 | Rust (source build) | 1.96.0 |
 | cargo-pgrx (source build) | 0.19.1 (pin exactly) |
 | License | Apache-2.0 |
@@ -48,13 +48,13 @@ Use this unless the task specifically requires a source build. It needs only a
 working Docker daemon.
 
 ```sh
-docker pull ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+docker pull ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 docker run -d --rm \
   --name pgcontext \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pgcontext \
   -p 5432:5432 \
-  ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+  ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 
 # Wait for the server to accept connections (bounded, no infinite loop).
 for i in $(seq 1 30); do
@@ -93,7 +93,7 @@ SELECT extname, extversion FROM pg_extension WHERE extname = 'pgcontext';
 -- 2. End-to-end: create a table, index it, run an ANN query.
 CREATE TABLE IF NOT EXISTS agent_smoke (
     id        text PRIMARY KEY,
-    embedding vector(3) NOT NULL
+    embedding pgcontext.vector(3) NOT NULL
 );
 INSERT INTO agent_smoke VALUES
     ('a', '[1,0,0]'), ('b', '[0.9,0.1,0]'), ('c', '[0,1,0]')
@@ -104,13 +104,13 @@ CREATE INDEX IF NOT EXISTS agent_smoke_hnsw
 
 SELECT id
 FROM agent_smoke
-ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::vector
+ORDER BY embedding OPERATOR(pgcontext.<=>) '[1,0,0]'::pgcontext.vector
 LIMIT 1;
 SQL
 ```
 
 **Success criteria:**
-- Step 1 returns one row: `pgcontext | 0.1.0`.
+- Step 1 returns one row: `pgcontext | 0.2.0`.
 - Step 3 returns `a` (the nearest vector to `[1,0,0]`).
 
 If step 1 returns no rows, the extension is not installed. If `CREATE EXTENSION`

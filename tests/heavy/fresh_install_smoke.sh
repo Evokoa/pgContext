@@ -9,6 +9,21 @@ source "${SCRIPT_DIR}/lib.sh"
 start_and_install_extension
 reset_database
 
+hostile_role=pgcontext_hostile_schema_owner
+drop_role_if_exists "${hostile_role}"
+psql_postgres -c "CREATE ROLE ${hostile_role}"
+psql_db -c "CREATE SCHEMA pgcontext AUTHORIZATION ${hostile_role}" \
+    -c "GRANT CREATE ON SCHEMA pgcontext TO PUBLIC"
+if psql_db -c "CREATE EXTENSION pgcontext" \
+    >"${HEAVY_TMPDIR}/fresh_install_hostile_schema.out" 2>&1; then
+    echo "pgcontext unexpectedly installed into a hostile schema" >&2
+    exit 1
+fi
+grep -q 'pgcontext schema must be owned by the extension installer' \
+    "${HEAVY_TMPDIR}/fresh_install_hostile_schema.out"
+psql_db -c "DROP SCHEMA pgcontext"
+drop_role_if_exists "${hostile_role}"
+
 psql_db <<'SQL'
 CREATE EXTENSION pgcontext;
 

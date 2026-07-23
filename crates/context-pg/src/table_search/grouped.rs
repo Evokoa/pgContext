@@ -14,7 +14,7 @@ use super::{
     resolve_collection, resolve_registered_vector, search_limit_from_sql, validate_search_drift,
 };
 
-#[pg_extern(schema = "pgcontext", name = "grouped_search")]
+#[pg_extern(name = "grouped_search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn grouped_search_collection(
     collection: String,
@@ -65,7 +65,7 @@ pub fn grouped_search_collection(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "grouped_search")]
+#[pg_extern(name = "grouped_search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn grouped_search_collection_named_vector(
     collection: String,

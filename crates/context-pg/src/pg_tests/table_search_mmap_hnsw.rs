@@ -32,6 +32,24 @@ fn table_search_mmap_hnsw_artifact_rechecks_decoded_candidates() {
 }
 
 #[pg_test]
+fn mmap_hnsw_internal_candidate_helper_rejects_direct_sql_calls() {
+    shared_assert_sql_failure(
+        "SELECT *
+           FROM pgcontext._mmap_hnsw_artifact_candidates(
+                'direct-call-probe',
+                'artifact',
+                '[0,0]'::vector,
+                4096,
+                1,
+                1
+           )",
+        "42501",
+        "pgcontext internal mapped HNSW candidate helper cannot be called directly",
+        "direct mapped HNSW candidate helper call",
+    );
+}
+
+#[pg_test]
 fn source_built_mmap_graph_is_navigable() {
     create_search_collection("m13_mmap_source_built_graph");
     upsert_search_points("m13_mmap_source_built_graph", &["10", "20", "30"]);
@@ -78,7 +96,7 @@ fn source_built_mmap_graph_is_navigable() {
            FROM pgcontext.search_mmap_hnsw_artifact(
                 'm13_mmap_source_built_graph',
                 'source-built',
-                '[0,0]'::public.vector,
+                '[0,0]'::pgcontext.vector,
                 65536,
                 4,
                 2
@@ -87,6 +105,96 @@ fn source_built_mmap_graph_is_navigable() {
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].1, "20");
     assert_eq!(rows[1].1, "30");
+}
+
+#[pg_test]
+fn quantized_source_built_graphs_use_v2_and_exact_source_rerank() {
+    for (suffix, options) in [
+        ("binary", r#"{"mode":"binary"}"#),
+        ("scalar", r#"{"mode":"scalar","levels":2}"#),
+        ("pq", r#"{"mode":"pq","subvector_dimensions":1}"#),
+    ] {
+        let collection = format!("stage_d_quantized_{suffix}");
+        create_search_collection(&collection);
+        Spi::run(&format!(
+            "SELECT pgcontext.configure_vector(
+                 '{collection}',
+                 'embedding',
+                 '{{}}'::jsonb,
+                 '{options}'::jsonb,
+                 'ready'
+             )"
+        ))
+        .expect("quantized vector policy should configure");
+        upsert_search_points(&collection, &["10", "20", "30"]);
+        let job_id = start_artifact_build_job(&collection, "mmap", "quantized", 0);
+        Spi::run(&format!("SELECT pgcontext.run_build_job({job_id}, 1)"))
+            .expect("quantized mmap job should complete");
+
+        let payload_version = Spi::get_one::<i32>(&format!(
+            "SELECT pg_catalog.get_byte(
+                 pgcontext.build_mmap_hnsw_artifact({job_id}),
+                 48
+             )"
+        ))
+        .expect("quantized graph payload version should load");
+        assert_eq!(payload_version, Some(2));
+
+        let published = artifact_file_rows(&format!(
+            "SELECT artifact_id,
+                    collection_name,
+                    build_job_id,
+                    artifact_kind,
+                    artifact_name,
+                    target_name,
+                    segment_kind,
+                    format_version,
+                    payload_bytes,
+                    checksum,
+                    relative_path,
+                    lifecycle_state
+               FROM pgcontext.publish_artifact_segment_file(
+                    {job_id},
+                    pgcontext.build_mmap_hnsw_artifact({job_id})
+               )"
+        ));
+        assert_eq!(published.len(), 1);
+
+        let rows = table_search_rows(&format!(
+            "SELECT point_id, source_key, score
+               FROM pgcontext.search_mmap_hnsw_artifact(
+                    '{collection}',
+                    'quantized',
+                    '[0,0]'::pgcontext.vector,
+                    65536,
+                    3,
+                    2
+               )"
+        ));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1, "20");
+        assert_eq!(rows[0].2, 1.0);
+        assert_eq!(rows[1].1, "30");
+        assert_eq!(rows[1].2, 2.0);
+        if suffix == "binary" {
+            shared_assert_sql_failure(
+                &format!(
+                    "SELECT *
+                       FROM pgcontext.search_mmap_hnsw_artifact(
+                            '{collection}',
+                            'quantized',
+                            '[0,0]'::pgcontext.vector,
+                            65536,
+                            2,
+                            2
+                       )"
+                ),
+                "22023",
+                "quantized mmap HNSW candidate_limit 2 must exceed final limit 2",
+                "quantized candidate oversampling",
+            );
+        }
+    }
 }
 
 #[pg_test]
@@ -574,7 +682,7 @@ fn table_search_mmap_hnsw_artifact_rejects_unservable_files() {
              1,
              1
          )",
-        "55000",
+        "XX001",
         "mmap artifact is not serving-ready: checksum_mismatch (segment checksum mismatch)",
         "mmap artifact checksum search",
     );
@@ -587,7 +695,7 @@ fn table_search_mmap_hnsw_artifact_rejects_unservable_files() {
              1,
              1
          )",
-        "55000",
+        "XX001",
         "mmap artifact is not serving-ready: metadata_mismatch (artifact file metadata differs from catalog)",
         "mmap artifact metadata drift search",
     );

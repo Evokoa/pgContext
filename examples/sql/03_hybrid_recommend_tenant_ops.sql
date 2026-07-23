@@ -3,16 +3,16 @@ CREATE EXTENSION IF NOT EXISTS pgcontext;
 DROP TABLE IF EXISTS public.example_hybrid_docs;
 CREATE TABLE public.example_hybrid_docs (
     id bigint PRIMARY KEY,
-    embedding vector NOT NULL,
+    embedding pgcontext.vector NOT NULL,
     tenant_id text NOT NULL,
     body text NOT NULL
 );
 
 INSERT INTO public.example_hybrid_docs (id, embedding, tenant_id, body) VALUES
-    (1, '[1,0]'::vector, 'acme', 'postgres vector search'),
-    (2, '[0,1]'::vector, 'acme', 'rust extension guide'),
-    (3, '[4,0]'::vector, 'other', 'tenant isolation diagnostics'),
-    (4, '[0,4]'::vector, 'acme', 'recommendation and discovery');
+    (1, '[1,0]'::pgcontext.vector, 'acme', 'postgres vector search'),
+    (2, '[0,1]'::pgcontext.vector, 'acme', 'rust extension guide'),
+    (3, '[4,0]'::pgcontext.vector, 'other', 'tenant isolation diagnostics'),
+    (4, '[0,4]'::pgcontext.vector, 'acme', 'recommendation and discovery');
 
 SELECT pgcontext.create_collection('example_hybrid_docs', 'public.example_hybrid_docs');
 SELECT pgcontext.register_vector('example_hybrid_docs', 'embedding', 'embedding', 2, 'l2');
@@ -20,12 +20,12 @@ SELECT pgcontext.register_filter_column('example_hybrid_docs', 'tenant_id', 'ten
 SELECT pgcontext.upsert_points('example_hybrid_docs', ARRAY['1', '2', '3', '4']);
 
 SELECT source_key, score
-FROM pgcontext.query('example_hybrid_docs', '[1,0]'::vector, 'postgres search', 'body', 3);
+FROM pgcontext.query('example_hybrid_docs', '[1,0]'::pgcontext.vector, 'postgres search', 'body', 3);
 
 SELECT source_key, score
 FROM pgcontext.recommend(
     'example_hybrid_docs',
-    ARRAY(SELECT point_id FROM pgcontext.search('example_hybrid_docs', '[1,0]'::vector, 1)),
+    ARRAY(SELECT point_id FROM pgcontext.search('example_hybrid_docs', '[1,0]'::pgcontext.vector, 1)),
     ARRAY[]::bigint[],
     3
 );
@@ -33,7 +33,7 @@ FROM pgcontext.recommend(
 SELECT source_key, score
 FROM pgcontext.discover(
     'example_hybrid_docs',
-    ARRAY(SELECT point_id FROM pgcontext.search('example_hybrid_docs', '[1,0]'::vector, 1)),
+    ARRAY(SELECT point_id FROM pgcontext.search('example_hybrid_docs', '[1,0]'::pgcontext.vector, 1)),
     3
 );
 
@@ -52,7 +52,7 @@ WHERE collection_name = 'example_hybrid_docs';
 
 SELECT pgcontext.query_rerank(
     pgcontext.query_prefetch(ARRAY[
-        pgcontext.query_weight(pgcontext.query_nearest('[1,0]'::vector, 20), 0.8),
+        pgcontext.query_weight(pgcontext.query_nearest('[1,0]'::pgcontext.vector, 20), 0.8),
         pgcontext.query_formula(pgcontext.query_discover(ARRAY[1], 10), '$score * 0.5')
     ]),
     5

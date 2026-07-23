@@ -36,7 +36,7 @@ struct JsonbColumnResolution {
 /// `insufficient_privilege` when the caller does not own the collection or
 /// lacks source-table `SELECT`, and `duplicate_object` when the filter key or
 /// source column registration already exists.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn register_jsonb_path(
     collection_name: String,

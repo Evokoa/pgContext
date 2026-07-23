@@ -32,6 +32,21 @@ pub trait CandidateSource {
     /// Returns a transport-neutral port error.
     fn readiness(&mut self, query: &QueryIr) -> Result<SourceReadiness>;
 
+    /// Returns the bounded number of candidates this leaf should request.
+    ///
+    /// The default exposes the remaining global allowance for compatibility
+    /// with sources whose candidate pool is independent of the result limit.
+    /// Production adapters should override this with a per-leaf request so one
+    /// branch cannot reserve work intended for its siblings.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport-neutral port error when the adapter cannot derive a
+    /// valid request for this query shape.
+    fn candidate_limit(&mut self, _query: &QueryIr, remaining: usize) -> Result<usize> {
+        Ok(remaining)
+    }
+
     /// Returns an owned bounded candidate page.
     ///
     /// # Errors
@@ -47,6 +62,11 @@ pub trait CandidateSource {
 
 /// Adapter that derives logical candidates from a public filter.
 pub trait FilterCandidateSource {
+    /// Returns the bounded filter-candidate request for one leaf.
+    fn candidate_limit(&mut self, _query: &QueryIr, remaining: usize) -> Result<usize> {
+        Ok(remaining)
+    }
+
     /// Returns an owned bounded logical-ID batch.
     ///
     /// # Errors

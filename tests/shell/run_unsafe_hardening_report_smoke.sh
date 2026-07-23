@@ -14,10 +14,13 @@ plan_two="${tmp_dir}/plan-two.tsv"
 cmp "${plan_one}" "${plan_two}"
 
 head -n 1 "${plan_one}" | grep -Fqx $'gate\tkind\towner\tpg_major\tcommand'
-[[ "$(tail -n +2 "${plan_one}" | wc -l | tr -d ' ')" == "5" ]]
+[[ "$(tail -n +2 "${plan_one}" | wc -l | tr -d ' ')" == "8" ]]
 grep -Fqx $'callback-source-inventory\tstatic\tcontext-pg\t17\tscripts/check-hnsw-callback-guards.sh' "${plan_one}"
 grep -Fqx $'unsafe-safety-comments\tstatic\tworkspace\t17\tscripts/check-unsafe-safety-comments.sh' "${plan_one}"
 grep -Fqx $'storage-segment-miri\tmiri\tcontext-storage\t17\tMIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p context-storage --test segment_format' "${plan_one}"
+grep -Fqx $'storage-mapped-view-miri\tmiri\tcontext-storage\t17\tMIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test -p context-storage --test mapped_hnsw_view' "${plan_one}"
+grep -Fqx $'storage-mapped-real-asan\tasan\tcontext-storage\t17\tRUSTFLAGS=-Zsanitizer=address cargo +nightly test -Zbuild-std --target <host-target> -p context-storage --test mapped_generation_subprocess' "${plan_one}"
+grep -Fqx $'storage-mapped-real-tsan\ttsan\tcontext-storage\t17\tRUSTFLAGS=-Zsanitizer=thread cargo +nightly test -Zbuild-std --target <host-target> -p context-storage --test mapped_generation_subprocess' "${plan_one}"
 grep -Fqx $'hnsw-pg17-asan\tasan\tcontext-pg\t17\tPG_CONFIG=<pg17-config> RUSTFLAGS=-Zsanitizer=address cargo +nightly pgrx test -p context-pg pg17 hnsw' "${plan_one}"
 grep -Fqx $'hnsw-pg17-tsan\ttsan\tcontext-pg\t17\tPG_CONFIG=<pg17-config> RUSTFLAGS=-Zsanitizer=thread cargo +nightly pgrx test -p context-pg pg17 hnsw' "${plan_one}"
 
@@ -77,7 +80,7 @@ UNSAFE_COMMENT_CHECKER="${fake_bin}/unsafe-checker" \
   "${RUNNER}" --pg-major 17 --dry-run --out-dir "${dry_dir}"
 
 [[ ! -e "${fake_log}" ]]
-[[ "$(awk -F '\t' 'NR > 1 && $4 == "dry-run" { count++ } END { print count + 0 }' "${dry_dir}/summary.tsv")" == "5" ]]
+[[ "$(awk -F '\t' 'NR > 1 && $4 == "dry-run" { count++ } END { print count + 0 }' "${dry_dir}/summary.tsv")" == "8" ]]
 grep -Fq -- '- Execution: `dry-run`' "${dry_dir}/report.md"
 
 run_dir="${tmp_dir}/run"
@@ -88,13 +91,16 @@ HNSW_CALLBACK_CHECKER="${fake_bin}/callback-checker" \
 UNSAFE_COMMENT_CHECKER="${fake_bin}/unsafe-checker" \
   "${RUNNER}" --pg-major 17 --out-dir "${run_dir}"
 
-[[ "$(wc -l <"${fake_log}" | tr -d ' ')" == "5" ]]
+[[ "$(wc -l <"${fake_log}" | tr -d ' ')" == "8" ]]
 grep -Fqx 'callback-checker|' "${fake_log}"
 grep -Fqx 'unsafe-checker|' "${fake_log}"
 grep -Fq 'cargo|RUSTFLAGS=|MIRIFLAGS=-Zmiri-disable-isolation|PG_CONFIG=|+nightly miri test -p context-storage --test segment_format' "${fake_log}"
+grep -Fq 'cargo|RUSTFLAGS=|MIRIFLAGS=-Zmiri-disable-isolation|PG_CONFIG=|+nightly miri test -p context-storage --test mapped_hnsw_view' "${fake_log}"
+grep -Fq 'cargo|RUSTFLAGS=-Zsanitizer=address|MIRIFLAGS=|PG_CONFIG=|+nightly test -Zbuild-std --target ' "${fake_log}"
+grep -Fq 'cargo|RUSTFLAGS=-Zsanitizer=thread|MIRIFLAGS=|PG_CONFIG=|+nightly test -Zbuild-std --target ' "${fake_log}"
 grep -Fq 'cargo|RUSTFLAGS=-Zsanitizer=address|MIRIFLAGS=|PG_CONFIG='"${fake_bin}/pg_config"'|+nightly pgrx test -p context-pg pg17 hnsw' "${fake_log}"
 grep -Fq 'cargo|RUSTFLAGS=-Zsanitizer=thread|MIRIFLAGS=|PG_CONFIG='"${fake_bin}/pg_config"'|+nightly pgrx test -p context-pg pg17 hnsw' "${fake_log}"
-[[ "$(awk -F '\t' 'NR > 1 && $4 == "pass" && $5 == "0" { count++ } END { print count + 0 }' "${run_dir}/summary.tsv")" == "5" ]]
+[[ "$(awk -F '\t' 'NR > 1 && $4 == "pass" && $5 == "0" { count++ } END { print count + 0 }' "${run_dir}/summary.tsv")" == "8" ]]
 grep -Fq -- '- Execution: `run`' "${run_dir}/report.md"
 
 fail_dir="${tmp_dir}/fail"
@@ -112,8 +118,8 @@ then
   exit 1
 fi
 grep -Fq $'hnsw-pg17-tsan\ttsan\tcontext-pg\tfail\t41' "${fail_dir}/summary.tsv"
-[[ "$(tail -n +2 "${fail_dir}/summary.tsv" | wc -l | tr -d ' ')" == "5" ]]
-[[ "$(wc -l <"${fail_log}" | tr -d ' ')" == "5" ]]
+[[ "$(tail -n +2 "${fail_dir}/summary.tsv" | wc -l | tr -d ' ')" == "8" ]]
+[[ "$(wc -l <"${fail_log}" | tr -d ' ')" == "8" ]]
 grep -Fq 'unsafe hardening report contains failing rows' "${tmp_dir}/fail.out"
 
 missing_root_dir="${tmp_dir}/missing-root-report"
@@ -131,7 +137,7 @@ then
   exit 1
 fi
 [[ ! -e "${missing_root_log}" ]]
-[[ "$(awk -F '\t' 'NR > 1 && $4 == "fail" { count++ } END { print count + 0 }' "${missing_root_dir}/summary.tsv")" == "5" ]]
+[[ "$(awk -F '\t' 'NR > 1 && $4 == "fail" { count++ } END { print count + 0 }' "${missing_root_dir}/summary.tsv")" == "8" ]]
 grep -Fq 'unsafe hardening report contains failing rows' "${tmp_dir}/missing-root.out"
 
 echo "unsafe hardening report smoke tests passed"

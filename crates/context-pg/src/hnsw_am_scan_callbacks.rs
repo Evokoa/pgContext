@@ -5,7 +5,8 @@
 #[pg_guard]
 #[allow(unused_qualifications)]
 // SAFETY: PostgreSQL supplies live planner/path inputs and distinct writable
-// output pointers for the guarded amcostestimate call.
+// output pointers for the guarded amcostestimate call. PostgreSQL 18 also
+// permits the estimator to update the path's disabled-node count.
 #[allow(
     clippy::too_many_arguments,
     reason = "PostgreSQL fixes the amcostestimate callback ABI"
@@ -25,7 +26,7 @@ unsafe extern "C-unwind" fn pgcontext_hnsw_cost_estimate(
     // SAFETY: Guaranteed by the amcostestimate callback contract above.
     let root = unsafe { scope.borrow(root, "PlannerInfo") };
     // SAFETY: Guaranteed by the amcostestimate callback contract above.
-    let path = unsafe { scope.borrow(path, "IndexPath") };
+    let path = unsafe { scope.borrow_mut(path, "IndexPath") };
     // SAFETY: PostgreSQL grants distinct writable output slots for the call.
     let startup = unsafe { scope.borrow_mut(index_startup_cost, "startup cost") };
     // SAFETY: See the output-pointer contract above.
@@ -50,7 +51,7 @@ unsafe extern "C-unwind" fn pgcontext_hnsw_cost_estimate(
 
 fn hnsw_cost_estimate_safe(
     root: PgCallbackRef<'_, pg_sys::PlannerInfo>,
-    path: PgCallbackRef<'_, pg_sys::IndexPath>,
+    path: PgCallbackMut<'_, pg_sys::IndexPath>,
     loop_count: f64,
     mut startup: PgCallbackMut<'_, pg_sys::Cost>,
     mut total: PgCallbackMut<'_, pg_sys::Cost>,
@@ -59,6 +60,14 @@ fn hnsw_cost_estimate_safe(
     mut pages: PgCallbackMut<'_, f64>,
 ) {
     if path.as_ref().indexorderbys.is_null() {
+        #[cfg(feature = "pg18")]
+        {
+            // PostgreSQL 18 compares disabled-node counts before costs. Mark
+            // unordered HNSW paths as less eligible than a disabled sequential
+            // scan so a zero-column query cannot become an index-only scan.
+            let mut path = path;
+            path.as_mut().path.disabled_nodes = 2;
+        }
         startup.write(f64::INFINITY);
         total.write(f64::INFINITY);
         selectivity.write(0.0);
@@ -116,8 +125,11 @@ unsafe extern "C-unwind" fn pgcontext_hnsw_validate(opclass_oid: pg_sys::Oid) ->
     self::hnsw_validate_safe(opclass_oid)
 }
 
-fn hnsw_validate_safe(_opclass_oid: pg_sys::Oid) -> bool {
-    true
+fn hnsw_validate_safe(opclass_oid: pg_sys::Oid) -> bool {
+    // SAFETY: PostgreSQL passes an opclass catalog OID. The validator performs
+    // read-only syscache and extension-membership checks and retains no tuple
+    // pointers after returning.
+    unsafe { hnsw_validate_opclass(opclass_oid) }
 }
 
 #[pg_guard]
@@ -143,6 +155,11 @@ fn hnsw_begin_scan_safe(
     nkeys: std::ffi::c_int,
     norderbys: std::ffi::c_int,
 ) -> pg_sys::IndexScanDesc {
+    // SAFETY: PostgreSQL initializes `MyDatabaseId` before invoking an index
+    // AM. Reconcile before allocating state so every HNSW scan makes bounded
+    // progress, including scans that later reuse backend-local graph state.
+    let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
+    reconcile_pending_mapped_drops(database_oid);
     let _key_count = checked_scan_count(nkeys, MAX_HNSW_SCAN_KEYS, "scan keys");
     let orderby_count = checked_scan_count(norderbys, MAX_HNSW_SCAN_ORDERBYS, "scan order-bys");
     // SAFETY: PostgreSQL passes a valid index relation and scan key counts.
@@ -277,10 +294,31 @@ fn hnsw_get_tuple_safe(
                 );
                 (*scan.as_ptr()).xs_heap_continue = false;
                 (*scan.as_ptr()).xs_recheck = false;
-                (*scan.as_ptr()).xs_recheckorderby = false;
                 if (*scan.as_ptr()).numberOfOrderBys > 0 {
-                    let metric = hnsw_score_metric((*scan.as_ptr()).indexRelation);
-                    store_hnsw_orderby_distance(scan.as_ptr(), metric, candidate.score);
+                    let Some(contract) = (*state).orderby_contract else {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                            "HNSW order-by contract was not cached during scan preparation",
+                        );
+                    };
+                    // Bit-Jaccard navigation is intentionally `f32`, while the
+                    // SQL operator is exact `f64`. PostgreSQL must re-evaluate
+                    // that operator on the visible heap tuple before ordering.
+                    // The bridge likewise binds pgvector's exact float8
+                    // operators while graph navigation remains f32. Emit the
+                    // conservative -infinity bound so the executor rechecks
+                    // and exactly reranks every bounded ANN candidate.
+                    (*scan.as_ptr()).xs_recheckorderby =
+                        contract.metric == HnswScoreMetric::BitJaccard
+                            || contract.pgvector_binding;
+                    store_hnsw_orderby_distance(
+                        scan.as_ptr(),
+                        contract.metric,
+                        candidate.score,
+                        contract.pgvector_binding,
+                    );
+                } else {
+                    (*scan.as_ptr()).xs_recheckorderby = false;
                 }
                 record_hnsw_scan_work((*state).work);
                 return true;
@@ -308,8 +346,21 @@ unsafe fn expand_hnsw_scan(scan: pg_sys::IndexScanDesc, state: &mut HnswScanStat
     // SAFETY: `scan` remains live for this callback and owns its order-by key.
     let query = unsafe { hnsw_orderby_query(scan) };
     // SAFETY: the live scan owns its index relation for the callback.
+    let Some(contract) = state.orderby_contract else {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "HNSW order-by contract was not cached before scan expansion",
+        );
+    };
+    // SAFETY: `scan` remains live for this callback and `contract.metric` was
+    // certified and cached from the same index relation during preparation.
     let mut outcome = unsafe {
-        hnsw_scan_candidates((*scan).indexRelation, query.as_ref(), Some(next_limit))
+        hnsw_scan_candidates_with_metric(
+            (*scan).indexRelation,
+            query.as_ref(),
+            Some(next_limit),
+            contract.metric,
+        )
     };
     outcome
         .candidates
@@ -327,17 +378,42 @@ unsafe fn store_hnsw_orderby_distance(
     scan: pg_sys::IndexScanDesc,
     metric: HnswScoreMetric,
     score: f32,
+    pgvector_binding: bool,
 ) {
     // SAFETY: PostgreSQL allocates these arrays in `pgcontext_hnsw_begin_scan`
     // when order-by keys are present, and this function is only called after
     // `numberOfOrderBys > 0`.
     let orderby_count = unsafe { c_int_to_usize((*scan).numberOfOrderBys, "scan order-bys") };
+    if pgvector_binding {
+        let mut order_by_types = vec![pg_sys::FLOAT8OID; orderby_count];
+        let mut distances = vec![
+            pg_sys::IndexOrderByDistance {
+                value: f64::NEG_INFINITY,
+                isnull: false,
+            };
+            orderby_count
+        ];
+        // SAFETY: The certified bridge contract requires a pgvector float8
+        // strategy operator for every active order-by key. Negative infinity
+        // is a valid common lower bound; `recheck = true` makes PostgreSQL
+        // replace it with the exact heap-operator distance before ordering.
+        unsafe {
+            pg_sys::index_store_float8_orderby_distances(
+                scan,
+                order_by_types.as_mut_ptr(),
+                distances.as_mut_ptr(),
+                true,
+            );
+        }
+        return;
+    }
     match metric {
-        HnswScoreMetric::L2 => {
+        HnswScoreMetric::L2 | HnswScoreMetric::BitJaccard => {
+            let (distance, recheck) = float8_orderby_distance(metric, score);
             let mut order_by_types = vec![pg_sys::FLOAT8OID; orderby_count];
             let mut distances = vec![
                 pg_sys::IndexOrderByDistance {
-                    value: f64::from(score),
+                    value: distance,
                     isnull: false,
                 };
                 orderby_count
@@ -349,7 +425,7 @@ unsafe fn store_hnsw_orderby_distance(
                     scan,
                     order_by_types.as_mut_ptr(),
                     distances.as_mut_ptr(),
-                    false,
+                    recheck,
                 );
             }
         }
@@ -374,6 +450,25 @@ unsafe fn store_hnsw_orderby_distance(
                 }
             }
         }
+    }
+}
+
+/// Returns a conservative lower bound for an exact `f64` Jaccard distance.
+///
+/// Graph navigation computes `1 - intersection / union` with two `f32`
+/// operations over exactly represented counts. Each operation contributes at
+/// most half an ulp in `[0, 1]`; subtracting two `f32::EPSILON`s therefore
+/// keeps PostgreSQL's reorder-queue key below the exact SQL distance. The heap
+/// operator recheck supplies the final `f64` value.
+fn bit_jaccard_orderby_lower_bound(score: f32) -> f64 {
+    (f64::from(score) - 2.0 * f64::from(f32::EPSILON)).max(0.0)
+}
+
+fn float8_orderby_distance(metric: HnswScoreMetric, score: f32) -> (f64, bool) {
+    match metric {
+        HnswScoreMetric::BitJaccard => (bit_jaccard_orderby_lower_bound(score), true),
+        HnswScoreMetric::L2 => (f64::from(score), false),
+        _ => unreachable!("only float8 HNSW metrics use float8 order-by storage"),
     }
 }
 

@@ -33,6 +33,7 @@ use std::{
 
 mod delta_segment;
 mod hnsw_graph_payload;
+mod mapped_packed_graph;
 mod mmap_file;
 mod packed_graph_image;
 
@@ -41,13 +42,21 @@ pub use delta_segment::{
     decode_delta_page, decode_delta_record, encode_delta_page, encode_delta_record,
 };
 pub use hnsw_graph_payload::{
-    HnswGraphArtifactRecord, HnswGraphPayloadError, decode_hnsw_graph_payload,
-    encode_hnsw_graph_payload,
+    CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HnswGraphArtifactRecord, HnswGraphPayload,
+    HnswGraphPayloadError, HnswGraphQuantization, HnswGraphQuantizationCodebook,
+    MIN_READABLE_HNSW_GRAPH_PAYLOAD_VERSION, MappedGraphNodeView, MappedGraphView,
+    MappedNeighborIter, PreparedQuantizedQuery, QuantizedHnswGraphNodeView, QuantizedHnswGraphView,
+    QuantizedNeighborIter, decode_hnsw_graph_payload, decode_hnsw_graph_payload_versioned,
+    encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
+};
+pub use mapped_packed_graph::{
+    MappedGraphIdentity, MappedPackedGraphError, MappedPackedGraphImage, encode_mapped_packed_graph,
 };
 pub use mmap_file::{MappedSegment, map_segment_file};
 pub use packed_graph_image::{
-    AlignedImageBuf, PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode,
-    PackedGraphImageView, encode_packed_graph_image, packed_graph_image_len,
+    AlignedImageBuf, CURRENT_PACKED_GRAPH_IMAGE_VERSION, MIN_READABLE_PACKED_GRAPH_IMAGE_VERSION,
+    PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView,
+    encode_packed_graph_image, encode_packed_graph_image_v2, packed_graph_image_len,
 };
 
 /// Maximum segment payload accepted by this loader.

@@ -53,6 +53,10 @@ fn delta_scan_applies_last_write_wins_and_retires_base() {
         outcome.retired.iter().copied().collect::<Vec<_>>(),
         vec![1, 2, 3, 4]
     );
+    assert_eq!(
+        outcome.scored_count, 2,
+        "work accounting must include every final live delta vector"
+    );
 
     // Base candidates: stale TID 1 (must be superseded), TID 3 (deleted),
     // TID 9 (untouched, survives).

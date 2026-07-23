@@ -13,17 +13,17 @@ fi
 verify_payload() {
   local payload="$1"
   if [[ "${DIRTY}" -eq 1 ]]; then
-    scripts/verify-release-payload.py --allow-dirty --tag v0.1.0 \
+    scripts/verify-release-payload.py --allow-dirty --tag v0.2.0 \
       --candidate-sha "$(git rev-parse HEAD)" "${payload}"
   else
-    scripts/verify-release-payload.py --tag v0.1.0 \
+    scripts/verify-release-payload.py --tag v0.2.0 \
       --candidate-sha "$(git rev-parse HEAD)" "${payload}"
   fi
 }
 
 for build in first second; do
   release/build-packages.sh --allow-dirty \
-    --out-dir "${WORK_DIR}/${build}" v0.1.0 >/dev/null
+    --out-dir "${WORK_DIR}/${build}" v0.2.0 >/dev/null
   verify_payload "${WORK_DIR}/${build}" >/dev/null
 done
 diff -r "${WORK_DIR}/first" "${WORK_DIR}/second"

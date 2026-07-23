@@ -16,6 +16,28 @@ ROLLBACK_PROBE_TABLE="_rollback_probe_should_not_persist"
 ROLLBACK_PROBE_SCRIPT=""
 ROLLBACK_PROBE_SCRIPT_CREATED=0
 PREVIOUS_INSTALL_SQL_STAGED=()
+CONTROL_RESTORE_REQUIRED=0
+PGVECTOR_STUB_STAGED=0
+
+restore_current_control() {
+    if [[ "${CONTROL_RESTORE_REQUIRED}" -eq 0 ]]; then
+        return
+    fi
+    cp "${REPO_ROOT}/crates/context-pg/pgcontext.control" \
+        "$("${PG_CONFIG}" --sharedir)/extension/pgcontext.control"
+    CONTROL_RESTORE_REQUIRED=0
+}
+
+stage_previous_control() {
+    local version="$1"
+    local previous_control="${REPO_ROOT}/sql/pgcontext--${version}.control"
+    if [[ ! -f "${previous_control}" || -L "${previous_control}" ]]; then
+        echo "previous control fixture is missing or is a symlink: ${previous_control}" >&2
+        exit 2
+    fi
+    cp "${previous_control}" "$("${PG_CONFIG}" --sharedir)/extension/pgcontext.control"
+    CONTROL_RESTORE_REQUIRED=1
+}
 
 cleanup_rollback_probe_script() {
     if [[ -n "${ROLLBACK_PROBE_SCRIPT}" && "${ROLLBACK_PROBE_SCRIPT_CREATED}" -eq 1 ]]; then
@@ -25,18 +47,44 @@ cleanup_rollback_probe_script() {
 
 cleanup_previous_install_sql() {
     local staged_sql
+    if [[ "${#PREVIOUS_INSTALL_SQL_STAGED[@]}" -eq 0 ]]; then
+        return
+    fi
     for staged_sql in "${PREVIOUS_INSTALL_SQL_STAGED[@]}"; do
         rm -f -- "${staged_sql}"
     done
 }
 
 cleanup_extension_scripts() {
+    restore_current_control
     cleanup_rollback_probe_script
     cleanup_previous_install_sql
+    if [[ "${PGVECTOR_STUB_STAGED}" -eq 1 ]]; then
+        rm -f -- "$("${PG_CONFIG}" --sharedir)/extension/vector.control" \
+            "$("${PG_CONFIG}" --sharedir)/extension/vector--0.8.5.sql"
+    fi
 }
 trap cleanup_extension_scripts EXIT
 
 start_and_install_extension
+
+stage_pgvector_stub_if_needed() {
+    local extension_dir
+    extension_dir="$("${PG_CONFIG}" --sharedir)/extension"
+    if [[ -f "${extension_dir}/vector.control" ]]; then
+        return
+    fi
+    if [[ -e "${extension_dir}/vector--0.8.5.sql" ]]; then
+        echo "refusing to overwrite existing pgvector SQL without vector.control: ${extension_dir}/vector--0.8.5.sql" >&2
+        exit 2
+    fi
+    cp "${REPO_ROOT}/tests/fixtures/pgvector_stub/vector.control" \
+        "${extension_dir}/vector.control"
+    cp "${REPO_ROOT}/tests/fixtures/pgvector_stub/vector--0.8.5.sql" \
+        "${extension_dir}/vector--0.8.5.sql"
+    chmod 0644 "${extension_dir}/vector.control" "${extension_dir}/vector--0.8.5.sql"
+    PGVECTOR_STUB_STAGED=1
+}
 
 INSTALL_VERSIONS=()
 while IFS= read -r version; do
@@ -52,6 +100,8 @@ stage_previous_install_sql_versions() {
     local version
     local source_sql
     local destination_sql
+    local update_sql
+    local destination_update_sql
 
     extension_dir="$("${PG_CONFIG}" --sharedir)/extension"
     if [[ ! -d "${extension_dir}" ]]; then
@@ -73,16 +123,32 @@ stage_previous_install_sql_versions() {
         fi
 
         if [[ -e "${destination_sql}" ]]; then
-            if cmp -s "${source_sql}" "${destination_sql}"; then
-                continue
+            if ! cmp -s "${source_sql}" "${destination_sql}"; then
+                echo "previous install SQL already exists with different contents: ${destination_sql}" >&2
+                exit 2
             fi
-            echo "previous install SQL already exists with different contents: ${destination_sql}" >&2
-            exit 2
+        else
+            PREVIOUS_INSTALL_SQL_STAGED+=("${destination_sql}")
+            cp "${source_sql}" "${destination_sql}"
+            chmod 0644 "${destination_sql}"
         fi
 
-        PREVIOUS_INSTALL_SQL_STAGED+=("${destination_sql}")
-        cp "${source_sql}" "${destination_sql}"
-        chmod 0644 "${destination_sql}"
+        update_sql="${REPO_ROOT}/sql/pgcontext--${version}--${CURRENT_VERSION}.sql"
+        destination_update_sql="${extension_dir}/pgcontext--${version}--${CURRENT_VERSION}.sql"
+        if [[ ! -f "${update_sql}" || -L "${update_sql}" ]]; then
+            echo "extension update SQL is missing or is a symlink: ${update_sql}" >&2
+            exit 2
+        fi
+        if [[ -e "${destination_update_sql}" ]]; then
+            if ! cmp -s "${update_sql}" "${destination_update_sql}"; then
+                echo "extension update SQL already exists with different contents: ${destination_update_sql}" >&2
+                exit 2
+            fi
+        else
+            PREVIOUS_INSTALL_SQL_STAGED+=("${destination_update_sql}")
+            cp "${update_sql}" "${destination_update_sql}"
+            chmod 0644 "${destination_update_sql}"
+        fi
     done
 }
 
@@ -165,14 +231,58 @@ BEGIN
        AND relkind = 'v'
        AND relname IN (
            '_collection_acl',
-           '_visible_collection_vectors',
-           '_visible_collection_sparse_vectors',
+           '_visible_artifact_segments',
+           '_visible_build_jobs',
+           '_visible_collection_late_interaction',
+           '_visible_collection_limits',
+           '_visible_collection_payload_columns',
            '_visible_collection_points',
-           '_visible_collection_payload_columns'
+           '_visible_collection_sparse_vectors',
+           '_visible_collection_vectors',
+           '_visible_collections',
+           '_visible_pgvector_ownership_conversions',
+           '_visible_query_stats'
        )
        AND NOT pg_catalog.has_table_privilege('m1_upgrade_priv_probe', pg_class.oid, 'SELECT');
     IF missing_visibility_views <> 0 THEN
         RAISE EXCEPTION '% ACL-filtered visibility views are missing SELECT', missing_visibility_views;
+    END IF;
+END
+$$;
+SQL
+}
+
+validate_visibility_barriers() {
+    psql_db <<'SQL'
+DO $$
+DECLARE
+    membership_filtered_views bigint;
+    unbarriered_views text[];
+BEGIN
+    SELECT count(*),
+           pg_catalog.array_agg(relname::text ORDER BY relname)
+               FILTER (
+                   WHERE NOT COALESCE(
+                       reloptions @> ARRAY['security_barrier=true']::text[],
+                       false
+                   )
+               )
+      INTO membership_filtered_views, unbarriered_views
+      FROM pg_catalog.pg_class
+      JOIN pg_catalog.pg_namespace
+        ON pg_namespace.oid = pg_class.relnamespace
+     WHERE pg_namespace.nspname = 'pgcontext'
+       AND relkind = 'v'
+       AND pg_catalog.pg_get_viewdef(pg_class.oid)
+           ILIKE '%pg_has_role(SESSION_USER,%';
+
+    IF membership_filtered_views <> 11 THEN
+        RAISE EXCEPTION 'expected 11 membership-filtered visibility views, found %',
+                        membership_filtered_views;
+    END IF;
+    IF unbarriered_views IS NOT NULL THEN
+        RAISE EXCEPTION 'membership-filtered views lack security barriers: %',
+                        unbarriered_views;
     END IF;
 END
 $$;
@@ -199,6 +309,490 @@ SELECT * FROM pgcontext.register_vector('upgrade_docs', 'embedding', 'embedding'
 SELECT * FROM pgcontext.register_filter_column('upgrade_docs', 'tenant', 'tenant');
 SELECT * FROM pgcontext.upsert_points('upgrade_docs', ARRAY['1', '2', '3']);
 SQL
+}
+
+load_representative_legacy_state() {
+    psql_db <<'SQL'
+CREATE TABLE public.docs (
+    id bigint PRIMARY KEY,
+    embedding vector NOT NULL,
+    body text NOT NULL,
+    tenant text NOT NULL
+);
+
+INSERT INTO public.docs (id, embedding, body, tenant)
+VALUES
+    (1, '[0,0]'::vector, 'database internals', 'acme'),
+    (2, '[1,0]'::vector, 'query planning', 'acme'),
+    (3, '[5,5]'::vector, 'gardening notes', 'other');
+
+WITH inserted AS (
+    INSERT INTO pgcontext._collections (
+        collection_name,
+        owner_role,
+        source_table_oid,
+        source_schema_name,
+        source_table_name
+    )
+    VALUES (
+        'upgrade_docs',
+        CURRENT_USER::regrole::oid,
+        'public.docs'::regclass,
+        'public',
+        'docs'
+    )
+    RETURNING collection_id
+)
+INSERT INTO pgcontext._collection_vectors (
+    collection_id,
+    vector_name,
+    source_table_oid,
+    source_schema_name,
+    source_table_name,
+    vector_column_name,
+    vector_attnum,
+    dimensions,
+    metric
+)
+SELECT collection_id,
+       'embedding',
+       'public.docs'::regclass,
+       'public',
+       'docs',
+       'embedding',
+       (
+           SELECT attnum FROM pg_attribute
+            WHERE attrelid = 'public.docs'::regclass
+              AND attname = 'embedding'
+       ),
+       2,
+       'l2'
+  FROM inserted;
+
+INSERT INTO pgcontext._collection_payload_columns (
+    collection_id,
+    filter_key,
+    source_table_oid,
+    source_schema_name,
+    source_table_name,
+    column_name,
+    column_attnum
+)
+SELECT collection_id,
+       'tenant',
+       'public.docs'::regclass,
+       'public',
+       'docs',
+       'tenant',
+       (
+           SELECT attnum FROM pg_attribute
+            WHERE attrelid = 'public.docs'::regclass
+              AND attname = 'tenant'
+       )
+  FROM pgcontext._collections
+ WHERE collection_name = 'upgrade_docs';
+
+INSERT INTO pgcontext._collection_points (collection_id, source_key)
+SELECT collection_id, source_key
+  FROM pgcontext._collections
+ CROSS JOIN unnest(ARRAY['1', '2', '3']) AS source_key
+ WHERE collection_name = 'upgrade_docs';
+
+INSERT INTO pgcontext._query_stats (
+    collection_id,
+    cohort,
+    query_kind,
+    result_count,
+    candidate_count,
+    latency_ms
+)
+SELECT collection_id,
+       'automatic',
+       'search',
+       777,
+       888,
+       9.5
+  FROM pgcontext._collections
+ WHERE collection_name = 'upgrade_docs';
+SQL
+}
+
+validate_legacy_automatic_reclassification() {
+    psql_db <<'SQL'
+DO $$
+DECLARE
+    legacy_rows bigint;
+    exposed_as_automatic bigint;
+BEGIN
+    SELECT count(*)
+      INTO legacy_rows
+      FROM pgcontext._query_stats
+     WHERE cohort = 'legacy_automatic'
+       AND result_count = 777
+       AND candidate_count = 888
+       AND strategy = 'unspecified'
+       AND completion = 'unspecified';
+    IF legacy_rows <> 1 THEN
+        RAISE EXCEPTION 'released manual automatic cohort was not reclassified exactly once';
+    END IF;
+
+    SELECT coalesce(sum(query_count), 0)
+      INTO exposed_as_automatic
+      FROM pgcontext.query_execution_stats()
+     WHERE collection_name = 'upgrade_docs';
+    IF exposed_as_automatic <> 0 THEN
+        RAISE EXCEPTION 'legacy manual row leaked into internal automatic observations';
+    END IF;
+END
+$$;
+SQL
+}
+
+validate_upgrade_catalog_transition() {
+    psql_db <<'SQL'
+DO $$
+DECLARE
+    extension_namespace text;
+    dependency_namespace text;
+    schema_is_extension_member boolean;
+    support_functions bigint;
+    public_support_functions bigint;
+    serving_columns integer;
+    migration_columns integer;
+    mmap_security_definer boolean;
+BEGIN
+    SELECT namespace.nspname
+      INTO extension_namespace
+      FROM pg_catalog.pg_extension AS extension
+      JOIN pg_catalog.pg_namespace AS namespace
+        ON namespace.oid = extension.extnamespace
+     WHERE extension.extname = 'pgcontext';
+    IF extension_namespace <> 'pgcontext' THEN
+        RAISE EXCEPTION 'upgraded extension namespace is %, expected pgcontext', extension_namespace;
+    END IF;
+
+    SELECT namespace.nspname
+      INTO dependency_namespace
+      FROM pg_catalog.pg_extension AS extension
+      JOIN pg_catalog.pg_depend AS dependency
+        ON dependency.classid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+       AND dependency.objid = extension.oid
+       AND dependency.refclassid = 'pg_catalog.pg_namespace'::pg_catalog.regclass
+       AND dependency.deptype = 'n'
+      JOIN pg_catalog.pg_namespace AS namespace
+        ON namespace.oid = dependency.refobjid
+     WHERE extension.extname = 'pgcontext';
+    IF dependency_namespace <> extension_namespace THEN
+        RAISE EXCEPTION 'extension namespace dependency is %, expected %', dependency_namespace, extension_namespace;
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_namespace AS namespace
+          JOIN pg_catalog.pg_depend AS dependency
+            ON dependency.classid = 'pg_catalog.pg_namespace'::pg_catalog.regclass
+           AND dependency.objid = namespace.oid
+           AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+           AND dependency.deptype = 'e'
+          JOIN pg_catalog.pg_extension AS extension ON extension.oid = dependency.refobjid
+         WHERE namespace.nspname = 'pgcontext' AND extension.extname = 'pgcontext'
+    ) INTO schema_is_extension_member;
+    IF schema_is_extension_member THEN
+        RAISE EXCEPTION 'pgcontext schema remained an extension member after upgrade';
+    END IF;
+
+    SELECT count(*) FILTER (WHERE namespace.nspname = 'pgcontext'),
+           count(*) FILTER (WHERE namespace.nspname = 'public')
+      INTO support_functions, public_support_functions
+      FROM pg_catalog.pg_proc AS procedure
+      JOIN pg_catalog.pg_namespace AS namespace
+        ON namespace.oid = procedure.pronamespace
+     WHERE procedure.proname IN (
+         'vector_in', 'vector_out', 'halfvec_in', 'halfvec_out',
+         'sparsevec_in', 'sparsevec_out', 'bitvec_in', 'bitvec_out'
+     );
+    IF support_functions <> 8 OR public_support_functions <> 0 THEN
+        RAISE EXCEPTION 'type support function schema parity failed: pgcontext %, public %',
+                        support_functions, public_support_functions;
+    END IF;
+
+    SELECT cardinality(proallargtypes)
+      INTO serving_columns
+      FROM pg_catalog.pg_proc
+     WHERE oid = 'pgcontext.hnsw_serving_stats()'::pg_catalog.regprocedure;
+    SELECT cardinality(proallargtypes)
+      INTO migration_columns
+      FROM pg_catalog.pg_proc
+     WHERE oid = 'pgcontext.migration_report()'::pg_catalog.regprocedure;
+    SELECT prosecdef
+      INTO mmap_security_definer
+      FROM pg_catalog.pg_proc
+     WHERE oid = 'pgcontext.build_mmap_hnsw_artifact(bigint)'::pg_catalog.regprocedure;
+    IF serving_columns <> 14 OR migration_columns <> 10 OR mmap_security_definer THEN
+        RAISE EXCEPTION 'retained C function ABI/ACL transition is stale: serving %, migration %, definer %',
+                        serving_columns, migration_columns, mmap_security_definer;
+    END IF;
+
+    PERFORM * FROM pgcontext.hnsw_serving_stats();
+    PERFORM * FROM pgcontext.migration_report();
+END
+$$;
+SQL
+    local default_path_types
+    default_path_types="$(
+        PGOPTIONS='-c search_path="$user",public' \
+            psql -h "${PGHOST}" -p "${PGPORT}" -d "${DBNAME}" \
+            -v ON_ERROR_STOP=1 -Atc \
+            "SELECT (pg_catalog.to_regtype('vector') IS NULL)::text || '|' || (pg_catalog.to_regtype('pgcontext.vector') IS NOT NULL)::text"
+    )"
+    if [[ "${default_path_types}" != "true|true" ]]; then
+        echo "upgraded vector type qualification contract failed: ${default_path_types}" >&2
+        exit 1
+    fi
+    echo "upgrade_default_search_path_requires_qualified_vector"
+}
+
+validate_upgraded_dump_restore() {
+    local restore_db="${DBNAME}_restore"
+    local dump_file="${HEAVY_TMPDIR}/${DBNAME}-upgrade-restore.sql"
+    require_simple_identifier "${restore_db}" "restore database"
+    "$(pg_bin pg_dump)" -h "${PGHOST}" -p "${PGPORT}" -d "${DBNAME}" \
+        --format=plain --no-owner --no-privileges --file="${dump_file}"
+    drop_database "${restore_db}"
+    create_database "${restore_db}"
+    psql -h "${PGHOST}" -p "${PGPORT}" -d "${restore_db}" -v ON_ERROR_STOP=1 \
+        -f "${dump_file}"
+    local restored_namespace
+    restored_namespace="$(psql -h "${PGHOST}" -p "${PGPORT}" -d "${restore_db}" -Atc \
+        "SELECT namespace.nspname FROM pg_catalog.pg_extension AS extension JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = extension.extnamespace WHERE extension.extname = 'pgcontext'")"
+    if [[ "${restored_namespace}" != "pgcontext" ]]; then
+        echo "restored extension namespace is ${restored_namespace}, expected pgcontext" >&2
+        exit 1
+    fi
+    drop_database "${restore_db}"
+    rm -f -- "${dump_file}"
+    echo "upgrade_dump_restore_exercised: ${CURRENT_VERSION}"
+}
+
+validate_pgvector_first_upgrade_preflight() {
+    local previous_version="$1"
+    reset_database
+    stage_pgvector_stub_if_needed
+    stage_previous_control "${previous_version}"
+    psql_db -c "CREATE EXTENSION vector" \
+        -c "CREATE TABLE public.coexist_docs (id bigint PRIMARY KEY, embedding public.vector NOT NULL)" \
+        -c "INSERT INTO public.coexist_docs VALUES (1, '[1,2]'::public.vector)" \
+        -c "CREATE EXTENSION pgcontext VERSION '${previous_version}'"
+    restore_current_control
+    if psql_db -c "ALTER EXTENSION pgcontext UPDATE TO '${CURRENT_VERSION}'"; then
+        echo "pgvector-first ${previous_version} upgrade unexpectedly succeeded" >&2
+        exit 1
+    fi
+    psql_db <<SQL
+DO \$\$
+DECLARE
+    installed_version text;
+    vector_owner text;
+    strategy_column_exists boolean;
+    preserved_value text;
+    preserved_type oid;
+BEGIN
+    SELECT extversion INTO installed_version
+      FROM pg_catalog.pg_extension WHERE extname = 'pgcontext';
+    IF installed_version <> '${previous_version}' THEN
+        RAISE EXCEPTION 'failed coexistence preflight changed extension version to %', installed_version;
+    END IF;
+    SELECT extension.extname
+      INTO vector_owner
+      FROM pg_catalog.pg_type AS type
+      JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = type.typnamespace
+      JOIN pg_catalog.pg_depend AS dependency
+        ON dependency.classid = 'pg_catalog.pg_type'::pg_catalog.regclass
+       AND dependency.objid = type.oid
+       AND dependency.deptype = 'e'
+      JOIN pg_catalog.pg_extension AS extension ON extension.oid = dependency.refobjid
+     WHERE namespace.nspname = 'public' AND type.typname = 'vector';
+    IF vector_owner <> 'vector' THEN
+        RAISE EXCEPTION 'coexistence preflight changed pgvector type ownership to %', vector_owner;
+    END IF;
+    SELECT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_attribute
+         WHERE attrelid = 'pgcontext._query_stats'::pg_catalog.regclass
+           AND attname = 'strategy' AND NOT attisdropped
+    ) INTO strategy_column_exists;
+    IF strategy_column_exists THEN
+        RAISE EXCEPTION 'failed coexistence preflight left partial 0.2 catalog changes';
+    END IF;
+    SELECT embedding::text, pg_catalog.pg_typeof(embedding)::oid
+      INTO preserved_value, preserved_type
+      FROM public.coexist_docs WHERE id = 1;
+    IF preserved_value <> '[1,2]' OR preserved_type <> 'public.vector'::pg_catalog.regtype::oid THEN
+        RAISE EXCEPTION 'failed coexistence preflight changed user vector value/type: %, %',
+                        preserved_value, preserved_type;
+    END IF;
+END
+\$\$;
+SQL
+    echo "pgvector_first_upgrade_preflight_exercised: ${previous_version} -> ${CURRENT_VERSION}"
+}
+
+validate_non_superuser_upgrade_refusal() {
+    local previous_version="$1"
+    local probe_role="m1_upgrade_non_super_probe"
+    reset_database
+    drop_role_if_exists "${probe_role}"
+    psql_postgres -c "CREATE ROLE ${probe_role} LOGIN SUPERUSER"
+    stage_previous_control "${previous_version}"
+    psql_db -c "SET SESSION AUTHORIZATION ${probe_role}; CREATE EXTENSION pgcontext VERSION '${previous_version}'"
+    restore_current_control
+    psql_postgres -c "ALTER ROLE ${probe_role} NOSUPERUSER"
+
+    if psql_db -c "SET SESSION AUTHORIZATION ${probe_role}; ALTER EXTENSION pgcontext UPDATE TO '${CURRENT_VERSION}'"; then
+        echo "non-superuser ${previous_version} upgrade unexpectedly succeeded" >&2
+        exit 1
+    fi
+    assert_sql_equals \
+        "SELECT extversion FROM pg_catalog.pg_extension WHERE extname = 'pgcontext'" \
+        "${previous_version}"
+    assert_sql_equals \
+        "SELECT (pg_catalog.to_regtype('public.vector') IS NOT NULL AND pg_catalog.to_regtype('pgcontext.vector') IS NULL)::text" \
+        "true"
+    assert_sql_equals \
+        "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid = 'pgcontext._query_stats'::pg_catalog.regclass AND attname = 'strategy' AND NOT attisdropped)::text" \
+        "false"
+
+    reset_database
+    drop_role_if_exists "${probe_role}"
+    echo "non_superuser_upgrade_refusal_exercised: ${previous_version} -> ${CURRENT_VERSION}"
+}
+
+validate_upgraded_drop_recreate() {
+    local locker_application="pgcontext_upgrade_recreation_locker"
+    local ddl_application="pgcontext_upgrade_recreation_ddl"
+    local locker_client_pid locker_backend_pid ddl_client_pid ddl_backend_pid
+    PGAPPNAME="${locker_application}" psql_db -c "
+        BEGIN;
+        LOCK TABLE pgcontext._query_stats IN ACCESS EXCLUSIVE MODE;
+        SELECT pg_catalog.pg_sleep(30);
+        COMMIT
+    " >/dev/null 2>&1 &
+    locker_client_pid=$!
+    locker_backend_pid=""
+    for _ in $(seq 1 100); do
+        locker_backend_pid="$(psql_db -Atc "
+            SELECT activity.pid
+              FROM pg_catalog.pg_stat_activity AS activity
+              JOIN pg_catalog.pg_locks AS lock
+                ON lock.pid = activity.pid
+               AND lock.relation = 'pgcontext._query_stats'::pg_catalog.regclass
+               AND lock.granted
+             WHERE activity.application_name = '${locker_application}'
+               AND activity.datname = current_database()
+             LIMIT 1
+        ")"
+        [[ "${locker_backend_pid}" =~ ^[1-9][0-9]*$ ]] && break
+        sleep 0.05
+    done
+    if [[ ! "${locker_backend_pid}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "recreation probe could not establish the telemetry table lock" >&2
+        exit 1
+    fi
+
+    psql_db <<'SQL'
+DO $$
+BEGIN
+    FOR attempt IN 1..512 LOOP
+        PERFORM *
+          FROM pgcontext.execute_query(
+               'upgrade_docs',
+               pgcontext.query_lookup(ARRAY[1]::bigint[])
+          );
+    END LOOP;
+END
+$$;
+SQL
+    local pending_before old_worker_pid
+    pending_before="$(psql_db -Atc "SELECT pending FROM pgcontext.query_telemetry_queue_stats()")"
+    old_worker_pid="$(psql_db -Atc "SELECT COALESCE(worker_pid, 0) FROM pgcontext.query_telemetry_queue_stats()")"
+    if [[ ! "${pending_before}" =~ ^[1-9][0-9]*$ || ! "${old_worker_pid}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "recreation probe did not establish pending work and a live old worker: pending=${pending_before}, worker=${old_worker_pid}" >&2
+        exit 1
+    fi
+
+    PGAPPNAME="${ddl_application}" psql_db -c "
+        BEGIN;
+        DROP EXTENSION pgcontext CASCADE;
+        CREATE EXTENSION pgcontext;
+        COMMIT
+    " >/dev/null 2>&1 &
+    ddl_client_pid=$!
+    ddl_backend_pid=""
+    for _ in $(seq 1 100); do
+        ddl_backend_pid="$(psql_db -Atc "
+            SELECT pid
+              FROM pg_catalog.pg_stat_activity
+             WHERE application_name = '${ddl_application}'
+               AND datname = current_database()
+               AND wait_event_type = 'Lock'
+             LIMIT 1
+        ")"
+        [[ "${ddl_backend_pid}" =~ ^[1-9][0-9]*$ ]] && break
+        sleep 0.05
+    done
+    if [[ ! "${ddl_backend_pid}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "recreation DDL did not wait behind the telemetry worker" >&2
+        exit 1
+    fi
+    assert_sql_equals \
+        "SELECT pg_catalog.pg_terminate_backend(${locker_backend_pid})::text" \
+        "true"
+    if wait "${locker_client_pid}"; then
+        echo "recreation lock holder unexpectedly completed" >&2
+        exit 1
+    fi
+    wait "${ddl_client_pid}"
+
+    assert_sql_equals \
+        "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE pid = ${old_worker_pid})::text" \
+        "true"
+    psql_db <<'SQL'
+CREATE TABLE public.upgrade_recreate_probe (id bigint PRIMARY KEY);
+INSERT INTO public.upgrade_recreate_probe VALUES (1);
+SELECT pgcontext.create_collection(
+    'upgrade_recreate_probe', 'public.upgrade_recreate_probe'
+);
+SELECT pgcontext.upsert_points('upgrade_recreate_probe', ARRAY['1']);
+SELECT *
+  FROM pgcontext.execute_query(
+       'upgrade_recreate_probe',
+       pgcontext.query_lookup(ARRAY[1]::bigint[])
+  );
+SQL
+    for _ in $(seq 1 100); do
+        recreation_state="$(psql_db -Atc "
+            SELECT pending || '|' || dropped_orphaned || '|' ||
+                   database_slot_exhausted || '|' || COALESCE(worker_pid, 0)
+              FROM pgcontext.query_telemetry_queue_stats()
+        ")"
+        IFS='|' read -r pending dropped_orphaned slot_exhausted new_worker_pid \
+            <<<"${recreation_state}"
+        if [[ "${pending}" == "0" && "${dropped_orphaned}" =~ ^[1-9][0-9]*$ ]]; then
+            break
+        fi
+        sleep 0.05
+    done
+    if [[ "${pending}" != "0" || ! "${dropped_orphaned}" =~ ^[1-9][0-9]*$ \
+          || "${slot_exhausted}" != "0" || "${new_worker_pid}" == "${old_worker_pid}" ]]; then
+        echo "unsafe extension-generation slot transition: ${recreation_state}, old_worker=${old_worker_pid}" >&2
+        exit 1
+    fi
+    assert_sql_equals \
+        "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity WHERE pid = ${old_worker_pid})::text" \
+        "true"
+    assert_sql_equals \
+        "SELECT namespace.nspname FROM pg_catalog.pg_extension AS extension JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = extension.extnamespace WHERE extension.extname = 'pgcontext'" \
+        "pgcontext"
+    echo "upgrade_drop_recreate_exercised: ${CURRENT_VERSION} (purged ${dropped_orphaned} stale events)"
 }
 
 validate_representative_behavior() {
@@ -357,6 +951,7 @@ SQL
     fi
 
     validate_lifecycle_state
+    validate_visibility_barriers
     validate_representative_behavior
     psql_db <<SQL
 DO \$\$
@@ -402,6 +997,7 @@ CREATE EXTENSION pgcontext VERSION '${CURRENT_VERSION}';
 SQL
 
 validate_lifecycle_state
+validate_visibility_barriers
 load_representative_state
 validate_representative_behavior
 validate_vector_metadata_compatibility
@@ -421,8 +1017,21 @@ fi
 
 stage_previous_install_sql_versions "${previous_versions[@]}"
 
+if [[ "${UPGRADE_MATRIX_STAGING_ONLY:-0}" == "1" ]]; then
+    for version in "${previous_versions[@]}"; do
+        stage_previous_control "${version}"
+        psql_db -c "CREATE EXTENSION pgcontext VERSION '${version}'"
+        restore_current_control
+        echo "upgrade_staging_exercised: ${version} -> ${CURRENT_VERSION}"
+    done
+    exit 0
+fi
+
 for version in "${previous_versions[@]}"; do
+    validate_pgvector_first_upgrade_preflight "${version}"
+    validate_non_superuser_upgrade_refusal "${version}"
     reset_database
+    stage_previous_control "${version}"
     psql_db <<SQL
 CREATE TABLE public.preexisting_source_table (
     id bigint PRIMARY KEY,
@@ -434,15 +1043,21 @@ DROP ROLE IF EXISTS m1_upgrade_priv_probe;
 CREATE ROLE m1_upgrade_priv_probe;
 CREATE EXTENSION pgcontext VERSION '${version}';
 SQL
+    restore_current_control
 
     validate_lifecycle_state
-    load_representative_state
+    load_representative_legacy_state
 
     psql_db -c "ALTER EXTENSION pgcontext UPDATE TO '${CURRENT_VERSION}'"
     echo "upgrade_path_exercised: ${version} -> ${CURRENT_VERSION}"
 
+    validate_legacy_automatic_reclassification
+    validate_upgrade_catalog_transition
     validate_lifecycle_state
+    validate_visibility_barriers
     validate_representative_behavior
     validate_vector_metadata_compatibility
+    validate_upgraded_dump_restore
     validate_failed_update_rollback_path
+    validate_upgraded_drop_recreate
 done

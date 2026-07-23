@@ -1,6 +1,7 @@
 //! Named dense-vector search overloads.
 
 use context_core::{CollectionName, VectorName};
+use pgrx::JsonB;
 use pgrx::prelude::*;
 
 use crate::Vector;
@@ -12,7 +13,7 @@ use super::{
     search_registered_table, search_registered_table_filtered, validate_search_drift,
 };
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection_named_vector(
     collection: String,
@@ -46,7 +47,7 @@ pub fn search_collection_named_vector(
     TableIterator::new(rows)
 }
 
-#[pg_extern(schema = "pgcontext", name = "search")]
+#[pg_extern(name = "search")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn search_collection_named_vector_filtered(
     collection: String,
@@ -90,7 +91,7 @@ pub fn search_collection_named_vector_filtered(
     TableIterator::new(rows)
 }
 
-pub(super) fn resolve_registered_vector_by_name(
+pub(crate) fn resolve_registered_vector_by_name(
     collection_name: &CollectionName,
     collection_id: i64,
     vector_name: &VectorName,
@@ -103,7 +104,8 @@ pub(super) fn resolve_registered_vector_by_name(
                     vector_column_name,
                     vector_attnum,
                     hnsw_index_oid,
-                    metric
+                    metric,
+                    quantization_options
                FROM pgcontext._visible_collection_vectors
               WHERE collection_id = $1
                 AND vector_name = $2",
@@ -140,6 +142,12 @@ pub(super) fn resolve_registered_vector_by_name(
                 super::spi_required_column::<String>(&row, 7, "metric"),
                 "vector",
             ),
+            quantization_options: super::spi_required_column::<JsonB>(
+                &row,
+                8,
+                "quantization_options",
+            )
+            .0,
         }
     })
 }

@@ -61,7 +61,7 @@ fn build_job_failpoint(stage: u8, label: &'static str) {
 }
 
 #[cfg(feature = "pg_test")]
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 fn test_set_build_job_failpoint(name: Option<String>) {
     let failpoint = match name.as_deref() {
         None => 0,
@@ -97,7 +97,7 @@ fn test_set_build_job_failpoint(name: Option<String>) {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "start_build_job", security_definer)]
+#[pg_extern(name = "start_build_job", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn start_build_job(
     collection: String,
@@ -153,7 +153,7 @@ pub fn start_build_job(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "build_jobs", security_definer)]
+#[pg_extern(name = "build_jobs", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn build_jobs(
     collection: String,
@@ -200,7 +200,7 @@ pub fn build_jobs(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "update_build_job", security_definer)]
+#[pg_extern(name = "update_build_job", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn update_build_job(
     build_job_id: i64,
@@ -280,7 +280,7 @@ pub fn update_build_job(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "request_build_cancel", security_definer)]
+#[pg_extern(name = "request_build_cancel", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn request_build_cancel(
     build_job_id: i64,
@@ -326,7 +326,7 @@ pub fn request_build_cancel(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "retry_build_job", security_definer)]
+#[pg_extern(name = "retry_build_job", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn retry_build_job(
     build_job_id: i64,
@@ -383,7 +383,7 @@ pub fn retry_build_job(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "run_build_job", security_definer)]
+#[pg_extern(name = "run_build_job", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn run_build_job(
     build_job_id: i64,

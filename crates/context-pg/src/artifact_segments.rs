@@ -14,9 +14,10 @@ use context_index::{HnswGraph, HnswPointId};
 use context_storage::{
     CURRENT_SEGMENT_FORMAT_VERSION, HnswGraphArtifactRecord, HnswGraphPayloadError, SegmentBytes,
     SegmentError, SegmentFileError, SegmentHeader, SegmentKind, SegmentWriteStage,
-    decode_hnsw_graph_payload, encode_hnsw_graph_payload, encode_segment, load_segment_file,
+    decode_hnsw_graph_payload, encode_hnsw_graph_payload_v2, encode_segment, load_segment_file,
     validate_mmap_segment, write_segment_atomic_with_hook,
 };
+use pgrx::JsonB;
 use pgrx::prelude::*;
 
 use crate::domain_types::{
@@ -40,7 +41,7 @@ fn artifact_publish_failpoint(stage: u8, label: &'static str) {
 }
 
 #[cfg(feature = "pg_test")]
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 fn test_set_artifact_publish_failpoint(name: Option<String>) {
     let stage = match name.as_deref() {
         None => 0,
@@ -59,7 +60,9 @@ fn test_set_artifact_publish_failpoint(name: Option<String>) {
 }
 
 mod diagnostics;
+mod quantization;
 mod serving_readiness;
+pub(crate) use serving_readiness::with_mapped_artifact_payload;
 
 type ArtifactSegmentResult = (
     i64,
@@ -168,7 +171,7 @@ impl From<SegmentKind> for ArtifactSegmentKind {
 }
 
 /// Encodes a rebuildable segment artifact with the storage header and checksum.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn encode_artifact_segment(kind: String, payload: Vec<u8>) -> Vec<u8> {
     let kind = ArtifactSegmentKind::from_sql(&kind);
     match encode_segment(kind.storage_kind(), &payload) {
@@ -178,16 +181,10 @@ pub fn encode_artifact_segment(kind: String, payload: Vec<u8>) -> Vec<u8> {
 }
 
 /// Builds a deterministic mmap graph artifact from visible source rows.
-#[pg_extern(schema = "pgcontext", security_definer, volatile)]
+#[pg_extern(volatile)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn build_mmap_hnsw_artifact(build_job_id: i64) -> Vec<u8> {
-    let job = resolve_publishable_build_job(build_job_id);
-    if job.artifact_kind != ArtifactKind::Mmap {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            "source-built artifact publication requires an mmap build job",
-        );
-    }
+    let job = resolve_visible_mmap_build_job(build_job_id);
     let collection_name = context_core::CollectionName::new(job.collection_name.clone())
         .unwrap_or_else(|error| raise_core_error(error));
     let mut registered =
@@ -267,17 +264,26 @@ pub fn build_mmap_hnsw_artifact(build_job_id: i64) -> Vec<u8> {
             )
         })
         .collect::<Vec<_>>();
-    let payload = encode_hnsw_graph_payload(&records).unwrap_or_else(|error| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
-            format!("source artifact graph is not buildable: {error}"),
-        )
-    });
+    let quantization =
+        quantization::quantize_graph_records(&records, &registered.quantization_options)
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                    format!("source artifact quantization is not buildable: {error}"),
+                )
+            });
+    let payload =
+        encode_hnsw_graph_payload_v2(&records, quantization.as_ref()).unwrap_or_else(|error| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!("source artifact graph is not buildable: {error}"),
+            )
+        });
     encode_artifact_segment("hnsw_graph".to_owned(), payload)
 }
 
 /// Validates a rebuildable segment artifact without copying its payload bytes.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn validate_artifact_segment(
     segment: Vec<u8>,
 ) -> TableIterator<
@@ -307,7 +313,7 @@ pub fn validate_artifact_segment(
 }
 
 /// Validates a rebuildable HNSW graph artifact segment and its portable payload.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn validate_hnsw_graph_artifact(
     segment: Vec<u8>,
 ) -> TableIterator<
@@ -364,7 +370,7 @@ pub fn validate_hnsw_graph_artifact(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn publish_artifact_segment(
     build_job_id: i64,
@@ -386,7 +392,9 @@ pub fn publish_artifact_segment(
     ),
 > {
     let job = resolve_publishable_build_job(build_job_id);
-    let metadata = validated_segment_metadata(&segment);
+    let validated = validated_segment(&segment);
+    validate_artifact_payload_policy(&job, &validated);
+    let metadata = validated.metadata;
     lock_artifact_publish_target(&job);
     let generation = next_artifact_generation(&job);
     let artifact_id = insert_artifact_segment(&job, generation, &metadata, None);
@@ -399,7 +407,7 @@ pub fn publish_artifact_segment(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", security_definer, volatile)]
+#[pg_extern(security_definer, volatile)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn publish_artifact_segment_file(
     build_job_id: i64,
@@ -422,8 +430,9 @@ pub fn publish_artifact_segment_file(
     ),
 > {
     let job = resolve_publishable_build_job(build_job_id);
-    replay_build_delta_tail(build_job_id);
     let validated = validated_segment(&segment);
+    validate_artifact_payload_policy(&job, &validated);
+    replay_build_delta_tail(build_job_id);
     lock_artifact_publish_target(&job);
     let generation = next_artifact_generation(&job);
     let relative_path = artifact_relative_path(&job, generation);
@@ -464,6 +473,59 @@ pub fn publish_artifact_segment_file(
     ))
 }
 
+fn validate_artifact_payload_policy(job: &PublishableBuildJob, segment: &ValidatedSegment<'_>) {
+    if job.artifact_kind != ArtifactKind::Mmap || segment.storage_kind != SegmentKind::HnswGraph {
+        return;
+    }
+    let quantization_options = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT vectors.quantization_options
+               FROM pgcontext._visible_collection_vectors AS vectors
+              WHERE vectors.collection_id = $1
+              ORDER BY vectors.vector_id",
+            Some(1),
+            &[job.collection_id.into()],
+        )?;
+        if rows.is_empty() {
+            Ok::<_, spi::Error>(None)
+        } else {
+            Ok(Some(required_column(
+                rows.first().get::<JsonB>(1)?,
+                "quantization_options",
+            )))
+        }
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("artifact quantization policy lookup failed: {error}"),
+        )
+    });
+    let Some(quantization_options) = quantization_options else {
+        return;
+    };
+    let quantization_options = quantization_options.0;
+    let configured_mode = quantization_options
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("none");
+    let graph = match context_storage::decode_hnsw_graph_payload_versioned(segment.payload) {
+        Ok(graph) => graph,
+        Err(_) if configured_mode == "none" => return,
+        Err(error) => raise_hnsw_graph_payload_error(error),
+    };
+    if let Err(error) = quantization::validate_graph_quantization_policy(
+        graph.records(),
+        graph.quantization(),
+        &quantization_options,
+    ) {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            format!("artifact quantization policy mismatch: {error}"),
+        );
+    }
+}
+
 fn replay_build_delta_tail(build_job_id: i64) {
     // No table lock. This used to take SHARE ROW EXCLUSIVE on
     // `_collection_points` to quiesce writers around the delete, but any
@@ -496,7 +558,7 @@ fn replay_build_delta_tail(build_job_id: i64) {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "artifact_segments", security_definer)]
+#[pg_extern(name = "artifact_segments", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn list_artifact_segments(
     collection: String,
@@ -528,11 +590,7 @@ pub fn list_artifact_segments(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "artifact_segment_memory",
-    security_definer
-)]
+#[pg_extern(name = "artifact_segment_memory", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn artifact_segment_memory(
     collection: String,
@@ -560,11 +618,7 @@ pub fn artifact_segment_memory(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "retire_artifact_segment",
-    security_definer
-)]
+#[pg_extern(name = "retire_artifact_segment", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn retire_artifact_segment(
     artifact_id: i64,
@@ -609,12 +663,7 @@ pub fn retire_artifact_segment(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "cleanup_artifact_segments",
-    security_definer,
-    volatile
-)]
+#[pg_extern(name = "cleanup_artifact_segments", security_definer, volatile)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn cleanup_artifact_segments(
     collection: String,
@@ -659,11 +708,7 @@ pub fn cleanup_artifact_segments(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "artifact_segment_diagnostics",
-    security_definer
-)]
+#[pg_extern(name = "artifact_segment_diagnostics", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn artifact_segment_diagnostics(
     collection: String,

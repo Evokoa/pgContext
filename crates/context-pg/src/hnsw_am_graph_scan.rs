@@ -148,9 +148,28 @@ unsafe fn hnsw_page_graph_scan_candidates(
     });
     let normalized_query;
     let query = if metric == HnswScoreMetric::Cosine {
-        normalized_query = metric
+        let Some(prepared) = metric
             .prepare_vector(query.clone())
-            .unwrap_or_else(|error| raise_core_error(error));
+            .unwrap_or_else(|error| raise_core_error(error))
+        else {
+            // pgvector treats a zero cosine query as an unordered walk over
+            // the entries the cosine opclass could index. Preserve that
+            // compatibility behavior (including post-build delta entries)
+            // rather than manufacturing distances for an undefined metric.
+            // SAFETY: The active AM scan owns this live relation.
+            let mut candidates =
+                unsafe { hnsw_unordered_scan_candidates_with_delta(index_relation) };
+            candidates.truncate(requested_limit);
+            return HnswScanCandidates {
+                work: HnswScanWork {
+                    candidates: candidates.len(),
+                    ..HnswScanWork::default()
+                },
+                candidates,
+                requested_limit,
+            };
+        };
+        normalized_query = prepared;
         &normalized_query
     } else {
         query
@@ -177,8 +196,58 @@ unsafe fn hnsw_page_graph_scan_candidates(
             graph.page_visits,
             graph.node_reads,
             limit.get(),
+            None,
         )
     }
+}
+
+/// Returns every live base or delta entry for an unordered index scan.
+///
+/// Delta records are replayed in append order so a later tombstone retires a
+/// base/live entry and a later live record replaces an earlier one.
+///
+/// # Safety
+///
+/// `index_relation` must remain a live index relation for the complete scan.
+unsafe fn hnsw_unordered_scan_candidates_with_delta(
+    index_relation: pg_sys::Relation,
+) -> Vec<HnswScanCandidate> {
+    // SAFETY: The caller owns the live relation for this AM callback.
+    let records = unsafe { read_hnsw_vector_records(index_relation) };
+    let mut candidates = hnsw_unordered_scan_candidates(records)
+        .into_iter()
+        .map(|candidate| (candidate.heap_tid, candidate))
+        .collect::<BTreeMap<_, _>>();
+
+    // SAFETY: The metapage and its published delta boundary belong to the
+    // same live relation held by the caller.
+    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+    if meta.delta_start_block != u64::MAX {
+        // SAFETY: `delta_start_block` was validated by the delta reader.
+        let delta_records =
+            unsafe { read_hnsw_delta_records(index_relation, meta.delta_start_block) };
+        if !delta_records.is_empty() {
+            record_hnsw_delta_segment_scan();
+        }
+        for record in delta_records {
+            match record.kind {
+                DeltaRecordKind::Live => {
+                    candidates.insert(
+                        record.heap_tid,
+                        HnswScanCandidate {
+                            heap_tid: record.heap_tid,
+                            score: 0.0,
+                        },
+                    );
+                }
+                DeltaRecordKind::Tombstone => {
+                    candidates.remove(&record.heap_tid);
+                }
+            }
+        }
+    }
+
+    candidates.into_values().collect()
 }
 
 unsafe fn hnsw_page_graph_scan_candidates_with_mask(
@@ -191,9 +260,25 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
 ) -> HnswScanCandidates {
     let normalized_query;
     let query = if metric == HnswScoreMetric::Cosine {
-        normalized_query = metric
+        let Some(prepared) = metric
             .prepare_vector(query.clone())
-            .unwrap_or_else(|error| raise_core_error(error));
+            .unwrap_or_else(|error| raise_core_error(error))
+        else {
+            // SAFETY: The active AM scan owns this live relation.
+            let mut candidates =
+                unsafe { hnsw_unordered_scan_candidates_with_delta(index_relation) };
+            candidates.retain(|candidate| mask.allows(HnswPointId::new(candidate.heap_tid)));
+            candidates.truncate(limit.get());
+            return HnswScanCandidates {
+                work: HnswScanWork {
+                    candidates: candidates.len(),
+                    ..HnswScanWork::default()
+                },
+                candidates,
+                requested_limit: limit.get(),
+            };
+        };
+        normalized_query = prepared;
         &normalized_query
     } else {
         query
@@ -223,6 +308,7 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
             graph.page_visits,
             graph.node_reads,
             limit.get(),
+            Some(mask),
         )
     }
 }
@@ -239,6 +325,7 @@ unsafe fn hnsw_scan_candidates_with_delta_merge(
     page_visits: usize,
     node_reads: usize,
     requested_limit: usize,
+    delta_mask: Option<&CandidateMask>,
 ) -> HnswScanCandidates {
     // SAFETY: this adapter exists only for the active AM callback.
     let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
@@ -264,15 +351,20 @@ unsafe fn hnsw_scan_candidates_with_delta_merge(
         );
     }
     record_hnsw_delta_segment_scan();
-    let entries = delta_records.iter().map(|record| match record.kind {
-        DeltaRecordKind::Live => DeltaScanEntry::Live {
-            heap_tid: record.heap_tid,
-            vector: record.vector.as_slice(),
-        },
-        DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
-            heap_tid: record.heap_tid,
-        },
-    });
+    let entries = delta_records
+        .iter()
+        .filter(|record| {
+            delta_mask.is_none_or(|mask| mask.allows(HnswPointId::new(record.heap_tid)))
+        })
+        .map(|record| match record.kind {
+            DeltaRecordKind::Live => DeltaScanEntry::Live {
+                heap_tid: record.heap_tid,
+                vector: record.vector.as_slice(),
+            },
+            DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
+                heap_tid: record.heap_tid,
+            },
+        });
     let delta_outcome = scan_delta_topk(
         entries,
         metric.navigation_metric(),
@@ -280,6 +372,7 @@ unsafe fn hnsw_scan_candidates_with_delta_merge(
         requested_limit,
     )
     .unwrap_or_else(|error| raise_hnsw_scan_error(error));
+    let scored_delta_vectors = delta_outcome.scored_count;
     let base_hits = outcome
         .results()
         .iter()
@@ -299,7 +392,7 @@ unsafe fn hnsw_scan_candidates_with_delta_merge(
     HnswScanCandidates {
         work: HnswScanWork {
             page_visits,
-            node_reads,
+            node_reads: node_reads.saturating_add(scored_delta_vectors),
             candidates: candidates.len(),
             rechecks: 0,
             exact_strategy: false,

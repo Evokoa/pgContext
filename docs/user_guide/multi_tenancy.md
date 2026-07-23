@@ -16,7 +16,7 @@ register it as a filter field:
 CREATE TABLE docs (
   id bigint PRIMARY KEY,
   tenant_id text NOT NULL,
-  embedding vector NOT NULL,
+  embedding pgcontext.vector NOT NULL,
   body text NOT NULL
 );
 
@@ -31,7 +31,7 @@ Every tenant-scoped read should include the tenant filter:
 SELECT point_id, source_key, score
 FROM pgcontext.search(
   'docs',
-  '[0,0,0]'::vector,
+  '[0,0,0]'::pgcontext.vector,
   '{"must":[{"key":"tenant_id","match":"acme"}]}',
   10
 );
@@ -67,7 +67,7 @@ table by tenant and register the partitioned parent:
 CREATE TABLE docs (
   id bigint NOT NULL,
   tenant_id text NOT NULL,
-  embedding vector NOT NULL,
+  embedding pgcontext.vector NOT NULL,
   PRIMARY KEY (tenant_id, id)
 ) PARTITION BY LIST (tenant_id);
 
@@ -87,7 +87,7 @@ WITH exact AS (
   SELECT array_agg(point_id ORDER BY score, point_id) AS point_ids
   FROM pgcontext.search(
     'docs',
-    '[0,0,0]'::vector,
+    '[0,0,0]'::pgcontext.vector,
     '{"must":[{"key":"tenant_id","match":"acme"}]}',
     100
   )

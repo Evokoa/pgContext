@@ -3,7 +3,7 @@ set -euo pipefail
 
 PG_VERSION="${PG_VERSION:-pg17}"
 PG_FEATURE="${PG_FEATURE:-pg17}"
-PG_CONFIG="${PG_CONFIG:-/opt/homebrew/opt/postgresql@17/bin/pg_config}"
+PG_CONFIG="${PG_CONFIG:-$(cargo pgrx info pg-config "${PG_VERSION}")}"
 PGHOST="${PGHOST:-localhost}"
 PGPORT="${PGPORT:-28817}"
 DBNAME="${DBNAME:-pgcontext_heavy}"
@@ -26,7 +26,10 @@ psql_postgres() {
 }
 
 psql_db() {
-    psql -h "${PGHOST}" -p "${PGPORT}" -d "${DBNAME}" -v ON_ERROR_STOP=1 "$@"
+    # Omit pg_catalog so PostgreSQL searches it implicitly before these
+    # explicit schemas while keeping public as the CREATE target.
+    PGOPTIONS="${PGOPTIONS:-} -c search_path=public,pgcontext" \
+        psql -h "${PGHOST}" -p "${PGPORT}" -d "${DBNAME}" -v ON_ERROR_STOP=1 "$@"
 }
 
 start_and_install_extension() {
@@ -34,17 +37,24 @@ start_and_install_extension() {
     cargo pgrx install -p context-pg --features "${PG_FEATURE}" --pg-config "${PG_CONFIG}"
 }
 
+start_and_install_test_extension() {
+    cargo pgrx start "${PG_VERSION}"
+    cargo pgrx install --test -p context-pg \
+        --no-default-features --features "${PG_FEATURE} pg_test" \
+        --pg-config "${PG_CONFIG}"
+}
+
 reset_database() {
     require_simple_identifier "${DBNAME}" "DBNAME"
     psql_postgres \
-        -c "DROP DATABASE IF EXISTS ${DBNAME}" \
+        -c "DROP DATABASE IF EXISTS ${DBNAME} WITH (FORCE)" \
         -c "CREATE DATABASE ${DBNAME}"
 }
 
 drop_database() {
     local dbname="$1"
     require_simple_identifier "${dbname}" "database name"
-    psql_postgres -c "DROP DATABASE IF EXISTS ${dbname}"
+    psql_postgres -c "DROP DATABASE IF EXISTS ${dbname} WITH (FORCE)"
 }
 
 create_database() {
@@ -110,4 +120,16 @@ pg_bin() {
     local executable="$1"
     "$(dirname "${PG_CONFIG}")/${executable}" --version >/dev/null
     printf '%s/%s\n' "$(dirname "${PG_CONFIG}")" "${executable}"
+}
+
+installed_test_extension_sql() {
+    local extension_version
+    extension_version="$(sed -n "s/^default_version = '\([^']*\)'/\1/p" \
+        "${REPO_ROOT}/crates/context-pg/pgcontext.control")"
+    if [[ -z "${extension_version}" ]]; then
+        echo "could not read pgcontext default_version" >&2
+        exit 2
+    fi
+    printf '%s/extension/pgcontext--%s.sql\n' \
+        "$("${PG_CONFIG}" --sharedir)" "${extension_version}"
 }

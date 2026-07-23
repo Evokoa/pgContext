@@ -193,109 +193,109 @@ CREATE OPERATOR CLASS pgcontext.bitvec_ops
 );
 
 /// Compares half vectors for btree ordering.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_cmp(left: HalfVec, right: HalfVec) -> i32 {
     ordering_to_i32(compare_halfvecs(left, right))
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_lt(left: HalfVec, right: HalfVec) -> bool {
     compare_halfvecs(left, right).is_lt()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_le(left: HalfVec, right: HalfVec) -> bool {
     compare_halfvecs(left, right).is_le()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_eq(left: HalfVec, right: HalfVec) -> bool {
     compare_halfvecs(left, right).is_eq()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_ne(left: HalfVec, right: HalfVec) -> bool {
     !compare_halfvecs(left, right).is_eq()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_ge(left: HalfVec, right: HalfVec) -> bool {
     compare_halfvecs(left, right).is_ge()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_gt(left: HalfVec, right: HalfVec) -> bool {
     compare_halfvecs(left, right).is_gt()
 }
 
 /// Compares sparse vectors for btree ordering.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_cmp(left: SparseVec, right: SparseVec) -> i32 {
     ordering_to_i32(compare_sparsevecs(left, right))
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_lt(left: SparseVec, right: SparseVec) -> bool {
     compare_sparsevecs(left, right).is_lt()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_le(left: SparseVec, right: SparseVec) -> bool {
     compare_sparsevecs(left, right).is_le()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_eq(left: SparseVec, right: SparseVec) -> bool {
     compare_sparsevecs(left, right).is_eq()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_ne(left: SparseVec, right: SparseVec) -> bool {
     !compare_sparsevecs(left, right).is_eq()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_ge(left: SparseVec, right: SparseVec) -> bool {
     compare_sparsevecs(left, right).is_ge()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn sparsevec_gt(left: SparseVec, right: SparseVec) -> bool {
     compare_sparsevecs(left, right).is_gt()
 }
 
 /// Compares bit vectors for btree ordering.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_cmp(left: BitVec, right: BitVec) -> i32 {
     ordering_to_i32(compare_bitvecs(left, right))
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_lt(left: BitVec, right: BitVec) -> bool {
     compare_bitvecs(left, right).is_lt()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_le(left: BitVec, right: BitVec) -> bool {
     compare_bitvecs(left, right).is_le()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_eq(left: BitVec, right: BitVec) -> bool {
     compare_bitvecs(left, right).is_eq()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_ne(left: BitVec, right: BitVec) -> bool {
     !compare_bitvecs(left, right).is_eq()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_ge(left: BitVec, right: BitVec) -> bool {
     compare_bitvecs(left, right).is_ge()
 }
 
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn bitvec_gt(left: BitVec, right: BitVec) -> bool {
     compare_bitvecs(left, right).is_gt()
 }

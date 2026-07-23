@@ -46,7 +46,7 @@ struct AdvisorRow {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "index_advisor")]
+#[pg_extern(name = "index_advisor")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn index_advisor(
     collection: String,

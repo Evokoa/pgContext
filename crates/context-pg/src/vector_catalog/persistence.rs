@@ -163,7 +163,7 @@ fn resolve_sparse_vector_column(
         let rows = match client.select(
             "SELECT attribute.attnum,
                     attribute.attname::text,
-                    attribute.atttypid = 'public.sparsevec'::regtype AS is_sparsevec,
+                    attribute.atttypid = 'pgcontext.sparsevec'::regtype AS is_sparsevec,
                     pg_catalog.format_type(attribute.atttypid, attribute.atttypmod)
                FROM pg_catalog.pg_attribute AS attribute
               WHERE attribute.attrelid = $1

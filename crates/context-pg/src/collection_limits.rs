@@ -42,7 +42,7 @@ struct LimitCollection {
 }
 
 /// Configures optional strict-mode limits for one collection.
-#[pg_extern(schema = "pgcontext", security_definer)]
+#[pg_extern(security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::too_many_arguments,
@@ -129,7 +129,7 @@ pub fn configure_collection_limits(
 }
 
 /// Returns optional strict-mode limits for one collection.
-#[pg_extern(schema = "pgcontext", stable, security_definer)]
+#[pg_extern(stable, security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 #[allow(
     clippy::type_complexity,

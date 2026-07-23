@@ -127,9 +127,9 @@ The source publication payload is version-neutral and unsigned. Build it twice,
 verify its complete checksum manifest, SBOM, provenance, and policy:
 
 ```sh
-release/build-packages.sh --out-dir target/release-payload v0.1.0
+release/build-packages.sh --out-dir target/release-payload v0.2.0
 scripts/verify-release-payload.py \
-  --tag v0.1.0 \
+  --tag v0.2.0 \
   --candidate-sha "$(git rev-parse HEAD)" \
   target/release-payload
 ```

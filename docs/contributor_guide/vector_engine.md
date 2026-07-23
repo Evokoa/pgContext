@@ -1,6 +1,6 @@
 # Vector Engine Architecture
 
-This document describes the vector engine implemented in pgContext 0.1.0. It covers both PostgreSQL-page HNSW and
+This document describes the vector engine implemented in pgContext 0.2.0. It covers both PostgreSQL-page HNSW and
 rebuildable mmap generations. Exact source-table scoring remains the correctness
 oracle for public retrieval results.
 
@@ -79,14 +79,19 @@ removed by source recheck.
 
 Binary, scalar, and product quantizers plus full-precision reranking are
 implemented as reusable primitives. Scalar encoding uses constant work per
-dimension. The current PostgreSQL-page and mmap navigation records still store
-full-precision vectors; stored SQ8 navigation codes are a remaining performance
-gate and must not be inferred from the quantization helper APIs.
+dimension. Deterministic scalar-range and product-codebook training is owned by
+the pure index crate; identical ordered samples produce identical codebooks,
+and persisted binary codes validate fixed dimensions and padding. Source-built
+mmap artifacts use payload v2 to bind the trained codebook and per-node codes to
+the graph generation. Their ANN traversal reconstructs the encoded navigation
+vectors, requires an oversampled candidate set, and exact-reranks from live
+source rows. Payload v1 remains readable. PostgreSQL-page and packed-image
+navigation still use full-precision vectors pending their versioned formats.
 
 ## Compatibility
 
 The packed SQL vector datum and HNSW metapage/directory formats are specific to
-pgContext 0.1.0. Vector columns and HNSW indexes built by any pre-release
+pgContext 0.2.0. Vector columns and HNSW indexes built by any pre-release
 prototype
 must be reloaded or rebuilt when moving to this engine revision. Segment files
 remain rebuildable acceleration artifacts, never the authoritative copy of

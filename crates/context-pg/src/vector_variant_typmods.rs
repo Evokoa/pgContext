@@ -71,21 +71,21 @@ CREATE CAST (vector AS vector)
 );
 
 /// Parses a `vector(n)` type modifier.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn vector_typmod_in(modifiers: Array<'_, &CStr>) -> i32 {
     parse_vector_typmod(modifiers, "vector")
 }
 
 /// Formats a `vector(n)` type modifier.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn vector_typmod_out(typmod: i32) -> CString {
     format_vector_typmod(typmod)
 }
 
 /// Enforces a declared `vector(n)` typmod during assignment.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn vector_enforce_typmod(vector: Vector, typmod: i32, _explicit: bool) -> Vector {
     if typmod >= 0 {
@@ -96,49 +96,49 @@ pub fn vector_enforce_typmod(vector: Vector, typmod: i32, _explicit: bool) -> Ve
 }
 
 /// Parses a `halfvec(n)` type modifier.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn halfvec_typmod_in(modifiers: Array<'_, &CStr>) -> i32 {
     parse_vector_typmod(modifiers, "halfvec")
 }
 
 /// Formats a `halfvec(n)` type modifier.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn halfvec_typmod_out(typmod: i32) -> CString {
     format_vector_typmod(typmod)
 }
 
 /// Parses a `sparsevec(n)` type modifier.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn sparsevec_typmod_in(modifiers: Array<'_, &CStr>) -> i32 {
     parse_vector_typmod(modifiers, "sparsevec")
 }
 
 /// Formats a `sparsevec(n)` type modifier.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn sparsevec_typmod_out(typmod: i32) -> CString {
     format_vector_typmod(typmod)
 }
 
 /// Parses a `bitvec(n)` type modifier.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn bitvec_typmod_in(modifiers: Array<'_, &CStr>) -> i32 {
     parse_vector_typmod(modifiers, "bitvec")
 }
 
 /// Formats a `bitvec(n)` type modifier.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn bitvec_typmod_out(typmod: i32) -> CString {
     format_vector_typmod(typmod)
 }
 
 /// Enforces a declared `halfvec(n)` typmod during assignment.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn halfvec_enforce_typmod(vector: HalfVec, typmod: i32, _explicit: bool) -> HalfVec {
     if typmod >= 0 {
@@ -153,7 +153,7 @@ pub fn halfvec_enforce_typmod(vector: HalfVec, typmod: i32, _explicit: bool) -> 
 }
 
 /// Enforces a declared `sparsevec(n)` typmod during assignment.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn sparsevec_enforce_typmod(vector: SparseVec, typmod: i32, _explicit: bool) -> SparseVec {
     if typmod >= 0 {
@@ -168,7 +168,7 @@ pub fn sparsevec_enforce_typmod(vector: SparseVec, typmod: i32, _explicit: bool)
 }
 
 /// Enforces a declared `bitvec(n)` typmod during assignment.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe, strict)]
+#[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
 pub fn bitvec_enforce_typmod(vector: BitVec, typmod: i32, _explicit: bool) -> BitVec {
     if typmod >= 0 {

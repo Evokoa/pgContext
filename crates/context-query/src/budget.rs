@@ -2,7 +2,8 @@
 
 use crate::{QueryError, Result};
 use context_core::policy::{
-    MAX_QUERY_EXPANSIONS, MAX_QUERY_STAGES, MAX_RECALL_CHECK_POINT_IDS, MAX_SEARCH_LIMIT,
+    MAX_HNSW_CANDIDATE_MASK_POINTS, MAX_QUERY_EXPANSIONS, MAX_QUERY_STAGES,
+    MAX_RECALL_CHECK_POINT_IDS, MAX_SEARCH_LIMIT,
 };
 
 /// Hard limits applied to one query execution.
@@ -50,7 +51,7 @@ impl ExecutionBudget {
             (
                 "max_filter_candidates",
                 max_filter_candidates,
-                MAX_RECALL_CHECK_POINT_IDS,
+                MAX_HNSW_CANDIDATE_MASK_POINTS,
             ),
             ("max_rechecks", max_rechecks, MAX_RECALL_CHECK_POINT_IDS),
             ("max_stages", max_stages, MAX_QUERY_STAGES),
@@ -100,6 +101,32 @@ impl ExecutionBudget {
 
     pub(crate) const fn max_results(self) -> usize {
         self.max_results
+    }
+
+    pub(crate) fn remaining(self, usage: BudgetUsage, query_has_filter: bool) -> Option<Self> {
+        let candidates = self.max_candidates.checked_sub(usage.candidates)?;
+        let filters = self
+            .max_filter_candidates
+            .checked_sub(usage.filter_candidates)?;
+        let rechecks = self.max_rechecks.checked_sub(usage.rechecks)?;
+        let stages = self.max_stages.checked_sub(usage.stages)?;
+        let expansions = self.max_expansions.checked_sub(usage.expansions)?;
+        if candidates == 0
+            || rechecks == 0
+            || stages == 0
+            || expansions == 0
+            || (query_has_filter && filters == 0)
+        {
+            return None;
+        }
+        Some(Self {
+            max_candidates: candidates,
+            max_filter_candidates: filters.max(1),
+            max_rechecks: rechecks,
+            max_stages: stages,
+            max_expansions: expansions,
+            max_results: self.max_results,
+        })
     }
 }
 
@@ -158,5 +185,19 @@ impl BudgetUsage {
 
     pub(crate) fn add_stage(&mut self) {
         self.stages = self.stages.saturating_add(1);
+    }
+
+    pub(crate) fn add_expansions(&mut self, count: usize) {
+        self.expansions = self.expansions.saturating_add(count);
+    }
+
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.filter_candidates = self
+            .filter_candidates
+            .saturating_add(other.filter_candidates);
+        self.candidates = self.candidates.saturating_add(other.candidates);
+        self.rechecks = self.rechecks.saturating_add(other.rechecks);
+        self.stages = self.stages.saturating_add(other.stages);
+        self.expansions = self.expansions.saturating_add(other.expansions);
     }
 }

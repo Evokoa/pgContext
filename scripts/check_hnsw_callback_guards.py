@@ -17,9 +17,9 @@ import sys
 from collections.abc import Iterable, Sequence
 
 
-EXPECTED_CALLBACKS = 16
+EXPECTED_CALLBACKS = 17
 EXPECTED_AM_CALLBACKS = 14
-EXPECTED_UNSAFE_ITEMS = 100
+EXPECTED_UNSAFE_ITEMS = 121
 EXPECTED_INCLUDES = {
     ("hnsw_am.rs", "hnsw_am_callbacks.rs"),
     ("hnsw_am.rs", "hnsw_am_scan_callbacks.rs"),
@@ -29,6 +29,9 @@ EXPECTED_INCLUDES = {
     ("hnsw_am.rs", "hnsw_am_packed_cache.rs"),
     ("hnsw_am.rs", "hnsw_am_graph_read.rs"),
     ("hnsw_am.rs", "hnsw_am_graph_scan.rs"),
+    ("hnsw_am.rs", "hnsw_am_metric.rs"),
+    ("hnsw_am.rs", "hnsw_am/mapped_files.rs"),
+    ("hnsw_am.rs", "hnsw_am/mapped_lifecycle.rs"),
     ("hnsw_am.rs", "hnsw_am/sql_contract.rs"),
     ("hnsw_am.rs", "hnsw_am/shared_registry.rs"),
     ("hnsw_am.rs", "hnsw_am_validation.rs"),
@@ -788,13 +791,17 @@ def main(arguments: Sequence[str]) -> None:
     safe_externs = [
         function for function in all_functions if not function.unsafe and function.abi == "C-unwind"
     ]
-    if [function.name for function in safe_externs] != ["pg_finfo_pgcontext_hnsw_handler"]:
+    expected_finfos = {
+        "pg_finfo_pgcontext_hnsw_handler": "HNSW_HANDLER_FINFO",
+        "pg_finfo_pgcontext_hnsw_mapped_sql_drop": "MAPPED_SQL_DROP_FINFO",
+    }
+    if {function.name for function in safe_externs} != set(expected_finfos):
         names = ", ".join(function.name for function in safe_externs) or "<empty>"
         fail(f"unexpected safe HNSW C-unwind export inventory: {names}")
-    finfo = safe_externs[0]
-    finfo_body = finfo.source.tokens[finfo.body_open + 1 : finfo.body_close]
-    if [token.value for token in finfo_body] != ["&", "HNSW_HANDLER_FINFO"]:
-        fail("HNSW finfo exemption must return the immutable static record")
+    for finfo in safe_externs:
+        finfo_body = finfo.source.tokens[finfo.body_open + 1 : finfo.body_close]
+        if [token.value for token in finfo_body] != ["&", expected_finfos[finfo.name]]:
+            fail("HNSW finfo exemption must return its immutable static record")
 
     expected_unsafe = unsafe_inventory(inventory_path)
     actual_unsafe = source_unsafe_items(parsed)

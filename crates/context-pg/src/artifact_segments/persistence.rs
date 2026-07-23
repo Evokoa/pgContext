@@ -74,6 +74,66 @@ fn resolve_publishable_build_job(build_job_id: i64) -> PublishableBuildJob {
     })
 }
 
+fn resolve_visible_mmap_build_job(build_job_id: i64) -> PublishableBuildJob {
+    Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT jobs.build_job_id,
+                    jobs.collection_id,
+                    (
+                        SELECT pg_catalog.min(acl.collection_name)
+                          FROM pgcontext._collection_acl AS acl
+                         WHERE acl.collection_id = jobs.collection_id
+                    ) AS collection_name,
+                    jobs.artifact_kind,
+                    jobs.artifact_name,
+                    jobs.target_name,
+                    jobs.config_revision,
+                    jobs.status
+               FROM pgcontext._visible_build_jobs AS jobs
+              WHERE jobs.build_job_id = $1",
+            Some(1),
+            &[build_job_id.into()],
+        )?;
+        if rows.is_empty() {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
+                format!("visible build job does not exist: {build_job_id}"),
+            );
+        }
+        let row = rows.first();
+        let artifact_kind =
+            artifact_kind_from_catalog(required_column(row.get::<String>(4)?, "artifact_kind"));
+        if artifact_kind != ArtifactKind::Mmap {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+                "source-built artifact publication requires an mmap build job",
+            );
+        }
+        let status = required_column(row.get::<String>(8)?, "status");
+        if status != "completed" {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                format!("cannot build mmap artifact for job {build_job_id} in status {status}"),
+            );
+        }
+        Ok::<_, spi::Error>(PublishableBuildJob {
+            build_job_id: required_column(row.get::<i64>(1)?, "build_job_id"),
+            collection_id: required_column(row.get::<i64>(2)?, "collection_id"),
+            collection_name: required_column(row.get::<String>(3)?, "collection_name"),
+            artifact_kind,
+            artifact_name: required_column(row.get::<String>(5)?, "artifact_name"),
+            target_name: required_column(row.get::<String>(6)?, "target_name"),
+            config_revision: row.get::<i64>(7)?,
+        })
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("visible mmap build job lookup failed: {error}"),
+        )
+    })
+}
+
 fn insert_artifact_segment(
     job: &PublishableBuildJob,
     generation: i64,

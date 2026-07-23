@@ -10,16 +10,21 @@ if [[ "$(uname -s)" == Darwin ]]; then
     # symbols. Install the pg_test build and invoke the generated wrappers in a
     # live backend so the same Rust test bodies and assertions execute where
     # those symbols are available.
-    start_and_install_extension
+    start_and_install_test_extension
     reset_database
-    psql_db <<'SQL'
-CREATE EXTENSION pgcontext;
-SELECT tests.sqlstate_contract_covers_vector_and_search_bad_paths();
-SELECT tests.sqlstate_contract_covers_collection_and_registration_bad_paths();
-SELECT tests.sqlstate_contract_covers_filter_and_operation_bad_paths();
-SELECT tests.t33_sqlstate_contract_covers_model_migration_and_telemetry_bad_();
-SQL
-    printf 'sqlstate_contract_in_server_complete\n'
+    runner_args=(
+        --repo-root "${REPO_ROOT}"
+        --psql "$(pg_bin psql)"
+        --host "${PGHOST}"
+        --port "${PGPORT}"
+        --database "${DBNAME}"
+        --extension-sql "$(installed_test_extension_sql)"
+        --filter sqlstate_contract
+    )
+    if [[ -n "${PGUSER:-}" ]]; then
+        runner_args+=(--user "${PGUSER}")
+    fi
+    python3 "${REPO_ROOT}/scripts/run_pgrx_tests_in_server.py" "${runner_args[@]}"
 else
     cargo pgrx test -p context-pg "${PG_VERSION}" sqlstate_contract
 fi

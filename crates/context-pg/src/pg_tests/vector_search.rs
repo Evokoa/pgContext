@@ -269,6 +269,22 @@ fn sparse_exact_search_rejects_unknown_metric_with_sqlstate() {
 }
 
 #[pg_test]
+fn sparse_exact_search_rejects_bit_metric_with_sqlstate() {
+    assert_vector_search_sql_failure(
+        "SELECT pgcontext.search_sparse(
+                pgcontext.sparsevec('{}/1'),
+                ARRAY[1]::bigint[],
+                ARRAY[pgcontext.sparsevec('{}/1')],
+                'hamming',
+                1
+         )",
+        "22023",
+        "unsupported sparse distance metric: hamming",
+        "sparse exact bit metric",
+    );
+}
+
+#[pg_test]
 fn sparse_exact_search_rejects_cosine_zero_vector_with_sqlstate() {
     assert_vector_search_sql_failure(
         "SELECT pgcontext.search_sparse(
@@ -454,6 +470,786 @@ fn sparse_table_search_rejects_dimension_mismatch_with_sqlstate() {
         "dimension mismatch: left has 4 dimensions, right has 2",
         "sparse table dimension mismatch",
     );
+}
+
+#[pg_test]
+fn named_sparse_ann_exactly_rechecks_bounded_hnsw_candidates() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_ann (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL
+         );
+         INSERT INTO public.m14_sparse_ann (id, lexical)
+         SELECT value,
+                pg_catalog.format('{1:%s,2:%s}/4', value, value % 7)::sparsevec
+           FROM generate_series(1, 256) AS value;
+         SELECT pgcontext.create_collection('m14_sparse_ann', 'public.m14_sparse_ann');
+         SELECT pgcontext.register_sparse_vector(
+             'm14_sparse_ann', 'lexical', 'lexical', 4, 'l2'
+         );
+         SELECT pgcontext.upsert_points(
+             'm14_sparse_ann',
+             ARRAY(SELECT value::text FROM generate_series(1, 256) AS value)
+         );",
+    )
+    .expect("sparse ANN fixture should be created");
+
+    let exact = sparse_table_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.search_sparse(
+                'm14_sparse_ann', 'lexical',
+                pgcontext.sparsevec('{1:128,2:2}/4'), 5
+           )",
+    );
+    let exact_strategy = Spi::get_one::<String>(
+        "SELECT strategy FROM pgcontext.explain_sparse(
+             'm14_sparse_ann', 'lexical',
+             pgcontext.sparsevec('{1:128,2:2}/4'), 5
+         )",
+    )
+    .expect("exact sparse explain should execute")
+    .expect("exact sparse explain should return a row");
+    assert_eq!(exact_strategy, "exact");
+
+    Spi::run(
+        "CREATE INDEX m14_sparse_ann_hnsw
+             ON public.m14_sparse_ann USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_ann', 'lexical', 'public.m14_sparse_ann_hnsw'
+         );",
+    )
+    .expect("sparse HNSW index should attach");
+
+    let ann = sparse_table_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.search_sparse(
+                'm14_sparse_ann', 'lexical',
+                pgcontext.sparsevec('{1:128,2:2}/4'), 5
+           )",
+    );
+    assert_eq!(ann, exact, "ANN candidates must be exactly reranked");
+
+    let explain = Spi::connect(|client| {
+        let row = client
+            .select(
+                "SELECT strategy, active_points, scored_count, candidate_count, recheck_count
+                   FROM pgcontext.explain_sparse(
+                        'm14_sparse_ann', 'lexical',
+                        pgcontext.sparsevec('{1:128,2:2}/4'), 5
+                   )",
+                Some(1),
+                &[],
+            )?
+            .first();
+        Ok::<_, spi::Error>((
+            row.get::<String>(1)?.expect("strategy should exist"),
+            row.get::<i64>(2)?.expect("active points should exist"),
+            row.get::<i64>(3)?.expect("scored count should exist"),
+            row.get::<i64>(4)?.expect("candidate count should exist"),
+            row.get::<i64>(5)?.expect("recheck count should exist"),
+        ))
+    })
+    .expect("sparse ANN explain should execute");
+    assert_eq!(explain.0, "hnsw");
+    assert!(explain.2 < explain.1, "HNSW should score less than the collection");
+    assert!(explain.3 < explain.1, "HNSW should produce bounded candidates");
+    assert_eq!(explain.3, explain.4, "every candidate must be exactly rechecked");
+}
+
+#[pg_test]
+fn named_sparse_ann_reports_exact_delta_scoring_work() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_delta_work (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL
+         );
+         SELECT pgcontext.create_collection(
+             'm14_sparse_delta_work', 'public.m14_sparse_delta_work'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'm14_sparse_delta_work', 'lexical', 'lexical', 4, 'l2'
+         );
+         CREATE INDEX m14_sparse_delta_work_hnsw
+             ON public.m14_sparse_delta_work USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_delta_work', 'lexical',
+             'public.m14_sparse_delta_work_hnsw'
+         );
+         INSERT INTO public.m14_sparse_delta_work (id, lexical)
+         SELECT value, pg_catalog.format('{1:%s,2:%s}/4', value, value % 9)::sparsevec
+           FROM generate_series(1, 128) AS value;
+         SELECT pgcontext.upsert_points(
+             'm14_sparse_delta_work',
+             ARRAY(SELECT value::text FROM generate_series(1, 128) AS value)
+         );",
+    )
+    .expect("sparse delta-work fixture should build");
+
+    let before = sparse_explain_work(
+        "m14_sparse_delta_work",
+        "pgcontext.sparsevec('{1:64,2:1}/4')",
+    );
+    assert_eq!(before.0, 128);
+    assert_eq!(
+        before.1, before.0,
+        "an empty-built index must report every exactly scored live delta vector"
+    );
+
+    Spi::run("REINDEX INDEX public.m14_sparse_delta_work_hnsw")
+        .expect("sparse delta-work index should reindex");
+    let after = sparse_explain_work(
+        "m14_sparse_delta_work",
+        "pgcontext.sparsevec('{1:64,2:1}/4')",
+    );
+    assert_eq!(after.0, before.0);
+    assert!(
+        after.1 < after.0,
+        "after REINDEX publishes the rows into the base graph, reported scoring work must be bounded"
+    );
+}
+
+fn sparse_explain_work(collection: &str, query: &str) -> (i64, i64) {
+    Spi::connect(|client| {
+        let sql = format!(
+            "SELECT active_points, scored_count
+               FROM pgcontext.explain_sparse(
+                    '{collection}', 'lexical', {query}, 5
+               )"
+        );
+        let row = client.select(&sql, Some(1), &[])?.first();
+        Ok::<_, spi::Error>((
+            row.get::<i64>(1)?.expect("active point count should exist"),
+            row.get::<i64>(2)?.expect("scored count should exist"),
+        ))
+    })
+    .expect("sparse explain work should load")
+}
+
+#[pg_test]
+fn sparse_hnsw_internal_candidate_helpers_reject_direct_sql_calls() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_helper_acl (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL
+         );
+         INSERT INTO public.m14_sparse_helper_acl VALUES (1, '{1:1}/1');
+         CREATE INDEX m14_sparse_helper_acl_hnsw
+             ON public.m14_sparse_helper_acl USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);",
+    )
+    .expect("sparse helper ACL fixture should build");
+    for helper_call in [
+        "SELECT * FROM pgcontext._hnsw_sparse_candidates(
+             'public.m14_sparse_helper_acl_hnsw'::regclass,
+             pgcontext.sparsevec('{1:1}/1'),
+             1
+         )",
+        "SELECT * FROM pgcontext._hnsw_sparse_masked_candidates(
+             'public.m14_sparse_helper_acl_hnsw'::regclass,
+             pgcontext.sparsevec('{1:1}/1'),
+             ARRAY[]::tid[],
+             1
+         )",
+        "SELECT * FROM pgcontext._hnsw_candidates(
+             'public.m14_sparse_helper_acl_hnsw'::regclass,
+             '[1]'::vector,
+             1
+         )",
+        "SELECT * FROM pgcontext._hnsw_masked_candidates(
+             'public.m14_sparse_helper_acl_hnsw'::regclass,
+             '[1]'::vector,
+             ARRAY[]::tid[],
+             1
+         )",
+    ] {
+        assert_vector_search_sql_failure(
+            helper_call,
+            "42501",
+            "pgcontext internal HNSW candidate helper cannot be called directly",
+            "direct HNSW candidate helper call",
+        );
+    }
+}
+
+#[pg_test]
+fn hnsw_candidate_helper_capability_is_bound_to_one_index() {
+    Spi::run(
+        "CREATE TABLE public.m14_helper_capability (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL
+         );
+         INSERT INTO public.m14_helper_capability VALUES (1, '{1:1}/1');
+         CREATE INDEX m14_helper_capability_hnsw
+             ON public.m14_helper_capability USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);",
+    )
+    .expect("candidate-helper capability fixture should build");
+    let wrong_index_oid = Spi::get_one::<pg_sys::Oid>(
+        "SELECT 'public.m14_helper_capability_pkey'::regclass::oid",
+    )
+    .expect("wrong capability index should load")
+    .expect("wrong capability index should exist");
+
+    crate::hnsw_am::with_hnsw_candidate_helper_capability(wrong_index_oid, || {
+        assert_vector_search_sql_failure(
+            "SELECT * FROM pgcontext._hnsw_candidates(
+                 'public.m14_helper_capability_hnsw'::regclass,
+                 '[1]'::vector,
+                 1
+             )",
+            "42501",
+            "pgcontext internal HNSW candidate helper cannot be called directly",
+            "candidate helper capability bound to another index",
+        );
+    });
+}
+
+#[pg_test]
+fn named_sparse_ann_follows_hot_updated_source_rows() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_hot (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL,
+             note text NOT NULL
+         ) WITH (fillfactor = 50);
+         INSERT INTO public.m14_sparse_hot (id, lexical, note)
+         SELECT value, pg_catalog.format('{1:%s}/4', value)::sparsevec, 'before'
+           FROM generate_series(1, 96) AS value;
+         SELECT pgcontext.create_collection('m14_sparse_hot', 'public.m14_sparse_hot');
+         SELECT pgcontext.register_sparse_vector(
+             'm14_sparse_hot', 'lexical', 'lexical', 4, 'l2'
+         );
+         SELECT pgcontext.upsert_points(
+             'm14_sparse_hot', ARRAY(SELECT value::text FROM generate_series(1, 96) AS value)
+         );
+         CREATE INDEX m14_sparse_hot_hnsw
+             ON public.m14_sparse_hot USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_hot', 'lexical', 'public.m14_sparse_hot_hnsw'
+         );",
+    )
+    .expect("sparse HOT fixture should build");
+    let original_tid = Spi::get_one::<String>(
+        "SELECT ctid::text FROM public.m14_sparse_hot WHERE id = 48",
+    )
+    .expect("original source TID should load")
+    .expect("source row should exist");
+    Spi::run("UPDATE public.m14_sparse_hot SET note = 'after' WHERE id = 48")
+        .expect("non-indexed HOT update should succeed");
+    let updated_tid = Spi::get_one::<String>(
+        "SELECT ctid::text FROM public.m14_sparse_hot WHERE id = 48",
+    )
+    .expect("updated source TID should load")
+    .expect("updated source row should exist");
+    assert_ne!(original_tid, updated_tid, "fixture must create a new heap tuple");
+
+    let rows = sparse_table_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.search_sparse(
+                'm14_sparse_hot', 'lexical',
+                pgcontext.sparsevec('{1:48}/4'), 1
+           )",
+    );
+    assert_eq!(
+        rows.first().map(|row| row.1.as_str()),
+        Some("48"),
+        "the index root TID must resolve to the visible HOT successor"
+    );
+}
+
+#[pg_test]
+fn named_sparse_ann_uses_registered_filter_masks() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_ann_filter (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL,
+             tenant text NOT NULL
+         );
+         INSERT INTO public.m14_sparse_ann_filter (id, lexical, tenant)
+         SELECT value,
+                pg_catalog.format('{1:%s,2:%s}/4', value, value % 11)::sparsevec,
+                CASE WHEN value % 2 = 0 THEN 'even' ELSE 'odd' END
+           FROM generate_series(1, 256) AS value;
+         SELECT pgcontext.create_collection(
+             'm14_sparse_ann_filter', 'public.m14_sparse_ann_filter'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'm14_sparse_ann_filter', 'lexical', 'lexical', 4, 'l2'
+         );
+         SELECT pgcontext.register_filter_column(
+             'm14_sparse_ann_filter', 'tenant', 'tenant'
+         );
+         SELECT pgcontext.upsert_points(
+             'm14_sparse_ann_filter',
+             ARRAY(SELECT value::text FROM generate_series(1, 256) AS value)
+         );",
+    )
+    .expect("filtered sparse ANN fixture should be created");
+
+    let search_sql = "SELECT point_id, source_key, score
+           FROM pgcontext.search_sparse(
+                'm14_sparse_ann_filter', 'lexical',
+                pgcontext.sparsevec('{1:128,2:7}/4'),
+                '{\"must\":[{\"key\":\"tenant\",\"match\":\"even\"}]}',
+                5
+           )";
+    let exact = sparse_table_rows(search_sql);
+
+    Spi::run(
+        "CREATE INDEX m14_sparse_ann_filter_hnsw
+             ON public.m14_sparse_ann_filter USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_ann_filter', 'lexical',
+             'public.m14_sparse_ann_filter_hnsw'
+         );",
+    )
+    .expect("filtered sparse HNSW index should attach");
+
+    let ann = sparse_table_rows(search_sql);
+    assert_eq!(ann, exact, "masked sparse ANN must retain exact reranking");
+    assert!(
+        ann.iter()
+            .all(|(_, source_key, _)| source_key.parse::<i64>().unwrap_or_default() % 2 == 0),
+        "the sparse candidate mask must exclude nonmatching source rows"
+    );
+    let exact_strategy = Spi::get_one::<bool>(
+        "SELECT exact_strategy FROM pgcontext.hnsw_last_scan_work()",
+    )
+    .expect("masked sparse work should load")
+    .expect("masked sparse work should be present");
+    assert!(!exact_strategy, "the filtered path should traverse sparse HNSW");
+
+    Spi::run("SET LOCAL pgcontext.hnsw_mask_candidate_limit = 0")
+        .expect("zero mask budget should be accepted");
+    Spi::run(
+        "SELECT pgcontext.configure_collection_limits(
+             'm14_sparse_ann_filter', true,
+             NULL, NULL, NULL, NULL, NULL, 5, NULL, NULL
+         )",
+    )
+    .expect("strict fallback candidate budget should configure");
+    let fallback = sparse_table_rows(search_sql);
+    assert_eq!(fallback, exact, "zero mask budget must retain exact results");
+}
+
+#[pg_test]
+fn named_sparse_ann_applies_filter_mask_to_post_build_delta() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_masked_delta (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL,
+             tenant text NOT NULL
+         );
+         INSERT INTO public.m14_sparse_masked_delta (id, lexical, tenant)
+         SELECT value,
+                pg_catalog.format('{1:%s}/4', value)::sparsevec,
+                'matching'
+           FROM generate_series(100, 107) AS value;
+         SELECT pgcontext.create_collection(
+             'm14_sparse_masked_delta', 'public.m14_sparse_masked_delta'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'm14_sparse_masked_delta', 'lexical', 'lexical', 4, 'l2'
+         );
+         SELECT pgcontext.register_filter_column(
+             'm14_sparse_masked_delta', 'tenant', 'tenant'
+         );
+         SELECT pgcontext.upsert_points(
+             'm14_sparse_masked_delta',
+             ARRAY(SELECT value::text FROM generate_series(100, 107) AS value)
+         );
+         CREATE INDEX m14_sparse_masked_delta_hnsw
+             ON public.m14_sparse_masked_delta USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_masked_delta', 'lexical',
+             'public.m14_sparse_masked_delta_hnsw'
+         );
+
+         -- These closer rows are written after the graph build, so the AM
+         -- serves them from its exact-scanned delta rather than the base graph.
+         INSERT INTO public.m14_sparse_masked_delta (id, lexical, tenant)
+         SELECT value,
+                pg_catalog.format('{1:%s}/4', value)::sparsevec,
+                'nonmatching'
+           FROM generate_series(1, 64) AS value;
+         SELECT pgcontext.upsert_points(
+             'm14_sparse_masked_delta',
+             ARRAY(SELECT value::text FROM generate_series(1, 64) AS value)
+         );
+         SET LOCAL pgcontext.hnsw_candidate_budget = 8;",
+    )
+    .expect("masked sparse delta fixture should build");
+
+    let rows = sparse_table_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.search_sparse(
+                'm14_sparse_masked_delta', 'lexical',
+                pgcontext.sparsevec('{}/4'),
+                '{\"must\":[{\"key\":\"tenant\",\"match\":\"matching\"}]}',
+                3
+           )",
+    );
+    assert_eq!(rows.len(), 3, "masked delta rows must not consume base candidates");
+    assert!(
+        rows.iter().all(|(_, source_key, _)| {
+            source_key.parse::<i64>().is_ok_and(|value| value >= 100)
+        }),
+        "only matching base-graph rows should survive exact recheck"
+    );
+}
+
+#[pg_test]
+fn named_sparse_ann_honors_raised_filter_mask_budget() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_large_mask (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL,
+             tenant text NOT NULL
+         );
+         INSERT INTO public.m14_sparse_large_mask (id, lexical, tenant)
+         SELECT value,
+                pg_catalog.format('{1:%s,2:%s}/4', value, value % 17)::sparsevec,
+                'all'
+           FROM generate_series(1, 10001) AS value;
+         SELECT pgcontext.create_collection(
+             'm14_sparse_large_mask', 'public.m14_sparse_large_mask'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'm14_sparse_large_mask', 'lexical', 'lexical', 4, 'l2'
+         );
+         SELECT pgcontext.register_filter_column(
+             'm14_sparse_large_mask', 'tenant', 'tenant'
+         );
+         SELECT pgcontext.upsert_points(
+             'm14_sparse_large_mask',
+             ARRAY(SELECT value::text FROM generate_series(1, 10000) AS value)
+         );
+         SELECT pgcontext.upsert_points('m14_sparse_large_mask', ARRAY['10001']);
+         CREATE INDEX m14_sparse_large_mask_hnsw
+             ON public.m14_sparse_large_mask USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_large_mask', 'lexical',
+             'public.m14_sparse_large_mask_hnsw'
+         );
+         SET LOCAL pgcontext.hnsw_mask_candidate_limit = 20000;",
+    )
+    .expect("large sparse mask fixture should build");
+
+    let rows = sparse_table_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.search_sparse(
+                'm14_sparse_large_mask', 'lexical',
+                pgcontext.sparsevec('{1:5000,2:2}/4'),
+                '{\"must\":[{\"key\":\"tenant\",\"match\":\"all\"}]}',
+                5
+           )",
+    );
+    assert_eq!(rows.len(), 5);
+    let exact_strategy = Spi::get_one::<bool>(
+        "SELECT exact_strategy FROM pgcontext.hnsw_last_scan_work()",
+    )
+    .expect("large sparse mask work should load")
+    .expect("large sparse mask work should be present");
+    assert!(
+        !exact_strategy,
+        "a raised mask budget must reach the sparse HNSW candidate source"
+    );
+}
+
+#[pg_test]
+fn named_sparse_ann_binds_and_serves_every_sparse_metric() {
+    for (suffix, metric, opclass) in [
+        ("l2", "l2", "sparsevec_hnsw_ops"),
+        ("ip", "inner_product", "sparsevec_hnsw_ip_ops"),
+        ("cos", "cosine", "sparsevec_hnsw_cosine_ops"),
+        ("l1", "l1", "sparsevec_hnsw_l1_ops"),
+    ] {
+        let table = format!("m14_sparse_metric_{suffix}");
+        Spi::run(&format!(
+            "CREATE TABLE public.{table} (
+                 id bigint PRIMARY KEY,
+                 lexical sparsevec NOT NULL
+             );
+             INSERT INTO public.{table} (id, lexical)
+             SELECT value,
+                    pg_catalog.format('{{1:%s,2:%s}}/4', value, value % 13)::sparsevec
+               FROM generate_series(1, 96) AS value;
+             SELECT pgcontext.create_collection('{table}', 'public.{table}');
+             SELECT pgcontext.register_sparse_vector(
+                 '{table}', 'lexical', 'lexical', 4, '{metric}'
+             );
+             SELECT pgcontext.upsert_points(
+                 '{table}', ARRAY(SELECT value::text FROM generate_series(1, 96) AS value)
+             );"
+        ))
+        .expect("sparse metric fixture should be created");
+        let search_sql = format!(
+            "SELECT point_id, source_key, score
+               FROM pgcontext.search_sparse(
+                    '{table}', 'lexical',
+                    pgcontext.sparsevec('{{1:48,2:9}}/4'), 5
+               )"
+        );
+        let exact = sparse_table_rows(&search_sql);
+        Spi::run(&format!(
+            "CREATE INDEX {table}_hnsw
+                 ON public.{table} USING pgcontext_hnsw
+                 (lexical pgcontext.{opclass});
+             SELECT pgcontext.attach_sparse_hnsw_index(
+                 '{table}', 'lexical', 'public.{table}_hnsw'
+             );"
+        ))
+        .expect("metric-matched sparse HNSW index should attach");
+        let ann = sparse_table_rows(&search_sql);
+        assert_eq!(ann, exact, "named sparse {metric} rerank must match exact");
+    }
+}
+
+#[pg_test]
+fn sparse_hnsw_attachment_rejects_partial_and_wrong_metric_indexes() {
+    create_sparse_search_collection("m14_sparse_bad_attach", "l2");
+    Spi::run(
+        "CREATE INDEX m14_sparse_bad_attach_partial
+             ON public.m14_sparse_bad_attach USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops)
+             WHERE id > 0;
+         CREATE INDEX m14_sparse_bad_attach_cosine
+             ON public.m14_sparse_bad_attach USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_cosine_ops);",
+    )
+    .expect("invalid attachment probes should build");
+
+    for index_name in [
+        "public.m14_sparse_bad_attach_partial",
+        "public.m14_sparse_bad_attach_cosine",
+    ] {
+        assert_vector_search_sql_failure(
+            &format!(
+                "SELECT pgcontext.attach_sparse_hnsw_index(
+                     'm14_sparse_bad_attach', 'lexical', '{index_name}'
+                 )"
+            ),
+            "22023",
+            "HNSW index does not match the registered sparse collection vector",
+            "invalid sparse HNSW attachment",
+        );
+    }
+}
+
+#[pg_test]
+fn sparse_hnsw_attachment_rejects_partitioned_parent_index() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_partitioned (
+             id bigint NOT NULL,
+             lexical sparsevec NOT NULL
+         ) PARTITION BY RANGE (id);
+         CREATE TABLE public.m14_sparse_partitioned_p1
+             PARTITION OF public.m14_sparse_partitioned
+             FOR VALUES FROM (0) TO (100);
+         SELECT pgcontext.create_collection(
+             'm14_sparse_partitioned', 'public.m14_sparse_partitioned'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'm14_sparse_partitioned', 'lexical', 'lexical', 4, 'l2'
+         );
+         CREATE INDEX m14_sparse_partitioned_hnsw
+             ON public.m14_sparse_partitioned USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);",
+    )
+    .expect("partitioned sparse fixture should build");
+
+    assert_vector_search_sql_failure(
+        "SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_partitioned', 'lexical',
+             'public.m14_sparse_partitioned_hnsw'
+         )",
+        "22023",
+        "HNSW index does not match the registered sparse collection vector",
+        "partitioned parent sparse HNSW attachment",
+    );
+}
+
+#[pg_test]
+fn named_sparse_ann_masks_logically_deleted_nearer_rows() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_active_mask (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL
+         );
+         INSERT INTO public.m14_sparse_active_mask (id, lexical)
+         SELECT value, pg_catalog.format('{1:%s}/4', value)::sparsevec
+           FROM generate_series(1, 64) AS value;
+         INSERT INTO public.m14_sparse_active_mask (id, lexical)
+         VALUES (100, pgcontext.sparsevec('{1:100}/4'));
+         SELECT pgcontext.create_collection(
+             'm14_sparse_active_mask', 'public.m14_sparse_active_mask'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'm14_sparse_active_mask', 'lexical', 'lexical', 4, 'l2'
+         );
+         SELECT pgcontext.upsert_points(
+             'm14_sparse_active_mask',
+             ARRAY(
+                 SELECT value::text FROM generate_series(1, 64) AS value
+                 UNION ALL SELECT '100'
+             )
+         );
+         CREATE INDEX m14_sparse_active_mask_hnsw
+             ON public.m14_sparse_active_mask USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_active_mask', 'lexical',
+             'public.m14_sparse_active_mask_hnsw'
+         );
+         SELECT pgcontext.delete_points(
+             'm14_sparse_active_mask',
+             ARRAY(SELECT value::text FROM generate_series(1, 64) AS value)
+         );
+         SET LOCAL pgcontext.hnsw_candidate_budget = 8;",
+    )
+    .expect("active sparse mask fixture should build");
+
+    let rows = sparse_table_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.search_sparse(
+                'm14_sparse_active_mask', 'lexical',
+                pgcontext.sparsevec('{}/4'), 1
+           )",
+    );
+    assert_eq!(rows.first().map(|row| row.1.as_str()), Some("100"));
+
+    Spi::run("SELECT pgcontext.delete_points('m14_sparse_active_mask', ARRAY['100'])")
+        .expect("last active sparse point should delete");
+    let (strategy, scored_count) = Spi::get_two::<String, i64>(
+        "SELECT strategy, scored_count
+           FROM pgcontext.explain_sparse(
+                'm14_sparse_active_mask', 'lexical',
+                pgcontext.sparsevec('{}/4'), 1
+           )",
+    )
+    .expect("empty sparse explain should execute");
+    assert_eq!(strategy.as_deref(), Some("exact"));
+    assert_eq!(scored_count, Some(0));
+}
+
+#[pg_test]
+fn named_sparse_ann_survives_dml_reindex_and_falls_back_after_drop() {
+    Spi::run(
+        "CREATE TABLE public.m14_sparse_ann_lifecycle (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL
+         );
+         INSERT INTO public.m14_sparse_ann_lifecycle (id, lexical)
+         SELECT value, pg_catalog.format('{1:%s}/4', value)::sparsevec
+           FROM generate_series(1, 96) AS value;
+         SELECT pgcontext.create_collection(
+             'm14_sparse_ann_lifecycle', 'public.m14_sparse_ann_lifecycle'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'm14_sparse_ann_lifecycle', 'lexical', 'lexical', 4, 'l2'
+         );
+         SELECT pgcontext.upsert_points(
+             'm14_sparse_ann_lifecycle',
+             ARRAY(SELECT value::text FROM generate_series(1, 96) AS value)
+         );
+         CREATE INDEX m14_sparse_ann_lifecycle_hnsw
+             ON public.m14_sparse_ann_lifecycle USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_ann_lifecycle', 'lexical',
+             'public.m14_sparse_ann_lifecycle_hnsw'
+         );
+         UPDATE public.m14_sparse_ann_lifecycle
+            SET lexical = pgcontext.sparsevec('{1:48}/4')
+          WHERE id = 96;
+         DELETE FROM public.m14_sparse_ann_lifecycle WHERE id = 48;
+         SELECT pgcontext.delete_points(
+             'm14_sparse_ann_lifecycle', ARRAY['47']
+         );",
+    )
+    .expect("sparse HNSW lifecycle operations should complete");
+
+    let search_sql = "SELECT point_id, source_key, score
+           FROM pgcontext.search_sparse(
+                'm14_sparse_ann_lifecycle', 'lexical',
+                pgcontext.sparsevec('{1:48}/4'), 5
+           )";
+    let exact_sql = "SELECT points.point_id,
+                            points.source_key,
+                            pgcontext.sparsevec_l2_distance(
+                                source.lexical,
+                                pgcontext.sparsevec('{1:48}/4')
+                            ) AS score
+                       FROM pgcontext._visible_collection_points AS points
+                       JOIN public.m14_sparse_ann_lifecycle AS source
+                         ON source.id::text = points.source_key
+                      WHERE points.collection_id = (
+                                SELECT collection_id
+                                  FROM pgcontext._collection_acl
+                                 WHERE collection_name = 'm14_sparse_ann_lifecycle'
+                            )
+                        AND points.deleted_at IS NULL
+                      ORDER BY score, points.point_id
+                      LIMIT 5";
+    let delta_ann = sparse_table_rows(search_sql);
+    let delta_exact = sparse_table_rows(exact_sql);
+    assert_eq!(
+        delta_ann, delta_exact,
+        "live delta update/delete state must match the exact sparse oracle"
+    );
+
+    Spi::run("REINDEX INDEX public.m14_sparse_ann_lifecycle_hnsw")
+        .expect("sparse lifecycle index should rebuild");
+    let ann = sparse_table_rows(search_sql);
+    assert_eq!(ann, delta_exact, "rebuilt sparse ANN must match the exact oracle");
+    assert_eq!(ann.first().map(|row| row.1.as_str()), Some("96"));
+    assert!(!ann.iter().any(|row| row.1 == "47" || row.1 == "48"));
+
+    Spi::run(
+        "SELECT pgcontext.configure_sparse_vector(
+             'm14_sparse_ann_lifecycle', 'lexical',
+             '{}'::jsonb, '{}'::jsonb, 'ready'
+         )",
+    )
+    .expect("sparse configuration change should clear the old index binding");
+    let configured_fallback = sparse_table_rows(search_sql);
+    assert_eq!(configured_fallback, ann);
+    let configured_strategy = Spi::get_one::<String>(
+        "SELECT strategy FROM pgcontext.explain_sparse(
+             'm14_sparse_ann_lifecycle', 'lexical',
+             pgcontext.sparsevec('{1:48}/4'), 5
+         )",
+    )
+    .expect("configured fallback explain should execute")
+    .expect("configured fallback explain should return a row");
+    assert_eq!(configured_strategy, "exact");
+    Spi::run(
+        "SELECT pgcontext.attach_sparse_hnsw_index(
+             'm14_sparse_ann_lifecycle', 'lexical',
+             'public.m14_sparse_ann_lifecycle_hnsw'
+         )",
+    )
+    .expect("sparse HNSW index should reattach after configuration change");
+
+    Spi::run("DROP INDEX public.m14_sparse_ann_lifecycle_hnsw")
+        .expect("attached sparse HNSW index should drop");
+    let fallback = sparse_table_rows(search_sql);
+    assert_eq!(fallback, ann, "dropped sparse index must fall back to exact");
+    let strategy = Spi::get_one::<String>(
+        "SELECT strategy FROM pgcontext.explain_sparse(
+             'm14_sparse_ann_lifecycle', 'lexical',
+             pgcontext.sparsevec('{1:48}/4'), 5
+         )",
+    )
+    .expect("fallback explain should execute")
+    .expect("fallback explain should return a row");
+    assert_eq!(strategy, "exact");
 }
 
 #[pg_test]
@@ -757,6 +1553,21 @@ fn exact_search_rejects_unknown_metric() {
          )",
     )
     .expect("unknown metric should fail");
+}
+
+#[pg_test]
+#[should_panic(expected = "unsupported distance metric: hamming")]
+fn exact_search_rejects_bit_metric() {
+    Spi::run(
+        "SELECT pgcontext.search(
+                '[0]'::vector,
+                ARRAY[1]::bigint[],
+                ARRAY['[0]'::vector],
+                'hamming',
+                1
+         )",
+    )
+    .expect("bit metric should fail for numeric exact search");
 }
 
 #[pg_test]

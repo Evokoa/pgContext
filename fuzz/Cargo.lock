@@ -43,6 +43,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "context-hybrid"
+version = "0.1.0"
+dependencies = [
+ "context-core",
+]
+
+[[package]]
 name = "context-index"
 version = "0.1.0"
 dependencies = [
@@ -51,10 +58,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "context-query"
+version = "0.1.0"
+dependencies = [
+ "context-core",
+ "context-filter",
+ "context-hybrid",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "context-storage"
 version = "0.1.0"
 dependencies = [
  "context-core",
+ "libc",
 ]
 
 [[package]]
@@ -120,8 +139,10 @@ dependencies = [
  "context-core",
  "context-filter",
  "context-index",
+ "context-query",
  "context-storage",
  "libfuzzer-sys",
+ "serde_json",
 ]
 
 [[package]]
@@ -155,6 +176,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]

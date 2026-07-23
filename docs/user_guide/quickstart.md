@@ -12,15 +12,11 @@ update). For a source checkout, install into the
 PostgreSQL 17 instance selected by `pg_config`:
 
 ```sh
-cargo pgrx install \
-  -p context-pg \
-  --release \
-  --pg-config /path/to/postgresql-17/bin/pg_config \
-  --no-default-features \
-  --features pg17
+make install PG_CONFIG=/path/to/postgresql-17/bin/pg_config
 ```
 
-The command writes extension artifacts into that PostgreSQL installation and
+The command writes the generated extension, its versioned upgrade SQL, and the
+optional pgvector bridge artifacts into that PostgreSQL installation and
 may require filesystem privileges appropriate to it. Connect as a role allowed
 to install extensions, then run the SQL below. The packaged HNSW/filter demo is
 documented separately in [Playground](playground.md).
@@ -32,16 +28,16 @@ CREATE EXTENSION IF NOT EXISTS pgcontext;
 
 CREATE TABLE public.docs (
     id text PRIMARY KEY,
-    embedding vector(2) NOT NULL,
+    embedding pgcontext.vector(2) NOT NULL,
     status text NOT NULL,
     body text NOT NULL,
     metadata jsonb NOT NULL
 );
 
 INSERT INTO public.docs (id, embedding, status, body, metadata) VALUES
-    ('doc-1', '[1,0]'::vector, 'published', 'postgres vector search', '{"topic":"postgres"}'),
-    ('doc-2', '[0,1]'::vector, 'published', 'rust extension guide', '{"topic":"rust"}'),
-    ('doc-3', '[3,0]'::vector, 'draft', 'internal draft', '{"topic":"postgres"}');
+    ('doc-1', '[1,0]'::pgcontext.vector, 'published', 'postgres vector search', '{"topic":"postgres"}'),
+    ('doc-2', '[0,1]'::pgcontext.vector, 'published', 'rust extension guide', '{"topic":"rust"}'),
+    ('doc-3', '[3,0]'::pgcontext.vector, 'draft', 'internal draft', '{"topic":"postgres"}');
 
 SELECT * FROM pgcontext.create_collection('docs', 'public.docs');
 ```
@@ -67,7 +63,7 @@ Run exact nearest-neighbor search:
 
 ```sql
 SELECT source_key, score
-FROM pgcontext.search('docs', '[1,0]'::vector, 2);
+FROM pgcontext.search('docs', '[1,0]'::pgcontext.vector, 2);
 ```
 
 Expected result order:
@@ -85,7 +81,7 @@ Add a filter:
 SELECT source_key, score
 FROM pgcontext.search(
     'docs',
-    '[1,0]'::vector,
+    '[1,0]'::pgcontext.vector,
     '{"must":[{"key":"status","match":"published"}]}',
     5
 );

@@ -41,11 +41,7 @@ struct MigrationRow {
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(
-    schema = "pgcontext",
-    name = "create_embedding_migration",
-    security_definer
-)]
+#[pg_extern(name = "create_embedding_migration", security_definer)]
 #[search_path(pg_catalog, pgcontext)]
 pub fn create_embedding_migration(
     collection: String,
@@ -117,7 +113,7 @@ pub fn create_embedding_migration(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "update_embedding_migration")]
+#[pg_extern(name = "update_embedding_migration")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn update_embedding_migration(
     migration_id: i64,
@@ -149,7 +145,7 @@ pub fn update_embedding_migration(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-#[pg_extern(schema = "pgcontext", name = "embedding_migrations")]
+#[pg_extern(name = "embedding_migrations")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn embedding_migrations() -> TableIterator<
     'static,

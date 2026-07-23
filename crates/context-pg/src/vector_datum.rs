@@ -208,33 +208,33 @@ vector_distance_entrypoint!(
 
 pgrx::extension_sql!(
     r#"
-CREATE FUNCTION pgcontext._l2_distance_fast(public.vector, public.vector)
+CREATE FUNCTION pgcontext._l2_distance_fast(pgcontext.vector, pgcontext.vector)
 RETURNS real
 AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION pgcontext._l2_distance_fast8(public.vector, public.vector)
+CREATE FUNCTION pgcontext._l2_distance_fast8(pgcontext.vector, pgcontext.vector)
 RETURNS double precision
 AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast8'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION pgcontext._negative_inner_product_fast(public.vector, public.vector)
+CREATE FUNCTION pgcontext._negative_inner_product_fast(pgcontext.vector, pgcontext.vector)
 RETURNS real
 AS 'MODULE_PATHNAME', 'pgcontext_negative_inner_product_fast'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION pgcontext._cosine_distance_fast(public.vector, public.vector)
+CREATE FUNCTION pgcontext._cosine_distance_fast(pgcontext.vector, pgcontext.vector)
 RETURNS real
 AS 'MODULE_PATHNAME', 'pgcontext_cosine_distance_fast'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 
-CREATE FUNCTION pgcontext._l1_distance_fast(public.vector, public.vector)
+CREATE FUNCTION pgcontext._l1_distance_fast(pgcontext.vector, pgcontext.vector)
 RETURNS real
 AS 'MODULE_PATHNAME', 'pgcontext_l1_distance_fast'
 LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 "#,
     name = "create_vector_fast_distance_functions",
-    requires = [pgcontext, Vector]
+    requires = ["pgcontext_bootstrap", Vector]
 );
 
 impl IntoDatum for Vector {

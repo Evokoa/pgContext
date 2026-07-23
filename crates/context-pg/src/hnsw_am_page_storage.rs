@@ -2,6 +2,10 @@
 // concentrates buffer, page, and relation unsafe boundaries behind the access
 // method's safe callback layer.
 
+// Reserve space for PostgreSQL's page header, line pointers, and pgContext's
+// typed page header. Node and delta records are intentionally single-page.
+const HNSW_MAX_PAGE_RECORD_BYTES: usize = pg_sys::BLCKSZ as usize - 128;
+
 fn checked_hnsw_item_range(
     page_lower: usize,
     page_upper: usize,
@@ -458,15 +462,7 @@ unsafe fn append_hnsw_typed_record(
     kind: GraphPageKind,
     label: &str,
 ) -> HnswPageItemLocation {
-    if payload.len() > pg_sys::BLCKSZ as usize {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
-            format!(
-                "HNSW {label} record exceeds PostgreSQL page size: {} bytes",
-                payload.len()
-            ),
-        );
-    }
+    ensure_hnsw_page_record_fits(payload, label);
 
     // SAFETY: The caller passes a valid index relation owned by PostgreSQL.
     unsafe { ensure_hnsw_metapage(index_relation) };
@@ -546,16 +542,10 @@ unsafe fn append_hnsw_bulk_typed_records(
             let page_start = locations.len();
             while locations.len() < record_count {
                 let payload = encode(locations.len());
-                if payload.len() > pg_sys::BLCKSZ as usize {
+                if payload.len() > HNSW_MAX_PAGE_RECORD_BYTES {
                     pg_sys::GenericXLogAbort(state);
                     pg_sys::UnlockReleaseBuffer(buffer);
-                    raise_sql_error(
-                        PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
-                        format!(
-                            "HNSW {label} record exceeds PostgreSQL page size: {} bytes",
-                            payload.len()
-                        ),
-                    );
+                    ensure_hnsw_page_record_fits(&payload, label);
                 }
                 hnsw_physical_failpoint(3, "before_append");
                 let offset = pg_sys::PageAddItemExtended(
@@ -589,6 +579,19 @@ unsafe fn append_hnsw_bulk_typed_records(
         }
     }
     locations
+}
+
+fn ensure_hnsw_page_record_fits(payload: &[u8], label: &str) {
+    if payload.len() <= HNSW_MAX_PAGE_RECORD_BYTES {
+        return;
+    }
+    raise_sql_error(
+        PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+        format!(
+            "HNSW {label} record exceeds single-page storage limit: {} bytes (maximum {HNSW_MAX_PAGE_RECORD_BYTES}); reduce vector dimensions or hnsw_m",
+            payload.len()
+        ),
+    );
 }
 
 unsafe fn try_append_hnsw_typed_record(

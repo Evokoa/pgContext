@@ -83,6 +83,69 @@ fn bit_metric_properties_are_symmetric_nonnegative_and_finite() -> Result<(), Er
 }
 
 #[test]
+fn dense_binary_navigation_metrics_match_the_bit_vector_oracle() -> Result<(), Error> {
+    for dimensions in 1..=8 {
+        let combinations = 1_u16 << dimensions;
+        for left_bits in 0..combinations {
+            for right_bits in 0..combinations {
+                let left = bits_from_mask(dimensions, left_bits);
+                let right = bits_from_mask(dimensions, right_bits);
+                let dense_left = DenseVector::new(bits_as_dense(&left))?;
+                let dense_right = DenseVector::new(bits_as_dense(&right))?;
+                let bit_left = BitVector::new(left)?;
+                let bit_right = BitVector::new(right)?;
+
+                let exact_hamming = u16::try_from(bit_left.hamming_distance(&bit_right)?)
+                    .map_err(|error| Error::InvalidVector(error.to_string()))?;
+                assert_eq!(
+                    DistanceMetric::Hamming.distance(&dense_left, &dense_right)?,
+                    f32::from(exact_hamming)
+                );
+                let navigation =
+                    f64::from(DistanceMetric::Jaccard.distance(&dense_left, &dense_right)?);
+                let exact = bit_left.jaccard_distance(&bit_right)?;
+                assert!((navigation - exact).abs() <= f64::from(f32::EPSILON));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn l2_navigation_does_not_preserve_jaccard_ordering() -> Result<(), Error> {
+    let query = DenseVector::new(vec![1.0, 0.0, 0.0])?;
+    let empty = DenseVector::new(vec![0.0, 0.0, 0.0])?;
+    let overlapping = DenseVector::new(vec![1.0, 1.0, 1.0])?;
+
+    assert!(
+        DistanceMetric::L2.distance(&query, &empty)?
+            < DistanceMetric::L2.distance(&query, &overlapping)?
+    );
+    assert!(
+        DistanceMetric::Jaccard.distance(&query, &overlapping)?
+            < DistanceMetric::Jaccard.distance(&query, &empty)?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn binary_navigation_metrics_reject_non_binary_coordinates() -> Result<(), Error> {
+    let binary = DenseVector::new(vec![0.0, 1.0])?;
+    let non_binary = DenseVector::new(vec![0.0, 0.5])?;
+
+    for metric in [DistanceMetric::Hamming, DistanceMetric::Jaccard] {
+        assert!(matches!(
+            metric.distance(&binary, &non_binary),
+            Err(Error::InvalidVector(_))
+        ));
+    }
+
+    Ok(())
+}
+
+#[test]
 fn every_metric_representation_rejects_dimension_mismatch() -> Result<(), Error> {
     for dimensions in 1..=32 {
         let dense_left = DenseVector::new(vec![1.0; dimensions])?;
@@ -171,6 +234,16 @@ fn sparse(dimensions: usize, values: &[f32]) -> Result<SparseVector, Error> {
 
 fn nonzero(value: f32) -> f32 {
     if value == 0.0 { 1.0 } else { value }
+}
+
+fn bits_from_mask(dimensions: usize, mask: u16) -> Vec<bool> {
+    (0..dimensions)
+        .map(|index| mask & (1_u16 << index) != 0)
+        .collect()
+}
+
+fn bits_as_dense(bits: &[bool]) -> Vec<f32> {
+    bits.iter().map(|bit| u8::from(*bit).into()).collect()
 }
 
 struct DeterministicValues(u64);

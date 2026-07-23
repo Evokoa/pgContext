@@ -13,7 +13,7 @@ use crate::vector_variants::SparseVec;
 mod candidate_hydration;
 mod catalog;
 mod late_interaction;
-mod late_interaction_ann;
+pub(crate) mod late_interaction_ann;
 use candidate_hydration::{
     HydratedBranch as QueryBranch, HydratedCandidate, hydrate_dense_exact_candidates,
     hydrate_full_text_candidates, hydrate_sparse_planned_candidates,
@@ -67,7 +67,7 @@ struct SparseQueryVector {
 /// `insufficient_privilege` when the caller does not own the collection or
 /// lacks source-table `SELECT`, and `invalid_parameter_value` when `limit` is
 /// invalid.
-#[pg_extern(schema = "pgcontext", name = "query")]
+#[pg_extern(name = "query")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_collection(
     collection: String,
@@ -119,7 +119,7 @@ pub fn query_collection(
 /// branch uses a registered sparse vector and exact sparse scoring. Branches
 /// are fused with reciprocal rank fusion and returned in deterministic fused
 /// score order.
-#[pg_extern(schema = "pgcontext", name = "query")]
+#[pg_extern(name = "query")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_collection_dense_sparse(
     collection: String,
@@ -174,7 +174,7 @@ pub fn query_collection_dense_sparse(
 ///
 /// Raises the same catalog, drift, ownership, and source-table privilege errors
 /// as [`query_collection`].
-#[pg_extern(schema = "pgcontext", name = "explain")]
+#[pg_extern(name = "explain")]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
     clippy::type_complexity,
@@ -544,7 +544,7 @@ fn search_limit_from_sql(limit: i32) -> SearchLimit {
     }
 }
 
-const fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
+fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
     match metric {
         DistanceMetric::L2 => "sparsevec_l2_distance",
         DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => {
@@ -552,6 +552,10 @@ const fn sparse_distance_function(metric: DistanceMetric) -> &'static str {
         }
         DistanceMetric::Cosine => "sparsevec_cosine_distance",
         DistanceMetric::L1 => "sparsevec_l1_distance",
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+            "bit distance metrics cannot score sparsevec collections",
+        ),
     }
 }
 
@@ -569,7 +573,7 @@ pub(super) fn policy_to_i64(value: usize, label: &'static str) -> i64 {
     }
 }
 
-const fn distance_function(metric: DistanceMetric) -> &'static str {
+fn distance_function(metric: DistanceMetric) -> &'static str {
     match metric {
         DistanceMetric::L2 => "l2_distance",
         DistanceMetric::InnerProduct | DistanceMetric::NegativeInnerProduct => {
@@ -577,6 +581,10 @@ const fn distance_function(metric: DistanceMetric) -> &'static str {
         }
         DistanceMetric::Cosine => "cosine_distance",
         DistanceMetric::L1 => "l1_distance",
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+            "bit distance metrics cannot score vector collections",
+        ),
     }
 }
 

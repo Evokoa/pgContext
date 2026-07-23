@@ -10,7 +10,7 @@ Start with the [Quickstart](quickstart.md), choose an
 [playground](user_guide/playground.md) to explore the APIs. Before adopting
 experimental features in production, review
 [known issues](known_issues.md), [known limitations](user_guide/limitations.md),
-and the [0.1.0 release notes](release_notes.md).
+and the [0.2.0 release notes](release_notes.md).
 
 ## User Documentation
 
@@ -23,6 +23,7 @@ and the [0.1.0 release notes](release_notes.md).
 - [Hybrid retrieval](user_guide/hybrid_retrieval.md)
 - [pgContext vs. pgvector vs. Qdrant](pgcontext-vs-pgvector-vs-qdrant.md)
 - [pgContext vs. pgvector benchmark](benchmarks/pgvector.md)
+- [Owned late-interaction storage and write amplification](benchmarks/late_interaction_owned.md)
 - [Operations and security](user_guide/operations.md)
 - [Troubleshooting](user_guide/troubleshooting.md)
 - [SQL API](user_guide/api_reference.md)

@@ -83,7 +83,10 @@ def main() -> None:
             f"{prefix}README.md",
             f"{prefix}crates/context-pg/Cargo.toml",
             f"{prefix}pgcontext.control",
+            f"{prefix}pgcontext_pgvector.control",
             f"{prefix}sql/pgcontext--{version}.sql",
+            f"{prefix}sql/pgcontext--0.1.0--0.2.0.sql",
+            f"{prefix}sql/pgcontext_pgvector--{version}.sql",
         }
         missing = sorted(required - files.keys())
         if missing:
@@ -118,6 +121,13 @@ def main() -> None:
             fail(f"META.json version {meta.get('version')!r} does not match {version!r}")
         if meta.get("provides", {}).get("pgcontext", {}).get("version") != version:
             fail("META.json provides.pgcontext.version does not match the archive")
+        if (
+            meta.get("provides", {})
+            .get("pgcontext_pgvector", {})
+            .get("version")
+            != version
+        ):
+            fail("META.json provides.pgcontext_pgvector.version does not match the archive")
         resources = meta.get("resources", {})
         invalid_resource_keys = sorted(
             key
@@ -162,6 +172,18 @@ def main() -> None:
         )
         if control_match is None or control_match.group("version") != version:
             fail("control-file version does not match the archive")
+
+        bridge_control = package.read(f"{prefix}pgcontext_pgvector.control").decode()
+        bridge_control_match = re.search(
+            r"^default_version\s*=\s*['\"](?P<version>[^'\"]+)['\"]\s*$",
+            bridge_control,
+            re.MULTILINE,
+        )
+        if (
+            bridge_control_match is None
+            or bridge_control_match.group("version") != version
+        ):
+            fail("bridge control-file version does not match the archive")
 
     print(f"PGXN archive verification passed: {args.archive}")
 

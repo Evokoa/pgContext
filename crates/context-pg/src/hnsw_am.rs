@@ -14,11 +14,14 @@ use context_index::{
     scan_delta_topk, search_graph_read, search_graph_read_with_mask_budgeted,
 };
 use context_storage::{
-    DeltaRecordKind, PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode,
-    PackedGraphImageView, encode_packed_graph_image,
+    DeltaRecordKind, MappedGraphIdentity, MappedPackedGraphImage, PackedGraphImageError,
+    PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView, SegmentHeader, SegmentKind,
+    encode_mapped_packed_graph, encode_packed_graph_image, write_segment_atomic,
 };
 use pgrx::datum::{AnyArray, AnyElement};
-use pgrx::itemptr::{item_pointer_set_all, item_pointer_to_u64, u64_to_item_pointer_parts};
+use pgrx::itemptr::{
+    item_pointer_set_all, item_pointer_to_u64, u64_to_item_pointer, u64_to_item_pointer_parts,
+};
 use pgrx::prelude::*;
 use pgrx::{AllocatedByRust, FromDatum, PgBox, PgMemoryContexts, PgRelation};
 use std::cell::{Cell, RefCell};
@@ -36,7 +39,11 @@ use crate::error::{raise_core_error, raise_sql_error, raise_sql_error_with_hint}
 use crate::settings::hnsw_config_from_gucs;
 use crate::vector_variants::{BitVec, HalfVec, SparseVec};
 #[allow(unused_imports)]
-use crate::vector_variants::{bitvec_hamming_distance, halfvec_l2_distance, sparsevec_l2_distance};
+use crate::vector_variants::{
+    bitvec_hamming_distance, bitvec_jaccard_distance, halfvec_cosine_distance, halfvec_l1_distance,
+    halfvec_l2_distance, halfvec_negative_inner_product, sparsevec_cosine_distance,
+    sparsevec_l1_distance, sparsevec_l2_distance, sparsevec_negative_inner_product,
+};
 
 mod bitmap;
 #[allow(
@@ -70,8 +77,61 @@ use storage::{
 const MAX_HNSW_SCAN_KEYS: usize = 1;
 const MAX_HNSW_SCAN_ORDERBYS: usize = 1;
 
+thread_local! {
+    /// Backend-local, single-use authorization for raw candidate traversal.
+    /// All four SQL helpers expose heap TIDs and approximate scores, so only
+    /// invoker-safe adapters may open this capability before a fixed SPI call
+    /// and exact ACL/RLS-aware recheck.
+    static HNSW_CANDIDATE_HELPER_INDEX: Cell<Option<pg_sys::Oid>> = const { Cell::new(None) };
+}
+
+struct HnswCandidateHelperGuard;
+
+impl HnswCandidateHelperGuard {
+    fn enter(index_oid: pg_sys::Oid) -> Self {
+        HNSW_CANDIDATE_HELPER_INDEX.with(|allowed_index| {
+            if allowed_index.replace(Some(index_oid)).is_some() {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    "HNSW candidate helper authorization is already active",
+                );
+            }
+        });
+        Self
+    }
+}
+
+impl Drop for HnswCandidateHelperGuard {
+    fn drop(&mut self) {
+        HNSW_CANDIDATE_HELPER_INDEX.with(|allowed_index| allowed_index.set(None));
+    }
+}
+
+pub(crate) fn with_hnsw_candidate_helper_capability<T>(
+    index_oid: pg_sys::Oid,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let _guard = HnswCandidateHelperGuard::enter(index_oid);
+    operation()
+}
+
+fn consume_hnsw_candidate_helper_capability(index_relation: pg_sys::Relation) {
+    // SAFETY: every caller owns a live `PgRelation` for this immediate identity
+    // check before any index pages or metadata are read.
+    let actual_index = unsafe { (*index_relation).rd_id };
+    let allowed_index = HNSW_CANDIDATE_HELPER_INDEX.with(|allowed| allowed.replace(None));
+    if allowed_index != Some(actual_index) {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            "pgcontext internal HNSW candidate helper cannot be called directly",
+        );
+    }
+}
+
 include!("hnsw_am/sql_contract.rs");
 include!("hnsw_am/shared_registry.rs");
+include!("hnsw_am/mapped_files.rs");
+include!("hnsw_am/mapped_lifecycle.rs");
 
 static HNSW_HANDLER_FINFO: pg_sys::Pg_finfo_record = pg_sys::Pg_finfo_record { api_version: 1 };
 const HNSW_META_MAGIC: u32 = 0x4853_4e57;
@@ -128,7 +188,7 @@ fn hnsw_physical_failpoint(stage: u8, label: &'static str) {
 }
 
 #[cfg(feature = "pg_test")]
-#[pg_extern(schema = "pgcontext")]
+#[pg_extern]
 fn test_set_hnsw_physical_failpoint(name: Option<String>) {
     let failpoint = match name.as_deref() {
         None => None,
@@ -157,8 +217,14 @@ fn test_set_hnsw_physical_failpoint(name: Option<String>) {
     hnsw_set_physical_failpoint(failpoint);
 }
 
+#[cfg(feature = "pg_test")]
+#[pg_extern]
+fn test_clear_hnsw_packed_cache() {
+    HNSW_PACKED_GRAPH_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
 /// Returns L2 distance as `float8` for HNSW order-by operators.
-#[pg_extern(schema = "pgcontext", immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe)]
 pub fn hnsw_l2_distance(left: Vector, right: Vector) -> f64 {
     let left = match left.to_dense() {
         Ok(vector) => vector,
@@ -373,6 +439,7 @@ impl HnswBuildState {
 #[derive(Default)]
 struct HnswScanState {
     prepared: bool,
+    orderby_contract: Option<HnswOrderByContract>,
     position: usize,
     candidate_limit: usize,
     candidates: Vec<HnswScanCandidate>,
@@ -406,7 +473,7 @@ pub(crate) fn record_hnsw_exact_scan(candidates: usize) {
     });
 }
 
-#[pg_extern(schema = "pgcontext", name = "hnsw_last_scan_work")]
+#[pg_extern(name = "hnsw_last_scan_work")]
 #[search_path(pg_catalog, pgcontext, public)]
 fn hnsw_last_scan_work() -> TableIterator<
     'static,
@@ -441,7 +508,63 @@ fn try_scan_counter_to_sql(value: usize) -> Result<i64, usize> {
     i64::try_from(value).map_err(|_| value)
 }
 
-#[pg_extern(schema = "pgcontext", name = "_hnsw_masked_candidates")]
+#[pg_extern(name = "_hnsw_candidates")]
+#[search_path(pg_catalog, pgcontext, public)]
+fn hnsw_candidates(
+    index_relation: PgRelation,
+    query: Vector,
+    limit: i32,
+) -> TableIterator<'static, (name!(heap_tid, String), name!(score, f32))> {
+    let limit = search_limit_from_masked_candidates(limit);
+    let query = match query.to_dense() {
+        Ok(query) => query,
+        Err(error) => raise_core_error(error),
+    };
+    let index_relation = index_relation.as_ptr();
+    consume_hnsw_candidate_helper_capability(index_relation);
+    ensure_hnsw_candidate_relation(index_relation);
+    // SAFETY: `PgRelation` holds AccessShareLock for a validated index relation;
+    // the page scan owns every buffer pin and returns owned candidate values.
+    let mut outcome =
+        unsafe { hnsw_scan_candidates(index_relation, Some(&query), Some(limit.get())) };
+    // SAFETY: the validated index relation identifies the heap relation and
+    // remains locked by `PgRelation` while PostgreSQL resolves each index TID
+    // through its HOT chain under the active statement snapshot.
+    unsafe { resolve_visible_hnsw_candidates(index_relation, &mut outcome) };
+    record_hnsw_scan_work(outcome.work);
+    TableIterator::new(outcome.candidates.into_iter().map(|candidate| {
+        let (block, offset) = u64_to_item_pointer_parts(candidate.heap_tid);
+        (format!("({block},{offset})"), candidate.score)
+    }))
+}
+
+#[pg_extern(name = "_hnsw_sparse_candidates")]
+#[search_path(pg_catalog, pgcontext, public)]
+fn hnsw_sparse_candidates(
+    index_relation: PgRelation,
+    query: SparseVec,
+    limit: i32,
+) -> TableIterator<'static, (name!(heap_tid, String), name!(score, f32))> {
+    let limit = search_limit_from_masked_candidates(limit);
+    let query = densify_hnsw_sparse_query(query);
+    let index_relation = index_relation.as_ptr();
+    consume_hnsw_candidate_helper_capability(index_relation);
+    ensure_hnsw_candidate_relation(index_relation);
+    // SAFETY: `PgRelation` holds AccessShareLock for a validated index relation;
+    // the page scan owns every buffer pin and returns owned candidate values.
+    let mut outcome =
+        unsafe { hnsw_scan_candidates(index_relation, Some(&query), Some(limit.get())) };
+    // SAFETY: see `hnsw_candidates`; sparse traversal stores the same canonical
+    // heap TID representation as every other HNSW opclass.
+    unsafe { resolve_visible_hnsw_candidates(index_relation, &mut outcome) };
+    record_hnsw_scan_work(outcome.work);
+    TableIterator::new(outcome.candidates.into_iter().map(|candidate| {
+        let (block, offset) = u64_to_item_pointer_parts(candidate.heap_tid);
+        (format!("({block},{offset})"), candidate.score)
+    }))
+}
+
+#[pg_extern(name = "_hnsw_masked_candidates")]
 #[search_path(pg_catalog, pgcontext, public)]
 fn hnsw_masked_candidates(
     index_relation: PgRelation,
@@ -450,19 +573,23 @@ fn hnsw_masked_candidates(
     limit: i32,
 ) -> TableIterator<'static, (name!(heap_tid, String), name!(score, f32))> {
     let limit = search_limit_from_masked_candidates(limit);
-    let mask = candidate_mask_from_heap_tids(&allowed_heap_tids);
     let query = match query.to_dense() {
         Ok(query) => query,
         Err(error) => raise_core_error(error),
     };
     let index_relation = index_relation.as_ptr();
-    let score_metric = ensure_masked_hnsw_relation(index_relation);
+    consume_hnsw_candidate_helper_capability(index_relation);
+    let score_metric = ensure_hnsw_candidate_relation(index_relation);
+    // SAFETY: the validated index relation identifies the locked source heap;
+    // converting visible tuple TIDs to HOT roots makes them comparable with
+    // the root TIDs stored by PostgreSQL indexes.
+    let mask = unsafe { candidate_mask_from_heap_tids(index_relation, &allowed_heap_tids) };
     // SAFETY: The validated relation owns a live versioned metapage.
     let config = unsafe { hnsw_stored_config(index_relation, score_metric) };
     // SAFETY: `PgRelation` holds AccessShareLock and keeps the relation cache
     // entry live for this regular SQL function. The page adapter reads through
     // shared buffer pins only; no SPI or AM callback is involved.
-    let outcome = unsafe {
+    let mut outcome = unsafe {
         hnsw_page_graph_scan_candidates_with_mask(
             index_relation,
             score_metric,
@@ -472,6 +599,8 @@ fn hnsw_masked_candidates(
             &mask,
         )
     };
+    // SAFETY: the source heap remains locked for this helper call.
+    unsafe { resolve_visible_hnsw_candidates(index_relation, &mut outcome) };
     record_hnsw_scan_work(outcome.work);
     TableIterator::new(outcome.candidates.into_iter().map(|candidate| {
         let (block, offset) = u64_to_item_pointer_parts(candidate.heap_tid);
@@ -479,7 +608,56 @@ fn hnsw_masked_candidates(
     }))
 }
 
-fn ensure_masked_hnsw_relation(index_relation: pg_sys::Relation) -> HnswScoreMetric {
+#[pg_extern(name = "_hnsw_sparse_masked_candidates")]
+#[search_path(pg_catalog, pgcontext, public)]
+fn hnsw_sparse_masked_candidates(
+    index_relation: PgRelation,
+    query: SparseVec,
+    allowed_heap_tids: AnyArray,
+    limit: i32,
+) -> TableIterator<'static, (name!(heap_tid, String), name!(score, f32))> {
+    let limit = search_limit_from_masked_candidates(limit);
+    let query = densify_hnsw_sparse_query(query);
+    let index_relation = index_relation.as_ptr();
+    consume_hnsw_candidate_helper_capability(index_relation);
+    let score_metric = ensure_hnsw_candidate_relation(index_relation);
+    // SAFETY: see `hnsw_masked_candidates`.
+    let mask = unsafe { candidate_mask_from_heap_tids(index_relation, &allowed_heap_tids) };
+    // SAFETY: The validated relation owns a live versioned metapage.
+    let config = unsafe { hnsw_stored_config(index_relation, score_metric) };
+    // SAFETY: `PgRelation` holds AccessShareLock and the page adapter returns
+    // owned candidates while all buffer pins remain scoped to this call.
+    let mut outcome = unsafe {
+        hnsw_page_graph_scan_candidates_with_mask(
+            index_relation,
+            score_metric,
+            &query,
+            config,
+            limit,
+            &mask,
+        )
+    };
+    // SAFETY: the source heap remains locked for this helper call.
+    unsafe { resolve_visible_hnsw_candidates(index_relation, &mut outcome) };
+    record_hnsw_scan_work(outcome.work);
+    TableIterator::new(outcome.candidates.into_iter().map(|candidate| {
+        let (block, offset) = u64_to_item_pointer_parts(candidate.heap_tid);
+        (format!("({block},{offset})"), candidate.score)
+    }))
+}
+
+fn densify_hnsw_sparse_query(query: SparseVec) -> DenseVector {
+    let query = query
+        .to_sparse()
+        .unwrap_or_else(|error| raise_core_error(error));
+    let mut values = vec![0.0; query.dimensions()];
+    for entry in query.entries() {
+        values[entry.index().saturating_sub(1)] = entry.value();
+    }
+    DenseVector::new(values).unwrap_or_else(|error| raise_core_error(error))
+}
+
+fn ensure_hnsw_candidate_relation(index_relation: pg_sys::Relation) -> HnswScoreMetric {
     // SAFETY: `PgRelation` owns a live relation cache entry for this function.
     // Reading its class form only validates that the SQL caller passed an
     // index relation before HNSW opclass metadata is inspected below.
@@ -491,22 +669,13 @@ fn ensure_masked_hnsw_relation(index_relation: pg_sys::Relation) -> HnswScoreMet
     if !is_index {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            "masked HNSW traversal requires an index relation",
+            "HNSW candidate traversal requires an index relation",
         );
     }
     // SAFETY: the relation was checked as an index above and stays locked by
     // `PgRelation`; opclass metadata reads are therefore callback-independent
     // but otherwise identical to the regular AM scan validation.
-    match unsafe { hnsw_score_metric(index_relation) } {
-        metric @ (HnswScoreMetric::L2
-        | HnswScoreMetric::NegativeInnerProduct
-        | HnswScoreMetric::Cosine
-        | HnswScoreMetric::L1) => metric,
-        HnswScoreMetric::BitHamming => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-            "masked HNSW Hamming traversal is unavailable until metric serving",
-        ),
-    }
+    unsafe { hnsw_score_metric(index_relation) }
 }
 
 fn search_limit_from_masked_candidates(limit: i32) -> SearchLimit {
@@ -523,7 +692,10 @@ fn search_limit_from_masked_candidates(limit: i32) -> SearchLimit {
     }
 }
 
-fn candidate_mask_from_heap_tids(heap_tids: &AnyArray) -> CandidateMask {
+unsafe fn candidate_mask_from_heap_tids(
+    index_relation: pg_sys::Relation,
+    heap_tids: &AnyArray,
+) -> CandidateMask {
     let array_oid = heap_tids.oid();
     if array_oid != pg_sys::TEXTARRAYOID && array_oid != pg_sys::TIDARRAYOID {
         raise_sql_error(
@@ -570,7 +742,164 @@ fn candidate_mask_from_heap_tids(heap_tids: &AnyArray) -> CandidateMask {
         };
         points.push(HnswPointId::new(heap_tid));
     }
+    // SAFETY: the caller validated and holds the index relation. The parsed
+    // TIDs came from the source relation or fail closed during heap-page read.
+    let points = unsafe { hot_root_heap_tids(index_relation, points) };
     CandidateMask::only(points)
+}
+
+/// Converts caller-visible heap TIDs to the root TIDs stored in an index.
+///
+/// PostgreSQL does not add a new index tuple for a HOT update. Candidate masks
+/// are assembled from current source-row CTIDs, while the graph still stores
+/// the HOT-chain root. `heap_get_root_tuples` is PostgreSQL's authoritative
+/// page-local mapping between those identities.
+unsafe fn hot_root_heap_tids(
+    index_relation: pg_sys::Relation,
+    points: Vec<HnswPointId>,
+) -> Vec<HnswPointId> {
+    // SAFETY: `index_relation` is a validated, locked index relation.
+    let heap_oid = unsafe { pg_sys::IndexGetRelation((*index_relation).rd_id, false) };
+    // SAFETY: acquiring AccessShareLock prevents the source relation from
+    // disappearing while its heap pages are inspected.
+    let heap_relation =
+        unsafe { PgRelation::with_lock(heap_oid, pg_sys::AccessShareLock.cast_signed()) };
+    let mut by_block = BTreeMap::<pg_sys::BlockNumber, Vec<pg_sys::OffsetNumber>>::new();
+    for point in points {
+        let (block, offset) = u64_to_item_pointer_parts(point.get());
+        by_block.entry(block).or_default().push(offset);
+    }
+
+    let mut roots = Vec::new();
+    for (block, offsets) in by_block {
+        // SAFETY: each TID is supplied by PostgreSQL from this relation. The
+        // buffer remains pinned and share-locked until all root offsets have
+        // been copied into Rust-owned values.
+        let buffer = unsafe { pg_sys::ReadBuffer(heap_relation.as_ptr(), block) };
+        unsafe { pg_sys::LockBuffer(buffer, pg_sys::BUFFER_LOCK_SHARE.cast_signed()) };
+        // SAFETY: the pinned, locked buffer exposes a valid heap page.
+        let page = unsafe { pg_sys::BufferGetPage(buffer) };
+        // `heap_get_root_tuples` clears `MaxHeapTuplesPerPage` entries before
+        // populating them, regardless of this page's current max offset. pgrx
+        // does not bind that macro, so allocate the strictly larger physical
+        // ceiling: one line pointer per `ItemIdData` across the whole page.
+        let page_bytes = usize::try_from(pg_sys::BLCKSZ).unwrap_or(8192);
+        let root_capacity = page_bytes / size_of::<pg_sys::ItemIdData>();
+        let mut root_offsets = vec![pg_sys::InvalidOffsetNumber; root_capacity];
+        // SAFETY: `root_offsets` is larger than PostgreSQL's
+        // `MaxHeapTuplesPerPage` work array and the page is share-locked.
+        unsafe { pg_sys::heap_get_root_tuples(page, root_offsets.as_mut_ptr()) };
+        for offset in offsets {
+            let offset_index = usize::from(offset.saturating_sub(pg_sys::FirstOffsetNumber));
+            let root_offset = root_offsets
+                .get(offset_index)
+                .copied()
+                .filter(|root| *root != pg_sys::InvalidOffsetNumber)
+                .unwrap_or(offset);
+            let mut root_tid = pg_sys::ItemPointerData::default();
+            // SAFETY: the block came from a valid heap TID and the root offset
+            // is either PostgreSQL's page mapping or that validated offset.
+            unsafe { pg_sys::ItemPointerSet(&mut root_tid, block, root_offset) };
+            roots.push(HnswPointId::new(item_pointer_to_u64(root_tid)));
+        }
+        // SAFETY: this call owns the only pin/lock acquired above.
+        unsafe { pg_sys::UnlockReleaseBuffer(buffer) };
+    }
+    roots
+}
+
+/// Owns PostgreSQL's table-AM fetch state used to follow index TIDs through
+/// HOT chains under the active statement snapshot.
+struct VisibleHeapTidResolver {
+    heap_relation: PgRelation,
+    fetch: *mut pg_sys::IndexFetchTableData,
+    slot: *mut pg_sys::TupleTableSlot,
+}
+
+impl VisibleHeapTidResolver {
+    unsafe fn new(index_relation: pg_sys::Relation) -> Self {
+        // SAFETY: the caller supplies a validated, locked index relation.
+        let heap_oid = unsafe { pg_sys::IndexGetRelation((*index_relation).rd_id, false) };
+        // SAFETY: AccessShareLock holds the heap relation and its tuple
+        // descriptor stable for the lifetime of this resolver.
+        let heap_relation =
+            unsafe { PgRelation::with_lock(heap_oid, pg_sys::AccessShareLock.cast_signed()) };
+        // SAFETY: the live relation supplies the table AM's matching slot ops
+        // and tuple descriptor; PostgreSQL owns both for the relation lifetime.
+        let slot = unsafe {
+            pg_sys::MakeSingleTupleTableSlot(
+                (*heap_relation.as_ptr()).rd_att,
+                pg_sys::table_slot_callbacks(heap_relation.as_ptr()),
+            )
+        };
+        // SAFETY: the relation remains live and locked in `heap_relation`.
+        let fetch = unsafe { pg_sys::table_index_fetch_begin(heap_relation.as_ptr()) };
+        Self {
+            heap_relation,
+            fetch,
+            slot,
+        }
+    }
+
+    fn resolve(&mut self, heap_tid: u64) -> Option<u64> {
+        let mut root_tid = pg_sys::ItemPointerData::default();
+        u64_to_item_pointer(heap_tid, &mut root_tid);
+        let mut call_again = false;
+        let mut all_dead = false;
+        // SAFETY: the slot was created for this relation and is cleared before
+        // table-AM fetch state stores the next tuple version into it.
+        unsafe { pg_sys::ExecClearTuple(self.slot) };
+        // SAFETY: every pointer belongs to this resolver, the TID came from the
+        // associated index, and SQL execution guarantees an active snapshot.
+        let found = unsafe {
+            pg_sys::table_index_fetch_tuple(
+                self.fetch,
+                &mut root_tid,
+                pg_sys::GetActiveSnapshot(),
+                self.slot,
+                &mut call_again,
+                &mut all_dead,
+            )
+        };
+        if !found {
+            return None;
+        }
+        // SAFETY: Under an MVCC statement snapshot there is at most one visible member
+        // of a HOT chain. The table AM stores that member's physical TID here.
+        Some(item_pointer_to_u64(unsafe { (*self.slot).tts_tid }))
+    }
+}
+
+impl Drop for VisibleHeapTidResolver {
+    fn drop(&mut self) {
+        // SAFETY: these pointers were created together in `new` and are each
+        // released exactly once before `heap_relation` drops its lock.
+        unsafe {
+            pg_sys::ExecClearTuple(self.slot);
+            pg_sys::table_index_fetch_end(self.fetch);
+            pg_sys::ExecDropSingleTupleTableSlot(self.slot);
+        }
+        // Read the field so its ownership/lifetime role is explicit; dropping
+        // it after this method closes the relation and releases AccessShareLock.
+        let _ = self.heap_relation.oid();
+    }
+}
+
+unsafe fn resolve_visible_hnsw_candidates(
+    index_relation: pg_sys::Relation,
+    outcome: &mut HnswScanCandidates,
+) {
+    // SAFETY: the caller supplies the same validated index relation used to
+    // produce every candidate in `outcome`.
+    let mut resolver = unsafe { VisibleHeapTidResolver::new(index_relation) };
+    outcome.candidates.retain_mut(|candidate| {
+        let Some(visible_tid) = resolver.resolve(candidate.heap_tid) else {
+            return false;
+        };
+        candidate.heap_tid = visible_tid;
+        true
+    });
+    outcome.work.candidates = outcome.candidates.len();
 }
 
 fn heap_tid_from_text(value: &str) -> u64 {
@@ -608,6 +937,7 @@ fn raise_invalid_heap_tid(value: &str) -> ! {
 impl HnswScanState {
     fn reset(&mut self) {
         self.prepared = false;
+        self.orderby_contract = None;
         self.position = 0;
         self.candidate_limit = 0;
         self.candidates.clear();
@@ -637,55 +967,16 @@ enum HnswScoreMetric {
     Cosine,
     L1,
     BitHamming,
+    BitJaccard,
 }
 
-impl HnswScoreMetric {
-    /// Returns the dense graph score preserving this metric's ordering.
-    ///
-    /// Hamming uses L2 over 0/1 coordinates because its square root is
-    /// monotone in the number of differing bits.
-    const fn navigation_metric(self) -> DistanceMetric {
-        match self {
-            Self::L2 | Self::BitHamming => DistanceMetric::L2,
-            Self::NegativeInnerProduct => DistanceMetric::NegativeInnerProduct,
-            Self::Cosine => DistanceMetric::NegativeInnerProduct,
-            Self::L1 => DistanceMetric::L1,
-        }
-    }
-
-    fn prepare_vector(self, vector: DenseVector) -> Result<DenseVector, context_core::Error> {
-        if self != Self::Cosine {
-            return Ok(vector);
-        }
-        let mut values = vector.into_values();
-        let norm_squared = values.iter().map(|value| value * value).sum::<f32>();
-        if !norm_squared.is_finite() || norm_squared <= 0.0 {
-            return Err(context_core::Error::InvalidVector(
-                "cosine HNSW vectors must have a finite nonzero norm".to_owned(),
-            ));
-        }
-        let inverse_norm = norm_squared.sqrt().recip();
-        values.iter_mut().for_each(|value| *value *= inverse_norm);
-        DenseVector::new(values)
-    }
-
-    const fn output_score(self, navigation_score: f32) -> f32 {
-        match self {
-            Self::Cosine => navigation_score + 1.0,
-            _ => navigation_score,
-        }
-    }
-
-    const fn storage_tag(self) -> u16 {
-        match self {
-            Self::L2 => 1,
-            Self::NegativeInnerProduct => 2,
-            Self::Cosine => 3,
-            Self::L1 => 4,
-            Self::BitHamming => 5,
-        }
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HnswOrderByContract {
+    metric: HnswScoreMetric,
+    pgvector_binding: bool,
 }
+
+include!("hnsw_am_metric.rs");
 
 #[pg_guard]
 #[allow(unused_qualifications)]
@@ -738,14 +1029,17 @@ fn hnsw_build_callback_safe(
     }) else {
         return;
     };
-    let dimension = dimension_to_u32(dense.dimension());
     let point_id = HnswPointId::new(item_pointer_to_u64(*tid.as_ref()));
 
     let state = state.as_mut();
-    let dense = state
+    let Some(dense) = state
         .score_metric
         .prepare_vector(dense)
-        .unwrap_or_else(|error| raise_core_error(error));
+        .unwrap_or_else(|error| raise_core_error(error))
+    else {
+        return;
+    };
+    let dimension = dimension_to_u32(dense.dimension());
     if state.parallel_workers > 1 {
         // Collected, not inserted: `finish_parallel_build` builds the graph
         // across worker threads once the scan completes. Duplicate/dimension
@@ -818,9 +1112,18 @@ unsafe fn prepare_hnsw_scan(scan: pg_sys::IndexScanDesc, state: &mut HnswScanSta
     let query = unsafe { hnsw_orderby_query(scan) };
     // SAFETY: The scan descriptor owns a valid index relation for the duration
     // of the AM callback.
-    let outcome = unsafe { hnsw_scan_candidates((*scan).indexRelation, query.as_ref(), None) };
+    let orderby_contract = unsafe { hnsw_orderby_contract((*scan).indexRelation) };
+    let outcome = unsafe {
+        hnsw_scan_candidates_with_metric(
+            (*scan).indexRelation,
+            query.as_ref(),
+            None,
+            orderby_contract.metric,
+        )
+    };
 
     state.prepared = true;
+    state.orderby_contract = Some(orderby_contract);
     state.position = 0;
     state.candidates = outcome.candidates;
     state.candidate_limit = outcome.requested_limit;
@@ -842,40 +1145,33 @@ unsafe fn hnsw_scan_candidates(
     // callback, and the first opclass input type is authoritative for this
     // single-column AM.
     let metric = unsafe { hnsw_score_metric(index_relation) };
+    // SAFETY: The same validated live relation and owned query are forwarded
+    // with the metric certified immediately above.
+    unsafe { hnsw_scan_candidates_with_metric(index_relation, query, requested_limit, metric) }
+}
+
+unsafe fn hnsw_scan_candidates_with_metric(
+    index_relation: pg_sys::Relation,
+    query: Option<&DenseVector>,
+    requested_limit: Option<usize>,
+    metric: HnswScoreMetric,
+) -> HnswScanCandidates {
     if let Some(query) = query {
-        match metric {
-            HnswScoreMetric::L2
-            | HnswScoreMetric::NegativeInnerProduct
-            | HnswScoreMetric::Cosine
-            | HnswScoreMetric::L1 => {
-                // SAFETY: The versioned metapage binds this opclass metric to
-                // the persisted graph's construction configuration.
-                let config = unsafe { hnsw_stored_config(index_relation, metric) };
-                let requested_limit = requested_limit.unwrap_or(config.ef_search());
-                // SAFETY: The page adapter reads only through shared pins while
-                // this AM callback owns the relation. It fetches nodes/layers
-                // on demand and never materializes the persisted graph.
-                return unsafe {
-                    hnsw_page_graph_scan_candidates(
-                        index_relation,
-                        metric,
-                        query,
-                        config,
-                        requested_limit,
-                    )
-                };
-            }
-            HnswScoreMetric::BitHamming => raise_sql_error(
-                PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-                "HNSW Hamming kNN serving is not available until the metric-serving checkpoint",
-            ),
-        }
+        // SAFETY: The versioned metapage binds this opclass metric to the
+        // persisted graph's construction configuration.
+        let config = unsafe { hnsw_stored_config(index_relation, metric) };
+        let requested_limit = requested_limit.unwrap_or(config.ef_search());
+        // SAFETY: The page adapter reads only through shared pins while this
+        // AM callback owns the relation. It fetches nodes/layers on demand and
+        // never materializes the persisted graph.
+        return unsafe {
+            hnsw_page_graph_scan_candidates(index_relation, metric, query, config, requested_limit)
+        };
     }
     // A non-ordered AM scan has no kNN strategy: it visits visible index
     // entries without manufacturing a score-ranked exact candidate set.
     // SAFETY: The scan owns a live index relation for the callback duration.
-    let records = unsafe { read_hnsw_vector_records(index_relation) };
-    let candidates = hnsw_unordered_scan_candidates(records);
+    let candidates = unsafe { hnsw_unordered_scan_candidates_with_delta(index_relation) };
     HnswScanCandidates {
         work: HnswScanWork {
             candidates: candidates.len(),

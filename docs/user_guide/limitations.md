@@ -1,6 +1,6 @@
 # Known Limitations
 
-This page describes the known limitations of the PostgreSQL 17 V1 release.
+This page describes the known limitations of the PostgreSQL 17 0.2 release.
 Extended production certification and unimplemented product behavior live in
 [`roadmap.md`](roadmap.md).
 
@@ -14,25 +14,28 @@ Extended production certification and unimplemented product behavior live in
   `pgcontext.search_sparse`; `bitvec` covers `boolean[]`, PostgreSQL `bit` and
   `bit varying` casts, pgvector-compatible built-in `bit` distance
   functions/operators, bitwise OR/AND aggregates, and btree ordering opclasses.
-  L2 HNSW index classes for `halfvec` and `sparsevec` are experimental, and
-  explicit Hamming HNSW indexing is available for `bitvec`. Non-dense ANN
-  promotion is not part of the current stable SQL promise; it is documented in
-  the post-V1 roadmap.
+  Explicit HNSW opclasses serve L2, inner product, cosine, and L1 for `halfvec`
+  and `sparsevec`, plus Hamming and Jaccard for `bitvec`. The opclass names and
+  metric bindings are stable; the non-dense SQL types and HNSW on-disk format
+  remain experimental.
 - `pgcontext.search` is the stable single-vector retrieval surface.
   `pgcontext.query` covers dense plus full-text fusion and experimental exact
-  dense+sparse RRF fusion. ANN sparse and multi-branch planners are post-V1
-  roadmap features.
+  dense+sparse RRF fusion. Named sparse ANN and typed composite execution are
+  experimental surfaces with exact recheck and bounded-work contracts.
 - Named dense vector registration and search-by-name selection are stable. The
   per-vector metadata functions are stable containers, but HNSW/quantization
   option semantics and full planner use are not part of the stable promise yet.
-- Named sparse table-backed ANN/index serving and internally maintained
-  multi-vector/late-interaction ANN are post-V1 roadmap features.
+- Named sparse table-backed ANN/index serving is experimental and requires an
+  explicitly attached, metric-matched HNSW index. It falls back to exact search
+  when the binding is absent or stale. Internally maintained
+  internally maintained multi-vector/late-interaction ANN remains outside the
+  stable 0.2 surface.
 - Qdrant-style payload mutation helpers and bulk point backfill APIs are stable
   SQL surfaces. Experimental backend-local build-job metadata exists for
   owner-scoped progress, cancellation, retry, abandoned-backend detection, and
   replacement after stale active-row recovery, plus synchronous `segment`/`mmap`
-  runner dry-runs. Background artifact publishing is not part of the current
-  stable SQL promise; mapped HNSW serving is a post-V1 roadmap feature.
+  runner dry-runs. Background artifact publishing and mapped HNSW serving are
+  experimental and not part of the current stable SQL promise.
 - `pgcontext.count` counts active table-backed point mappings, optionally with
   the same registered-field filter JSON accepted by filtered search and facets.
 - Collection strict-mode limits are available for catalog and query guardrails,
@@ -46,6 +49,13 @@ Extended production certification and unimplemented product behavior live in
 - The experimental HNSW on-page record format is intentionally not backward
   compatible during construction. Recreate an HNSW index after upgrading
   pgContext to a version whose on-page format differs.
+- SQL vector values may contain up to 16,000 dimensions, but the current HNSW
+  format stores each densified node plus its graph links in one PostgreSQL page.
+  An encoded node record is capped at 8,064 bytes; the effective indexable
+  dimension therefore also depends on graph degree and layers. `CREATE INDEX`
+  fails with SQLSTATE `54000` before appending an oversized record. Reduce the
+  dimensions or `pgcontext.hnsw_m`; multi-page and bit-native records are not
+  implemented in this format.
 - Four-metric dense HNSW has bounded exact-oracle, VACUUM, REINDEX,
   crash/restart, replica-promotion, concurrency, filtered-ANN, and work-budget
   coverage. It remains experimental because V1 does not promise a stable
@@ -101,20 +111,35 @@ Extended production certification and unimplemented product behavior live in
   The update-churn lane in the [benchmark](../benchmarks/pgvector.md) records
   both the pre-compaction measurements and the re-measurement above.
 
-## Unimplemented Serving Paths
+## Experimental or Unimplemented Serving Paths
 
-- Complete non-dense ANN metric coverage is not implemented. Only the
-  experimental variant opclasses described under SQL Surface exist.
-- Quantization helpers do not provide quantized HNSW build or serving.
-- Named sparse vector search is exact; named sparse ANN is not implemented.
-- Late-interaction ANN is not internally maintained and requires an
-  experimental user-managed token companion table.
-- Typed composite query structures do not yet execute every advanced candidate
-  source as one pipeline.
-- Artifact and mapping helpers do not perform memory-mapped HNSW graph
-  traversal.
-- Query telemetry does not yet automatically record the complete execution
-  strategy and outcome for every serving path.
+- Quantized HNSW traversal is experimental: encoded scalar, product, and binary
+  candidates are always exactly reranked from authoritative source vectors.
+- Named sparse ANN densifies sparse values for graph traversal, then exactly
+  rechecks authoritative sparse source rows. Its index records therefore share
+  the documented single-page dimension/degree envelope, and the feature is not
+  part of the stable V1 contract. Live post-build delta vectors are scanned
+  exactly and included in `explain_sparse.scored_count`; use REINDEX or the
+  documented compaction lifecycle when bounded base-graph work is required.
+- Internally maintained late-interaction ANN is experimental; pgContext owns
+  the token relation and maintains it in the source DML transaction.
+- Typed composite execution covers dense, filtered, sparse, full-text,
+  quantized, recommendation/discovery, lookup, and late-interaction adapters
+  with bounded weighted or reciprocal-rank fusion.
+- Mapped HNSW serving traverses immutable, checksummed graph generations in
+  place and falls back safely when attachment or validation fails.
+- Automatic execution telemetry covers the executor-backed `search` and
+  `execute_query` surfaces. Older specialized SQL entry points that do not yet
+  use the typed executor retain their existing manual cohort instrumentation.
+  A bounded, nonblocking shared-memory queue persists observations in an
+  independent background-worker transaction, so errors and cancellations can
+  survive caller rollback. Delivery is best-effort, may duplicate, and fail-open: contention,
+  shared-memory allocation/attachment failure, queue/database-slot exhaustion,
+  launch failure, restart, or a collection that remains invisible for 60
+  seconds can lose an observation, while a worker
+  failure in the commit/acknowledgement window can duplicate one. Automatic
+  rows have bounded dimensions, but their history is not automatically pruned;
+  operators must define retention for write-heavy deployments.
 
 ## Lifecycle And Operations
 

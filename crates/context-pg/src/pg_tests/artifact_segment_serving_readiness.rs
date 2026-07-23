@@ -372,7 +372,7 @@ fn artifact_segment_mmap_payload_rejects_checksum_and_metadata_drift() {
              'checksum',
              100
         )",
-        "55000",
+        "XX001",
         "mmap artifact is not serving-ready: checksum_mismatch (segment checksum mismatch)",
         "checksum drift mmap payload is not served",
     );
@@ -382,7 +382,7 @@ fn artifact_segment_mmap_payload_rejects_checksum_and_metadata_drift() {
              'metadata',
              100
         )",
-        "55000",
+        "XX001",
         "mmap artifact is not serving-ready: metadata_mismatch (artifact file metadata differs from catalog)",
         "metadata drift mmap payload is not served",
     );
@@ -420,9 +420,9 @@ fn artifact_segment_mmap_payload_enforces_collection_visibility() {
                  'view-a',
                  100
             )",
-            "55000",
-            "serving-ready mmap artifact not found: m10_artifact_mmap_payload_acl/view-a",
-            "denied role cannot serve hidden artifacts",
+            "42501",
+            "raw mmap artifact payload access is internal",
+            "non-superuser cannot read raw artifact bytes",
         );
     });
 }

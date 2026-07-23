@@ -5,8 +5,9 @@ metrics, and exact top-k search. The PostgreSQL extension exposes this
 through a SQL-facing dense vector type, distance functions, and an
 array-based exact search function.
 
-Non-dense ANN, named sparse ANN, internally maintained late interaction, and
-composite query execution are tracked in the [post-V1 roadmap](roadmap.md).
+Metric-bound non-dense HNSW opclasses and named sparse ANN are implemented.
+Composite query execution is
+tracked in the [post-V1 roadmap](roadmap.md).
 
 ## Dense Vector Text
 
@@ -44,11 +45,10 @@ input/output, dimensions, construction from aligned `integer[]` indexes and
 `real[]` values, casts to and from dense `real[]` arrays, canonical index/value
 accessors, and exact L2, inner-product, negative-inner-product, cosine, and L1
 distance functions plus distance operators and sum/average aggregates as an experimental
-surface. `pgcontext.search_sparse` also provides experimental exact top-k over
-explicit sparse candidate arrays and registered sparse source columns for `l2`,
-`inner_product`, `cosine`, and `l1`. `sparsevec` L2 `pgcontext_hnsw` indexes
-are experimental and use dense vector storage; non-L2 sparse ANN/index serving
-remains planned. Sparse cosine rejects zero vectors because the distance is
+surface. `pgcontext.search_sparse` provides experimental exact top-k over
+explicit sparse candidate arrays and exact-rechecked ANN over registered sparse
+source columns for `l2`, `inner_product`, `cosine`, and `l1`. Sparse
+`pgcontext_hnsw` indexes use dense graph storage. Sparse cosine rejects zero vectors because the distance is
 undefined.
 
 ```sql
@@ -64,6 +64,61 @@ FROM pgcontext.search_sparse(
   2
 );
 ```
+
+Named search falls back to exhaustive exact scoring until a validated HNSW
+index is attached. Build the metric-matched index and bind its schema-qualified
+identity to the sparse registration:
+
+```sql
+CREATE INDEX docs_lexical_hnsw
+ON docs USING pgcontext_hnsw
+  (lexical pgcontext.sparsevec_hnsw_ops);
+
+SELECT pgcontext.attach_sparse_hnsw_index(
+  'docs', 'lexical', 'public.docs_lexical_hnsw'
+);
+```
+
+Use `sparsevec_hnsw_ip_ops`, `sparsevec_hnsw_cosine_ops`, or
+`sparsevec_hnsw_l1_ops` for the corresponding registered metric. Attachment
+rejects a different table/column/metric, partial or expression indexes, and
+invalid indexes. Every ANN candidate is joined back to the current source row
+and exactly rescored under the caller's ACL/RLS snapshot. A missing, dropped,
+or configuration-cleared binding falls back to exact search.
+
+The five-argument overload accepts the same registered-field filter JSON as
+dense filtered search and uses a sparse HNSW candidate mask:
+
+```sql
+SELECT point_id, source_key, score
+FROM pgcontext.search_sparse(
+  'docs',
+  'lexical',
+  pgcontext.sparsevec('{1:1,3:2}/4096'),
+  '{"must":[{"key":"tenant","match":"acme"}]}',
+  10
+);
+```
+
+`pgcontext.explain_sparse` reports `strategy`, `active_points`,
+`scored_count`, `candidate_count`, and `recheck_count`. `scored_count` includes
+both graph node scoring and every live vector scored exactly in the HNSW delta
+segment, so inserts made after the last build are not hidden from work
+accounting. A rebuilt/compacted HNSW generation should show bounded scored and
+candidate work while rechecking every produced candidate.
+
+Filtered sparse ANN uses `pgcontext.hnsw_mask_candidate_limit` as both its
+executor and AM mask ceiling. Raising that setting therefore permits a larger
+registered-field filter set end to end instead of failing first at a separate
+fixed query-executor limit. Setting it to `0` disables masked ANN for filtered
+queries and selects the authoritative exact fallback.
+
+Named sparse ANN also masks unfiltered traversal to active collection points
+whose source rows are visible under the caller's ACL/RLS snapshot. This keeps
+closer hidden, unregistered, or logically deleted rows from consuming the
+candidate page. When that caller-visible set exceeds
+`pgcontext.hnsw_mask_candidate_limit`, pgContext selects exact search; raise the
+setting when bounded ANN is preferred for a larger visible collection.
 
 For a collection registered with `pgcontext.register_sparse_vector`, use the
 named sparse vector directly:
@@ -88,9 +143,10 @@ mismatches are rejected, and bit vectors are capped at `16,000` bits. The SQL
 distance, Jaccard distance, distance operators, `boolean[]` casts, casts from
 PostgreSQL `bit` and `bit varying`, and casts back to PostgreSQL `bit` and
 `bit varying`, and `bitvec(n)` typmods as an experimental surface.
-Pgvector-compatible bit-vector Hamming ANN indexing is available through the
-explicit `pgcontext.bitvec_hnsw_hamming_ops` opclass; bit-vector Jaccard ANN
-indexing remains planned.
+Pgvector-compatible bit-vector ANN indexing is available through the explicit
+`pgcontext.bitvec_hnsw_hamming_ops` and
+`pgcontext.bitvec_hnsw_jaccard_ops` opclasses. Both traverse with the matching
+bit metric; Jaccard is not approximated with densified L2.
 
 ## Conversion Policy
 
@@ -125,10 +181,10 @@ also rejects zero-magnitude vectors because the result is undefined.
 The SQL facade exposes named functions:
 
 ```sql
-SELECT pgcontext.l2_distance('[1,2,3]'::vector, '[1,2,5]'::vector);
-SELECT pgcontext.inner_product('[1,2,3]'::vector, '[4,5,6]'::vector);
-SELECT pgcontext.cosine_distance('[1,0]'::vector, '[0,1]'::vector);
-SELECT pgcontext.l1_distance('[1,2,3]'::vector, '[2,4,6]'::vector);
+SELECT pgcontext.l2_distance('[1,2,3]'::pgcontext.vector, '[1,2,5]'::pgcontext.vector);
+SELECT pgcontext.inner_product('[1,2,3]'::pgcontext.vector, '[4,5,6]'::pgcontext.vector);
+SELECT pgcontext.cosine_distance('[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector);
+SELECT pgcontext.l1_distance('[1,2,3]'::pgcontext.vector, '[2,4,6]'::pgcontext.vector);
 ```
 
 pgContext's dense-vector surface is pgvector-compatible. It covers text
@@ -168,12 +224,12 @@ vectors, a metric name, and a result limit:
 ```sql
 SELECT point_id, score
 FROM pgcontext.search(
-  '[0,0]'::vector,
+  '[0,0]'::pgcontext.vector,
   ARRAY[30, 10, 20]::bigint[],
   ARRAY[
-    '[2,0]'::vector,
-    '[1,0]'::vector,
-    '[0,1]'::vector
+    '[2,0]'::pgcontext.vector,
+    '[1,0]'::pgcontext.vector,
+    '[0,1]'::pgcontext.vector
   ],
   'l2',
   2
@@ -223,7 +279,7 @@ are fused with reciprocal-rank fusion:
 SELECT point_id, source_key, score
 FROM pgcontext.query(
   'docs',
-  '[0.1,0.2,0.3]'::vector,
+  '[0.1,0.2,0.3]'::pgcontext.vector,
   'lexical',
   pgcontext.sparsevec('{1:1,9:0.5}/4096'),
   10
@@ -243,8 +299,8 @@ FROM pgcontext.recommend('docs', ARRAY[101, 205], ARRAY[309], 10);
 SELECT point_id, source_key, score
 FROM pgcontext.recommend(
   'docs',
-  ARRAY['[0.1,0.2,0.3]'::vector],
-  ARRAY[]::vector[],
+  ARRAY['[0.1,0.2,0.3]'::pgcontext.vector],
+  ARRAY[]::pgcontext.vector[],
   10
 );
 ```
@@ -261,12 +317,12 @@ FROM pgcontext.discover('docs', ARRAY[101, 205], 10);
 ```
 
 Query-constructor helpers return validated JSON plans that clients can persist,
-inspect, or translate without relying on internal catalog tables:
+inspect, translate, or execute without relying on internal catalog tables:
 
 ```sql
 SELECT pgcontext.query_rerank(
   pgcontext.query_prefetch(ARRAY[
-    pgcontext.query_weight(pgcontext.query_nearest('[0,0,0]'::vector, 50), 0.7),
+    pgcontext.query_weight(pgcontext.query_nearest('[0,0,0]'::pgcontext.vector, 50), 0.7),
     pgcontext.query_score_threshold(
       pgcontext.query_recommend(ARRAY[101], ARRAY[309], 20),
       0.0,
@@ -277,12 +333,32 @@ SELECT pgcontext.query_rerank(
   ]),
   10
 );
+
+SELECT point_id, source_key, score
+FROM pgcontext.execute_query(
+  'docs',
+  pgcontext.query_rerank(
+    pgcontext.query_prefetch(ARRAY[
+      pgcontext.query_nearest('[0,0,0]'::pgcontext.vector, 50),
+      pgcontext.query_sparse_nearest('keywords', '{1:1}/3'::pgcontext.sparsevec, 50),
+      pgcontext.query_full_text('postgres retrieval', 'body', 50)
+    ]),
+    10
+  )
+);
 ```
 
 Formula text is preserved as an opaque client-plan value. It must contain 1 to
-512 UTF-8 bytes; executable formula semantics are not implied by this JSON
-constructor. Query-plan argument validation is shared with the pure query layer,
-while PostgreSQL remains responsible for SQL/JSON conversion and SQLSTATEs.
+512 UTF-8 bytes. `execute_query` accepts finite literals, `$score`/`score`,
+parentheses, unary signs, and `+`, `-`, `*`, and `/`; unsupported syntax fails
+before candidate work. Composite execution is depth/node/work bounded, applies
+authoritative source rechecks before fusion, and supports named or filtered
+dense, named sparse, full-text, and owned late-interaction leaves. An unfiltered
+default-vector leaf with quantization configured uses its revision-bound mapped
+HNSW artifact; named or filtered quantized leaves fall back to their validated
+full-precision HNSW binding. `query_rerank` is the final deterministic
+score-order and result-limit stage; exact scoring happens in each retrieval
+leaf's source recheck before fusion.
 
 ## Late-Interaction Rerank
 
@@ -296,9 +372,9 @@ ascending point ID.
 ```sql
 SELECT point_id, score
 FROM pgcontext.rerank_late_interaction(
-  ARRAY['[1,0]'::vector, '[0,1]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector],
   ARRAY[10, 20]::bigint[],
-  ARRAY['[1,0]'::vector, '[0,1]'::vector, '[0.8,0.1]'::vector, '[0.1,0.7]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector, '[0.8,0.1]'::pgcontext.vector, '[0.1,0.7]'::pgcontext.vector],
   ARRAY[0, 2, 4]::integer[],
   2
 );
@@ -314,7 +390,7 @@ comparison budget.
 SELECT point_id, source_key, score
 FROM pgcontext.search_late_interaction(
   'docs',
-  ARRAY['[1,0]'::vector, '[0,1]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector],
   'token_vectors',
   10
 );
@@ -329,7 +405,7 @@ multi-vector serving readiness:
 SELECT stage, strategy, status, estimated_candidates, candidate_budget
 FROM pgcontext.explain_late_interaction(
   'docs',
-  ARRAY['[1,0]'::vector, '[0,1]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector],
   'token_vectors'
 );
 ```
@@ -349,7 +425,7 @@ source table and applies exact MaxSim for final scores:
 ```sql
 CREATE TABLE doc_tokens (
   source_key text NOT NULL,
-  token_embedding vector(2) NOT NULL
+  token_embedding pgcontext.vector(2) NOT NULL
 );
 
 CREATE INDEX doc_tokens_embedding_idx
@@ -358,7 +434,7 @@ CREATE INDEX doc_tokens_embedding_idx
 SELECT point_id, source_key, score
 FROM pgcontext.search_late_interaction_ann(
   'docs',
-  ARRAY['[1,0]'::vector, '[0,1]'::vector],
+  ARRAY['[1,0]'::pgcontext.vector, '[0,1]'::pgcontext.vector],
   'token_vectors',
   'public.doc_tokens',
   'source_key',

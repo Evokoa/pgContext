@@ -327,6 +327,7 @@ name = "context-hybrid"
 version = "0.1.0"
 dependencies = [
  "context-core",
+ "proptest",
 ]
 
 [[package]]
@@ -340,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "context-pg"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "context-build",
  "context-core",

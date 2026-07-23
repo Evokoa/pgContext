@@ -535,6 +535,468 @@ fn search_limit_policy_does_not_require_private_catalog_table_grants() {
 }
 
 #[pg_test]
+fn hybrid_query_does_not_require_private_catalog_table_grants() {
+    acl_create_role("m5_acl_query_owner");
+    acl_grant_api_access("m5_acl_query_owner");
+
+    acl_set_session_user("m5_acl_query_owner");
+    create_hybrid_collection("m5_acl_query_docs");
+    upsert_search_points("m5_acl_query_docs", &["10", "20", "30", "40"]);
+
+    // A collection owner in production is a plain (non-superuser) role that
+    // holds no direct privilege on the private catalog tables — only the
+    // PUBLIC visibility views. `pgcontext.query` must resolve the collection
+    // through those views, exactly as `pgcontext.search` does.
+    assert!(
+        !acl_has_table_privilege("pgcontext._collections", "SELECT"),
+        "collection owners must not need direct _collections SELECT"
+    );
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_points", "SELECT"),
+        "collection owners must not need direct _collection_points SELECT"
+    );
+
+    let rows = hybrid_query_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.query(
+                'm5_acl_query_docs',
+                '[0,0]'::vector,
+                'database',
+                'body',
+                4
+           )",
+    );
+    let source_keys = rows
+        .into_iter()
+        .map(|(_point_id, source_key, _score)| source_key)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        source_keys,
+        vec![
+            "20".to_owned(),
+            "10".to_owned(),
+            "30".to_owned(),
+            "40".to_owned()
+        ],
+        "owner without private catalog grants should get fused hybrid results"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
+fn hybrid_query_refreshes_drifted_source_table_without_catalog_writes() {
+    acl_create_role("m5_acl_drift_owner");
+    acl_grant_api_access("m5_acl_drift_owner");
+
+    acl_set_session_user("m5_acl_drift_owner");
+    create_hybrid_collection("m5_acl_drift_docs");
+    upsert_search_points("m5_acl_drift_docs", &["10", "20", "30", "40"]);
+
+    // Simulate a dump/restore: rebuild the source table so its oid changes.
+    // The next query detects the drift and must persist the refreshed oid, but
+    // a plain collection owner holds no direct write privilege on the private
+    // catalog tables. The refresh therefore has to run through the SECURITY
+    // DEFINER helpers rather than a direct UPDATE.
+    Spi::run("DROP TABLE public.m5_acl_drift_docs").expect("source table should drop");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_drift_docs (
+             id bigint PRIMARY KEY,
+             embedding vector NOT NULL,
+             body text NOT NULL
+         )",
+    )
+    .expect("source table should be recreated");
+    Spi::run(
+        "INSERT INTO public.m5_acl_drift_docs (id, embedding, body)
+         VALUES (10, '[1,0]'::vector, 'database internals'),
+                (20, '[0,0]'::vector, 'database database'),
+                (30, '[2,0]'::vector, 'storage database'),
+                (40, '[3,0]'::vector, 'unrelated')",
+    )
+    .expect("source rows should be reinserted");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collections", "UPDATE"),
+        "collection owners must not need direct _collections UPDATE"
+    );
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_vectors", "UPDATE"),
+        "collection owners must not need direct _collection_vectors UPDATE"
+    );
+
+    let rows = hybrid_query_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.query(
+                'm5_acl_drift_docs',
+                '[0,0]'::vector,
+                'database',
+                'body',
+                4
+           )",
+    );
+    assert_eq!(
+        rows.len(),
+        4,
+        "drift refresh should self-heal through SECURITY DEFINER helpers and return results"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
+fn late_interaction_search_does_not_require_private_catalog_table_grants() {
+    acl_create_role("m14_acl_late_owner");
+    acl_grant_api_access("m14_acl_late_owner");
+
+    acl_set_session_user("m14_acl_late_owner");
+    create_late_interaction_collection("m14_acl_late_docs");
+    upsert_hybrid_points("m14_acl_late_docs", &["10", "20", "30", "40"]);
+
+    // The late-interaction resolve needs collection-level source metadata. A
+    // plain owner must reach it through the membership-filtered
+    // `_visible_collections` view, never the base `_collections` table.
+    assert!(
+        !acl_has_table_privilege("pgcontext._collections", "SELECT"),
+        "collection owners must not need direct _collections SELECT"
+    );
+
+    let rows = hybrid_query_rows(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.search_late_interaction(
+                'm14_acl_late_docs',
+                ARRAY['[1,0]'::vector, '[0,1]'::vector],
+                'token_vectors',
+                3
+           )",
+    );
+    assert_eq!(
+        rows.into_iter()
+            .map(|(_point_id, source_key, score)| (source_key, score))
+            .collect::<Vec<_>>(),
+        vec![
+            ("10".to_owned(), 2.0),
+            ("20".to_owned(), 1.5),
+            ("30".to_owned(), 1.0),
+        ],
+        "late-interaction search should work for a member without private catalog grants"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
+fn refresh_helpers_cannot_repoint_collection_to_caller_controlled_table() {
+    acl_create_role("m5_acl_defkey_owner");
+    acl_create_role("m5_acl_defkey_member");
+    acl_grant_api_access("m5_acl_defkey_owner");
+    acl_grant_api_access("m5_acl_defkey_member");
+    // The member is a member of the owner role, so it passes the definer
+    // helper's ownership gate.
+    Spi::run("GRANT m5_acl_defkey_owner TO m5_acl_defkey_member")
+        .expect("member should be granted the owner role");
+
+    acl_set_session_user("m5_acl_defkey_owner");
+    create_hybrid_collection("m5_acl_defkey_docs");
+    upsert_search_points("m5_acl_defkey_docs", &["10", "20"]);
+    acl_reset_session_user();
+
+    acl_set_session_user("m5_acl_defkey_member");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_defkey_scratch (
+             id bigint PRIMARY KEY,
+             embedding vector NOT NULL,
+             body text NOT NULL
+         )",
+    )
+    .expect("member scratch table should be created");
+    let collection_id = Spi::get_one::<i64>(
+        "SELECT collection_id
+           FROM pgcontext._collection_acl
+          WHERE collection_name = 'm5_acl_defkey_docs'",
+    )
+    .expect("acl lookup should succeed")
+    .expect("collection id should exist");
+    // The definer helpers are PUBLIC-executable, but they accept no oid and
+    // re-derive the registered source table, so the member cannot point the
+    // collection at the scratch table they control (confused-deputy vector).
+    Spi::run(&format!(
+        "SELECT pgcontext._refresh_collection_source_table({collection_id})"
+    ))
+    .expect("member refresh call should succeed");
+    Spi::run(&format!(
+        "SELECT pgcontext._refresh_vector_source_binding({collection_id}, 'embedding')"
+    ))
+    .expect("member vector refresh call should succeed");
+    acl_reset_session_user();
+
+    let pinned_to_registered_table = Spi::get_one::<bool>(
+        "SELECT source_table_oid = 'public.m5_acl_defkey_docs'::regclass
+            AND source_table_oid <> 'public.m5_acl_defkey_scratch'::regclass
+           FROM pgcontext._collections
+          WHERE collection_name = 'm5_acl_defkey_docs'",
+    )
+    .expect("collection oid lookup should succeed")
+    .expect("collection row should exist");
+    assert!(
+        pinned_to_registered_table,
+        "refresh helpers must keep source_table_oid pinned to the registered table"
+    );
+}
+
+#[pg_test]
+fn search_refreshes_drifted_source_table_without_catalog_writes() {
+    acl_create_role("m5_acl_search_drift_owner");
+    acl_grant_api_access("m5_acl_search_drift_owner");
+
+    acl_set_session_user("m5_acl_search_drift_owner");
+    create_hybrid_collection("m5_acl_search_drift_docs");
+    upsert_search_points("m5_acl_search_drift_docs", &["10", "20", "30", "40"]);
+
+    Spi::run("DROP TABLE public.m5_acl_search_drift_docs").expect("source table should drop");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_search_drift_docs (
+             id bigint PRIMARY KEY,
+             embedding vector NOT NULL,
+             body text NOT NULL
+         )",
+    )
+    .expect("source table should be recreated");
+    Spi::run(
+        "INSERT INTO public.m5_acl_search_drift_docs (id, embedding, body)
+         VALUES (10, '[1,0]'::vector, 'a'),
+                (20, '[0,0]'::vector, 'b'),
+                (30, '[2,0]'::vector, 'c'),
+                (40, '[3,0]'::vector, 'd')",
+    )
+    .expect("source rows should be reinserted");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collections", "UPDATE"),
+        "collection owners must not need direct _collections UPDATE"
+    );
+
+    let count = Spi::get_one::<i64>(
+        "SELECT count(*)
+           FROM pgcontext.search('m5_acl_search_drift_docs', '[0,0]'::vector, 4)",
+    )
+    .expect("search should execute")
+    .expect("search count should not be null");
+    assert_eq!(
+        count, 4,
+        "search should self-heal source-table drift through SECURITY DEFINER helpers"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
+fn sparse_search_refreshes_drifted_source_table_without_catalog_writes() {
+    acl_create_role("m5_acl_sparse_drift_owner");
+    acl_grant_api_access("m5_acl_sparse_drift_owner");
+
+    acl_set_session_user("m5_acl_sparse_drift_owner");
+    create_dense_sparse_collection("m5_acl_sparse_drift_docs");
+    upsert_hybrid_points("m5_acl_sparse_drift_docs", &["10", "20", "30"]);
+
+    Spi::run("DROP TABLE public.m5_acl_sparse_drift_docs").expect("source table should drop");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_sparse_drift_docs (
+             id bigint PRIMARY KEY,
+             embedding vector NOT NULL,
+             lexical sparsevec NOT NULL,
+             body text NOT NULL
+         )",
+    )
+    .expect("source table should be recreated");
+    Spi::run(
+        "INSERT INTO public.m5_acl_sparse_drift_docs (id, embedding, lexical, body)
+         VALUES (10, '[0,0]'::vector, pgcontext.sparsevec('{1:1}/4'), 'first'),
+                (20, '[3,0]'::vector, pgcontext.sparsevec('{1:3}/4'), 'second'),
+                (30, '[2,0]'::vector, pgcontext.sparsevec('{1:2}/4'), 'third')",
+    )
+    .expect("source rows should be reinserted");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_sparse_vectors", "UPDATE"),
+        "collection owners must not need direct _collection_sparse_vectors UPDATE"
+    );
+
+    let count = Spi::get_one::<i64>(
+        "SELECT count(*)
+           FROM pgcontext.search_sparse(
+                'm5_acl_sparse_drift_docs',
+                'lexical',
+                pgcontext.sparsevec('{1:1}/4'),
+                3
+           )",
+    )
+    .expect("sparse search should execute")
+    .expect("sparse search count should not be null");
+    assert!(
+        count >= 1,
+        "sparse search should self-heal source-table drift through SECURITY DEFINER helpers"
+    );
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
+fn sparse_ann_preserves_non_superuser_acl_and_source_rls() {
+    acl_create_role("m5_acl_sparse_ann_owner");
+    acl_grant_api_access("m5_acl_sparse_ann_owner");
+
+    acl_set_session_user("m5_acl_sparse_ann_owner");
+    Spi::run(
+        "CREATE TABLE public.m5_acl_sparse_ann_docs (
+             id bigint PRIMARY KEY,
+             lexical sparsevec NOT NULL,
+             tenant text NOT NULL
+         );
+         INSERT INTO public.m5_acl_sparse_ann_docs (id, lexical, tenant)
+         SELECT value,
+                pg_catalog.format('{1:%s}/4', value)::sparsevec,
+                'other'
+           FROM generate_series(1, 64) AS value;
+         INSERT INTO public.m5_acl_sparse_ann_docs (id, lexical, tenant)
+         VALUES (100, pgcontext.sparsevec('{1:100}/4'), 'm5_acl_sparse_ann_owner');
+         ALTER TABLE public.m5_acl_sparse_ann_docs ENABLE ROW LEVEL SECURITY;
+         ALTER TABLE public.m5_acl_sparse_ann_docs FORCE ROW LEVEL SECURITY;
+         CREATE POLICY m5_acl_sparse_ann_tenant
+             ON public.m5_acl_sparse_ann_docs
+          USING (tenant = SESSION_USER);
+         SELECT pgcontext.create_collection(
+             'm5_acl_sparse_ann_docs', 'public.m5_acl_sparse_ann_docs'
+         );
+         SELECT pgcontext.register_sparse_vector(
+             'm5_acl_sparse_ann_docs', 'lexical', 'lexical', 4, 'l2'
+         );
+         SELECT pgcontext.upsert_points(
+             'm5_acl_sparse_ann_docs',
+             ARRAY(
+                 SELECT value::text FROM generate_series(1, 64) AS value
+                 UNION ALL SELECT '100'
+             )
+         );
+         CREATE INDEX m5_acl_sparse_ann_docs_hnsw
+             ON public.m5_acl_sparse_ann_docs USING pgcontext_hnsw
+             (lexical pgcontext.sparsevec_hnsw_ops);
+         SELECT pgcontext.attach_sparse_hnsw_index(
+             'm5_acl_sparse_ann_docs', 'lexical',
+             'public.m5_acl_sparse_ann_docs_hnsw'
+         );
+         SET LOCAL pgcontext.hnsw_candidate_budget = 8;",
+    )
+    .expect("non-superuser sparse ANN fixture should be created");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_sparse_vectors", "SELECT"),
+        "sparse ANN callers must not need private sparse catalog SELECT"
+    );
+    let visible_sources = Spi::get_one::<String>(
+        "SELECT coalesce(string_agg(source_key, ',' ORDER BY source_key), '')
+           FROM pgcontext.search_sparse(
+                'm5_acl_sparse_ann_docs', 'lexical',
+                pgcontext.sparsevec('{}/4'), 1
+           )",
+    )
+    .expect("non-superuser sparse ANN should execute")
+    .expect("sparse ANN aggregate should not be null");
+    assert_eq!(visible_sources, "100");
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
+fn composite_execute_query_preserves_non_superuser_acl_rls_and_mvcc() {
+    acl_create_role("stage_g_composite_rls_owner");
+    acl_grant_api_access("stage_g_composite_rls_owner");
+
+    acl_set_session_user("stage_g_composite_rls_owner");
+    Spi::run(
+        "CREATE TABLE public.stage_g_composite_rls_docs (
+             id bigint PRIMARY KEY,
+             embedding vector(2) NOT NULL,
+             tenant text NOT NULL
+         );
+         INSERT INTO public.stage_g_composite_rls_docs VALUES
+             (1, '[1,0]', 'stage_g_composite_rls_owner'),
+             (2, '[0.9,0.1]', 'other'),
+             (3, '[0,1]', 'other');
+         SELECT pgcontext.create_collection(
+             'stage_g_composite_rls_docs', 'public.stage_g_composite_rls_docs'
+         );
+         SELECT pgcontext.register_vector(
+             'stage_g_composite_rls_docs', 'embedding', 'embedding', 2, 'l2'
+         );
+         SELECT pgcontext.upsert_points(
+             'stage_g_composite_rls_docs', ARRAY['1', '2', '3']
+         );
+         CREATE INDEX stage_g_composite_rls_docs_hnsw
+             ON public.stage_g_composite_rls_docs
+             USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_ops);
+         SELECT pgcontext.attach_hnsw_index(
+             'stage_g_composite_rls_docs', 'embedding',
+             'public.stage_g_composite_rls_docs_hnsw'
+         );
+         ALTER TABLE public.stage_g_composite_rls_docs ENABLE ROW LEVEL SECURITY;
+         ALTER TABLE public.stage_g_composite_rls_docs FORCE ROW LEVEL SECURITY;
+         CREATE POLICY stage_g_composite_rls_tenant
+             ON public.stage_g_composite_rls_docs
+          USING (tenant = SESSION_USER)
+          WITH CHECK (tenant = SESSION_USER);",
+    )
+    .expect("non-superuser composite fixture should be created");
+
+    assert!(
+        !acl_has_table_privilege("pgcontext._collection_points", "SELECT"),
+        "composite callers must not need private point-catalog SELECT"
+    );
+    let visible = Spi::get_one::<String>(
+        "SELECT coalesce(string_agg(source_key, ',' ORDER BY source_key), '')
+           FROM pgcontext.execute_query(
+               'stage_g_composite_rls_docs',
+               pgcontext.query_nearest('[1,0]'::vector, 3)
+           )",
+    )
+    .expect("non-superuser composite query should execute")
+    .expect("visible aggregate should not be null");
+    assert_eq!(visible, "1");
+
+    Spi::run(
+        "UPDATE public.stage_g_composite_rls_docs
+            SET embedding = '[0,1]'::vector
+          WHERE id = 1",
+    )
+    .expect("visible source update should succeed");
+    let score = Spi::get_one::<f32>(
+        "SELECT score
+           FROM pgcontext.execute_query(
+               'stage_g_composite_rls_docs',
+               pgcontext.query_nearest('[0,1]'::vector, 1)
+           )",
+    )
+    .expect("updated composite query should execute")
+    .expect("updated visible row should remain searchable");
+    assert_eq!(score, 0.0);
+
+    Spi::run("DELETE FROM public.stage_g_composite_rls_docs WHERE id = 1")
+        .expect("visible source delete should succeed");
+    let remaining = Spi::get_one::<i64>(
+        "SELECT count(*)
+           FROM pgcontext.execute_query(
+               'stage_g_composite_rls_docs',
+               pgcontext.query_nearest('[0,1]'::vector, 3)
+           )",
+    )
+    .expect("post-delete composite query should execute")
+    .expect("post-delete count should not be null");
+    assert_eq!(remaining, 0);
+
+    acl_reset_session_user();
+}
+
+#[pg_test]
 fn drop_collection_denies_non_owner_collections() {
     acl_create_role("m2_acl_collection_owner_d");
     acl_create_role("m2_acl_denied_drop");

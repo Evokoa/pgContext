@@ -18,6 +18,10 @@
           "path": "benchmarks/pgvector.md"
         },
         {
+          "title": "Owned late-interaction storage benchmark",
+          "path": "benchmarks/late_interaction_owned.md"
+        },
+        {
           "title": "Quickstart",
           "path": "quickstart.md"
         },
@@ -81,6 +85,10 @@
         {
           "title": "Hybrid retrieval",
           "path": "user_guide/hybrid_retrieval.md"
+        },
+        {
+          "title": "Retrieval methods overview",
+          "path": "user_guide/retrieval_methods.md"
         },
         {
           "title": "Client examples",
