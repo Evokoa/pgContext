@@ -3,13 +3,13 @@
 The fastest way to try pgContext is to pull the pre-built Docker image — no build step needed. The image is multi-arch (`linux/amd64` and `linux/arm64`) and works on macOS, Linux, and Windows via Docker Desktop.
 
 ```sh
-docker pull ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+docker pull ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 docker run -d --rm \
   --name pgcontext \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pgcontext \
   -p 5432:5432 \
-  ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+  ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 ```
 
 Verify the extension is loaded (uses `psql` inside the container, so you don't need a local PostgreSQL client):
@@ -19,7 +19,7 @@ docker exec pgcontext psql -U postgres -d pgcontext \
   -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'pgcontext';"
 ```
 
-*(Note: the registry image is published with the v0.1.0 release. Until then, build and run the same demo locally using `scripts/quickstart.sh` instead.)*
+*(If the v0.2.0 registry tag is not yet available, build and run the same demo locally using `scripts/quickstart.sh` instead.)*
 
 To exercise the current checkout immediately, you can use the bundled script:
 

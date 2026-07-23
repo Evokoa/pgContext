@@ -120,7 +120,7 @@ impl CompositeLateInteractionSource {
             .unwrap_or_default()
             .max(1)
             .min(self.candidates_per_query);
-        let point_ids = owned_late_interaction_ann_point_ids(
+        let (point_ids, visits) = owned_late_interaction_ann_point_ids(
             self.collection.collection_id,
             &self.query_vectors,
             per_query,
@@ -140,7 +140,7 @@ impl CompositeLateInteractionSource {
                 )
             })
             .collect::<Result<Vec<_>>>()?;
-        Ok(CandidatePage::with_scored_count(candidates, limit, true)
+        Ok(CandidatePage::with_scored_count(candidates, visits, true)
             .with_strategy("owned_late_interaction_ann")
             .with_expansion_count(1))
     }
@@ -547,7 +547,7 @@ fn owned_late_interaction_ann_point_ids(
     collection_id: i64,
     query_vectors: &[DenseVector],
     candidates_per_query: usize,
-) -> Vec<i64> {
+) -> (Vec<i64>, usize) {
     let candidate_limit = i32::try_from(candidates_per_query).unwrap_or_else(|_| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
@@ -556,6 +556,7 @@ fn owned_late_interaction_ann_point_ids(
     });
     let mut seen = HashSet::new();
     let mut point_ids = Vec::new();
+    let mut visits = 0_usize;
     for query_vector in query_vectors {
         let sql_vector = Vector::from_dense(query_vector.clone());
         Spi::connect(|client| {
@@ -583,8 +584,15 @@ fn owned_late_interaction_ann_point_ids(
                 }
             }
         });
+        let query_visits =
+            Spi::get_one::<i64>("SELECT node_reads FROM pgcontext.hnsw_last_scan_work()")
+                .ok()
+                .flatten()
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or_default();
+        visits = visits.saturating_add(query_visits);
     }
-    point_ids
+    (point_ids, visits)
 }
 
 fn search_owned_late_interaction_adaptive(
@@ -609,7 +617,7 @@ fn search_owned_late_interaction_adaptive(
             collection_name,
             projected_candidates,
         );
-        let point_ids = owned_late_interaction_ann_point_ids(
+        let (point_ids, _visits) = owned_late_interaction_ann_point_ids(
             collection.collection_id,
             query_vectors,
             candidate_limit,
@@ -704,7 +712,7 @@ fn search_late_interaction_candidate_points(
     clippy::too_many_arguments,
     reason = "SQL surface keeps the source and token table contract explicit"
 )]
-pub fn search_legacy_late_interaction_ann(
+pub fn search_late_interaction_ann(
     collection: String,
     query_vectors: Vec<Vector>,
     vector_column: String,
@@ -797,7 +805,7 @@ pub fn search_legacy_late_interaction_ann(
     clippy::type_complexity,
     reason = "pgrx SQL generation requires the explicit table row tuple"
 )]
-pub fn explain_legacy_late_interaction_ann(
+pub fn explain_late_interaction_ann(
     collection: String,
     query_vectors: Vec<Vector>,
     vector_column: String,

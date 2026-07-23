@@ -4,7 +4,7 @@ pgContext is an open-source PostgreSQL extension for AI vector and hybrid
 retrieval.
 
 This guide distinguishes stable, implemented behavior from experimental and
-planned paths. pgContext 0.1.0 targets PostgreSQL 17.
+planned paths. pgContext 0.2.0 targets PostgreSQL 17.
 
 ## Current Status
 
@@ -52,15 +52,14 @@ intended bit metric.
   cosine, and L1, plus bit Hamming and Jaccard; their SQL types and the HNSW
   on-disk format remain experimental.
 
-## Explicitly Not Implemented
+## Advanced and Intentionally Different Capabilities
 
-Named sparse ANN is implemented as an experimental, exact-rechecked path and is
-not part of the stable V1 contract. V1 does not implement quantized HNSW
-serving, internally maintained late-interaction token indexes, complete
-composite-query-plan execution, memory-mapped HNSW graph
-traversal, or complete automatic query telemetry. IVFFlat is intentionally not
-part of pgContext's V1 product. Existing helper APIs, metadata containers, or
-artifact readers do not imply that these serving paths exist.
+Named sparse ANN, revision-bound quantized candidate traversal with exact
+reranking, internally maintained late-interaction tokens, typed composite query
+execution, immutable mapped graph generations, and bounded automatic executor
+telemetry are implemented. These advanced paths retain the maturity labels and
+operational limits documented in their individual guides. IVFFlat is
+intentionally not part of pgContext's V1 product.
 
 Their dependency order and acceptance requirements are in the
 [post-V1 product roadmap](roadmap.md).

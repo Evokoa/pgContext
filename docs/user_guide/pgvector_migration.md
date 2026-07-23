@@ -5,12 +5,23 @@ databases. The two main extensions can be installed in either order because
 pgvector owns `public.*` types while pgContext owns canonical `pgcontext.*`
 types. Keep an existing pgvector column in place and install the certified
 `pgcontext_pgvector` companion bridge before building a `pgcontext_hnsw` index
-over it. The bridge profile is PostgreSQL 17 with pgContext 0.1.0 and pgvector
+over it. The bridge profile is PostgreSQL 17 with pgContext 0.2.0 and pgvector
 0.8.x installed in `public`. Dense `vector` and `halfvec` layouts are
 byte-certified; `sparsevec`
 ownership conversion remains fail-closed because its physical layouts differ. See
 [Trying pgContext on an Existing pgvector Database](pgvector_coexist.md) for
 the live workflow and inventory tools.
+
+### Upgrading a pgvector-first 0.1 install
+
+The 0.1→0.2 extension update deliberately refuses this legacy layout before
+mutation because `public.vector` belongs to pgvector. Export pgContext
+collection/vector/filter registrations and inventory every object depending on
+the old pgContext extension before any `DROP EXTENSION ... CASCADE`; CASCADE can
+remove application views/functions as well as indexes. Then install pgContext
+0.2 and `pgcontext_pgvector`, recreate the registrations and dependent objects,
+and rebuild `pgcontext_hnsw` indexes over the original unchanged pgvector
+columns. The upgrade preflight never rewrites or retypes those columns.
 
 Explicit pgContext HNSW opclasses cover half and sparse L2, inner product,
 cosine, and L1, plus bit Hamming and Jaccard. The names and metric bindings are

@@ -89,6 +89,11 @@ failure.
 - `artifact_publication_rollback.sh`: validates that a rolled-back mmap artifact
   publication leaves no visible generation, cleanup reconciles its orphan file,
   and a later committed publication becomes serving-ready.
+- `automatic_observability.sh`: validates asynchronous automatic telemetry for
+  successful, errored, cancelled, budget-exhausted, concurrent-update,
+  fallback, missing, rebuild-required, quantized, and corrupt executions; it
+  also gates privacy, queue health, disabled-vs-enabled latency, and idle worker
+  reclamation.
 - `rls_acl_boundary.sh`: validates source-table ACL and forced RLS boundaries
   against pgContext search from owner and non-owner roles.
 - `large_exact_search.sh`: loads a deterministic exact-search collection,
@@ -124,6 +129,7 @@ tests/heavy/filtered_ann_recall.sh
 tests/heavy/late_interaction_ann_serving.sh
 tests/heavy/build_job_resumability.sh
 tests/heavy/artifact_publication_rollback.sh
+tests/heavy/automatic_observability.sh
 tests/heavy/rls_acl_boundary.sh
 tests/heavy/large_exact_search.sh
 tests/heavy/partitioned_collections.sh

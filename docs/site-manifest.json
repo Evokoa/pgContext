@@ -71,7 +71,7 @@
         "vector_engine.md"
       ],
       "path": "contributor_guide/README.md",
-      "sha256": "43f40bd2a8390347f4514845ace6bfa008c25715a68d1015840b6463fbc1f85e"
+      "sha256": "c59cb6b259aa1be7255fa2fbb28cf3dcd681ae79239ac21b400daedd5ad473a4"
     },
     {
       "links": [
@@ -131,12 +131,12 @@
     {
       "links": [],
       "path": "contributor_guide/release_matrix.md",
-      "sha256": "2f7011f9c39740e85065eb7bf50556fb234a961267d62d1c8a6843154141e851"
+      "sha256": "2de0a4e0c503ed173248254d8cb9033a0c6677c35723259e08a9c952f6bf506e"
     },
     {
       "links": [],
       "path": "contributor_guide/release_process.md",
-      "sha256": "96a068e0b8ee883373ebb72c1f3326b41fb749bc710d79016d113a7e765575d3"
+      "sha256": "15e8c4e17d3bdd62b86edf183a69a235cd379cc1a362791820b57c5c22620f66"
     },
     {
       "links": [],
@@ -194,7 +194,7 @@
         "../benchmarks/pgvector.md"
       ],
       "path": "contributor_guide/vector_engine.md",
-      "sha256": "ae42abed82ff600933a187f74be621919d1a10f0c688e70022c3d6a28acaed17"
+      "sha256": "44a7ed75b02d40b3e7f9fd4c47f1c3bd7aaf076f2d16e7925516537ae6b58bf7"
     },
     {
       "links": [
@@ -224,7 +224,7 @@
         "user_guide/vector_search.md"
       ],
       "path": "index.md",
-      "sha256": "ae497484d656e429b8f8638d8be477f0be4589d58c3c4f4fbdd833bf3bec8013"
+      "sha256": "45e0616cf710eb0ad69892480ddb5f4825efeee05ead99aa51143294abbf71ba"
     },
     {
       "links": [
@@ -315,14 +315,14 @@
         "user_guide/quickstart.md"
       ],
       "path": "quickstart.md",
-      "sha256": "1a2e00f3e18f642de7ac8b1092641fac4a8d07dc4d198eafedc8c6401dc938af"
+      "sha256": "6010bdc79e3d2c888ab0134737c6f48a852990a5191cdd16d5910432390dc6a9"
     },
     {
       "links": [
         "user_guide/release_notes.md"
       ],
       "path": "release_notes.md",
-      "sha256": "93e702fd158a6480e0ac775c8d1d1134bcfc83962f3dae3ecf3ca14c632be1d4"
+      "sha256": "e329e7c71dbbeffdadbda3e3a4b2c92e211a1ec5baeb28851483cf297fd4e93e"
     },
     {
       "links": [
@@ -363,7 +363,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "09938443cf298251c3d622d19db36b78553041811125cb4414cfca1b0ccbda45"
+      "sha256": "e378f9ddecd64cce5531c17016d9bf7bbfb3fe07f4837fca2e4dff74a4d450d3"
     },
     {
       "links": [
@@ -373,7 +373,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "716dab5be9919b8fd63960df7e454e40a045ffb23d9b4baf35c08323100afe24"
+      "sha256": "3e74fc6f73fde30dc4a1f6cf0a9fc217be8550813d837b09718a72ed6366bc67"
     },
     {
       "links": [],
@@ -408,14 +408,14 @@
     {
       "links": [],
       "path": "user_guide/hybrid_retrieval.md",
-      "sha256": "57e08fb3998c901c028cb83554f6d162d302664ae1b16820f82818025fa93ba4"
+      "sha256": "57608702e3a075ddf0e1625b6c8290b9e0e5ec3ef3dfbee0d3de7098280f3efb"
     },
     {
       "links": [
         "pgvector_coexist.md"
       ],
       "path": "user_guide/indexes.md",
-      "sha256": "58959a5013a3522c0b9297653b15b3291639e564f8a426a0d2474d44492bffea"
+      "sha256": "4ec14eb68417956ad4dee58aa3017fbbd5398d80449adff96ae6bcdd280101de"
     },
     {
       "links": [
@@ -423,7 +423,7 @@
         "troubleshooting.md"
       ],
       "path": "user_guide/installation.md",
-      "sha256": "cf3d7e8ba99b90836c8429dd4e09654876f3af142110ec2640ac9d34b522eb18"
+      "sha256": "78f8ee0a629fcd3a836b6757761934f303fde5b81056fb91a47c3995454eb561"
     },
     {
       "links": [
@@ -431,7 +431,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/limitations.md",
-      "sha256": "d911034f031173bedcb75347f84989a95385c4fbcc0b94c43a67ffc13c30ab91"
+      "sha256": "03206d6d58947b51bed60c61b62c4012475fd00a49dd5790522163637716aac9"
     },
     {
       "links": [
@@ -461,26 +461,26 @@
         "troubleshooting.md"
       ],
       "path": "user_guide/operations.md",
-      "sha256": "ce2f0a1f2721daab2b086faf309c8c65976a892261bb00d45da7d0d8ce05e4e5"
+      "sha256": "e806841d0128840fba105892fc156f14d573b87a7833692de9bed93936492685"
     },
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "cbb5a00be667441d0d3fe2ff04eda97f8a8b3dca656b14af544289c1911743eb"
+      "sha256": "6622bd9028abe3851c36eb676e1496910eb57bed9f6537ee41e093676af3d486"
     },
     {
       "links": [
         "pgvector_migration.md#converting-column-ownership"
       ],
       "path": "user_guide/pgvector_coexist.md",
-      "sha256": "26c1d44491758e64010e4275dec247efc30e0ebee027f7fffaf226799ff69030"
+      "sha256": "35bed9e790919f577f6c47783cb52c6bc826dbc99d546680645a4a4cd5b974d5"
     },
     {
       "links": [
         "pgvector_coexist.md"
       ],
       "path": "user_guide/pgvector_migration.md",
-      "sha256": "e066b46a0881722ec7bc1569e3ddd91dfe168c6c2ba175c6a44af3115d424c01"
+      "sha256": "1fed386324dc6debc9d55551d72163b8be42e928228483702243d2203855021b"
     },
     {
       "links": [
@@ -495,7 +495,7 @@
         "playground.md"
       ],
       "path": "user_guide/quickstart.md",
-      "sha256": "fcd2388ef58c4d21720112797ea4fab4e72cbfd798e70ac84a58fa68d6ca5716"
+      "sha256": "76d54d7ef25081103660a79c233be8cadd9eb9c00362ea58ad78f06fe97e4bd2"
     },
     {
       "links": [
@@ -524,7 +524,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "c3719fae894ad86e32223e1c9a22b2310a2c909902a24561cd2bc19da1703793"
+      "sha256": "8ecbcb36e4a87631a9cd67731b82849805920b418675598e143af49172ace13a"
     },
     {
       "links": [
@@ -538,7 +538,7 @@
         "https://github.com/evokoa/pggraph"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "0f67f77cdfdca872abbe10b6869fbb24c44eb4e1f81eeb6e1740e32b9bed3a68"
+      "sha256": "21de2ec873c80d84442298923307eacbd0997e1247396dfef2163e34d374e9f6"
     },
     {
       "links": [],
@@ -548,12 +548,12 @@
     {
       "links": [],
       "path": "user_guide/security.md",
-      "sha256": "8b6ccea904b83990837df46442f03990f88c5079ce80fb4087b1842000ea578d"
+      "sha256": "1e0e0eb0d58f07a70dad3b3d0b42e76033382433a0c47da96bafd92a02b4d62f"
     },
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "c4501dfbdde020bacaa31822ef57f957f62c843b0807ac3fa4641604fcfc103a"
+      "sha256": "ab8f1c42828d8e0a9205961aa136466867e3d5542f283f9bb13bac00e5a7ac6d"
     },
     {
       "links": [],
@@ -577,7 +577,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/vector_search.md",
-      "sha256": "fd2593e1def2ac394cba4c41c1aef81e46b6c6375674d2d046282e2264fd5468"
+      "sha256": "0e673b38a93442dbee0c5ac0663983e810282403a6effff34fee89f4d1020bfb"
     }
   ],
   "public_files": [
@@ -613,6 +613,7 @@
         "docs/user_guide/indexes.md",
         "docs/user_guide/installation.md",
         "docs/user_guide/installation.md",
+        "docs/user_guide/limitations.md",
         "docs/user_guide/operations.md",
         "docs/user_guide/parity_matrix.md",
         "docs/user_guide/pgvector_migration.md",
@@ -637,7 +638,7 @@
         "https://img.shields.io/badge/PostgreSQL-17-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white",
         "https://img.shields.io/badge/docs-pgContext-0ea5e9?style=flat-square",
         "https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square",
-        "https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square",
+        "https://img.shields.io/badge/version-0.2.0-2ea44f?style=flat-square",
         "https://img.shields.io/discord/1496159762704896022?style=for-the-badge&label=Join%20Discord&logo=discord&logoColor=white&color=5865F2",
         "https://img.shields.io/github/issues-pr/evokoa/pgcontext?style=flat-square&logo=github&label=PRs",
         "https://img.shields.io/github/issues/evokoa/pgcontext?style=flat-square&logo=github&label=issues",
@@ -655,19 +656,19 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "ba454ebf676e3698fb66a01fa1d216205ce7fae4b2f386e4af0662dafe400136"
+      "sha256": "5a02e215810030b9908299d82b30d45e35d926589bf2007e2da4ef4215637a80"
     },
     {
       "links": [],
       "path": "CONTRIBUTING.md",
-      "sha256": "fefc075d5aa9dec9e6e43b77a05d7f427b27147c1bee1ebc05381693f15439de"
+      "sha256": "441ef75c352e456c23ed615eeaa79cff3bcee5917c9ec557872e850f6e2e0081"
     },
     {
       "links": [
         "mailto:team@evokoa.com"
       ],
       "path": "SECURITY.md",
-      "sha256": "a82ebb7985bcf90fc4a20052e00bfc2a62e38c00ee1f69d8af6d996bb7d06f42"
+      "sha256": "771deadcce9a0478e56b00948685529a42fac654ca5aee0f29d092cb8a41c88a"
     },
     {
       "links": [],
@@ -680,7 +681,7 @@
         "../docs/contributor_guide/release_process.md"
       ],
       "path": "release/README.md",
-      "sha256": "1a248238183a0756e6c3b0bae6f3f3aea9913df7dbd499c7df3b270deafb0cf4"
+      "sha256": "f72487ad0f9501e6b9a05b975dbf07fbbd34326f7cfcf775ed7aa6c2755ad4c7"
     }
   ],
   "renderer": "github-markdown",

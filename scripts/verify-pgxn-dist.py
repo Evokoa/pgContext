@@ -85,6 +85,7 @@ def main() -> None:
             f"{prefix}pgcontext.control",
             f"{prefix}pgcontext_pgvector.control",
             f"{prefix}sql/pgcontext--{version}.sql",
+            f"{prefix}sql/pgcontext--0.1.0--0.2.0.sql",
             f"{prefix}sql/pgcontext_pgvector--{version}.sql",
         }
         missing = sorted(required - files.keys())

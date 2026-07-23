@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 269;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 271;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -537,6 +537,8 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function("query_cohort_stats", "", SqlLifecycle::Stable),
+    SqlContractObject::function("query_execution_stats", "", SqlLifecycle::Stable),
+    SqlContractObject::function("query_telemetry_queue_stats", "", SqlLifecycle::Stable),
     SqlContractObject::function(
         "recall_check",
         "exact_point_ids bigint[], candidate_point_ids bigint[], min_recall double precision",

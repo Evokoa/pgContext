@@ -682,7 +682,7 @@ fn table_search_mmap_hnsw_artifact_rejects_unservable_files() {
              1,
              1
          )",
-        "55000",
+        "XX001",
         "mmap artifact is not serving-ready: checksum_mismatch (segment checksum mismatch)",
         "mmap artifact checksum search",
     );
@@ -695,7 +695,7 @@ fn table_search_mmap_hnsw_artifact_rejects_unservable_files() {
              1,
              1
          )",
-        "55000",
+        "XX001",
         "mmap artifact is not serving-ready: metadata_mismatch (artifact file metadata differs from catalog)",
         "mmap artifact metadata drift search",
     );

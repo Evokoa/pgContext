@@ -1,6 +1,6 @@
 # Known Limitations
 
-This page describes the known limitations of the PostgreSQL 17 V1 release.
+This page describes the known limitations of the PostgreSQL 17 0.2 release.
 Extended production certification and unimplemented product behavior live in
 [`roadmap.md`](roadmap.md).
 
@@ -20,21 +20,22 @@ Extended production certification and unimplemented product behavior live in
   remain experimental.
 - `pgcontext.search` is the stable single-vector retrieval surface.
   `pgcontext.query` covers dense plus full-text fusion and experimental exact
-  dense+sparse RRF fusion. Named sparse ANN is a separate experimental search
-  path; composite multi-branch planning remains roadmap work.
+  dense+sparse RRF fusion. Named sparse ANN and typed composite execution are
+  experimental surfaces with exact recheck and bounded-work contracts.
 - Named dense vector registration and search-by-name selection are stable. The
   per-vector metadata functions are stable containers, but HNSW/quantization
   option semantics and full planner use are not part of the stable promise yet.
 - Named sparse table-backed ANN/index serving is experimental and requires an
   explicitly attached, metric-matched HNSW index. It falls back to exact search
   when the binding is absent or stale. Internally maintained
-  multi-vector/late-interaction ANN remains outside the stable V1 surface.
+  internally maintained multi-vector/late-interaction ANN remains outside the
+  stable 0.2 surface.
 - Qdrant-style payload mutation helpers and bulk point backfill APIs are stable
   SQL surfaces. Experimental backend-local build-job metadata exists for
   owner-scoped progress, cancellation, retry, abandoned-backend detection, and
   replacement after stale active-row recovery, plus synchronous `segment`/`mmap`
-  runner dry-runs. Background artifact publishing is not part of the current
-  stable SQL promise; mapped HNSW serving is a post-V1 roadmap feature.
+  runner dry-runs. Background artifact publishing and mapped HNSW serving are
+  experimental and not part of the current stable SQL promise.
 - `pgcontext.count` counts active table-backed point mappings, optionally with
   the same registered-field filter JSON accepted by filtered search and facets.
 - Collection strict-mode limits are available for catalog and query guardrails,
@@ -112,21 +113,33 @@ Extended production certification and unimplemented product behavior live in
 
 ## Experimental or Unimplemented Serving Paths
 
-- Quantization helpers do not provide quantized HNSW build or serving.
+- Quantized HNSW traversal is experimental: encoded scalar, product, and binary
+  candidates are always exactly reranked from authoritative source vectors.
 - Named sparse ANN densifies sparse values for graph traversal, then exactly
   rechecks authoritative sparse source rows. Its index records therefore share
   the documented single-page dimension/degree envelope, and the feature is not
   part of the stable V1 contract. Live post-build delta vectors are scanned
   exactly and included in `explain_sparse.scored_count`; use REINDEX or the
   documented compaction lifecycle when bounded base-graph work is required.
-- Late-interaction ANN is not internally maintained and requires an
-  experimental user-managed token companion table.
-- Typed composite query structures do not yet execute every advanced candidate
-  source as one pipeline.
-- Artifact and mapping helpers do not perform memory-mapped HNSW graph
-  traversal.
-- Query telemetry does not yet automatically record the complete execution
-  strategy and outcome for every serving path.
+- Internally maintained late-interaction ANN is experimental; pgContext owns
+  the token relation and maintains it in the source DML transaction.
+- Typed composite execution covers dense, filtered, sparse, full-text,
+  quantized, recommendation/discovery, lookup, and late-interaction adapters
+  with bounded weighted or reciprocal-rank fusion.
+- Mapped HNSW serving traverses immutable, checksummed graph generations in
+  place and falls back safely when attachment or validation fails.
+- Automatic execution telemetry covers the executor-backed `search` and
+  `execute_query` surfaces. Older specialized SQL entry points that do not yet
+  use the typed executor retain their existing manual cohort instrumentation.
+  A bounded, nonblocking shared-memory queue persists observations in an
+  independent background-worker transaction, so errors and cancellations can
+  survive caller rollback. Delivery is best-effort, may duplicate, and fail-open: contention,
+  shared-memory allocation/attachment failure, queue/database-slot exhaustion,
+  launch failure, restart, or a collection that remains invisible for 60
+  seconds can lose an observation, while a worker
+  failure in the commit/acknowledgement window can duplicate one. Automatic
+  rows have bounded dimensions, but their history is not automatically pruned;
+  operators must define retention for write-heavy deployments.
 
 ## Lifecycle And Operations
 

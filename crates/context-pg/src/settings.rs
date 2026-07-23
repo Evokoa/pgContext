@@ -59,6 +59,7 @@ static HNSW_MASK_CANDIDATE_LIMIT: GucSetting<i32> =
 static HNSW_BUILD_PARALLEL_WORKERS: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_BUILD_PARALLEL_WORKERS_I32);
 static PGVECTOR_COMPAT_WARNINGS: GucSetting<bool> = GucSetting::<bool>::new(true);
+static QUERY_TELEMETRY_ENABLED: GucSetting<bool> = GucSetting::<bool>::new(true);
 const DEFAULT_HNSW_DELTA_SEGMENT_LIMIT: i32 = 10_000;
 static HNSW_DELTA_SEGMENT_LIMIT: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_DELTA_SEGMENT_LIMIT);
@@ -73,6 +74,14 @@ static HNSW_COMPACT_ON_THRESHOLD_MAX_MB: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_COMPACT_ON_THRESHOLD_MAX_MB);
 
 pub(crate) fn init_gucs() {
+    GucRegistry::define_bool_guc(
+        c"pgcontext.query_telemetry_enabled",
+        c"Persist bounded automatic query execution telemetry.",
+        c"When enabled, executor-backed retrieval enqueues strategy, work, outcome, and latency counters for asynchronous persistence. Only superusers may disable it for incident response or controlled latency baselines.",
+        &QUERY_TELEMETRY_ENABLED,
+        GucContext::Suset,
+        GucFlags::default(),
+    );
     GucRegistry::define_int_guc(
         c"pgcontext.hnsw_m",
         c"Default HNSW neighbor count.",
@@ -293,6 +302,10 @@ pub(crate) fn init_gucs() {
         GucContext::Userset,
         GucFlags::default(),
     );
+}
+
+pub(crate) fn query_telemetry_enabled() -> bool {
+    QUERY_TELEMETRY_ENABLED.get()
 }
 
 pub(crate) fn pgvector_compat_warnings_from_guc() -> bool {

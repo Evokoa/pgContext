@@ -14,7 +14,7 @@ DECLARE
 BEGIN
     IF pg_catalog.current_setting('server_version_num')::integer < 170000
        OR pg_catalog.current_setting('server_version_num')::integer >= 180000 THEN
-        RAISE EXCEPTION 'pgcontext_pgvector 0.1.0 supports PostgreSQL 17 only'
+        RAISE EXCEPTION 'pgcontext_pgvector 0.2.0 supports PostgreSQL 17 only'
             USING ERRCODE = '0A000';
     END IF;
 
@@ -22,8 +22,8 @@ BEGIN
       INTO pgcontext_version
       FROM pg_catalog.pg_extension AS extension
      WHERE extension.extname = 'pgcontext';
-    IF pgcontext_version IS DISTINCT FROM '0.1.0' THEN
-        RAISE EXCEPTION 'pgcontext_pgvector 0.1.0 requires pgcontext 0.1.0 (found %)',
+    IF pgcontext_version IS DISTINCT FROM '0.2.0' THEN
+        RAISE EXCEPTION 'pgcontext_pgvector 0.2.0 requires pgcontext 0.2.0 (found %)',
                         pgcontext_version
             USING ERRCODE = '0A000';
     END IF;
@@ -40,7 +40,7 @@ BEGIN
             USING ERRCODE = '0A000';
     END IF;
     IF pgvector_version IS NULL OR pgvector_version !~ '^0[.]8[.][0-9]+$' THEN
-        RAISE EXCEPTION 'pgcontext_pgvector 0.1.0 certifies pgvector 0.8.x only (found %)',
+        RAISE EXCEPTION 'pgcontext_pgvector 0.2.0 certifies pgvector 0.8.x only (found %)',
                         pgvector_version
             USING ERRCODE = '0A000';
     END IF;
@@ -175,3 +175,4 @@ CREATE OPERATOR CLASS pgcontext.halfvec_hnsw_pgvector_l1_ops
     OPERATOR 1 public.<+> (public.halfvec, public.halfvec) FOR ORDER BY pg_catalog.float_ops,
     FUNCTION 1 pgcontext._pgvector_halfvec_l1_support(public.halfvec, public.halfvec),
     STORAGE pgcontext.vector;
+

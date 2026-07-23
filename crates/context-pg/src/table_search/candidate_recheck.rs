@@ -27,6 +27,16 @@ thread_local! {
     /// usable only while the invoker-safe outer function performs its fixed
     /// SPI call.
     static MMAP_CANDIDATE_HELPER_ALLOWED: Cell<bool> = const { Cell::new(false) };
+    static MMAP_LAST_CANDIDATE_VISITS: Cell<usize> = const { Cell::new(0) };
+    static MMAP_LAST_DELTA_VISITS: Cell<usize> = const { Cell::new(0) };
+}
+
+pub(crate) fn take_last_mmap_candidate_visits() -> usize {
+    MMAP_LAST_CANDIDATE_VISITS.with(|visits| visits.replace(0))
+}
+
+pub(crate) fn take_last_mmap_delta_visits() -> usize {
+    MMAP_LAST_DELTA_VISITS.with(|visits| visits.replace(0))
 }
 
 struct MmapCandidateHelperGuard;
@@ -449,7 +459,7 @@ fn mmap_hnsw_artifact_candidates_internal(
         .to_dense()
         .unwrap_or_else(|error| raise_core_error(error));
     let metric = registered_vector.metric;
-    let (generation_high_water, candidates) =
+    let (generation_high_water, candidates, visits) =
         crate::artifact_segments::with_mapped_artifact_payload(
             collection_name.as_str(),
             &artifact_name,
@@ -462,7 +472,7 @@ fn mmap_hnsw_artifact_candidates_internal(
                     .map(|node| node.point_id())
                     .max()
                     .unwrap_or_default();
-                let candidates = match graph.codebook() {
+                let (candidates, visits) = match graph.codebook() {
                     Some(codebook) => {
                         if candidate_limit.get() <= limit.get() {
                             raise_sql_error(
@@ -484,9 +494,10 @@ fn mmap_hnsw_artifact_candidates_internal(
                     }
                     None => mmap_hnsw_candidates(&graph, &query, metric, candidate_limit.get()),
                 };
-                (generation_high_water, candidates)
+                (generation_high_water, candidates, visits)
             },
         );
+    MMAP_LAST_CANDIDATE_VISITS.with(|last| last.set(visits));
     let generation_high_water = i64::try_from(generation_high_water).unwrap_or_else(|_| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
@@ -579,7 +590,7 @@ fn mmap_hnsw_candidates(
     query: &context_core::DenseVector,
     metric: DistanceMetric,
     candidate_limit: usize,
-) -> Vec<(i64, f32)> {
+) -> (Vec<(i64, f32)>, usize) {
     if query.dimension() != graph.dimensions() {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_DATA_EXCEPTION,
@@ -598,14 +609,20 @@ fn mmap_hnsw_candidates(
     let config = crate::settings::hnsw_config_from_gucs();
     let search_width = config.ef_search().max(candidate_limit);
     let mut scratch = Vec::with_capacity(graph.dimensions());
-    let candidates = if has_edges {
+    let (candidates, visits) = if has_edges {
         traverse_mapped_base_layer(graph, query, metric, search_width, &mut scratch)
     } else {
-        (0..graph.len())
-            .map(|node_id| score_mapped_node(graph, query, metric, node_id, &mut scratch))
-            .collect()
+        (
+            (0..graph.len())
+                .map(|node_id| score_mapped_node(graph, query, metric, node_id, &mut scratch))
+                .collect(),
+            graph.len(),
+        )
     };
-    mapped_candidates_to_point_scores(graph, candidates, candidate_limit)
+    (
+        mapped_candidates_to_point_scores(graph, candidates, candidate_limit),
+        visits,
+    )
 }
 
 fn traverse_mapped_base_layer(
@@ -614,7 +631,7 @@ fn traverse_mapped_base_layer(
     metric: DistanceMetric,
     search_width: usize,
     scratch: &mut Vec<f32>,
-) -> Vec<EncodedCandidate> {
+) -> (Vec<EncodedCandidate>, usize) {
     let entry = score_mapped_node(graph, query, metric, 0, scratch);
     let mut pending = BinaryHeap::from([Reverse(entry)]);
     let mut nearest = BinaryHeap::from([entry]);
@@ -658,7 +675,8 @@ fn traverse_mapped_base_layer(
             }
         }
     }
-    nearest.into_sorted_vec()
+    let visits = visited.into_iter().filter(|visited| *visited).count();
+    (nearest.into_sorted_vec(), visits)
 }
 
 fn score_mapped_node(
@@ -743,7 +761,7 @@ fn mmap_quantized_hnsw_candidates(
     query: &context_core::DenseVector,
     metric: DistanceMetric,
     candidate_limit: usize,
-) -> Vec<(i64, f32)> {
+) -> (Vec<(i64, f32)>, usize) {
     if query.dimension() != graph.dimensions() {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_DATA_EXCEPTION,
@@ -764,12 +782,15 @@ fn mmap_quantized_hnsw_candidates(
             .node(node_id)
             .is_some_and(|node| node.neighbors().next().is_some())
     });
-    let candidates = if has_edges {
+    let (candidates, visits) = if has_edges {
         traverse_quantized_base_layer(graph, &prepared, search_width)
     } else {
-        (0..graph.len())
-            .map(|node_id| score_quantized_node(graph, &prepared, node_id))
-            .collect()
+        (
+            (0..graph.len())
+                .map(|node_id| score_quantized_node(graph, &prepared, node_id))
+                .collect(),
+            graph.len(),
+        )
     };
     let mut candidates = candidates
         .into_iter()
@@ -797,14 +818,14 @@ fn mmap_quantized_hnsw_candidates(
         },
     );
     candidates.truncate(candidate_limit);
-    candidates
+    (candidates, visits)
 }
 
 fn traverse_quantized_base_layer(
     graph: &MappedGraphView<'_>,
     prepared: &PreparedQuantizedQuery,
     search_width: usize,
-) -> Vec<EncodedCandidate> {
+) -> (Vec<EncodedCandidate>, usize) {
     let entry = score_quantized_node(graph, prepared, 0);
     let mut pending = BinaryHeap::from([Reverse(entry)]);
     let mut nearest = BinaryHeap::from([entry]);
@@ -848,7 +869,8 @@ fn traverse_quantized_base_layer(
             }
         }
     }
-    nearest.into_sorted_vec()
+    let visits = visited.into_iter().filter(|visited| *visited).count();
+    (nearest.into_sorted_vec(), visits)
 }
 
 fn score_quantized_node(
@@ -890,7 +912,8 @@ pub(crate) fn mmap_delta_candidates(
     let distance_function = distance_function(registered_vector.metric);
     let sql = format!(
         "SELECT points.point_id,
-                pgcontext.{distance_function}(source.{vector_column}, $1) AS score
+                pgcontext.{distance_function}(source.{vector_column}, $1) AS score,
+                count(*) OVER ()::bigint AS scored_count
            FROM pgcontext._visible_collection_points AS points
            JOIN {table_name} AS source ON source.id::text = points.source_key
           WHERE points.collection_id = $2
@@ -918,8 +941,16 @@ pub(crate) fn mmap_delta_candidates(
                     format!("failed to search mmap mutable delta: {error}"),
                 )
             });
-        rows.into_iter()
+        let mut scored_count = 0;
+        let candidates = rows
+            .into_iter()
             .map(|row| {
+                scored_count = row
+                    .get::<i64>(3)
+                    .ok()
+                    .flatten()
+                    .and_then(|count| usize::try_from(count).ok())
+                    .unwrap_or_default();
                 (
                     row.get::<i64>(1).ok().flatten().unwrap_or_else(|| {
                         raise_sql_error(
@@ -935,7 +966,9 @@ pub(crate) fn mmap_delta_candidates(
                     }),
                 )
             })
-            .collect()
+            .collect();
+        MMAP_LAST_DELTA_VISITS.with(|visits| visits.set(scored_count));
+        candidates
     })
 }
 

@@ -442,6 +442,40 @@ fn execute_query_routes_quantized_mapped_hnsw_and_exactly_rechecks() {
     assert_eq!(rows[0].2, 1.0);
     assert_eq!(rows[1].1, "30");
     assert_eq!(rows[1].2, 2.0);
+    let collection_id = Spi::get_one::<i64>(
+        "SELECT collection_id FROM pgcontext._collection_acl
+          WHERE collection_name = 'stage_g_quantized_composite'",
+    )
+    .expect("quantized telemetry collection lookup should succeed")
+    .expect("quantized telemetry collection should exist");
+    let events = crate::query_stats_async::test_events(collection_id);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].strategy, "quantized_mmap_hnsw");
+    assert_eq!(events[0].lifecycle, "Indexed");
+    assert!(events[0].visits >= events[0].candidates);
+    assert!(events[0].candidates >= events[0].rechecks);
+
+    Spi::run(
+        "SELECT pgcontext.configure_vector(
+             'stage_g_quantized_composite', 'embedding', '{}'::jsonb,
+             '{\"mode\":\"scalar\",\"levels\":16}'::jsonb, 'ready'
+         )",
+    )
+    .expect("quantized policy change should require a rebuild");
+    let rebuild = std::panic::catch_unwind(|| {
+        Spi::run(
+            "SELECT * FROM pgcontext.execute_query(
+                 'stage_g_quantized_composite',
+                 pgcontext.query_nearest('[0,0]'::vector, 2)
+             )",
+        )
+        .expect("stale quantized generation should fail");
+    });
+    assert!(rebuild.is_err());
+    let events = crate::query_stats_async::test_events(collection_id);
+    let rebuild = events.last().expect("rebuild event should be captured");
+    assert_eq!(rebuild.completion, "error");
+    assert_eq!(rebuild.lifecycle, "IndexNotReady");
 }
 
 #[pg_test]
@@ -528,6 +562,19 @@ fn execute_query_composes_all_named_postgres_sources() {
             .len(),
         rows.len()
     );
+    let collection_id = Spi::get_one::<i64>(
+        "SELECT collection_id FROM pgcontext._collection_acl
+          WHERE collection_name = 'stage_g_named_sources'",
+    )
+    .expect("composite telemetry collection lookup should succeed")
+    .expect("composite telemetry collection should exist");
+    let events = crate::query_stats_async::test_events(collection_id);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].query_kind, "hybrid");
+    assert_eq!(events[0].strategy, "composite_hnsw");
+    assert_eq!(events[0].lifecycle, "Indexed");
+    assert!(events[0].filter_candidates <= events[0].visits);
+    assert!(events[0].stages >= 9);
 }
 
 #[pg_test]

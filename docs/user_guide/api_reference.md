@@ -158,6 +158,11 @@ Operations, diagnostics, and telemetry:
 - `pgcontext.record_query_stat(collection text, cohort text, query_kind text, result_count bigint, candidate_count bigint, latency_ms double precision)`
 - `pgcontext.record_query_stat(collection text, cohort text, query_kind text, result_count bigint, candidates_considered bigint, rows_rechecked bigint, rows_pruned bigint, recall_threshold double precision, recall_achieved double precision, latency_ms double precision, lifecycle_state pgcontext."QueryLifecycleState")`
 - `pgcontext.query_cohort_stats()`
+- `pgcontext.query_execution_stats()` — membership-filtered automatic rollups
+  by actual strategy, completion, latency bucket, lifecycle state, and bounded
+  executor work counters
+- `pgcontext.query_telemetry_queue_stats()` — `pg_monitor`-restricted health
+  counters for the bounded asynchronous delivery queue
 - `pgcontext.register_model_version(collection text, model_name text, model_version text, dimensions integer, metric text)`
 - `pgcontext.model_versions()`
 - `pgcontext.create_embedding_migration(collection text, source_model_name text, source_model_version text, target_model_name text, target_model_version text, total_points bigint)`

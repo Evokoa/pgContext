@@ -4,7 +4,7 @@ use context_core::{CollectionName, SourceKey, SparseVector};
 use context_query::{
     Candidate, CandidateBranch, CandidatePage, CandidateSource, ExecutionBudget, ExecutionOutcome,
     HydratedCandidate, QueryError, QueryExecutor, QueryIr, QueryKind, Result, SourceReadiness,
-    SourceRechecker, StageDiagnostic, TelemetrySink,
+    SourceRechecker,
 };
 use pgrx::prelude::*;
 use serde_json::Value;
@@ -164,6 +164,51 @@ pub(crate) fn run_sparse_query(
     filter: Option<Value>,
     limit: usize,
 ) -> SparseExecution {
+    let observation = std::sync::Mutex::new(None);
+    PgTryBuilder::new(|| {
+        run_sparse_query_inner(
+            collection_name,
+            collection_id,
+            registered_vector,
+            query_vector,
+            filter,
+            limit,
+            &observation,
+        )
+    })
+    .catch_others(|cause| {
+        use pgrx::pg_sys::panic::CaughtError;
+
+        let sqlerrcode = match &cause {
+            CaughtError::PostgresError(report) | CaughtError::ErrorReport(report) => {
+                report.sql_error_code()
+            }
+            CaughtError::RustPanic { ereport, .. } => ereport.sql_error_code(),
+        };
+        let observation = *observation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(observation) = observation {
+            crate::query_stats_async::abort(observation, sqlerrcode as i32);
+        }
+        cause.rethrow()
+    })
+    .execute()
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the sparse PostgreSQL adapter carries resolved catalog and query inputs"
+)]
+fn run_sparse_query_inner(
+    collection_name: &CollectionName,
+    collection_id: i64,
+    registered_vector: &RegisteredSparseVector,
+    query_vector: SparseVector,
+    filter: Option<Value>,
+    limit: usize,
+    observation: &std::sync::Mutex<Option<crate::query_stats_async::ObservationToken>>,
+) -> SparseExecution {
     let has_filter = filter.is_some();
     let query = QueryIr::sparse_nearest(
         registered_vector.vector_name.clone(),
@@ -173,6 +218,10 @@ pub(crate) fn run_sparse_query(
         limit,
     )
     .unwrap_or_else(|error| crate::error::raise_query_error(error));
+    *observation
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        crate::query_stats::begin_automatic_query_stat(collection_id, &query, false);
     let mask_limit = crate::settings::hnsw_mask_candidate_limit_from_guc();
     let strategy = resolve_sparse_hnsw_index(registered_vector).map_or(
         SparseCandidateStrategy::Exact,
@@ -240,7 +289,7 @@ pub(crate) fn run_sparse_query(
     let filter_port = query
         .filter()
         .map(|_| &mut filter_source as &mut dyn context_query::FilterCandidateSource);
-    let mut telemetry = SparseTelemetry::default();
+    let mut telemetry = super::PgTelemetrySink::default();
     let cancellation = PgCancellation;
     let outcome = QueryExecutor::new(
         &mut candidate_source,
@@ -249,8 +298,16 @@ pub(crate) fn run_sparse_query(
         &mut telemetry,
         &cancellation,
     )
-    .execute(&query, budget)
-    .unwrap_or_else(|error| crate::error::raise_query_error(error));
+    .execute(&query, budget);
+    crate::query_stats::record_automatic_query_stat(
+        *observation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        &telemetry.diagnostics,
+        outcome.as_ref(),
+        false,
+    );
+    let outcome = outcome.unwrap_or_else(|error| crate::error::raise_query_error(error));
     require_complete_outcome(&outcome);
     let rows =
         outcome_rows(&outcome).unwrap_or_else(|error| crate::error::raise_query_error(error));
@@ -282,7 +339,7 @@ impl CandidateSource for SpiSparseAnnCandidateSource<'_> {
         filter: Option<&context_query::FilterCandidateBatch>,
         limit: usize,
     ) -> Result<CandidatePage> {
-        match self.strategy {
+        let page = match self.strategy {
             SparseCandidateStrategy::Exact => exact_sparse_candidates(
                 self.collection_id,
                 self.registered_vector,
@@ -298,7 +355,16 @@ impl CandidateSource for SpiSparseAnnCandidateSource<'_> {
                 filter,
                 limit,
             ),
-        }
+        }?;
+        Ok(page
+            .with_strategy(match self.strategy {
+                SparseCandidateStrategy::Exact => "named_sparse_exact",
+                SparseCandidateStrategy::Hnsw(_) => "named_sparse_hnsw",
+            })
+            .with_expansion_count(usize::from(matches!(
+                self.strategy,
+                SparseCandidateStrategy::Hnsw(_)
+            ))))
     }
 }
 
@@ -695,17 +761,5 @@ fn sparse_query(query: &QueryIr) -> Result<&SparseVector> {
             stage: "sparse_candidate_source",
             message: "sparse PostgreSQL adapter requires a sparse-nearest query".to_owned(),
         }),
-    }
-}
-
-#[derive(Default)]
-struct SparseTelemetry {
-    _diagnostics: Vec<StageDiagnostic>,
-}
-
-impl TelemetrySink for SparseTelemetry {
-    fn record(&mut self, diagnostic: &StageDiagnostic) -> Result<()> {
-        self._diagnostics.push(diagnostic.clone());
-        Ok(())
     }
 }

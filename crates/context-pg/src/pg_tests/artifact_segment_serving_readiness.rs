@@ -372,7 +372,7 @@ fn artifact_segment_mmap_payload_rejects_checksum_and_metadata_drift() {
              'checksum',
              100
         )",
-        "55000",
+        "XX001",
         "mmap artifact is not serving-ready: checksum_mismatch (segment checksum mismatch)",
         "checksum drift mmap payload is not served",
     );
@@ -382,7 +382,7 @@ fn artifact_segment_mmap_payload_rejects_checksum_and_metadata_drift() {
              'metadata',
              100
         )",
-        "55000",
+        "XX001",
         "mmap artifact is not serving-ready: metadata_mismatch (artifact file metadata differs from catalog)",
         "metadata drift mmap payload is not served",
     );

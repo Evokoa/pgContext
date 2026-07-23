@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 pg_major=""
-artifact="${REPO_ROOT}/sql/pgcontext--0.1.0.sql"
+artifact="${REPO_ROOT}/sql/pgcontext--0.2.0.sql"
 
 usage() {
   cat <<'USAGE'
@@ -17,7 +17,7 @@ objects, catalog constraints, operators, or changed block content.
 
 Options:
   --pg-major N    PostgreSQL major to generate. Defaults to workspace metadata.
-  --artifact PATH Checked-in artifact to compare. Defaults to sql/pgcontext--0.1.0.sql.
+  --artifact PATH Checked-in artifact to compare. Defaults to sql/pgcontext--0.2.0.sql.
   -h, --help      Show this help text.
 USAGE
 }
@@ -179,6 +179,6 @@ normalize_sql "${generated}" "${actual}"
 
 if ! diff -u "${expected}" "${actual}" >&2; then
   echo "checked-in SQL artifact is stale for PostgreSQL ${pg_major}: ${artifact_path}" >&2
-  echo "refresh with: cargo pgrx schema -p context-pg pg${pg_major} --out sql/pgcontext--0.1.0.sql" >&2
+  echo "refresh with: cargo pgrx schema -p context-pg pg${pg_major} --out sql/pgcontext--0.2.0.sql" >&2
   exit 1
 fi

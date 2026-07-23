@@ -171,7 +171,7 @@ done
 
 require_contract CAP-IVFFLAT intentionally\ different
 if grep -Eiq 'CREATE[[:space:]]+(ACCESS METHOD|OPERATOR CLASS).*ivfflat' \
-    "${REPO_ROOT}/sql/pgcontext--0.1.0.sql"; then
+    "${REPO_ROOT}/sql/pgcontext--0.2.0.sql"; then
   echo "IVFFlat SQL appeared despite the intentional-difference contract" >&2
   exit 1
 fi
@@ -254,7 +254,7 @@ for opclass in \
   halfvec_hnsw_ops halfvec_hnsw_ip_ops halfvec_hnsw_cosine_ops halfvec_hnsw_l1_ops \
   sparsevec_hnsw_ops sparsevec_hnsw_ip_ops sparsevec_hnsw_cosine_ops sparsevec_hnsw_l1_ops \
   bitvec_hnsw_hamming_ops bitvec_hnsw_jaccard_ops; do
-  require_fixed sql/pgcontext--0.1.0.sql \
+  require_fixed sql/pgcontext--0.2.0.sql \
     "CREATE OPERATOR CLASS pgcontext.${opclass}" \
     "installed HNSW opclass"
 done

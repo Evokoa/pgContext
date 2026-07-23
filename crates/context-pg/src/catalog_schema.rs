@@ -115,6 +115,19 @@ CREATE TABLE pgcontext._query_stats (
     recall_achieved double precision CHECK (recall_achieved IS NULL OR (recall_achieved >= 0 AND recall_achieved <= 1)),
     latency_bucket text NOT NULL DEFAULT 'Unspecified' CHECK (latency_bucket IN ('Lt1Ms', 'Lt10Ms', 'Lt100Ms', 'Lt1S', 'Gte1S', 'Unspecified')),
     lifecycle_state text NOT NULL DEFAULT 'Unspecified' CHECK (lifecycle_state IN ('Unspecified', 'Exact', 'Indexed', 'Fallback', 'IndexNotReady', 'IndexCorrupt', 'ArtifactMissing')),
+    strategy text NOT NULL DEFAULT 'unspecified' CHECK (
+        pg_catalog.octet_length(strategy) BETWEEN 1 AND 64
+        AND strategy ~ '^[a-z0-9_]+$'
+    ),
+    visits bigint NOT NULL DEFAULT 0 CHECK (visits >= 0),
+    filter_candidates bigint NOT NULL DEFAULT 0 CHECK (filter_candidates >= 0),
+    candidates bigint NOT NULL DEFAULT 0 CHECK (candidates >= 0),
+    rechecks bigint NOT NULL DEFAULT 0 CHECK (rechecks >= 0),
+    stages bigint NOT NULL DEFAULT 0 CHECK (stages >= 0),
+    expansions bigint NOT NULL DEFAULT 0 CHECK (expansions >= 0),
+    completion text NOT NULL DEFAULT 'unspecified' CHECK (
+        completion IN ('unspecified', 'complete', 'cancelled', 'budget_exhausted', 'error')
+    ),
     latency_ms double precision NOT NULL CHECK (latency_ms >= 0),
     created_at timestamptz NOT NULL DEFAULT pg_catalog.now()
 );
@@ -346,6 +359,12 @@ SELECT points.*
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
+CREATE VIEW pgcontext._visible_query_stats AS
+SELECT stats.*
+  FROM pgcontext._query_stats AS stats
+  JOIN pgcontext._collections AS collections USING (collection_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
+
 CREATE VIEW pgcontext._visible_collection_payload_columns AS
 SELECT payload_columns.*
   FROM pgcontext._collection_payload_columns AS payload_columns
@@ -381,6 +400,7 @@ SELECT collection_id,
 
 CREATE VIEW pgcontext._visible_collections AS
 SELECT collection_id,
+       collection_name,
        owner_role,
        source_table_oid,
        source_schema_name,
@@ -392,6 +412,7 @@ GRANT SELECT ON pgcontext._collection_acl TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_vectors TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_sparse_vectors TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_points TO PUBLIC;
+GRANT SELECT ON pgcontext._visible_query_stats TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_payload_columns TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_build_jobs TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_artifact_segments TO PUBLIC;

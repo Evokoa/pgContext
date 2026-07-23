@@ -37,7 +37,7 @@ rebuilt with `REINDEX`.
 |---|---|
 | Extension name | `pgcontext` |
 | Supported PostgreSQL major | **17 only** (15/16/18 are roadmap, not working) |
-| Docker image | `ghcr.io/evokoa/pgcontext:pg17-v0.1.0` (multi-arch `amd64`/`arm64`) |
+| Docker image | `ghcr.io/evokoa/pgcontext:pg17-v0.2.0` (multi-arch `amd64`/`arm64`) |
 | Rust (source build) | 1.96.0 |
 | cargo-pgrx (source build) | 0.19.1 (pin exactly) |
 | License | Apache-2.0 |
@@ -48,13 +48,13 @@ Use this unless the task specifically requires a source build. It needs only a
 working Docker daemon.
 
 ```sh
-docker pull ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+docker pull ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 docker run -d --rm \
   --name pgcontext \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pgcontext \
   -p 5432:5432 \
-  ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+  ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 
 # Wait for the server to accept connections (bounded, no infinite loop).
 for i in $(seq 1 30); do
@@ -110,7 +110,7 @@ SQL
 ```
 
 **Success criteria:**
-- Step 1 returns one row: `pgcontext | 0.1.0`.
+- Step 1 returns one row: `pgcontext | 0.2.0`.
 - Step 3 returns `a` (the nearest vector to `[1,0,0]`).
 
 If step 1 returns no rows, the extension is not installed. If `CREATE EXTENSION`
@@ -119,7 +119,7 @@ not support other majors in this release.
 
 ## Guardrails for automated changes
 
-- **Do not** target PostgreSQL 15, 16, or 18 — only 17 works in v0.1.0.
+- **Do not** target PostgreSQL 15, 16, or 18 — only 17 works in v0.2.0.
 - **Do not** treat the HNSW index as primary data; it is a rebuildable artifact.
 - **Do not** publish, push, tag, or upload release artifacts as part of an
   install task.

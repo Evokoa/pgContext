@@ -294,6 +294,7 @@ fn validate_or_raise(result: context_query::Result<()>) {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+    use context_query::QueryError;
 
     #[test]
     fn parser_accepts_nested_constructor_shape_and_preserves_branch_limits() {

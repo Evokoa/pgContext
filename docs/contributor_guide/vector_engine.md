@@ -1,6 +1,6 @@
 # Vector Engine Architecture
 
-This document describes the vector engine implemented in pgContext 0.1.0. It covers both PostgreSQL-page HNSW and
+This document describes the vector engine implemented in pgContext 0.2.0. It covers both PostgreSQL-page HNSW and
 rebuildable mmap generations. Exact source-table scoring remains the correctness
 oracle for public retrieval results.
 
@@ -91,7 +91,7 @@ navigation still use full-precision vectors pending their versioned formats.
 ## Compatibility
 
 The packed SQL vector datum and HNSW metapage/directory formats are specific to
-pgContext 0.1.0. Vector columns and HNSW indexes built by any pre-release
+pgContext 0.2.0. Vector columns and HNSW indexes built by any pre-release
 prototype
 must be reloaded or rebuilt when moving to this engine revision. Segment files
 remain rebuildable acceleration artifacts, never the authoritative copy of

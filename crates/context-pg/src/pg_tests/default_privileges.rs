@@ -222,6 +222,7 @@ fn default_privileges_visibility_views_without_select(role_name: &str) -> Vec<St
                     '_visible_collection_vectors',
                     '_visible_collection_sparse_vectors',
                     '_visible_collection_points',
+                    '_visible_query_stats',
                     '_visible_collection_payload_columns',
                     '_visible_collection_limits',
                     '_visible_collections'

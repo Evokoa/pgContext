@@ -121,6 +121,8 @@ def main() -> None:
     )
     if not (ROOT / f"sql/pgcontext--{version}.sql").is_file():
         fail(f"generated SQL sql/pgcontext--{version}.sql is missing")
+    if version == "0.2.0" and not (ROOT / "sql/pgcontext--0.1.0--0.2.0.sql").is_file():
+        fail("upgrade SQL sql/pgcontext--0.1.0--0.2.0.sql is missing")
     if not (ROOT / f"sql/pgcontext_pgvector--{version}.sql").is_file():
         fail(f"bridge SQL sql/pgcontext_pgvector--{version}.sql is missing")
 

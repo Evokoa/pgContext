@@ -21,10 +21,36 @@ default:
 - `pgcontext.index_advisor` suggests ordinary PostgreSQL indexes and statistics
   actions for registered filter fields.
 - `pgcontext.vacuum_advice` reports index-level tuple and page counters.
-- `pgcontext.telemetry` and `pgcontext.query_cohort_stats` expose local counters
+- `pgcontext.telemetry`, `pgcontext.query_cohort_stats`, and
+  `pgcontext.query_execution_stats` expose local counters
   for monitoring trends, including candidates considered, rows rechecked, rows
   pruned, recall targets and achieved recall, latency buckets, and serving
-  lifecycle state.
+lifecycle state.
+
+`query_execution_stats` is populated automatically by executor-backed
+`search` and `execute_query` calls. Its rows contain only bounded strategy,
+completion, lifecycle, latency-bucket, and numeric work fields. Apart from its
+collection association, the membership-filtered view does not expose vectors,
+payloads, filters, query text, source keys, roles, or caller-provided tenant
+dimensions.
+
+Automatic events are offered nonblockingly to a bounded named shared-memory
+queue and committed by a database-scoped background worker. Members of
+`pg_monitor` should alert on nonzero `dropped_contention`, `dropped_full`,
+`dropped_orphaned`, `database_slot_exhausted`, or `worker_launch_failures` from:
+
+```sql
+SELECT * FROM pgcontext.query_telemetry_queue_stats();
+```
+
+The queue provides bounded best-effort delivery that may duplicate, not an audit log:
+shared-memory allocation or attachment failure leaves the query unobserved, a
+postmaster restart loses pending events, and commit/acknowledgement failure can
+produce a duplicate. The worker retries a not-yet-visible collection for 60
+seconds and exits after five idle seconds. Retain or aggregate `_query_stats`
+according to the deployment's write volume. Superusers may disable new events
+with `SET pgcontext.query_telemetry_enabled = off` for incident response or
+controlled measurement.
 
 Diagnostics return typed statuses and counters. They are not intended to expose
 vector contents, filters, payload values, or literal query text.
@@ -203,7 +229,12 @@ The detailed symptom-to-action runbook is in
 
 ## Upgrades
 
-Install and upgrade the extension with ordinary PostgreSQL extension workflows.
+Install and upgrade the extension with ordinary PostgreSQL extension workflows
+as a PostgreSQL superuser. pgContext creates an access method, and the supported
+standalone 0.1-to-0.2 update also performs a version-pinned extension-namespace
+catalog repair. Fresh 0.2 SQL types live in `pgcontext`; qualify them (for
+example, `pgcontext.vector`) or deliberately add `pgcontext` to the application
+role/database `search_path`.
 Upgrade scripts must not discover user data or start index builds during
 extension installation. After an upgrade, run smoke queries against collection
 registration, exact search, filters, telemetry, and any deployed index paths.

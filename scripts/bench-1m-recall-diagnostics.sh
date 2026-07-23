@@ -94,8 +94,8 @@ if [[ "${SKIP_INSTALL}" != "1" ]]; then
         >"${LOG_DIR}/install.log" 2>&1
     # cargo-pgrx writes the raw generated SQL; the checked-in artifact carries
     # the canonical fixed-schema artifact, and this database has pgvector installed.
-    cp sql/pgcontext--0.1.0.sql \
-       "$("${BREW_PG_CONFIG}" --sharedir)/extension/pgcontext--0.1.0.sql"
+    cp sql/pgcontext--0.2.0.sql \
+       "$("${BREW_PG_CONFIG}" --sharedir)/extension/pgcontext--0.2.0.sql"
     note "  installed"
     note ""
 fi

@@ -185,8 +185,8 @@ package_source() {
 
 install_source() {
   cd "${WORK_DIR}/source/pgContext-${VERSION}"
-  cargo pgrx install -p context-pg --release \
-    --pg-config "${PG_CONFIG_BIN}" --no-default-features --features pg17
+  make install PG_CONFIG="${PG_CONFIG_BIN}"
+  test -f "$("${PG_CONFIG_BIN}" --sharedir)/extension/pgcontext--0.1.0--0.2.0.sql"
 }
 
 source_demo() {

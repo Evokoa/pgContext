@@ -16,7 +16,7 @@ cargo clippy -p context-pg --all-targets --features pg17 -- -D warnings
 cargo test --workspace --exclude context-pg --all-features
 cargo check -p context-pg --features pg17
 scripts/run-v1-pgrx-tests.sh
-cargo pgrx schema -p context-pg pg17 --out /tmp/pgcontext--0.1.0.generated.sql
+cargo pgrx schema -p context-pg pg17 --out /tmp/pgcontext--0.2.0.generated.sql
 cargo doc --workspace --no-deps
 scripts/check-crate-boundaries.sh
 scripts/check-public-docs.py --check

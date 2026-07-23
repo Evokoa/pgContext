@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Install the separately packaged pgcontext_pgvector control and SQL artifacts.
+# Install version-to-version SQL scripts that cargo-pgrx does not package.
 set -euo pipefail
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PG_CONFIG_BIN=${1:-${PG_CONFIG:-pg_config}}
 PG_MAJOR=$("${PG_CONFIG_BIN}" --version | sed -E 's/[^0-9]*([0-9]+).*/\1/')
 if [[ "${PG_MAJOR}" != "17" ]]; then
-  echo "pgcontext_pgvector 0.2.0 supports PostgreSQL 17; selected ${PG_MAJOR}" >&2
+  echo "pgContext 0.2.0 upgrade artifacts support PostgreSQL 17; selected ${PG_MAJOR}" >&2
   exit 1
 fi
 
@@ -18,8 +18,7 @@ else
 fi
 
 install -d "${EXTENSION_DIR}"
-install -m 0644 "${REPO_ROOT}/pgcontext_pgvector.control" "${EXTENSION_DIR}/pgcontext_pgvector.control"
-install -m 0644 "${REPO_ROOT}/sql/pgcontext_pgvector--0.2.0.sql" \
-  "${EXTENSION_DIR}/pgcontext_pgvector--0.2.0.sql"
+install -m 0644 "${REPO_ROOT}/sql/pgcontext--0.1.0--0.2.0.sql" \
+  "${EXTENSION_DIR}/pgcontext--0.1.0--0.2.0.sql"
 
-echo "installed pgcontext_pgvector bridge artifacts in ${EXTENSION_DIR}"
+echo "installed pgContext upgrade artifacts in ${EXTENSION_DIR}"

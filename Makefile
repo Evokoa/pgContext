@@ -2,11 +2,11 @@ EXTENSION := pgcontext
 PACKAGE := context-pg
 PG_CONFIG ?= pg_config
 PGRX ?= cargo pgrx
-TAG ?= v0.1.0
+TAG ?= v0.2.0
 PG_MAJOR := $(shell $(PG_CONFIG) --version 2>/dev/null | sed -E 's/[^0-9]*([0-9]+).*/\1/')
 PG_FEATURE := pg$(PG_MAJOR)
 
-.PHONY: all check-pg17 install install-pgvector-bridge installcheck package quickstart clean
+.PHONY: all check-pg17 install install-pgcontext-upgrades install-pgvector-bridge installcheck package quickstart clean
 
 all: package
 
@@ -19,7 +19,11 @@ check-pg17:
 install: check-pg17
 	$(PGRX) install -p $(PACKAGE) --pg-config $(PG_CONFIG) --release \
 		--no-default-features --features $(PG_FEATURE)
+	$(MAKE) install-pgcontext-upgrades
 	$(MAKE) install-pgvector-bridge
+
+install-pgcontext-upgrades: check-pg17
+	scripts/install-pgcontext-upgrades.sh $(PG_CONFIG)
 
 install-pgvector-bridge: check-pg17
 	scripts/install-pgvector-bridge.sh $(PG_CONFIG)

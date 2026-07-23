@@ -49,8 +49,8 @@ COPY --from=builder /package/usr/lib/postgresql/${PG_MAJOR}/lib/ \
     /usr/lib/postgresql/${PG_MAJOR}/lib/
 COPY --from=builder /package/usr/share/postgresql/${PG_MAJOR}/extension/ \
     /usr/share/postgresql/${PG_MAJOR}/extension/
-COPY sql/pgcontext--0.1.0.sql \
-    /usr/share/postgresql/${PG_MAJOR}/extension/pgcontext--0.1.0.sql
+COPY sql/pgcontext--0.2.0.sql \
+    /usr/share/postgresql/${PG_MAJOR}/extension/pgcontext--0.2.0.sql
 # Benchmark creates its own databases and extensions; no init hook.
 HEALTHCHECK --interval=5s --timeout=3s --start-period=15s --retries=30 \
   CMD pg_isready -U "${POSTGRES_USER:-postgres}" || exit 1

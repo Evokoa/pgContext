@@ -1,12 +1,12 @@
 # Security Policy
 
-pgContext 0.1.0 is prepared for operator-controlled GitHub publication.
+pgContext 0.2.0 is prepared for operator-controlled GitHub publication.
 Experimental surfaces remain outside the stable compatibility promise.
 
 ## Supported Versions
 
 Security fixes currently apply to the `master` branch and, after publication, the
-latest `0.1.x` release. PostgreSQL 17 is the only supported V1 target.
+latest `0.2.x` release. PostgreSQL 17 is the only supported release target.
 
 ## Reporting a Vulnerability
 

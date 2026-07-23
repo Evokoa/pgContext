@@ -45,6 +45,11 @@ mod points;
 mod quantization_sql;
 mod query_builders;
 mod query_stats;
+#[allow(
+    unsafe_code,
+    reason = "rollback-independent telemetry uses PostgreSQL named DSM, error hooks, and a dynamic background worker behind a fixed safe event API"
+)]
+mod query_stats_async;
 mod retrieval;
 mod settings;
 mod sparse_search;
@@ -77,9 +82,9 @@ pub mod pgcontext {
 
 pub(crate) use pgcontext::{vector, vector_variants};
 
-// The control file creates and selects the fixed `pgcontext` schema before
-// this SQL graph runs. Refuse a pre-existing foreign-owned or delegated-CREATE
-// schema: security-definer functions place this namespace on trusted paths.
+// The generated schema item runs before this guard. Refuse a pre-existing
+// foreign-owned or delegated-CREATE schema: security-definer functions place
+// this namespace on trusted paths.
 pgrx::extension_sql!(
     r#"
 DO $pgcontext_schema_guard$

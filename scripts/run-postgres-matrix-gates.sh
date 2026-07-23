@@ -15,6 +15,7 @@ HEAVY_GATES=(
   tests/heavy/mmap_hnsw_artifact_restart.sh
   tests/heavy/hnsw_vacuum.sh
   tests/heavy/named_sparse_ann_lifecycle.sh
+  tests/heavy/automatic_observability.sh
   tests/heavy/concurrent_read_write.sh
   tests/heavy/filtered_ann_recall.sh
   tests/heavy/late_interaction_ann_serving.sh
@@ -54,6 +55,16 @@ NAMED_SPARSE_ANN_MARKERS=(
   "named_sparse_ann_hot_visible: before_vacuum"
   "named_sparse_ann_hot_visible: after_vacuum"
   "named_sparse_ann_restart_complete"
+)
+AUTOMATIC_OBSERVABILITY_MARKERS=(
+  "automatic_observability_success: 1"
+  "automatic_observability_typed_error: 1"
+  "automatic_observability_cancelled: 1"
+  "automatic_observability_latency_gate"
+  "automatic_observability_queue_health"
+  "automatic_observability_worker_idled"
+  "automatic_observability_terminated_producer_reclaimed"
+  "automatic_observability_worker_crash_recovered"
 )
 FILTERED_ANN_RECALL_MARKERS=(
   "filtered_ann_exact_oracle_seqscan"
@@ -452,6 +463,18 @@ run_gate() {
           exit_code=1
           overall_status=1
           printf '\nnamed_sparse_ann_lifecycle: failed; missing evidence marker: %s\n' "${marker}" >>"${log_file}"
+          break
+        fi
+      done
+    fi
+    if [[ "${status}" == "passed" && "${gate}" == "heavy:automatic_observability" ]]; then
+      local marker
+      for marker in "${AUTOMATIC_OBSERVABILITY_MARKERS[@]}"; do
+        if ! grep -qxF "${marker}" "${log_file}"; then
+          status="failed"
+          exit_code=1
+          overall_status=1
+          printf '\nautomatic_observability: failed; missing evidence marker: %s\n' "${marker}" >>"${log_file}"
           break
         fi
       done

@@ -101,6 +101,7 @@ hnsw_am_graph_read.rs|fn|PgHnswGraphRead::load_packed|builds a backend-local pac
 hnsw_am_graph_read.rs|fn|PgHnswGraphRead::node|reads a graph node from live PostgreSQL pages
 hnsw_am_graph_read.rs|fn|PgHnswGraphRead::with_node_item|visits a validated node item while its PostgreSQL page remains pinned and locked
 hnsw_am_graph_scan.rs|fn|read_hnsw_meta_page|reads typed metadata from a live PostgreSQL page
+hnsw_am_graph_scan.rs|fn|hnsw_unordered_scan_candidates_with_delta|reads base and delta records from a live PostgreSQL index relation
 hnsw_am_page_storage.rs|fn|read_hnsw_delta_records|reads delta records from a live PostgreSQL relation's delta block range
 hnsw_am_page_storage.rs|fn|read_hnsw_vector_records|reads records from a live PostgreSQL relation
 hnsw_am_page_storage.rs|fn|try_append_hnsw_typed_record|appends a typed payload into a locked PostgreSQL page

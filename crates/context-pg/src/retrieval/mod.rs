@@ -19,7 +19,8 @@ use crate::table_search::{
     load_mmap_artifact_candidates, mmap_delta_candidates, push_filter_parameter_args,
     quote_identifier, quote_qualified_identifier, require_collection_owner,
     require_table_select_privilege, resolve_collection, resolve_registered_vector,
-    resolve_registered_vector_by_name, resolve_typed_filter_plan, validate_search_drift,
+    resolve_registered_vector_by_name, resolve_typed_filter_plan, take_last_mmap_candidate_visits,
+    take_last_mmap_delta_visits, validate_search_drift,
 };
 use crate::vector::Vector;
 
@@ -83,6 +84,12 @@ type LateInteractionCache =
     Rc<RefCell<Option<crate::hybrid_query::late_interaction_ann::CompositeLateInteractionSource>>>;
 type QuantizedArtifactCache = Rc<RefCell<BTreeMap<Option<String>, String>>>;
 
+enum QuantizedArtifactResolution {
+    Ready(String),
+    RebuildRequired,
+    Missing,
+}
+
 #[derive(Debug, Clone)]
 struct SourceTable {
     schema_name: String,
@@ -125,11 +132,18 @@ impl CandidateSource for PgCandidateRouter<'_> {
                     let registered_vector =
                         registered_vector_for_query(self.registered_vectors, query)?;
                     if uses_quantized_mmap(query, registered_vector) {
-                        let Some(artifact_name) = resolve_quantized_artifact(self.collection_id)?
-                        else {
-                            return Ok(SourceReadiness::NotReady {
-                                reason: context_query::ReadinessReason::GenerationMissing,
-                            });
+                        let artifact_name = match resolve_quantized_artifact(self.collection_id)? {
+                            QuantizedArtifactResolution::Ready(artifact_name) => artifact_name,
+                            QuantizedArtifactResolution::RebuildRequired => {
+                                return Ok(SourceReadiness::RebuildRequired {
+                                    reason: context_query::ReadinessReason::ConfigurationChanged,
+                                });
+                            }
+                            QuantizedArtifactResolution::Missing => {
+                                return Ok(SourceReadiness::NotReady {
+                                    reason: context_query::ReadinessReason::GenerationMissing,
+                                });
+                            }
                         };
                         self.quantized_artifacts
                             .borrow_mut()
@@ -276,7 +290,7 @@ impl CandidateSource for PgCandidateRouter<'_> {
                 message: "this named source does not accept a filter batch".to_owned(),
             });
         }
-        let rows = advanced_source_rows(
+        let (rows, scored_count) = advanced_source_rows(
             self.collection_name,
             self.collection_id,
             self.source_table,
@@ -303,9 +317,11 @@ impl CandidateSource for PgCandidateRouter<'_> {
             QueryKind::Lookup { .. } => "exact_lookup",
             _ => unreachable!("advanced source rows only accepts executable named leaves"),
         };
-        Ok(CandidatePage::new(candidates, true)
-            .with_strategy(strategy)
-            .with_expansion_count(0))
+        Ok(
+            CandidatePage::with_scored_count(candidates, scored_count, true)
+                .with_strategy(strategy)
+                .with_expansion_count(0),
+        )
     }
 }
 
@@ -555,10 +571,14 @@ impl FilterCandidateSource for SpiFilterCandidateSource<'_> {
 }
 
 #[derive(Default)]
-pub(crate) struct PgTelemetrySink;
+pub(crate) struct PgTelemetrySink {
+    diagnostics: Vec<StageDiagnostic>,
+}
 
 impl TelemetrySink for PgTelemetrySink {
-    fn record(&mut self, _diagnostic: &StageDiagnostic) -> Result<()> {
+    fn record(&mut self, diagnostic: &StageDiagnostic) -> Result<()> {
+        crate::query_stats_async::record(diagnostic);
+        self.diagnostics.push(diagnostic.clone());
         Ok(())
     }
 }
@@ -589,9 +609,48 @@ pub(crate) fn run_query(
     query: QueryIr,
     adapter: CandidateAdapter,
 ) -> Vec<(i64, String, f32)> {
+    let observation = std::sync::Mutex::new(None);
+    PgTryBuilder::new(|| run_query_inner(collection_name, query, adapter, &observation))
+        .catch_others(|cause| {
+            use pgrx::pg_sys::panic::CaughtError;
+
+            let sqlerrcode = match &cause {
+                CaughtError::PostgresError(report) | CaughtError::ErrorReport(report) => {
+                    report.sql_error_code()
+                }
+                CaughtError::RustPanic { ereport, .. } => ereport.sql_error_code(),
+            };
+            let observation = *observation
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(observation) = observation {
+                crate::query_stats_async::abort(observation, sqlerrcode as i32);
+            }
+            cause.rethrow()
+        })
+        .execute()
+}
+
+fn run_query_inner(
+    collection_name: &CollectionName,
+    query: QueryIr,
+    adapter: CandidateAdapter,
+    observation: &std::sync::Mutex<Option<crate::query_stats_async::ObservationToken>>,
+) -> Vec<(i64, String, f32)> {
+    let requested_adapter = adapter;
     let adapter = effective_candidate_adapter(&query, adapter);
+    let used_fallback =
+        requested_adapter == CandidateAdapter::Hnsw && adapter == CandidateAdapter::Exact;
     let collection = resolve_collection(collection_name);
     require_collection_owner(&collection, collection_name);
+    *observation
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) =
+        crate::query_stats::begin_automatic_query_stat(
+            collection.collection_id,
+            &query,
+            used_fallback,
+        );
     let source_table = resolve_source_table(collection.collection_id)
         .unwrap_or_else(|error| raise_query_error(error));
     require_source_table_select_privilege(&source_table);
@@ -617,7 +676,7 @@ pub(crate) fn run_query(
         Vec::new()
     };
 
-    let mut telemetry = PgTelemetrySink;
+    let mut telemetry = PgTelemetrySink::default();
     let outcome = execute_prepared_query_with_vectors(
         collection_name.as_str(),
         collection.collection_id,
@@ -627,8 +686,16 @@ pub(crate) fn run_query(
         &query,
         adapter,
         &mut telemetry,
-    )
-    .unwrap_or_else(|error| raise_query_error(error));
+    );
+    crate::query_stats::record_automatic_query_stat(
+        *observation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        &telemetry.diagnostics,
+        outcome.as_ref(),
+        used_fallback,
+    );
+    let outcome = outcome.unwrap_or_else(|error| raise_query_error(error));
     require_complete_outcome(&outcome);
     outcome_rows(&outcome).unwrap_or_else(|error| raise_query_error(error))
 }
@@ -733,9 +800,9 @@ fn resolve_source_table(collection_id: i64) -> Result<SourceTable> {
                         collections.source_schema_name,
                         collections.source_table_name
                    FROM pgcontext._visible_collections AS collections
-                   JOIN pg_catalog.pg_namespace AS source_namespace
+                   LEFT JOIN pg_catalog.pg_namespace AS source_namespace
                      ON source_namespace.nspname = collections.source_schema_name
-                   JOIN pg_catalog.pg_class AS source_class
+                   LEFT JOIN pg_catalog.pg_class AS source_class
                      ON source_class.relnamespace = source_namespace.oid
                     AND source_class.relname = collections.source_table_name
                     AND source_class.relkind IN ('r', 'p')
@@ -750,10 +817,21 @@ fn resolve_source_table(collection_id: i64) -> Result<SourceTable> {
                 message: "collection source table is unavailable or has drifted".to_owned(),
             });
         };
+        let schema_name = spi_column::<String>(&row, 2, "source_table_resolver")?;
+        let table_name = spi_column::<String>(&row, 3, "source_table_resolver")?;
+        let table_oid = row
+            .get::<pg_sys::Oid>(1)
+            .map_err(|error| port_failure("source_table_resolver", error))?
+            .unwrap_or_else(|| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_UNDEFINED_TABLE,
+                    format!("registered source table drifted: {schema_name}.{table_name}"),
+                )
+            });
         Ok(SourceTable {
-            table_oid: spi_column::<pg_sys::Oid>(&row, 1, "source_table_resolver")?,
-            schema_name: spi_column::<String>(&row, 2, "source_table_resolver")?,
-            table_name: spi_column::<String>(&row, 3, "source_table_resolver")?,
+            table_oid,
+            schema_name,
+            table_name,
         })
     })
 }
@@ -875,27 +953,41 @@ fn uses_quantized_mmap(query: &QueryIr, registered_vector: &SearchVector) -> boo
         && dense_vector_key(query).is_ok_and(|key| key.is_none())
 }
 
-fn resolve_quantized_artifact(collection_id: i64) -> Result<Option<String>> {
-    let names = Spi::connect(|client| {
+fn resolve_quantized_artifact(collection_id: i64) -> Result<QuantizedArtifactResolution> {
+    let rows = Spi::connect(|client| {
         client
             .select(
-                "SELECT artifacts.artifact_name
+                "SELECT artifacts.artifact_name,
+                        artifacts.lifecycle_state,
+                        artifacts.config_revision =
+                            pgcontext.current_vector_config_revision($1) AS config_matches
                    FROM pgcontext._visible_artifact_segments AS artifacts
                   WHERE artifacts.collection_id = $1
                     AND artifacts.artifact_kind = 'mmap'
                     AND artifacts.segment_kind = 'hnsw_graph'
-                    AND artifacts.lifecycle_state = 'file_materialized'
-                    AND artifacts.config_revision =
-                        pgcontext.current_vector_config_revision($1)
                   ORDER BY artifacts.generation DESC, artifacts.artifact_id DESC",
                 None,
                 &[collection_id.into()],
             )
             .map_err(|error| port_failure("quantized_hnsw_readiness", error))?
-            .map(|row| spi_column::<String>(&row, 1, "quantized_hnsw_readiness"))
+            .map(|row| {
+                Ok((
+                    spi_column::<String>(&row, 1, "quantized_hnsw_readiness")?,
+                    spi_column::<String>(&row, 2, "quantized_hnsw_readiness")?,
+                    row.get::<bool>(3)
+                        .map_err(|error| port_failure("quantized_hnsw_readiness", error))?
+                        .unwrap_or(false),
+                ))
+            })
             .collect::<Result<Vec<_>>>()
     })?;
-    let distinct = names.into_iter().collect::<BTreeSet<_>>();
+    let distinct = rows
+        .iter()
+        .filter(|(_, lifecycle, config_matches)| {
+            lifecycle == "file_materialized" && *config_matches
+        })
+        .map(|(name, _, _)| name.clone())
+        .collect::<BTreeSet<_>>();
     if distinct.len() > 1 {
         return Err(QueryError::PortFailure {
             stage: "quantized_hnsw_readiness",
@@ -903,7 +995,15 @@ fn resolve_quantized_artifact(collection_id: i64) -> Result<Option<String>> {
                 .to_owned(),
         });
     }
-    Ok(distinct.into_iter().next())
+    if let Some(name) = distinct.into_iter().next() {
+        return Ok(QuantizedArtifactResolution::Ready(name));
+    }
+    if rows.iter().any(|(_, lifecycle, config_matches)| {
+        lifecycle == "rebuild_required" || (lifecycle == "file_materialized" && !*config_matches)
+    }) {
+        return Ok(QuantizedArtifactResolution::RebuildRequired);
+    }
+    Ok(QuantizedArtifactResolution::Missing)
 }
 
 fn quantized_mmap_candidates(
@@ -932,13 +1032,16 @@ fn quantized_mmap_candidates(
         candidate_limit,
         result_limit,
     );
-    rows.extend(mmap_delta_candidates(
+    let graph_visits = take_last_mmap_candidate_visits();
+    let delta_rows = mmap_delta_candidates(
         collection_id,
         registered_vector,
         &query_vector,
         generation_high_water,
         limit,
-    ));
+    );
+    let scored_count = graph_visits.saturating_add(take_last_mmap_delta_visits());
+    rows.extend(delta_rows);
     rows.sort_by(|left, right| {
         left.1
             .total_cmp(&right.1)
@@ -946,7 +1049,6 @@ fn quantized_mmap_candidates(
     });
     rows.dedup_by_key(|(point_id, _)| *point_id);
     rows.truncate(limit);
-    let scored_count = rows.len();
     let candidates = rows
         .into_iter()
         .map(|(point_id, score)| {
@@ -967,39 +1069,60 @@ fn quantized_mmap_candidates(
     )
 }
 
+type HydratedSourceRows = (Vec<HydratedCandidate>, usize);
+type SqlScoredSourceRows = (Vec<(i64, String, f64)>, usize);
+
 fn advanced_source_rows(
     collection_name: &str,
     collection_id: i64,
     source_table: &SourceTable,
     query: &QueryIr,
     limit: usize,
-) -> Result<Vec<HydratedCandidate>> {
+) -> Result<HydratedSourceRows> {
     let sql_limit = i32::try_from(limit).map_err(|_| QueryError::PortFailure {
         stage: "named_candidate_source",
         message: format!("candidate limit {limit} exceeds PostgreSQL integer"),
     })?;
-    let rows = match query.kind() {
+    let (rows, scored_count) = match query.kind() {
         QueryKind::FullText { text_column, query } => {
             full_text_source_rows(collection_id, source_table, text_column, query, limit)?
         }
         QueryKind::Recommend { positive, negative } => {
-            crate::table_search::recommend::recommend_collection_from_points(
+            let scored = crate::table_search::recommend::recommend_collection_from_points_scored(
                 collection_name.to_owned(),
                 sql_point_ids(positive.iter().copied())?,
                 sql_point_ids(negative.iter().copied())?,
                 sql_limit,
+            );
+            (
+                scored
+                    .rows
+                    .into_iter()
+                    .map(|(point_id, source_key, score)| (point_id, source_key, f64::from(score)))
+                    .collect(),
+                scored.scored_count,
             )
-            .map(|(point_id, source_key, score)| (point_id, source_key, f64::from(score)))
-            .collect()
         }
-        QueryKind::Discover { context } => crate::table_search::recommend::discover_collection(
-            collection_name.to_owned(),
-            sql_point_ids(context.iter().copied())?,
-            sql_limit,
-        )
-        .map(|(point_id, source_key, score)| (point_id, source_key, f64::from(score)))
-        .collect(),
-        QueryKind::Lookup { point_ids } => lookup_source_rows(collection_id, point_ids, limit)?,
+        QueryKind::Discover { context } => {
+            let scored = crate::table_search::recommend::discover_or_explore_collection_scored(
+                collection_name.to_owned(),
+                sql_point_ids(context.iter().copied())?,
+                sql_limit,
+            );
+            (
+                scored
+                    .rows
+                    .into_iter()
+                    .map(|(point_id, source_key, score)| (point_id, source_key, f64::from(score)))
+                    .collect(),
+                scored.scored_count,
+            )
+        }
+        QueryKind::Lookup { point_ids } => {
+            let rows = lookup_source_rows(collection_id, point_ids, limit)?;
+            let scored_count = rows.len();
+            (rows, scored_count)
+        }
         _ => {
             return Err(QueryError::PortFailure {
                 stage: "named_candidate_source",
@@ -1007,7 +1130,8 @@ fn advanced_source_rows(
             });
         }
     };
-    rows.into_iter()
+    let rows = rows
+        .into_iter()
         .map(|(point_id, source_key, score)| {
             HydratedCandidate::new(
                 PointId::from_i64(point_id).ok_or_else(|| QueryError::PortFailure {
@@ -1018,7 +1142,8 @@ fn advanced_source_rows(
                 score,
             )
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    Ok((rows, scored_count))
 }
 
 fn full_text_source_rows(
@@ -1027,7 +1152,7 @@ fn full_text_source_rows(
     text_column: &str,
     text_query: &str,
     limit: usize,
-) -> Result<Vec<(i64, String, f64)>> {
+) -> Result<SqlScoredSourceRows> {
     let table_name =
         quote_qualified_identifier(&source_table.schema_name, &source_table.table_name);
     let text_column = quote_identifier(text_column);
@@ -1039,7 +1164,8 @@ fn full_text_source_rows(
                 pg_catalog.ts_rank_cd(
                     pg_catalog.to_tsvector('simple', coalesce(source.{text_column}::text, '')),
                     query.tsquery
-                )::double precision
+                )::double precision,
+                count(*) OVER ()::bigint AS scored_count
            FROM pgcontext._visible_collection_points AS points
            JOIN {table_name} AS source ON source.id::text = points.source_key
            CROSS JOIN query
@@ -1050,7 +1176,7 @@ fn full_text_source_rows(
           LIMIT $3"
     );
     Spi::connect(|client| {
-        client
+        let rows = client
             .select(
                 &sql,
                 Some(sql_limit),
@@ -1062,9 +1188,17 @@ fn full_text_source_rows(
                     spi_column::<i64>(&row, 1, "full_text_candidate_source")?,
                     spi_column::<String>(&row, 2, "full_text_candidate_source")?,
                     spi_column::<f64>(&row, 3, "full_text_candidate_source")?,
+                    spi_column::<i64>(&row, 4, "full_text_candidate_source")?,
                 ))
             })
-            .collect()
+            .collect::<Result<Vec<_>>>()?;
+        let scored_count = rows.first().map(|row| row.3).unwrap_or_default();
+        Ok((
+            rows.into_iter()
+                .map(|(point_id, source_key, score, _)| (point_id, source_key, score))
+                .collect(),
+            usize::try_from(scored_count).unwrap_or(usize::MAX),
+        ))
     })
 }
 
@@ -1073,7 +1207,8 @@ fn lookup_source_rows(
     point_ids: &[PointId],
     limit: usize,
 ) -> Result<Vec<(i64, String, f64)>> {
-    let sql_ids = sql_point_ids(point_ids.iter().copied())?;
+    let bounded_point_ids = point_ids.iter().copied().take(limit).collect::<Vec<_>>();
+    let sql_ids = sql_point_ids(bounded_point_ids.iter().copied())?;
     let rows = Spi::connect(|client| {
         client
             .select(
@@ -1094,9 +1229,8 @@ fn lookup_source_rows(
             })
             .collect::<Result<BTreeMap<_, _>>>()
     })?;
-    point_ids
+    bounded_point_ids
         .iter()
-        .take(limit)
         .enumerate()
         .filter_map(|(position, point_id)| {
             let point_id = i64::try_from(point_id.get()).ok()?;
@@ -1266,7 +1400,9 @@ fn exact_candidate_rows(
     };
     let limit_placeholder = if point_ids.is_some() { 4 } else { 3 };
     let sql = format!(
-        "SELECT points.point_id, {score_expression} AS score
+        "SELECT points.point_id,
+                {score_expression} AS score,
+                count(*) OVER ()::bigint AS scored_count
            FROM pgcontext._visible_collection_points AS points
            JOIN {table_name} AS source ON source.id::text = points.source_key
           WHERE points.collection_id = $2
@@ -1288,16 +1424,26 @@ fn exact_candidate_rows(
             .select(&sql, Some(sql_limit), &args)
             .map_err(|error| port_failure("candidate_source", error))?;
         let mut candidates = Vec::new();
+        let mut scored_count = 0;
         for row in rows {
             let point_id = spi_point_id(&row, 1, "candidate_source")?;
             let score = f64::from(spi_column::<f32>(&row, 2, "candidate_source")?);
+            scored_count = usize::try_from(spi_column::<i64>(&row, 3, "candidate_source")?)
+                .map_err(|_| QueryError::PortFailure {
+                    stage: "candidate_source",
+                    message: "exact scored row count exceeds usize".to_owned(),
+                })?;
             candidates.push(Candidate::new(
                 point_id,
                 score,
                 CandidateBranch::DenseExact,
             )?);
         }
-        Ok(CandidatePage::new(candidates, true))
+        Ok(CandidatePage::with_scored_count(
+            candidates,
+            scored_count,
+            true,
+        ))
     })
 }
 
@@ -1383,7 +1529,7 @@ fn hnsw_candidate_rows(
     args.push(hnsw_limit.into());
     args.push(index_oid.into());
 
-    crate::hnsw_am::with_hnsw_candidate_helper_capability(index_oid, || {
+    let candidates = crate::hnsw_am::with_hnsw_candidate_helper_capability(index_oid, || {
         Spi::connect(|client| {
             let rows = client
                 .select(&sql, Some(sql_limit), &args)
@@ -1394,9 +1540,14 @@ fn hnsw_candidate_rows(
                 let score = spi_column::<f64>(&row, 2, "candidate_source")?;
                 candidates.push(Candidate::new(point_id, score, CandidateBranch::DenseAnn)?);
             }
-            Ok(CandidatePage::new(candidates, true))
+            Ok::<_, QueryError>(candidates)
         })
-    })
+    })?;
+    let visits = Spi::get_one::<i64>("SELECT node_reads FROM pgcontext.hnsw_last_scan_work()")
+        .map_err(|error| port_failure("candidate_source", error))?
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(candidates.len());
+    Ok(CandidatePage::with_scored_count(candidates, visits, true))
 }
 
 fn nearest_vector(query: &QueryIr) -> Result<&DenseVector> {

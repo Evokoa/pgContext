@@ -3,18 +3,18 @@
 This document describes pgContext's product direction and release-engineering
 plans following the installable GitHub V1 launch.
 
-It outlines broad product direction, not an implementation checklist. Each
-item below is planned for a release after 0.1.0.
+It outlines broad product direction, not an implementation checklist. Items
+marked complete are implemented for 0.2.0; remaining items describe later work.
 
 A feature listed here remains "planned" until its public capability row and
-release notes announce its arrival. Everything below is deliberately scoped
-as post-V1. A roadmap item only becomes release-blocking once it is
+release notes announce its arrival. The document began as a post-V1 plan and
+now records completed 0.2 work and remaining direction. A roadmap item only becomes release-blocking once it is
 selected into a future dependency-ordered build or release plan.
 
-## Frequently asked: not in 0.1.0 yet
+## Frequently asked since 0.1.0
 
-For transparency, here are the capabilities most often asked about that 0.1.0
-does **not** yet ship, and where each is headed:
+For transparency, here is where the capabilities most often requested after
+0.1.0 stand in 0.2.0 and where the remaining work is headed:
 
 - **Faster index builds** — pgvector currently builds HNSW indexes faster.
   Closing that gap is planned through parallel-build efficiency and
@@ -36,9 +36,9 @@ does **not** yet ship, and where each is headed:
   x86 hardware. Every published benchmark is Apple Silicon (NEON). See the
   x86-64 SIMD kernels item under
   [Delivery Phases](#delivery-phases-post-v1-overview).
-- **Drop-in pgvector name compatibility** — coexist mode (build pgContext
-  indexes on existing `vector` columns, no data movement) is in active
-  engineering; full drop-in name compatibility is sequenced later. See
+- **Drop-in pgvector name compatibility** — the certified companion bridge now
+  builds pgContext indexes on existing `vector` and `halfvec` columns without
+  data movement; full unqualified name compatibility is sequenced later. See
   [pgvector Migration and Compatibility](#pgvector-migration-and-compatibility).
 
 ## Delivery Phases (post-V1 overview)
@@ -46,7 +46,7 @@ does **not** yet ship, and where each is headed:
 The detailed sections below are grouped into broad delivery phases, in
 order:
 
-1. **pgvector interoperability (in active engineering).** Install
+1. **pgvector interoperability (implemented in 0.2).** Install
    pgContext alongside an existing pgvector database and build pgContext
    indexes directly on existing `vector` columns — no data movement — with
    a side-by-side comparison function and a migration report/adopt
@@ -93,16 +93,19 @@ order:
    5. **Memory and quality features.** A target-recall setting that
       auto-tunes search effort per index, quantized in-graph traversal
       with exact reranking, statistics-driven filtered search, and
-      memory-budgeted external index builds for very large tables.
-4. **Drop-in pgvector compatibility.** When pgvector is not installed,
+      memory-budgeted external index builds for very large tables. Quantized
+      traversal with exact rerank is implemented; the remaining tuning and
+      external-build work is planned.
+4. **Broader pgvector compatibility.** The 0.2 bridge and resumable ownership
+   conversion cover the certified PG17 profile. When pgvector is not installed,
    pgvector-spelled SQL (types, operators, opclasses, `USING hnsw`,
    familiar settings) runs unmodified, validated by running the pgvector
    regression suite in CI, plus an in-place adoption tool that converts
    columns without rewriting tables.
-5. **Advanced retrieval features.** Sparse-vector indexing with exact
-   top-k pruning, server-side hybrid fusion (RRF and distribution-based
-   scoring), a fuller quantization surface, and late-interaction
-   (multivector) reranking.
+5. **Advanced retrieval features (implemented experimentally in 0.2).** Named
+   sparse ANN with exact recheck, typed composite fusion, quantized candidates,
+   internally maintained late interaction, mapped HNSW, and automatic
+   observability now have bounded serving paths. Further certification remains.
 6. **Production certification.** Model-checked and fuzz-tested
    concurrency, crash-recovery and replication test matrices, additional
    PostgreSQL major versions, progress reporting, and removal of
@@ -156,7 +159,7 @@ exact-oracle and bounded-work assertions.
 
 ## Quantized HNSW
 
-Status: planned after V1.
+Status: implemented experimentally for the PostgreSQL 17 profile.
 
 Depends on: PG17 V1 freeze, dense HNSW, and resumable generation
 infrastructure.
@@ -184,8 +187,8 @@ Validated by an end-to-end serving test with exact-oracle and bounded-work asser
 > deliverable, while full drop-in name compatibility is sequenced later as
 > described below.
 
-Status: coexist mode in active engineering; the remaining scope below is
-planned after non-dense ANN opclasses and quantized HNSW.
+Status: the bounded PostgreSQL 17 coexistence and migration profile is
+implemented and certified; IVFFlat remains an explicit detect-and-plan path.
 
 Depends on: PG17 V1 freeze, non-dense ANN opclasses, and quantized HNSW.
 
@@ -240,7 +243,7 @@ Validated by an end-to-end serving test with exact-oracle and bounded-work asser
 
 ## Internally Maintained Late Interaction
 
-Status: planned after V1.
+Status: implemented experimentally for the PostgreSQL 17 profile.
 
 Depends on: execution ports, resumable generations, and persisted HNSW
 serving.
@@ -282,7 +285,8 @@ Validated by end-to-end serving tests before promotion.
 
 ## Mapped HNSW Serving
 
-Status: planned after V1.
+Status: implemented experimentally and lifecycle-gated for the PostgreSQL 17
+profile.
 
 Depends on: resumable generation publication, metadata-filtered ANN, and the
 shared graph-read port.
@@ -305,7 +309,7 @@ Validated by an end-to-end serving test with exact-oracle and bounded-work asser
 
 ## Expanded Automatic Observability
 
-Status: planned after composite query execution and mapped serving.
+Status: implemented and lifecycle-gated for the PostgreSQL 17 profile.
 
 Depends on: executable query outcomes and every serving strategy that it
 reports.
@@ -319,7 +323,13 @@ Scope:
 - cover success, typed error, cancellation, concurrent updates,
   rebuild-required, not-ready, and corruption.
 
-Validated by end-to-end serving tests before promotion.
+The query backend uses a bounded nonblocking named-DSM queue; a database-scoped
+worker commits observations independently so aborted statements can be
+reported without adding a synchronous catalog write to query latency. Queue
+health is restricted to `pg_monitor`, and delivery limitations are documented
+as best-effort, may-duplicate, and fail-open. The PostgreSQL 17 gate covers the complete
+outcome matrix above, privacy, strategy/work accuracy, disabled-vs-enabled
+latency, queue health, and worker reclamation.
 
 ## Reproducible Public Benchmarks
 

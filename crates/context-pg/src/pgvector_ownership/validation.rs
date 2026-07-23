@@ -45,8 +45,8 @@ pub(super) fn ensure_certified_bridge() {
                JOIN pg_catalog.pg_namespace AS pgvector_namespace
                  ON pgvector_namespace.oid = pgvector.extnamespace
               WHERE bridge.extname = 'pgcontext_pgvector'
-                AND bridge.extversion = '0.1.0'
-                AND pgcontext.extversion = '0.1.0'
+                AND bridge.extversion = '0.2.0'
+                AND pgcontext.extversion = '0.2.0'
                 AND pgvector.extversion ~ '^0[.]8[.][0-9]+$'
                 AND pgvector_namespace.nspname = 'public'
          )
@@ -131,7 +131,7 @@ pub(super) fn ensure_certified_bridge() {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
             "pgvector ownership conversion requires the certified \
-             pgcontext_pgvector 0.1.0 bridge with pgcontext 0.1.0 and \
+             pgcontext_pgvector 0.2.0 bridge with pgcontext 0.2.0 and \
              pgvector 0.8.x",
         );
     }

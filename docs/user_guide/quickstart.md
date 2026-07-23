@@ -12,15 +12,11 @@ update). For a source checkout, install into the
 PostgreSQL 17 instance selected by `pg_config`:
 
 ```sh
-cargo pgrx install \
-  -p context-pg \
-  --release \
-  --pg-config /path/to/postgresql-17/bin/pg_config \
-  --no-default-features \
-  --features pg17
+make install PG_CONFIG=/path/to/postgresql-17/bin/pg_config
 ```
 
-The command writes extension artifacts into that PostgreSQL installation and
+The command writes the generated extension, its versioned upgrade SQL, and the
+optional pgvector bridge artifacts into that PostgreSQL installation and
 may require filesystem privileges appropriate to it. Connect as a role allowed
 to install extensions, then run the SQL below. The packaged HNSW/filter demo is
 documented separately in [Playground](playground.md).

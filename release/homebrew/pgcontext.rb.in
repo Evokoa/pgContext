@@ -32,6 +32,7 @@ class Pgcontext < Formula
 
     staged_prefix = package_dir/HOMEBREW_PREFIX.to_s.delete_prefix("/")
     extension_dir = staged_prefix/"share/#{postgresql.name}/extension"
+    extension_dir.install "sql/pgcontext--0.1.0--0.2.0.sql"
     extension_dir.install "pgcontext_pgvector.control"
     extension_dir.install "sql/pgcontext_pgvector--#{version}.sql"
 

@@ -47,9 +47,9 @@ fi
 
 jq -e '
   .name == "pgContext" and
-  .version == "0.1.0" and
+  .version == "0.2.0" and
   .license == "apache_2_0" and
-  .provides.pgcontext.version == "0.1.0"
+  .provides.pgcontext.version == "0.2.0"
 ' META.json >/dev/null
 
 grep -qF 'cargo pgrx package -p context-pg' release/docker/Dockerfile

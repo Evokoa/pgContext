@@ -12,7 +12,7 @@ catalog dependency on the `vector` extension, so installing or dropping
 pgvector does not remove or disable canonical pgContext objects.
 
 The optional `pgcontext_pgvector` companion is shipped as a separate extension
-artifact. Its certified profile is PostgreSQL 17, pgContext 0.1.0, and pgvector
+artifact. Its certified profile is PostgreSQL 17, pgContext 0.2.0, and pgvector
 0.8.x installed in `public`; installation fails closed outside that profile.
 
 ```sql
@@ -34,7 +34,9 @@ extension's dependency boundary clean.
 
 `make install` installs both control/SQL artifacts. If the main extension was
 installed directly with `cargo pgrx install`, install the SQL-only companion
-artifact with `scripts/install-pgvector-bridge.sh /path/to/pg_config` before
+and upgrade artifacts with
+`scripts/install-pgcontext-upgrades.sh /path/to/pg_config` and
+`scripts/install-pgvector-bridge.sh /path/to/pg_config` before
 running `CREATE EXTENSION pgcontext_pgvector`. The companion does not activate
 automatically and does not create pgvector itself.
 

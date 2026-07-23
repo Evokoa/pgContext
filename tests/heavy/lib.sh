@@ -47,14 +47,14 @@ start_and_install_test_extension() {
 reset_database() {
     require_simple_identifier "${DBNAME}" "DBNAME"
     psql_postgres \
-        -c "DROP DATABASE IF EXISTS ${DBNAME}" \
+        -c "DROP DATABASE IF EXISTS ${DBNAME} WITH (FORCE)" \
         -c "CREATE DATABASE ${DBNAME}"
 }
 
 drop_database() {
     local dbname="$1"
     require_simple_identifier "${dbname}" "database name"
-    psql_postgres -c "DROP DATABASE IF EXISTS ${dbname}"
+    psql_postgres -c "DROP DATABASE IF EXISTS ${dbname} WITH (FORCE)"
 }
 
 create_database() {

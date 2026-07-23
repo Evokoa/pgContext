@@ -2,7 +2,7 @@
 # added, and these files may not grow beyond the pinned reviewed size.
 crates/context-pg/src/hnsw_am.rs|1264
 crates/context-pg/src/hnsw_am_validation.rs|1241
-crates/context-pg/src/hybrid_query/late_interaction_ann.rs|1078
+crates/context-pg/src/hybrid_query/late_interaction_ann.rs|1225
 crates/context-pg/src/pg_tests/late_interaction_ann.rs|1474
 crates/context-pg/src/pg_tests/late_interaction_owned.rs|1058
 crates/context-pg/src/pg_tests/vector_search.rs|1696
@@ -12,4 +12,7 @@ crates/context-pg/src/pg_tests/table_search.rs|1135
 crates/context-pg/src/pg_tests/hnsw_am.rs|1117
 crates/context-pg/src/pg_tests/artifact_segment_retire_cleanup.rs|1049
 crates/context-pg/src/pg_tests/artifact_segments.rs|1105
-crates/context-pg/src/pg_tests/acl_denial.rs|1014
+crates/context-pg/src/pg_tests/acl_denial.rs|1223
+crates/context-pg/src/contract/contract_objects.rs|1022
+crates/context-pg/src/query_stats_async.rs|1516
+crates/context-pg/src/retrieval/mod.rs|1854

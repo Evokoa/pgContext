@@ -346,13 +346,16 @@ impl<'a> QueryExecutor<'a> {
                 point_id: row.point_id(),
             });
         }
-        usage.add_rechecks(rows.len());
+        // Recheck work is the number of candidate identities submitted under
+        // the authoritative recheck bound, not only the rows that survive
+        // MVCC/RLS/deletion filtering.
+        usage.add_rechecks(recheck_limit);
         usage.add_stage();
         let points = deterministic_points(rows, query.limit(), query.score_order());
         let diagnostic = StageDiagnostic::new(
             StageKind::SourceRecheck,
             "authoritative_source_recheck",
-            page.candidates().len(),
+            recheck_limit,
             points.len(),
             None,
         );

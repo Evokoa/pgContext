@@ -33,13 +33,15 @@ RUN cargo pgrx init --pg${PG_MAJOR}=/usr/lib/postgresql/${PG_MAJOR}/bin/pg_confi
         --features=pg${PG_MAJOR} \
     && install -m 0644 pgcontext_pgvector.control \
         /package/usr/share/postgresql/${PG_MAJOR}/extension/pgcontext_pgvector.control \
-    && install -m 0644 sql/pgcontext_pgvector--0.1.0.sql \
-        /package/usr/share/postgresql/${PG_MAJOR}/extension/pgcontext_pgvector--0.1.0.sql
+    && install -m 0644 sql/pgcontext--0.1.0--0.2.0.sql \
+        /package/usr/share/postgresql/${PG_MAJOR}/extension/pgcontext--0.1.0--0.2.0.sql \
+    && install -m 0644 sql/pgcontext_pgvector--0.2.0.sql \
+        /package/usr/share/postgresql/${PG_MAJOR}/extension/pgcontext_pgvector--0.2.0.sql
 
 FROM ${POSTGRES_IMAGE}
 
 ARG PG_MAJOR=17
-ARG VERSION=0.1.0
+ARG VERSION=0.2.0
 ARG REVISION=unknown
 LABEL org.opencontainers.image.source="https://github.com/evokoa/pgcontext" \
       org.opencontainers.image.description="PostgreSQL 17 with pgContext installed" \

@@ -26,7 +26,7 @@
     <img src="https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars" alt="GitHub stars">
   </a>
   <a href="https://github.com/evokoa/pgcontext/releases">
-    <img src="https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square" alt="Version 0.1.0">
+    <img src="https://img.shields.io/badge/version-0.2.0-2ea44f?style=flat-square" alt="Version 0.2.0">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache-2.0 license">
@@ -204,27 +204,30 @@ semantics.
 
 ## Roadmap
 
-pgContext 0.1.0 is the foundation, not the finish line. The goal is the most
-powerful AI search engine you can run inside PostgreSQL. On the way:
+pgContext 0.2.0 extends the V1 foundation with the first complete advanced
+retrieval pipeline. It now includes:
 
-- **More vector types and indexing.** First-class `sparsevec` and `bitvec`,
-  quantized in-graph traversal with exact reranking, and non-dense ANN opclasses.
-- **Lower latency and faster builds at scale.** Segmented serving for
-  per-query parallelism, background-worker compaction that keeps writes fast
-  under sustained load, and parallel-build improvements that close the
-  index-build-time gap.
-- **Drop-in pgvector compatibility.** Run pgvector-spelled SQL unmodified, with
-  in-place migration and no data movement.
+- **Broader vector indexing.** First-class non-dense HNSW opclasses, named
+  sparse ANN, and scalar/product/binary quantized traversal with exact rerank.
+- **Composable retrieval.** Typed dense, filtered, sparse, full-text,
+  quantized, recommendation, lookup, and late-interaction branches with
+  weighted or reciprocal-rank fusion.
+- **Owned serving infrastructure.** Internally maintained late-interaction
+  tokens, immutable mapped HNSW generations, and automatic bounded execution
+  telemetry.
+- **pgvector migration.** A certified PostgreSQL 17 bridge, preflight and
+  adoption tooling, and lossless resumable conversion for the supported
+  profile without requiring a new application vector column.
 - **Graph-augmented retrieval.** We plan to bring graph capabilities from our
   sister extension **[pgGraph](https://github.com/evokoa/pggraph)** into
   pgContext, so vector results can expand and re-rank along the relationships in
   your data (the pattern behind GraphRAG), without leaving Postgres or copying
   data between systems.
 
-We're upfront about what isn't here yet: IVFFlat, x86 performance numbers, and
-full drop-in compatibility all live on the roadmap. See
-[what's not in 0.1.0 yet](docs/user_guide/roadmap.md) and the full
-[roadmap](docs/roadmap.md).
+The remaining work includes IVFFlat, measured x86 performance claims, broader
+PostgreSQL-major certification, and full unqualified pgvector-name
+compatibility. See the [known limitations](docs/user_guide/limitations.md),
+[product roadmap](docs/user_guide/roadmap.md), and full [roadmap](docs/roadmap.md).
 
 ## Quickstart
 
@@ -241,13 +244,13 @@ image; it is multi-arch (`linux/amd64` and `linux/arm64`) and works on macOS,
 Linux, and Windows via Docker Desktop.
 
 ```sh
-docker pull ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+docker pull ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 docker run -d --rm \
   --name pgcontext \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pgcontext \
   -p 5432:5432 \
-  ghcr.io/evokoa/pgcontext:pg17-v0.1.0
+  ghcr.io/evokoa/pgcontext:pg17-v0.2.0
 ```
 
 Verify the extension is loaded (uses `psql` inside the container, so you don't need a local PostgreSQL client):
@@ -284,7 +287,7 @@ shell support, verification, uninstall, cleanup, and troubleshooting.
 Package-manager installs are on the way and will be added here once available.
 Until then, use the Docker image or a source build above.
 
-- **PGXN**: `pgxn install pgContext` (distribution `pgContext-0.1.0.zip`).
+- **PGXN**: `pgxn install pgContext` (distribution `pgContext-0.2.0.zip`).
 - **Homebrew** (macOS): `brew install pgcontext` from the Evokoa tap.
 
 ## Installing with an AI Agent

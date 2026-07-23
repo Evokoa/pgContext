@@ -19,7 +19,7 @@ from collections.abc import Iterable, Sequence
 
 EXPECTED_CALLBACKS = 17
 EXPECTED_AM_CALLBACKS = 14
-EXPECTED_UNSAFE_ITEMS = 120
+EXPECTED_UNSAFE_ITEMS = 121
 EXPECTED_INCLUDES = {
     ("hnsw_am.rs", "hnsw_am_callbacks.rs"),
     ("hnsw_am.rs", "hnsw_am_scan_callbacks.rs"),
@@ -29,6 +29,7 @@ EXPECTED_INCLUDES = {
     ("hnsw_am.rs", "hnsw_am_packed_cache.rs"),
     ("hnsw_am.rs", "hnsw_am_graph_read.rs"),
     ("hnsw_am.rs", "hnsw_am_graph_scan.rs"),
+    ("hnsw_am.rs", "hnsw_am_metric.rs"),
     ("hnsw_am.rs", "hnsw_am/mapped_files.rs"),
     ("hnsw_am.rs", "hnsw_am/mapped_lifecycle.rs"),
     ("hnsw_am.rs", "hnsw_am/sql_contract.rs"),

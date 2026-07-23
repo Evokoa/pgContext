@@ -1,10 +1,10 @@
-# pgContext 0.1.0 — Vector and Hybrid Retrieval for PostgreSQL
+# pgContext 0.2.0 — Composable Retrieval for PostgreSQL
 
-Today we are releasing pgContext 0.1.0, an Apache-2.0 PostgreSQL extension for
+Today we are releasing pgContext 0.2.0, an Apache-2.0 PostgreSQL extension for
 vector search, metadata filtering, HNSW indexing, and hybrid retrieval over the
 data you already keep in PostgreSQL.
 
-This first release is for prototypes, evaluation, and controlled pilots on
+This release is for prototypes, evaluation, and controlled pilots on
 PostgreSQL 17. It already provides a broad retrieval surface, including exact
 and approximate vector search, filtered search, collections, hybrid full-text
 retrieval, recommendation, discovery, grouping, facets, and operational
@@ -42,7 +42,7 @@ Our goal is not to disguise a remote vector database behind SQL. Our goal is to
 make PostgreSQL itself a capable retrieval engine while preserving the reasons
 teams chose PostgreSQL in the first place.
 
-## What Ships in 0.1.0
+## What Ships in 0.2.0
 
 ### Dense vector SQL
 
@@ -140,7 +140,7 @@ The dense HNSW surface includes:
 - scan-work counters and recall comparison against exact search;
 - index memory estimates, lifecycle status, diagnostics, and vacuum advice.
 
-Dense HNSW is implemented and usable, but remains experimental in 0.1.0. We do
+Dense HNSW is implemented and usable, but remains experimental in 0.2.0. We do
 not yet promise a stable on-disk HNSW format across extension versions or a
 broad production workload envelope. Plan to rebuild HNSW indexes when moving
 between early releases.
@@ -154,7 +154,7 @@ as traversal connectors, and then rechecks the source rows and exact distances.
 
 This gives applications one public filter language across exact search and ANN
 without making a copied payload store authoritative. Filtered ANN is also
-experimental in 0.1.0 while we expand workload certification and tune the
+experimental in 0.2.0 while we expand workload certification and tune the
 strategy across selective and broad filters.
 
 ### Hybrid retrieval with PostgreSQL full-text search
@@ -179,7 +179,7 @@ semantics in the same database.
 
 ### Half, sparse, and bit vectors
 
-0.1.0 also exposes experimental SQL types for additional vector
+0.2.0 also exposes experimental SQL types for additional vector
 representations:
 
 - `halfvec` with dimensions, typmods, numeric-array casts, exact metrics,
@@ -234,6 +234,8 @@ and indexes:
 - index memory estimation;
 - vacuum and rebuild advice;
 - cohort summaries;
+- automatic executor strategy, visit, candidate, recheck, budget, completion,
+  lifecycle, and latency rollups;
 - backend-local build progress, cancellation, retry, and stale-owner metadata;
 - versioned acceleration-artifact metadata and readiness validation;
 - snapshot, export, import, retirement, and rebuild primitives for generated
@@ -257,7 +259,7 @@ pgContext operates inside PostgreSQL's authority boundary:
 
 ### Installation and distribution
 
-The 0.1.0 release supports PostgreSQL 17 through:
+The 0.2.0 release supports PostgreSQL 17 through:
 
 - a versioned GitHub source archive (PGXN publication to follow);
 - manual source installation with `cargo-pgrx`;
@@ -300,7 +302,7 @@ The pgvector/Qdrant parity matrix remains the source of truth for parity claims.
 Every non-stable capability is repeated here so that an experimental or
 deliberately different feature cannot be mistaken for stable parity.
 
-| Capability | Parity status | What that means in 0.1.0 |
+| Capability | Parity status | What that means in 0.2.0 |
 |---|---|---|
 | HNSW access method | `experimental` | Dense, half, sparse, and bit metric-bound HNSW are implemented; format stability, the single-page node envelope, and broad certification remain open. |
 | Filtered ANN serving | `experimental` | Persisted HNSW, candidate masks, and authoritative source rechecks are implemented; broader workload tuning remains open. |
@@ -317,7 +319,7 @@ deliberately different feature cannot be mistaken for stable parity.
 
 ## What pgContext Is Not Yet
 
-pgContext 0.1.0 is not a drop-in replacement for pgvector and is not claiming
+pgContext 0.2.0 is not a drop-in replacement for pgvector and is not claiming
 broad production certification.
 
 Important current limits:
@@ -327,15 +329,42 @@ Important current limits:
 - IVFFlat is not implemented.
 - Non-dense SQL types and the HNSW on-disk format remain experimental, and
   densified node records must fit the documented 8,064-byte page envelope.
-- Quantized HNSW build and serving are not implemented.
+- Quantized and mapped HNSW serving remain experimental and require
+  revision-bound generated artifacts plus exact source reranking.
 - Named sparse ANN is experimental, explicitly attached, and densifies graph
   traversal while retaining exact sparse source rerank and exact fallback.
-- Late-interaction token indexes are not maintained automatically.
-- Typed composite query plans are constructed and validated, but not every
-  candidate-source combination executes as one pipeline.
-- Mapped-file HNSW traversal is not part of the serving path.
+- Internally maintained late-interaction and typed composite execution are
+  experimental and retain the documented lifecycle and budget limits.
+- Automatic execution telemetry is bounded and fail-open, not an audit log;
+  pending events can be lost or a committed event duplicated at documented
+  worker and postmaster failure boundaries.
 - Full pgvector helper, expression-index, subvector, iterative-scan/GUC,
   parallel-build, and progress-reporting compatibility is not implemented.
+
+The expanded automatic-observability columns, visibility view, and queue-health
+function ship in the 0.2.0 base install and in the supported standalone
+`0.1.0 -> 0.2.0` extension update. Both fresh installation and this update
+require a PostgreSQL superuser because pgContext installs an access method and
+the version-pinned update repairs PostgreSQL extension-namespace catalogs. The
+update preserves catalog rows, moves
+the four pgContext-owned physical vector type OIDs and support functions into
+the fixed extension schema without rewriting user tables, repairs the extension
+namespace for dump/restore, and reclassifies historical client-written
+`automatic` cohorts as `legacy_automatic` before reserving `automatic` for
+internal observations. After the move, standalone applications must either use
+qualified types such as `pgcontext.vector(1536)` or explicitly add `pgcontext`
+to their session/role/database `search_path`; unqualified `vector` no longer
+resolves under PostgreSQL's default `"$user", public` path.
+
+A pgvector-first 0.1.0 coexist install is detected before mutation and refused
+with SQLSTATE `0A000`: its public vector types belong to pgvector and must never
+be moved by pgContext. Before using `DROP EXTENSION pgcontext CASCADE`, export
+collection registrations and inventory every dependent view, function, and
+index because CASCADE can remove all of them. Install 0.2.0 plus
+`pgcontext_pgvector`, recreate registrations and application dependents, then
+rebuild pgContext indexes over the unchanged pgvector columns. The upgrade
+matrix proves the refusal is atomic and preserves a real pgvector-typed user
+value and type OID.
 
 See [Known Limitations](limitations.md) and the
 [pgvector migration guide](pgvector_migration.md) for the detailed boundary.
@@ -370,7 +399,7 @@ model.
 ## Roadmap
 
 The roadmap is dependency-ordered. Listing a feature here means it is planned,
-not that it is partially promised by 0.1.0.
+not that it is partially promised by 0.2.0.
 
 ### Completed foundation: non-dense ANN coverage
 
@@ -420,9 +449,12 @@ are part of this work.
 
 ### 7. Automatic observability
 
-Record the strategy that actually ran—visits, candidates, filters, rechecks,
-quantization, fallback, latency, cancellation, and budget outcome—while keeping
-telemetry bounded and excluding application data and secrets.
+Implemented with a bounded nonblocking shared-memory queue and an independent
+database worker. Executor-backed retrieval records the strategy that actually
+ran—visits, candidates, filters, rechecks, quantization, fallback, latency,
+cancellation, and budget outcome—while excluding application data and secrets.
+Delivery health is visible to `pg_monitor`; the queue is explicitly fail-open
+and best-effort/may-duplicate rather than an audit log.
 
 ### 8. pgvector coexistence and migration
 
@@ -456,7 +488,7 @@ The complete roadmap, including dependencies and promotion criteria, is in the
 
 PostgreSQL 17 is the only supported V1 major. PostgreSQL 15, 16, and 18 remain
 future certification targets; PostgreSQL 14 remains legacy best-effort and is
-not a supported 0.1.0 release target.
+not a supported 0.2.0 release target.
 
 Source builds require Rust `1.96.0`, `cargo-pgrx` `0.19.1`, PostgreSQL 17 server
 development headers, and a matching `pg_config`.

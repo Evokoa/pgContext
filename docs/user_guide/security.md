@@ -18,10 +18,20 @@ Security-definer paths are tested with attacker-controlled schemas earlier in
 the caller `search_path` to ensure pgContext resolves its own catalog objects
 and PostgreSQL built-ins deliberately.
 
-Telemetry surfaces are local SQL-visible counters and typed statuses. Query
-cohort telemetry does not store vector contents, filter values, or literal query
-text, and cohort labels are validated as bounded ASCII operator labels rather
-than free-form user text.
+Telemetry surfaces are local SQL-visible counters and typed statuses. Automatic
+execution telemetry stores the collection association plus bounded
+strategy/completion labels and numeric work; it never copies vectors, payloads,
+source keys, role names, filter values, literal query text, or caller-provided
+tenant dimensions. Manual cohort labels are caller-controlled bounded ASCII
+operator labels and may intentionally encode an application's tenant/cohort
+dimension, so applications must apply their own PII policy to those labels.
+Visibility is derived from `SESSION_USER` membership through public visibility
+views; callers receive no direct access to the private telemetry table.
+Query backends enqueue fixed-size numeric/label events without supplying a role
+OID or database identity. The background worker derives its database and
+extension-owner identity from server state and writes the private table directly
+in its own transaction; there is no public security-definer telemetry writer.
+Queue-health counters are database-local and require membership in `pg_monitor`.
 
 ## Security-Definer Review Notes
 
@@ -40,8 +50,9 @@ Reviewed groups:
 - Source-row readers: `search`, filtered `search`, candidate recheck,
   `count`, `facet`, `scroll`, and `query`.
 - Operations and telemetry: `index_status`, `estimate_index_memory`,
-  `optimization_status`, `vacuum_advice`, `record_query_stat`, and
-  `query_cohort_stats`.
+  `optimization_status`, `vacuum_advice`, `record_query_stat`,
+  `query_cohort_stats`, `query_execution_stats`, and the `pg_monitor`-restricted
+  `query_telemetry_queue_stats`.
 - Model metadata: `register_model_version`, `model_versions`,
   `create_embedding_migration`, `update_embedding_migration`, and
   `embedding_migrations`.

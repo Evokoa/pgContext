@@ -122,7 +122,7 @@ pub fn artifact_segment_mmap_payload(
     let loaded = match load_serving_ready_segment(&row, max_mapped_bytes) {
         Ok(loaded) => loaded,
         Err(failure) => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            failure.sql_error_code(),
             format!(
                 "mmap artifact is not serving-ready: {} ({})",
                 failure.status, failure.detail
@@ -153,7 +153,7 @@ pub(crate) fn with_mapped_artifact_payload<R>(
     let loaded = match load_serving_ready_segment(&row, max_mapped_bytes) {
         Ok(loaded) => loaded,
         Err(failure) => raise_sql_error(
-            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            failure.sql_error_code(),
             format!(
                 "mmap artifact is not serving-ready: {} ({})",
                 failure.status, failure.detail
@@ -414,6 +414,17 @@ fn readiness_failure(
         status: status.into(),
         mapped_bytes,
         detail: detail.into(),
+    }
+}
+
+impl ServingReadinessFailure {
+    fn sql_error_code(&self) -> PgSqlErrorCode {
+        match self.status.as_str() {
+            "checksum_mismatch" | "artifact_corrupt" | "metadata_mismatch" => {
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED
+            }
+            _ => PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+        }
     }
 }
 
