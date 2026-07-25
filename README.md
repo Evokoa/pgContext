@@ -12,7 +12,8 @@
 
 <p align="center">
   Hybrid dense + full-text retrieval, filter-aware ANN, and exact, MVCC-visible
-  re-scoring: a dedicated vector engine's feature set, as a PostgreSQL&nbsp;17 extension.
+  re-scoring: a dedicated vector engine's feature set, as a
+  PostgreSQL&nbsp;17 and 18 extension.
 </p>
 
 <p align="center">
@@ -25,8 +26,8 @@
   <a href="https://github.com/evokoa/pgcontext/stargazers">
     <img src="https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars" alt="GitHub stars">
   </a>
-  <a href="https://github.com/evokoa/pgcontext/releases/tag/v0.1.0">
-    <img src="https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square" alt="Version 0.1.0">
+  <a href="https://github.com/evokoa/pgcontext/releases/tag/v0.2.0">
+    <img src="https://img.shields.io/badge/version-0.2.0-2ea44f?style=flat-square" alt="Version 0.2.0">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache-2.0 license">
@@ -226,12 +227,12 @@ it:
 CREATE EXTENSION pgcontext;
 ```
 
-Pick whichever install path fits your setup: **Docker** (zero build) or
-**PGXN / source**. The fastest is the pre-built Docker
-image; it is multi-arch (`linux/amd64` and `linux/arm64`) and runs on Linux or
-through Docker Desktop's Linux-container support on macOS and Windows.
-Choose the matching `pgMAJOR-vVERSION` tag; unqualified version tags continue
-to select PostgreSQL 17.
+Pick whichever install path fits your setup: **Docker** (zero build),
+**Homebrew**, **PGXN**, or **source**. The fastest cross-platform option is the
+pre-built Docker image; it is multi-arch (`linux/amd64` and `linux/arm64`) and
+runs on Linux or through Docker Desktop's Linux-container support on macOS and
+Windows. Choose the matching `pgMAJOR-vVERSION` tag; unqualified version tags
+continue to select PostgreSQL 17.
 
 ```sh
 docker pull ghcr.io/evokoa/pgcontext:pg17-v0.2.0
@@ -248,7 +249,10 @@ Wait for PostgreSQL to accept connections, then verify the extension is loaded
 client):
 
 ```sh
-until docker exec pgcontext pg_isready -U postgres -d pgcontext; do sleep 1; done
+for i in $(seq 1 30); do
+  docker exec pgcontext pg_isready -U postgres -d pgcontext && break
+  sleep 1
+done
 docker exec pgcontext psql -U postgres -d pgcontext \
   -c "SELECT extname, extversion FROM pg_extension WHERE extname = 'pgcontext';"
 ```
@@ -275,16 +279,37 @@ shell support, verification, uninstall, cleanup, and troubleshooting.
 
 ## Package Registries
 
-pgContext 0.1.0 is available from
-[PGXN](https://pgxn.org/dist/pgcontext/0.1.0/). With PostgreSQL 17,
-its server development headers, Rust 1.96.0, and `cargo-pgrx` 0.19.1 installed:
+### Homebrew
+
+The [Evokoa Homebrew tap](https://github.com/Evokoa/homebrew-tap) installs
+pgContext 0.2.0 for Homebrew `postgresql@17`. The formula builds from source
+and installs PostgreSQL extension files; it does not add a `pgcontext` command
+to your shell.
+
+```sh
+brew update
+brew install Evokoa/tap/pgcontext
+brew services start postgresql@17
+```
+
+Enable pgContext in each database that should use it (replace `postgres` with
+the target database name):
+
+```sh
+psql -X -v ON_ERROR_STOP=1 -d postgres \
+  -c 'CREATE EXTENSION IF NOT EXISTS pgcontext;'
+```
+
+### PGXN
+
+pgContext 0.2.0 is available from
+[PGXN](https://pgxn.org/dist/pgcontext/0.2.0/). With PostgreSQL 17 or 18,
+its matching server development headers, Rust 1.96.0, and `cargo-pgrx` 0.19.1
+installed:
 
 ```sh
 pgxn install pgContext
 ```
-
-Homebrew packaging for macOS is still in progress. Until it is published, use
-the Docker image, PGXN, or a source build rather than `brew install pgcontext`.
 
 ## Installing with an AI Agent
 
