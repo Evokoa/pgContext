@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "1cbeb62c9b47db31419db3cbe82cbd971cbc98132e443a64dc651d7e5cda2a30",
+  "navigation_sha256": "c27bd618dcd1a386e6e0865552d17b1d60a0c704582e120ed313f2ce6a1f0c24",
   "pages": [
     {
       "links": [],
@@ -233,7 +233,7 @@
         "user_guide/troubleshooting.md"
       ],
       "path": "known_issues.md",
-      "sha256": "8a340c591b714ad10aa1d594f929da39eeb9ba23f2523da962130642f30393c8"
+      "sha256": "48527c1f2968435acfd7a16bc75385c3f58a74cd5691737ffdec73b068011003"
     },
     {
       "links": [
@@ -360,11 +360,13 @@
         "sql_object_inventory.md",
         "storage.md",
         "support_policy.md",
+        "supported_features.md",
+        "supported_features.md",
         "troubleshooting.md",
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "b9fd0d02a06dbae7f4ba40aa144e018230db0943ce2ee98fd0db3c5c71012018"
+      "sha256": "4b1aa8d7aec556dfd9745693195c4fc5d98632abafbae13642f3795219da9233"
     },
     {
       "links": [
@@ -420,11 +422,13 @@
     },
     {
       "links": [
+        "https://github.com/Evokoa/homebrew-tap",
+        "https://pgxn.org/dist/pgcontext/0.2.0/",
         "operations.md",
         "troubleshooting.md"
       ],
       "path": "user_guide/installation.md",
-      "sha256": "6ceefa1e8dbb5f212c2b8b1347793bc14c7250794d456349c2fa6eacc7559b56"
+      "sha256": "f95375d4cb6af48a903349425b38d3c61aad56937fafbf8a88a74b542c2b8dca"
     },
     {
       "links": [
@@ -560,22 +564,92 @@
         "vector_search.md"
       ],
       "path": "user_guide/retrieval_methods.md",
-      "sha256": "bf9a6b8afdd7cd5aa4114fe30634b90b45cad4e472ae12428a268ac873d3460c"
+      "sha256": "0579a4a76a56bf8c75841fe6c6dbe84798f5ee064350381c5140f55c02645fcd"
     },
     {
       "links": [
+        "#deletion-propagation-and-bounded-erasure",
         "#delivery-phases-post-v1-overview",
         "#delivery-phases-post-v1-overview",
+        "#ecosystem-and-framework-integrations",
+        "#evidence-assembly-provenance-and-rag-evaluation",
+        "#evidence-assembly-provenance-and-rag-evaluation",
+        "#evidence-assembly-provenance-and-rag-evaluation",
+        "#extractive-corpus-maps",
+        "#extractive-corpus-maps",
+        "#full-ivfflat-support",
+        "#full-ivfflat-support",
+        "#full-quantized-serving-and-turboquant",
+        "#full-quantized-serving-and-turboquant",
+        "#global-query-statistics-and-coverage-profiles",
+        "#graph-augmented-retrieval",
+        "#graph-augmented-retrieval",
+        "#hierarchical-corpus-summaries",
+        "#hierarchical-corpus-summaries",
         "#large-dimension-sparse-vectors",
+        "#large-dimension-sparse-vectors",
+        "#model-native-integer-and-binary-source-vectors",
+        "#model-native-integer-and-binary-source-vectors",
+        "#multi-model-retrieval-semantic-reranking-and-automatic-chunking",
+        "#multi-model-retrieval-semantic-reranking-and-automatic-chunking",
+        "#multi-model-retrieval-semantic-reranking-and-automatic-chunking",
         "#named-sparse-ann",
         "#non-dense-ann-opclasses",
         "#pgvector-migration-and-compatibility",
-        "#pgvector-migration-and-compatibility",
+        "#postgresql-native-lexical-retrieval",
+        "#postgresql-native-lexical-retrieval",
+        "#query-and-operations-priorities",
         "#reproducible-public-benchmarks",
-        "https://github.com/evokoa/pggraph"
+        "#reproducible-public-benchmarks",
+        "#segmented-serving-and-background-compaction",
+        "#set-based-bulk-mutations",
+        "#summary-artifacts-and-deterministic-partition-rollups",
+        "#summary-artifacts-and-deterministic-partition-rollups",
+        "#summary-artifacts-and-deterministic-partition-rollups",
+        "https://aclanthology.org/2025.tacl-1.36/",
+        "https://aclanthology.org/P11-1101/",
+        "https://arxiv.org/abs/2109.10086",
+        "https://arxiv.org/abs/2203.05794",
+        "https://arxiv.org/abs/2405.12497",
+        "https://arxiv.org/abs/2406.03482",
+        "https://arxiv.org/abs/2407.01449",
+        "https://arxiv.org/abs/2409.04701",
+        "https://arxiv.org/abs/2409.09913",
+        "https://arxiv.org/abs/2502.02617",
+        "https://arxiv.org/abs/2504.19874",
+        "https://docs.cohere.com/v2/reference/embed",
+        "https://docs.rs/crate/pgrx/latest",
+        "https://docs.voyageai.com/docs/flexible-dimensions-and-quantization",
+        "https://eur-lex.europa.eu/eli/reg/2016/679/2016-05-04",
+        "https://github.com/erikbern/ann-benchmarks",
+        "https://github.com/evokoa/pggraph",
+        "https://github.com/harsha-simhadri/big-ann-benchmarks",
+        "https://github.com/pgvector/pgvector#ivfflat",
+        "https://proceedings.iclr.cc/paper_files/paper/2024/hash/8a2acd174940dbca361a6398a4f9df91-Abstract-Conference.html",
+        "https://proceedings.iclr.cc/paper_files/paper/2024/hash/8a2acd174940dbca361a6398a4f9df91-Abstract-Conference.html",
+        "https://proceedings.neurips.cc/paper_files/paper/2022/hash/c32319f4868da7613d78af9993100e42-Abstract-Conference.html",
+        "https://research.google/blog/muvera-making-multi-vector-retrieval-as-fast-as-single-vector-search/",
+        "https://research.google/blog/turboquant-redefining-ai-efficiency-with-extreme-compression/",
+        "https://www.anthropic.com/engineering/contextual-retrieval",
+        "https://www.anthropic.com/engineering/contextual-retrieval",
+        "https://www.microsoft.com/en-us/research/blog/lazygraphrag-setting-a-new-standard-for-quality-and-cost/",
+        "https://www.microsoft.com/en-us/research/project/graphrag/",
+        "https://www.microsoft.com/en-us/research/project/graphrag/",
+        "https://www.microsoft.com/en-us/research/project/project-akupara-approximate-nearest-neighbor-search-for-large-scale-semantic-search/",
+        "https://www.postgresql.org/developer/roadmap/",
+        "https://www.postgresql.org/docs/17/xfunc-c.html",
+        "https://www.postgresql.org/docs/18/monitoring-stats.html",
+        "https://www.postgresql.org/docs/18/release-18.html",
+        "https://www.postgresql.org/docs/18/release-18.html",
+        "https://www.postgresql.org/docs/current/amcheck.html",
+        "https://www.postgresql.org/docs/current/backup.html",
+        "https://www.postgresql.org/docs/current/datatype-textsearch.html",
+        "https://www.postgresql.org/docs/current/routine-vacuuming.html",
+        "https://www.postgresql.org/docs/current/textsearch-controls.html",
+        "https://www.postgresql.org/docs/current/textsearch-indexes.html"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "8c80273babde47fe9f239262d3e9897872f14d10912a0ead0c666cf0da746359"
+      "sha256": "415cbaa03acc82f2afc73c4ea7dff9c6a314591feeaad148db1e92fce3d15262"
     },
     {
       "links": [],
@@ -601,6 +675,28 @@
       "links": [],
       "path": "user_guide/support_policy.md",
       "sha256": "725b372b2cec8be173c53cb3a6f3646651c535bcf8b2a4b55b36f69321fc607a"
+    },
+    {
+      "links": [
+        "api_reference.md",
+        "collections.md",
+        "filters.md",
+        "hybrid_retrieval.md",
+        "indexes.md",
+        "metric_operator_matrix.md",
+        "multi_tenancy.md",
+        "operations.md",
+        "pgvector_coexist.md",
+        "pgvector_migration.md",
+        "retrieval_methods.md",
+        "roadmap.md",
+        "storage.md",
+        "support_policy.md",
+        "vector_search.md",
+        "vector_search.md"
+      ],
+      "path": "user_guide/supported_features.md",
+      "sha256": "a4f324f19d6ceea7c8ac1a14377e10a0f4ea2f957933ba3c347ac29a9b344db9"
     },
     {
       "links": [],
@@ -660,8 +756,9 @@
         "https://evokoa.com",
         "https://evokoa.com",
         "https://evokoa.com",
+        "https://github.com/Evokoa/homebrew-tap",
         "https://github.com/evokoa/pgcontext/pkgs/container/pgcontext",
-        "https://github.com/evokoa/pgcontext/releases/tag/v0.1.0",
+        "https://github.com/evokoa/pgcontext/releases/tag/v0.2.0",
         "https://github.com/evokoa/pgcontext/stargazers",
         "https://github.com/evokoa/pggraph",
         "https://github.com/evokoa/pggraph",
@@ -672,10 +769,10 @@
         "https://img.shields.io/badge/PostgreSQL-17%20%26%2018-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white",
         "https://img.shields.io/badge/docs-pgContext-0ea5e9?style=flat-square",
         "https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square",
-        "https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square",
+        "https://img.shields.io/badge/version-0.2.0-2ea44f?style=flat-square",
         "https://img.shields.io/discord/1496159762704896022?style=for-the-badge&label=Join%20Discord&logo=discord&logoColor=white&color=5865F2",
         "https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars",
-        "https://pgxn.org/dist/pgcontext/0.1.0/",
+        "https://pgxn.org/dist/pgcontext/0.2.0/",
         "https://polygres.com",
         "https://polygres.com",
         "https://polygres.com",
@@ -688,7 +785,7 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "066ebbe15bdfced0245e60c1a89195c6fd30a852b71c3e2ad82f37a8fd179f69"
+      "sha256": "80fcc62e7712552b8c923e64b74b3a38274e0df8604e439fcc0fc8d92b36e50d"
     },
     {
       "links": [],
