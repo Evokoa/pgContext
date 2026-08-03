@@ -10,10 +10,11 @@ usage() {
 Usage: scripts/check-extension-sql-artifact.sh [options]
 
 Generate pgContext extension SQL with cargo-pgrx and compare it with the
-checked-in SQL artifact. The comparison normalizes trailing whitespace and sorts
-pgrx connected-object blocks because cargo-pgrx may emit the same objects in a
-different order across runs; it still fails when the artifact is missing SQL
-objects, catalog constraints, operators, or changed block content.
+checked-in SQL artifact. The comparison normalizes trailing whitespace and pgrx
+source locations, then sorts connected-object blocks because cargo-pgrx may emit
+the same objects in a different order across runs; it still fails when the
+artifact is missing SQL objects, catalog constraints, operators, or changed
+block content.
 
 Options:
   --pg-major N    PostgreSQL major to generate. Defaults to workspace metadata.
@@ -30,11 +31,13 @@ metadata_value() {
 normalize_sql() {
   local input="$1"
   local output="$2"
-  # pgrx can reorder connected-object blocks even when the SQL surface is the
-  # same. Sort whole blocks after whitespace cleanup so the gate catches stale
-  # objects without flaking on pgrx emission order.
+  # pgrx can change Rust source line comments and reorder connected-object
+  # blocks even when the SQL surface is unchanged. Remove only its generated
+  # Rust provenance comments, then sort whole blocks so the gate remains
+  # semantic without hiding SQL comments or changed object content.
   perl -0ne '
     s/[ \t]+$//mg;
+    s/^-- (?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\.rs:\d+\n//mg;
     s/\n+\z/\n/;
     s/\n+\/\* <begin connected objects> \*\//\n\/\* <begin connected objects> \*\//g;
     s/\/\* <\/end connected objects> \*\/\n+/\/\* <\/end connected objects> \*\/\n/g;

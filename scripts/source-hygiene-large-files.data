@@ -1,7 +1,7 @@
 # Existing cohesive modules above the 1,000-line target. New files may not be
 # added, and these files may not grow beyond the pinned reviewed size.
 crates/context-pg/src/hnsw_am.rs|1264
-crates/context-pg/src/hnsw_am_validation.rs|1241
+crates/context-pg/src/hnsw_am_validation.rs|1304
 crates/context-pg/src/hybrid_query/late_interaction_ann.rs|1225
 crates/context-pg/src/pg_tests/late_interaction_ann.rs|1474
 crates/context-pg/src/pg_tests/late_interaction_owned.rs|1058

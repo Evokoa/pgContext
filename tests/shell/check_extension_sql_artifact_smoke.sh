@@ -76,6 +76,12 @@ write_fake_cargo "${generated_reordered}"
 printf '%s' "${checked_reordered}" >"${repo}/sql/pgcontext--0.1.0.sql"
 run_check >"${work_dir}/reordered.out" 2>"${work_dir}/reordered.err"
 
+generated_with_source_locations=$'CREATE SCHEMA pgcontext;\n/* <begin connected objects> */\n-- crates/pg/src/api.rs:41\nCREATE FUNCTION pgcontext.a() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n/* </end connected objects> */\n\n/* <begin connected objects> */\n-- crates/pg/src/api.rs:92\nCREATE FUNCTION pgcontext.b() RETURNS int LANGUAGE sql AS $$ SELECT 2 $$;\n/* </end connected objects> */\n'
+checked_with_source_locations=$'CREATE SCHEMA pgcontext;\n/* <begin connected objects> */\n-- crates/pg/src/api.rs:109\nCREATE FUNCTION pgcontext.b() RETURNS int LANGUAGE sql AS $$ SELECT 2 $$;\n/* </end connected objects> */\n/* <begin connected objects> */\n-- crates/pg/src/api.rs:58\nCREATE FUNCTION pgcontext.a() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n/* </end connected objects> */\n'
+write_fake_cargo "${generated_with_source_locations}"
+printf '%s' "${checked_with_source_locations}" >"${repo}/sql/pgcontext--0.1.0.sql"
+run_check >"${work_dir}/source-locations.out" 2>"${work_dir}/source-locations.err"
+
 changed_sql="${checked_reordered/SELECT 2/SELECT 9}"
 printf '%s' "${changed_sql}" >"${repo}/sql/pgcontext--0.1.0.sql"
 if run_check >"${work_dir}/changed.out" 2>"${work_dir}/changed.err"; then
