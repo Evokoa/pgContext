@@ -37,8 +37,8 @@ pub use graph_mvcc::{
 };
 
 pub use graph_port::{
-    GraphError, GraphMetadata, GraphNeighbors, GraphNodeRecord, GraphNodeView, GraphRead,
-    GraphRecordId, GraphResult, GraphWrite, InMemoryGraphStore, MAX_GRAPH_LAYERS,
+    GraphError, GraphMetadata, GraphNeighbors, GraphNodeRecord, GraphNodeScore, GraphNodeView,
+    GraphRead, GraphRecordId, GraphResult, GraphWrite, InMemoryGraphStore, MAX_GRAPH_LAYERS,
     MAX_GRAPH_NEIGHBORS_PER_LAYER, NewGraphNode,
 };
 

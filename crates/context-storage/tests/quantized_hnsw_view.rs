@@ -2,11 +2,11 @@
 
 use std::error::Error;
 
-use context_codec::QuantizedCodebook;
+use context_codec::{CodecRevision, ContiguousCodes, QuantizedCodebook, ReconstructionPolicy};
 use context_core::{DenseVector, DistanceMetric};
 use context_storage::{
     HnswGraphArtifactRecord, HnswGraphQuantization, QuantizedHnswGraphView,
-    encode_hnsw_graph_payload_v2,
+    encode_hnsw_graph_payload_current,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -21,11 +21,14 @@ fn quantized_view_borrows_codes_and_neighbors() -> TestResult {
         HnswGraphArtifactRecord::new(0, 10, vector(&[-1.0, 1.0])?, vec![1]),
         HnswGraphArtifactRecord::new(1, 20, vector(&[1.0, -1.0])?, vec![0]),
     ];
+    let codebook = QuantizedCodebook::Binary { dimensions: 2 };
     let quantization = HnswGraphQuantization::new(
-        QuantizedCodebook::Binary { dimensions: 2 },
-        vec![vec![0b10], vec![0b01]],
-    );
-    let payload = encode_hnsw_graph_payload_v2(&records, Some(&quantization))?;
+        test_revision()?,
+        ReconstructionPolicy::ExactSourceRerank,
+        codebook.clone(),
+        ContiguousCodes::from_rows(codebook.code_len(), &[vec![0b10], vec![0b01]])?,
+    )?;
+    let payload = encode_hnsw_graph_payload_current(&records, Some(&quantization))?;
     let view = QuantizedHnswGraphView::attach(&payload)?
         .ok_or_else(|| std::io::Error::other("payload should be quantized"))?;
 
@@ -40,6 +43,11 @@ fn quantized_view_borrows_codes_and_neighbors() -> TestResult {
     assert!(node.code().as_ptr() >= payload.as_ptr());
     assert!(node.code().as_ptr() < payload[payload.len()..].as_ptr());
     Ok(())
+}
+
+fn test_revision() -> TestResult<CodecRevision> {
+    CodecRevision::new(1)
+        .ok_or_else(|| std::io::Error::other("test codec revision is invalid").into())
 }
 
 #[test]

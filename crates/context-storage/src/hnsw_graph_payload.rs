@@ -9,6 +9,8 @@ use core::{fmt, mem::size_of};
 
 use context_core::DenseVector;
 
+use crate::{CodecArtifactView, encode_codec_artifact};
+
 mod mapped_view;
 mod quantization;
 mod quantized_view;
@@ -16,8 +18,8 @@ mod quantized_view;
 pub use mapped_view::{MappedGraphNodeView, MappedGraphView, MappedNeighborIter};
 pub use quantization::HnswGraphQuantization;
 pub(crate) use quantization::{
-    QUANTIZATION_NONE, decode_quantization_codebook, encode_quantization_codebook,
-    quantization_mode, validate_quantization, validate_quantized_code,
+    codec_artifact_error, decode_quantization_codebook, encode_quantization_codebook,
+    quantization_mode, validate_quantization,
 };
 pub use quantized_view::{
     QuantizedHnswGraphNodeView, QuantizedHnswGraphView, QuantizedNeighborIter,
@@ -27,10 +29,10 @@ const HNSW_GRAPH_PAYLOAD_MAGIC: [u8; 8] = *b"PGCTXHNS";
 /// Oldest HNSW graph payload version accepted by the decoder.
 pub const MIN_READABLE_HNSW_GRAPH_PAYLOAD_VERSION: u32 = 1;
 /// Current HNSW graph payload version used for quantized artifacts.
-pub const CURRENT_HNSW_GRAPH_PAYLOAD_VERSION: u32 = 2;
+pub const CURRENT_HNSW_GRAPH_PAYLOAD_VERSION: u32 = 3;
 const HNSW_GRAPH_PAYLOAD_VERSION_V1: u32 = 1;
 const HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1: usize = 24;
-const HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2: usize = 40;
+const HNSW_GRAPH_PAYLOAD_HEADER_LEN_CURRENT: usize = 32;
 const HNSW_GRAPH_RECORD_HEADER_LEN: usize = 16;
 const MAX_HNSW_GRAPH_RECORDS: usize = 1_000_000;
 type DecodedRecords = (Vec<HnswGraphArtifactRecord>, usize, Vec<Vec<u8>>);
@@ -149,7 +151,7 @@ pub enum HnswGraphPayloadError {
         /// Raw payload version.
         version: u32,
     },
-    /// Quantization metadata or codes violate the v2 payload contract.
+    /// Quantization metadata or codes violate the current payload contract.
     InvalidQuantization(String),
     /// Reserved payload header field is non-zero.
     NonZeroReserved {
@@ -328,57 +330,60 @@ pub fn encode_hnsw_graph_payload(
     Ok(output)
 }
 
-/// Encodes a version-2 graph payload with optional persisted quantization.
+/// Encodes the current graph payload with an optional codec artifact.
 ///
-/// Full-precision vectors remain in the artifact for validation and exact
-/// recovery. Quantized codes are an additional navigation representation and
-/// are bound positionally to the contiguous graph records.
+/// Full-precision vectors remain in the graph section for validation and graph
+/// recovery. The independently versioned codec artifact is appended as one
+/// checksummed contiguous section and is bound positionally to graph records.
 ///
 /// # Errors
 ///
 /// Returns [`HnswGraphPayloadError`] when graph records, codebook metadata, or
 /// per-node codes violate the portable payload contract.
-pub fn encode_hnsw_graph_payload_v2(
+pub fn encode_hnsw_graph_payload_current(
     records: &[HnswGraphArtifactRecord],
     quantization: Option<&HnswGraphQuantization>,
 ) -> Result<Vec<u8>, HnswGraphPayloadError> {
     validate_hnsw_graph_records(records)?;
     let dimensions = records[0].vector.dimension();
-    let (mode, code_len, codebook_bytes) = match quantization {
+    let codec_bytes = match quantization {
         Some(quantization) => {
             validate_quantization(quantization, records.len(), dimensions)?;
-            let mode = quantization_mode(quantization.codebook());
-            let bytes = encode_quantization_codebook(quantization.codebook())?;
-            (mode, quantization.codebook().code_len(), bytes)
+            encode_codec_artifact(quantization.artifact()).map_err(codec_artifact_error)?
         }
-        None => (QUANTIZATION_NONE, 0, Vec::new()),
+        None => Vec::new(),
     };
     let capacity = hnsw_graph_payload_len(
         records,
         dimensions,
-        HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2
-            .checked_add(codebook_bytes.len())
-            .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?,
-        code_len,
-    )?;
+        HNSW_GRAPH_PAYLOAD_HEADER_LEN_CURRENT,
+        0,
+    )?
+    .checked_add(if codec_bytes.is_empty() { 0 } else { 15 })
+    .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?
+    .checked_add(codec_bytes.len())
+    .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
     let mut output = Vec::with_capacity(capacity);
     output.extend_from_slice(&HNSW_GRAPH_PAYLOAD_MAGIC);
     output.extend_from_slice(&CURRENT_HNSW_GRAPH_PAYLOAD_VERSION.to_le_bytes());
     output.extend_from_slice(&usize_to_u32(records.len(), 0)?.to_le_bytes());
     output.extend_from_slice(&usize_to_u32(dimensions, 0)?.to_le_bytes());
-    output.extend_from_slice(&mode.to_le_bytes());
-    output.extend_from_slice(&usize_to_u32(code_len, 0)?.to_le_bytes());
-    output.extend_from_slice(&usize_to_u32(codebook_bytes.len(), 0)?.to_le_bytes());
     output.extend_from_slice(&0_u32.to_le_bytes());
-    output.extend_from_slice(&0_u32.to_le_bytes());
-    output.extend_from_slice(&codebook_bytes);
+    output.extend_from_slice(
+        &u64::try_from(codec_bytes.len())
+            .map_err(|_| HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?
+            .to_le_bytes(),
+    );
 
-    for (record_index, record) in records.iter().enumerate() {
+    for record in records {
         encode_record(&mut output, record)?;
-        if let Some(quantization) = quantization {
-            output.extend_from_slice(&quantization.codes()[record_index]);
-        }
     }
+    if !codec_bytes.is_empty() {
+        let codec_offset = align_up_16(output.len())
+            .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+        output.resize(codec_offset, 0);
+    }
+    output.extend_from_slice(&codec_bytes);
     Ok(output)
 }
 
@@ -394,7 +399,7 @@ pub fn decode_hnsw_graph_payload(
     decode_hnsw_graph_payload_versioned(payload).map(HnswGraphPayload::into_records)
 }
 
-/// Decodes a version-1 or version-2 HNSW graph payload.
+/// Decodes a version-1 or current HNSW graph payload.
 ///
 /// # Errors
 ///
@@ -415,7 +420,7 @@ pub fn decode_hnsw_graph_payload_versioned(
     let version = read_u32(payload, 8);
     match version {
         HNSW_GRAPH_PAYLOAD_VERSION_V1 => decode_v1_payload(payload),
-        CURRENT_HNSW_GRAPH_PAYLOAD_VERSION => decode_v2_payload(payload),
+        CURRENT_HNSW_GRAPH_PAYLOAD_VERSION => decode_current_payload(payload),
         _ => Err(HnswGraphPayloadError::UnsupportedVersion { version }),
     }
 }
@@ -432,48 +437,69 @@ fn decode_v1_payload(payload: &[u8]) -> Result<HnswGraphPayload, HnswGraphPayloa
     })
 }
 
-fn decode_v2_payload(payload: &[u8]) -> Result<HnswGraphPayload, HnswGraphPayloadError> {
-    if payload.len() < HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2 {
+fn decode_current_payload(payload: &[u8]) -> Result<HnswGraphPayload, HnswGraphPayloadError> {
+    if payload.len() < HNSW_GRAPH_PAYLOAD_HEADER_LEN_CURRENT {
         return Err(HnswGraphPayloadError::TruncatedHeader {
             actual: payload.len(),
-            minimum: HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2,
+            minimum: HNSW_GRAPH_PAYLOAD_HEADER_LEN_CURRENT,
         });
     }
     let record_count = require_nonzero_u32(read_u32(payload, 12), true)? as usize;
     let dimensions = require_nonzero_u32(read_u32(payload, 16), false)? as usize;
-    let mode = read_u32(payload, 20);
-    let code_len = read_u32(payload, 24) as usize;
-    let codebook_len = read_u32(payload, 28) as usize;
-    let reserved = read_u32(payload, 32);
+    let reserved = read_u32(payload, 20);
     if reserved != 0 {
         return Err(HnswGraphPayloadError::NonZeroReserved { value: reserved });
     }
-    let reserved = read_u32(payload, 36);
-    if reserved != 0 {
-        return Err(HnswGraphPayloadError::NonZeroReserved { value: reserved });
-    }
-    let codebook_end = HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2
-        .checked_add(codebook_len)
+    let codec_len = usize::try_from(read_u64(payload, 24))
+        .map_err(|_| HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+    let (records, offset, _) = decode_records(
+        payload,
+        record_count,
+        dimensions,
+        HNSW_GRAPH_PAYLOAD_HEADER_LEN_CURRENT,
+        0,
+    )?;
+    validate_hnsw_graph_records(&records)?;
+    let codec_offset = if codec_len == 0 {
+        offset
+    } else {
+        let aligned = align_up_16(offset)
+            .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+        if payload
+            .get(offset..aligned)
+            .is_none_or(|padding| padding.iter().any(|byte| *byte != 0))
+        {
+            return Err(HnswGraphPayloadError::InvalidQuantization(
+                "codec artifact alignment padding is invalid".to_owned(),
+            ));
+        }
+        aligned
+    };
+    let codec_end = codec_offset
+        .checked_add(codec_len)
         .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
-    if payload.len() < codebook_end {
+    if codec_end != payload.len() {
         return Err(HnswGraphPayloadError::InvalidQuantization(format!(
-            "truncated codebook: expected {codebook_len} bytes, got {}",
-            payload
-                .len()
-                .saturating_sub(HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2)
+            "codec artifact length mismatch: declared {codec_len}, available {}",
+            payload.len().saturating_sub(codec_offset)
         )));
     }
-    let codebook = decode_quantization_codebook(
-        mode,
-        dimensions,
-        code_len,
-        &payload[HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2..codebook_end],
-    )?;
-    let (records, offset, codes) =
-        decode_records(payload, record_count, dimensions, codebook_end, code_len)?;
-    require_no_trailing_bytes(payload, offset)?;
-    validate_hnsw_graph_records(&records)?;
-    let quantization = codebook.map(|codebook| HnswGraphQuantization::new(codebook, codes));
+    let quantization = if codec_len == 0 {
+        None
+    } else {
+        let view = CodecArtifactView::attach(&payload[codec_offset..codec_end])
+            .map_err(codec_artifact_error)?;
+        if view.dimensions() != dimensions || view.codes().row_count() != record_count {
+            return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+                "codec artifact binding mismatch: expected {record_count} rows of {dimensions} dimensions, got {} rows of {} dimensions",
+                view.codes().row_count(),
+                view.dimensions()
+            )));
+        }
+        Some(HnswGraphQuantization::from_artifact(
+            view.to_owned().map_err(codec_artifact_error)?,
+        )?)
+    };
     if let Some(quantization) = &quantization {
         validate_quantization(quantization, record_count, dimensions)?;
     }
@@ -482,6 +508,10 @@ fn decode_v2_payload(payload: &[u8]) -> Result<HnswGraphPayload, HnswGraphPayloa
         records,
         quantization,
     })
+}
+
+fn align_up_16(value: usize) -> Option<usize> {
+    value.checked_add(15).map(|end| end / 16 * 16)
 }
 
 fn decode_records(
@@ -765,14 +795,14 @@ const fn size_of_u32() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use context_codec::QuantizedCodebook;
+    use context_codec::{CodecRevision, ContiguousCodes, QuantizedCodebook, ReconstructionPolicy};
     use context_core::DenseVector;
 
     use super::{
         CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1,
-        HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2, HnswGraphArtifactRecord, HnswGraphPayloadError,
-        HnswGraphQuantization, decode_hnsw_graph_payload, decode_hnsw_graph_payload_versioned,
-        encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
+        HnswGraphArtifactRecord, HnswGraphPayloadError, HnswGraphQuantization,
+        decode_hnsw_graph_payload, decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload,
+        encode_hnsw_graph_payload_current,
     };
     use crate::{SegmentKind, encode_segment, validate_mmap_segment};
 
@@ -798,12 +828,13 @@ mod tests {
     }
 
     #[test]
-    fn quantized_v2_payload_round_trips_scalar_codes() -> Result<(), Box<dyn std::error::Error>> {
+    fn current_quantized_payload_round_trips_scalar_codes() -> Result<(), Box<dyn std::error::Error>>
+    {
         let records = vec![
             hnsw_record(0, 101, &[-1.0, 0.5], &[1])?,
             hnsw_record(1, 102, &[1.0, -0.5], &[0])?,
         ];
-        let quantization = HnswGraphQuantization::new(
+        let quantization = test_quantization(
             QuantizedCodebook::Scalar {
                 dimensions: 2,
                 minimum: -1.0,
@@ -811,9 +842,9 @@ mod tests {
                 levels: 256,
             },
             vec![vec![0, 191], vec![255, 64]],
-        );
+        )?;
 
-        let encoded = encode_hnsw_graph_payload_v2(&records, Some(&quantization))?;
+        let encoded = encode_hnsw_graph_payload_current(&records, Some(&quantization))?;
         let decoded = decode_hnsw_graph_payload_versioned(&encoded)?;
 
         assert_eq!(decoded.version(), CURRENT_HNSW_GRAPH_PAYLOAD_VERSION);
@@ -824,10 +855,10 @@ mod tests {
     }
 
     #[test]
-    fn quantized_v2_payload_round_trips_product_codebooks() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn current_quantized_payload_round_trips_product_codebooks()
+    -> Result<(), Box<dyn std::error::Error>> {
         let records = vec![hnsw_record(0, 101, &[0.0, 1.0], &[])?];
-        let quantization = HnswGraphQuantization::new(
+        let quantization = test_quantization(
             QuantizedCodebook::Product {
                 dimensions: 2,
                 subvector_dimensions: 1,
@@ -837,9 +868,9 @@ mod tests {
                 ],
             },
             vec![vec![1, 0]],
-        );
+        )?;
 
-        let encoded = encode_hnsw_graph_payload_v2(&records, Some(&quantization))?;
+        let encoded = encode_hnsw_graph_payload_current(&records, Some(&quantization))?;
         assert_eq!(
             decode_hnsw_graph_payload_versioned(&encoded)?.quantization(),
             Some(&quantization)
@@ -848,14 +879,14 @@ mod tests {
     }
 
     #[test]
-    fn quantized_v2_payload_rejects_binary_padding_corruption()
+    fn quantized_payload_rejects_binary_code_corruption_by_checksum()
     -> Result<(), Box<dyn std::error::Error>> {
         let records = vec![hnsw_record(0, 101, &[1.0; 9], &[])?];
-        let quantization = HnswGraphQuantization::new(
+        let quantization = test_quantization(
             QuantizedCodebook::Binary { dimensions: 9 },
             vec![vec![0xff, 0x01]],
-        );
-        let mut encoded = encode_hnsw_graph_payload_v2(&records, Some(&quantization))?;
+        )?;
+        let mut encoded = encode_hnsw_graph_payload_current(&records, Some(&quantization))?;
         let code_byte = encoded
             .last_mut()
             .ok_or_else(|| std::io::Error::other("encoded graph has no code bytes"))?;
@@ -864,23 +895,24 @@ mod tests {
         assert!(matches!(
             decode_hnsw_graph_payload_versioned(&encoded),
             Err(HnswGraphPayloadError::InvalidQuantization(message))
-                if message.contains("padding")
+                if message.contains("checksum")
         ));
         Ok(())
     }
 
     #[test]
-    fn quantized_v2_payload_rejects_truncated_codebook() -> Result<(), Box<dyn std::error::Error>> {
+    fn current_quantized_payload_rejects_truncated_codebook()
+    -> Result<(), Box<dyn std::error::Error>> {
         let records = vec![hnsw_record(0, 101, &[1.0], &[])?];
         let quantization =
-            HnswGraphQuantization::new(QuantizedCodebook::Binary { dimensions: 1 }, vec![vec![1]]);
-        let encoded = encode_hnsw_graph_payload_v2(&records, Some(&quantization))?;
-        let truncated = &encoded[..HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2 + 1];
+            test_quantization(QuantizedCodebook::Binary { dimensions: 1 }, vec![vec![1]])?;
+        let encoded = encode_hnsw_graph_payload_current(&records, Some(&quantization))?;
+        let truncated = &encoded[..encoded.len() - 1];
 
         assert!(matches!(
             decode_hnsw_graph_payload_versioned(truncated),
             Err(HnswGraphPayloadError::InvalidQuantization(message))
-                if message.contains("truncated codebook")
+                if message.contains("length mismatch")
         ));
         Ok(())
     }
@@ -989,5 +1021,20 @@ mod tests {
             DenseVector::new(values.to_vec())?,
             base_neighbors.to_vec(),
         ))
+    }
+
+    fn test_quantization(
+        codebook: QuantizedCodebook,
+        rows: Vec<Vec<u8>>,
+    ) -> Result<HnswGraphQuantization, Box<dyn std::error::Error>> {
+        let revision = CodecRevision::new(1)
+            .ok_or_else(|| std::io::Error::other("test codec revision is invalid"))?;
+        let codes = ContiguousCodes::from_rows(codebook.code_len(), &rows)?;
+        Ok(HnswGraphQuantization::new(
+            revision,
+            ReconstructionPolicy::ExactSourceRerank,
+            codebook,
+            codes,
+        )?)
     }
 }

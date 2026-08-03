@@ -4,19 +4,21 @@
 //! user data. The crate may opt into tightly reviewed unsafe code when mmap
 //! validation is implemented.
 //!
-//! # Segment Format Version 1
+//! # Segment Format Version 2
 //!
-//! All integer fields are little-endian. The fixed header is 40 bytes:
+//! All integer fields are little-endian. The fixed header is 48 bytes so a
+//! page-aligned file mapping exposes its payload at a 16-byte boundary:
 //!
 //! | Offset | Size | Field |
 //! |---:|---:|---|
 //! | 0 | 8 | magic bytes `PGCTXSEG` |
-//! | 8 | 4 | segment format version, currently `1` |
+//! | 8 | 4 | segment format version, currently `2` |
 //! | 12 | 4 | endian marker `0x01020304` |
 //! | 16 | 4 | segment kind |
 //! | 20 | 4 | reserved, currently zero |
 //! | 24 | 8 | payload byte length |
 //! | 32 | 8 | checksum |
+//! | 40 | 8 | alignment padding, currently zero |
 //!
 //! The checksum is a deterministic FNV-1a 64-bit checksum over the header with
 //! the checksum field set to zero followed by the payload bytes. The checksum
@@ -31,6 +33,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+mod codec_artifact;
 mod delta_segment;
 mod hnsw_graph_payload;
 mod hnsw_segment_directory;
@@ -38,6 +41,10 @@ mod mapped_packed_graph;
 mod mmap_file;
 mod packed_graph_image;
 
+pub use codec_artifact::{
+    CURRENT_CODEC_ARTIFACT_VERSION, CodecArtifact, CodecArtifactError, CodecArtifactView,
+    encode_codec_artifact,
+};
 pub use delta_segment::{
     DELTA_MAX_DIMENSIONS, DELTA_PAGE_HEADER_BYTES, DeltaRecord, DeltaRecordKind, DeltaSegmentError,
     decode_delta_page, decode_delta_record, encode_delta_page, encode_delta_record,
@@ -47,7 +54,8 @@ pub use hnsw_graph_payload::{
     HnswGraphPayloadError, HnswGraphQuantization, MIN_READABLE_HNSW_GRAPH_PAYLOAD_VERSION,
     MappedGraphNodeView, MappedGraphView, MappedNeighborIter, QuantizedHnswGraphNodeView,
     QuantizedHnswGraphView, QuantizedNeighborIter, decode_hnsw_graph_payload,
-    decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
+    decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload,
+    encode_hnsw_graph_payload_current,
 };
 pub use hnsw_segment_directory::{
     HNSW_SEGMENT_DIRECTORY_VERSION, HnswDeltaDescriptor, HnswSegmentDescriptor,
@@ -61,7 +69,7 @@ pub use mmap_file::{MappedSegment, map_segment_file};
 pub use packed_graph_image::{
     AlignedImageBuf, CURRENT_PACKED_GRAPH_IMAGE_VERSION, MIN_READABLE_PACKED_GRAPH_IMAGE_VERSION,
     PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView,
-    encode_packed_graph_image, encode_packed_graph_image_v2, packed_graph_image_len,
+    encode_packed_graph_image, encode_packed_graph_image_current, packed_graph_image_len,
 };
 
 /// Maximum segment payload accepted by this loader.
@@ -74,10 +82,10 @@ pub const SEGMENT_SECTION_ALIGNMENT_BYTES: usize = 8;
 pub const MAX_SEGMENT_FILE_BYTES: usize = SegmentHeader::ENCODED_LEN + MAX_SEGMENT_PAYLOAD_BYTES;
 
 /// Current production segment format version written by pgContext.
-pub const CURRENT_SEGMENT_FORMAT_VERSION: u32 = 1;
+pub const CURRENT_SEGMENT_FORMAT_VERSION: u32 = 2;
 
 /// Oldest segment format version this loader can read.
-pub const MIN_READABLE_SEGMENT_FORMAT_VERSION: u32 = 1;
+pub const MIN_READABLE_SEGMENT_FORMAT_VERSION: u32 = 2;
 
 /// Newest segment format version this loader can read.
 pub const MAX_READABLE_SEGMENT_FORMAT_VERSION: u32 = CURRENT_SEGMENT_FORMAT_VERSION;
@@ -94,8 +102,8 @@ static TEMP_WRITE_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// Segment format version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegmentVersion {
-    /// Initial rebuildable segment format.
-    V1,
+    /// Payload-aligned rebuildable segment format.
+    V2,
 }
 
 impl SegmentVersion {
@@ -103,7 +111,7 @@ impl SegmentVersion {
     #[must_use]
     pub const fn as_u32(self) -> u32 {
         match self {
-            Self::V1 => CURRENT_SEGMENT_FORMAT_VERSION,
+            Self::V2 => CURRENT_SEGMENT_FORMAT_VERSION,
         }
     }
 }
@@ -155,7 +163,7 @@ pub struct SegmentHeader {
 
 impl SegmentHeader {
     /// Encoded header length in bytes.
-    pub const ENCODED_LEN: usize = 40;
+    pub const ENCODED_LEN: usize = 48;
 
     /// Returns the segment format version.
     #[must_use]
@@ -188,7 +196,7 @@ impl SegmentHeader {
                 maximum: MAX_SEGMENT_PAYLOAD_BYTES,
             })?;
         Ok(Self {
-            version: SegmentVersion::V1,
+            version: SegmentVersion::V2,
             kind,
             payload_len,
             checksum,
@@ -693,6 +701,14 @@ fn decode_header_and_payload(input: &[u8]) -> Result<(SegmentHeader, &[u8]), Seg
     if reserved != RESERVED {
         return Err(SegmentError::NonZeroReserved { value: reserved });
     }
+    for offset in [40, 44] {
+        let alignment_padding = read_u32(input, offset);
+        if alignment_padding != RESERVED {
+            return Err(SegmentError::NonZeroReserved {
+                value: alignment_padding,
+            });
+        }
+    }
 
     let payload_len = read_u64(input, 24);
     let payload_len_usize =
@@ -710,7 +726,7 @@ fn decode_header_and_payload(input: &[u8]) -> Result<(SegmentHeader, &[u8]), Seg
     )?;
 
     let header = SegmentHeader {
-        version: SegmentVersion::V1,
+        version: SegmentVersion::V2,
         kind,
         payload_len,
         checksum: read_u64(input, 32),

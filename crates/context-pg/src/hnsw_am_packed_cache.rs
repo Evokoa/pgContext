@@ -27,6 +27,18 @@ struct HnswSegmentCacheKey {
     generation: u64,
 }
 
+const HNSW_CODEC_TRAINING_SAMPLE_ROWS: usize = 4_096;
+
+fn hnsw_codec_training_sample_indices(row_count: usize) -> Vec<usize> {
+    let sample_count = row_count.min(HNSW_CODEC_TRAINING_SAMPLE_ROWS);
+    if sample_count == row_count {
+        return (0..row_count).collect();
+    }
+    (0..sample_count)
+        .map(|sample| sample.saturating_mul(row_count) / sample_count)
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy)]
 struct PackedHnswNode {
     point_id: HnswPointId,
@@ -49,6 +61,7 @@ struct PackedHnswGraph {
     vectors: Vec<f32>,
     layers: Vec<PackedHnswLayer>,
     neighbors: Vec<HnswNodeId>,
+    quantization: Option<HnswGraphQuantization>,
 }
 
 impl PackedHnswGraph {
@@ -56,12 +69,54 @@ impl PackedHnswGraph {
         records: Vec<HnswVectorRecord>,
         node_count: usize,
         dimensions: usize,
+        codec_spec: Option<CodecSpec>,
     ) -> context_index::GraphResult<Self> {
         if records.len() != node_count {
             return Err(context_index::GraphError::CorruptGraph {
                 message: "packed HNSW generation node count is incomplete".to_owned(),
             });
         }
+        let quantization = codec_spec
+            .filter(|_| !records.is_empty())
+            .map(|spec| {
+                let sample = hnsw_codec_training_sample_indices(records.len())
+                    .into_iter()
+                    .map(|index| records[index].vector.clone())
+                    .collect::<Vec<_>>();
+                let trained = TrainedCodecArtifact::train(spec, &sample).map_err(|error| {
+                    context_index::GraphError::AdapterFailure {
+                        operation: "train HNSW codec",
+                        message: error.to_string(),
+                    }
+                })?;
+                let codebook = trained.codebook().cloned().ok_or_else(|| {
+                    context_index::GraphError::AdapterFailure {
+                        operation: "train HNSW codec",
+                        message: "quantized HNSW codec produced no codebook".to_owned(),
+                    }
+                })?;
+                let codes = trained
+                    .encode_refs(records.iter().map(|record| &record.vector))
+                    .map_err(|error| context_index::GraphError::AdapterFailure {
+                        operation: "encode HNSW codec rows",
+                        message: error.to_string(),
+                    })?
+                    .ok_or_else(|| context_index::GraphError::AdapterFailure {
+                        operation: "encode HNSW codec rows",
+                        message: "quantized HNSW codec produced no codes".to_owned(),
+                    })?;
+                HnswGraphQuantization::new(
+                    trained.revision(),
+                    trained.reconstruction_policy(),
+                    codebook,
+                    codes,
+                )
+                .map_err(|error| context_index::GraphError::AdapterFailure {
+                    operation: "publish HNSW codec artifact",
+                    message: error.to_string(),
+                })
+            })
+            .transpose()?;
         let mut nodes = Vec::with_capacity(node_count);
         let mut vectors = Vec::with_capacity(node_count.saturating_mul(dimensions));
         let mut layers = Vec::new();
@@ -104,6 +159,7 @@ impl PackedHnswGraph {
             vectors,
             layers,
             neighbors,
+            quantization,
         })
     }
 
@@ -120,7 +176,14 @@ impl PackedHnswGraph {
         let vectors = self.vectors.len() * size_of::<f32>();
         let layers = self.layers.len() * size_of::<PackedHnswLayer>();
         let neighbors = self.neighbors.len() * size_of::<HnswNodeId>();
-        (nodes + vectors + layers + neighbors) as u64
+        let codes = self
+            .quantization
+            .as_ref()
+            .map_or(0, |quantization| quantization.codes().as_bytes().len());
+        let codebook = self.quantization.as_ref().map_or(0, |quantization| {
+            quantization.codebook().resident_bytes()
+        });
+        (nodes + vectors + layers + neighbors + codes + codebook) as u64
     }
 
     /// Encodes this generation into the portable shared-image byte format
@@ -148,13 +211,33 @@ impl PackedHnswGraph {
             })
             .collect();
         let neighbors: Vec<u64> = self.neighbors.iter().map(|id| id.get() as u64).collect();
-        encode_packed_graph_image(
+        encode_packed_graph_image_current(
             dimensions,
             &nodes,
             &layers,
             &neighbors,
             &self.vectors,
+            self.quantization.as_ref(),
         )
+    }
+
+    fn prepare_query(
+        &self,
+        query: &DenseVector,
+        metric: DistanceMetric,
+    ) -> context_index::GraphResult<Option<PreparedQuantizedQuery>> {
+        self.quantization
+            .as_ref()
+            .map(|quantization| quantization.codebook().prepare_query(query, metric))
+            .transpose()
+            .map_err(|error| context_index::GraphError::AdapterFailure {
+                operation: "prepare HNSW codec query",
+                message: error.to_string(),
+            })
+    }
+
+    fn node_code(&self, node_id: HnswNodeId) -> Option<&[u8]> {
+        self.quantization.as_ref()?.codes().code(node_id.get())
     }
 
     fn neighbors(&self, node: PackedHnswNode, layer: LayerIndex) -> Option<&[HnswNodeId]> {
@@ -192,6 +275,17 @@ struct PackedNodeInfo {
 }
 
 impl PackedGraphStore {
+    fn quantization_codebook(&self) -> Option<&QuantizedCodebook> {
+        match self {
+            Self::Local(graph) => graph
+                .quantization
+                .as_ref()
+                .map(HnswGraphQuantization::codebook),
+            Self::Mapped(image) => image.view().quantization_codebook(),
+            Self::Shared(image) => image.view().quantization_codebook(),
+        }
+    }
+
     fn node(&self, node_id: HnswNodeId) -> Option<(PackedNodeInfo, &[f32])> {
         match self {
             Self::Local(graph) => {
@@ -228,6 +322,33 @@ impl PackedGraphStore {
                     vector,
                 ))
             }
+        }
+    }
+
+    fn prepare_query(
+        &self,
+        query: &DenseVector,
+        metric: DistanceMetric,
+    ) -> context_index::GraphResult<Option<PreparedQuantizedQuery>> {
+        let codebook = match self {
+            Self::Local(graph) => return graph.prepare_query(query, metric),
+            Self::Mapped(image) => image.view().quantization_codebook(),
+            Self::Shared(image) => image.view().quantization_codebook(),
+        };
+        codebook
+            .map(|codebook| codebook.prepare_query(query, metric))
+            .transpose()
+            .map_err(|error| context_index::GraphError::AdapterFailure {
+                operation: "prepare packed HNSW codec query",
+                message: error.to_string(),
+            })
+    }
+
+    fn node_code(&self, node_id: HnswNodeId) -> Option<&[u8]> {
+        match self {
+            Self::Local(graph) => graph.node_code(node_id),
+            Self::Mapped(image) => image.view().node_code(node_id.get()),
+            Self::Shared(image) => image.view().node_code(node_id.get()),
         }
     }
 
@@ -327,6 +448,22 @@ impl HnswPackedGeneration {
         output: &mut Vec<HnswNodeId>,
     ) -> context_index::GraphResult<bool> {
         self.base.neighbors_into(node_id, layer, node_count, output)
+    }
+
+    fn prepare_query(
+        &self,
+        query: &DenseVector,
+        metric: DistanceMetric,
+    ) -> context_index::GraphResult<Option<PreparedQuantizedQuery>> {
+        self.base.prepare_query(query, metric)
+    }
+
+    fn node_code(&self, node_id: HnswNodeId) -> Option<&[u8]> {
+        self.base.node_code(node_id)
+    }
+
+    fn matches_codec(&self, meta: HnswMetaPage) -> bool {
+        meta.accepts_codec_codebook(self.base.quantization_codebook())
     }
 
     fn parallel_local_graph(&self) -> Option<Arc<PackedHnswGraph>> {
@@ -496,6 +633,16 @@ fn record_hnsw_pack_build(bytes: u64, millis: u64) {
         current.last_pack_bytes = bytes;
         current.last_pack_millis = millis;
         current.total_pack_millis = current.total_pack_millis.saturating_add(millis);
+        stats.set(current);
+    });
+}
+
+/// Records the complete packed footprint concurrently resident for the most
+/// recent multi-segment serving generation.
+fn record_hnsw_generation_bytes(bytes: u64) {
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.last_pack_bytes = bytes;
         stats.set(current);
     });
 }

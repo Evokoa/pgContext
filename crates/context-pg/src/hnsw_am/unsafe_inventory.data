@@ -23,7 +23,7 @@ hnsw_am.rs|fn|ensure_hnsw_opclass_owner|certifies bridge opclass extension owner
 hnsw_am.rs|fn|ensure_hnsw_strategy_operator|reads and releases PostgreSQL syscache tuples
 hnsw_am.rs|fn|expand_hnsw_scan|continues a validated live PostgreSQL index scan with a larger bounded candidate budget
 hnsw_am.rs|fn|hnsw_dense_from_datum|decodes a datum using its validated PostgreSQL type OID
-hnsw_am.rs|fn|hnsw_dense_score_metric|reads live dense operator-class metadata
+hnsw_am.rs|fn|hnsw_dense_score_metric_contract|reads live dense operator-class and certified result-type metadata
 hnsw_am.rs|fn|hnsw_certified_pgvector_type_oid|resolves an exact public type OID and certifies pgvector extension ownership
 hnsw_am.rs|fn|hnsw_index_opcintype|reads a live relation-cache OID array
 hnsw_am.rs|fn|hnsw_index_uses_certified_pgvector_type|classifies a live opclass input through certified catalog OIDs
@@ -47,6 +47,7 @@ hnsw_am.rs|fn|hnsw_scan_candidates|reads a live index relation and PostgreSQL pa
 hnsw_am.rs|fn|hnsw_scan_candidates_with_metric|scans a live index relation with an already certified metric
 hnsw_am.rs|fn|hnsw_scan_state_ptr|dereferences the AM-owned scan-state slot
 hnsw_am.rs|fn|hnsw_score_metric|reads live relation and operator-class metadata
+hnsw_am.rs|fn|hnsw_score_metric_contract|reads live relation, operator-class, and certified result-type metadata
 hnsw_am.rs|fn|hnsw_score_metric_from_bridge_candidates|certifies pgvector bridge operator and support metadata
 hnsw_am.rs|fn|hnsw_score_metric_from_candidates|reads live relation and operator-class metadata candidates
 hnsw_am.rs|fn|hnsw_sort_family_matches|certifies the btree sort family referenced by a strategy operator
@@ -67,10 +68,7 @@ hnsw_am/ffi_boundary.rs|fn|PgCallbackScope::new|anchors PostgreSQL pointer capab
 hnsw_am/options.rs|extern|pgcontext_hnsw_options|guarded PostgreSQL AM callback
 hnsw_am/options.rs|fn|hnsw_quantization_metadata|reads live relation reloptions
 hnsw_am/options.rs|fn|hnsw_reloption_kind|registers PostgreSQL reloption definitions
-hnsw_am/options.rs|fn|hnsw_reloption_string|reads a validated relative C-string offset
-hnsw_am/options.rs|fn|metadata_from_reloptions|reads validated PostgreSQL reloptions
 hnsw_am/options.rs|fn|validate_hnsw_reloptions|validates a PostgreSQL reloptions pointer
-hnsw_am/options.rs|fn|validate_pq_hnsw_reloptions|reads validated product-quantization options
 hnsw_am/storage.rs|fn|decode_hnsw_vector_record|decodes a caller-bounded PostgreSQL page payload
 hnsw_am/storage.rs|fn|decode_hnsw_adjacency_record|decodes a caller-bounded adjacency page payload
 hnsw_am/storage.rs|fn|hnsw_vector_record_view|validates a caller-bounded page payload before exposing borrowed vector and link spans
@@ -126,6 +124,7 @@ hnsw_am_graph_scan.rs|fn|write_hnsw_meta_page|writes typed metadata to a live Po
 hnsw_am_page_storage.rs|fn|write_hnsw_node_revisions_bulk|writes finalized graph nodes and their locators in page-sized Generic-WAL batches
 hnsw_am_page_storage.rs|fn|page_accepts_generation|reads a locked page header to reject records stamped for another base generation
 hnsw_am/shared_registry.rs|extern|hnsw_shared_registry_init_callback|one-time GetNamedDSMSegment initializer zero-filling and locking a fresh shared header
+hnsw_am/shared_registry.rs|extern|hnsw_shared_before_shmem_exit|drops backend-local shared-image owners before PostgreSQL dismantles dynamic shared-memory attachment bookkeeping
 hnsw_am/shared_registry.rs|fn|AttachedSharedImage::new|attaches a dsm_handle and erases the packed-image view's lifetime to the owning struct
 hnsw_am/shared_registry.rs|fn|commit_shared_slot|writes a registry slot and the shared byte budget total under the header lock
 hnsw_am/shared_registry.rs|fn|evict_shared_slot|removes a poisoned registry slot and its byte budget contribution under the header lock

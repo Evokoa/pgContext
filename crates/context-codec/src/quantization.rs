@@ -107,7 +107,7 @@ impl ScalarQuantizer {
         clippy::cast_sign_loss,
         reason = "clamping and the validated 2..=256 level range prove the rounded code is in 0..=255"
     )]
-    fn quantize_value(self, value: f32) -> Result<u8> {
+    pub(crate) fn quantize_value(self, value: f32) -> Result<u8> {
         let clamped = value.clamp(self.min, self.max);
         let span = f64::from(self.max) - f64::from(self.min);
         let scale = f64::from(self.levels - 1) / span;
@@ -290,6 +290,12 @@ impl ProductQuantizer {
     /// configured product codebook dimensions or when exact metric evaluation
     /// fails.
     pub fn quantize(&self, vector: &DenseVector) -> Result<ProductQuantizedVector> {
+        let mut codes = Vec::with_capacity(self.codebooks.len());
+        self.quantize_into(vector, &mut codes)?;
+        ProductQuantizedVector::new(codes)
+    }
+
+    pub(crate) fn quantize_into(&self, vector: &DenseVector, output: &mut Vec<u8>) -> Result<()> {
         let expected = self.expected_dimensions()?;
         if vector.dimension() != expected {
             return Err(CodecError::DimensionMismatch {
@@ -298,17 +304,16 @@ impl ProductQuantizer {
             });
         }
 
-        let mut codes = Vec::with_capacity(self.codebooks.len());
+        output.clear();
+        output.reserve(self.codebooks.len());
         for (codebook, subvector) in self
             .codebooks
             .iter()
             .zip(vector.as_slice().chunks_exact(self.subvector_dimensions))
         {
-            let subvector = DenseVector::new(subvector.to_vec())?;
-            codes.push(nearest_centroid_code(codebook, &subvector)?);
+            output.push(nearest_centroid_code_slice(codebook, subvector)?);
         }
-
-        ProductQuantizedVector::new(codes)
+        Ok(())
     }
 
     /// Reconstructs a dense vector by concatenating coded centroids.
@@ -381,12 +386,12 @@ impl ProductQuantizedVector {
     }
 }
 
-fn nearest_centroid_code(codebook: &ProductCodebook, subvector: &DenseVector) -> Result<u8> {
+fn nearest_centroid_code_slice(codebook: &ProductCodebook, subvector: &[f32]) -> Result<u8> {
     let mut best_code = 0u8;
     let mut best_score = f32::INFINITY;
 
     for (code, centroid) in codebook.centroids.iter().enumerate() {
-        let score = DistanceMetric::L2.distance(subvector, centroid)?;
+        let score = DistanceMetric::L2.distance_slices(subvector, centroid.as_slice())?;
         if score < best_score {
             best_code = u8::try_from(code).map_err(|_| {
                 CoreError::InvalidVector(format!(

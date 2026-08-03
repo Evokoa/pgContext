@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `82e247fcae0df6e3372c2fd7218b61fe36c62f3571166800456d6c3d477ee36a`
+Full SQL artifact SHA-256: `7c723089ce43fbee3772bbbe4b90ff23f1ffddc29a4e26f1dd4f6f50025bce79`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -606,12 +606,11 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 
 | Option | Accepted shape | Lifecycle |
 |---|---|---|
-| `quantization` | `none`, `scalar`, `sq8`, or `pq` | Experimental until quantized serving is complete |
+| `quantization` | `none`, `scalar`, `sq8`, `pq`, or `binary` | Candidate codec; exact source rerank is mandatory |
 | `scalar_min` | finite lower bound | Experimental |
 | `scalar_max` | finite upper bound greater than `scalar_min` | Experimental |
 | `scalar_levels` | integer from 2 through 256 | Experimental |
 | `pq_subvector_dimensions` | positive divisor of vector dimensions | Experimental |
-| `pq_codebooks` | validated JSON codebook array | Experimental |
 
 ## HNSW GUCs
 

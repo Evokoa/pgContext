@@ -7,6 +7,50 @@ impl GraphRead for ParallelPackedGraphRead {
         Ok(self.metadata)
     }
 
+    fn prepare_query(
+        &mut self,
+        metric: DistanceMetric,
+        query: &DenseVector,
+    ) -> context_index::GraphResult<()> {
+        self.prepared_query = self.graph.prepare_query(query, metric)?;
+        Ok(())
+    }
+
+    fn score_node(
+        &mut self,
+        node_id: HnswNodeId,
+        metric: DistanceMetric,
+        query: &DenseVector,
+    ) -> context_index::GraphResult<Option<GraphNodeScore>> {
+        let Some((node, vector)) = self.graph.node(node_id) else {
+            return Ok(None);
+        };
+        self.node_reads = self.node_reads.saturating_add(1);
+        let score = if let Some(prepared) = &self.prepared_query {
+            let code = self.graph.node_code(node_id).ok_or_else(|| {
+                context_index::GraphError::CorruptGraph {
+                    message: "quantized packed HNSW node is missing its code".to_owned(),
+                }
+            })?;
+            prepared.score(code).map_err(|error| {
+                context_index::GraphError::CorruptGraph {
+                    message: format!("quantized packed HNSW score failed: {error}"),
+                }
+            })?
+        } else {
+            metric
+                .distance_slices(query.as_slice(), vector)
+                .map_err(|error| context_index::GraphError::CorruptGraph {
+                    message: format!("packed HNSW score failed: {error}"),
+                })?
+        };
+        Ok(Some(GraphNodeScore::new(
+            score,
+            node.point_id,
+            node.layer_count,
+        )))
+    }
+
     fn read_node(
         &mut self,
         node_id: HnswNodeId,
@@ -120,6 +164,71 @@ impl GraphRead for PgHnswGraphRead {
             ))
         };
         GraphMetadata::new(node_count, entry, (meta.dimensions != 0).then_some(meta.dimensions as usize))
+    }
+
+    fn prepare_query(
+        &mut self,
+        metric: DistanceMetric,
+        query: &DenseVector,
+    ) -> context_index::GraphResult<()> {
+        // SAFETY: this adapter exists only for the active AM callback and the
+        // packed generation remains pinned by `self` for the traversal.
+        self.prepared_query = unsafe { self.load_packed()? }
+            .map(|packed| packed.prepare_query(query, metric))
+            .transpose()?
+            .flatten();
+        Ok(())
+    }
+
+    fn score_node(
+        &mut self,
+        node_id: HnswNodeId,
+        metric: DistanceMetric,
+        query: &DenseVector,
+    ) -> context_index::GraphResult<Option<GraphNodeScore>> {
+        if self.prepared_query.is_some() {
+            // SAFETY: this adapter owns the active relation and generation.
+            let packed = unsafe { self.load_packed()? }.ok_or_else(|| {
+                context_index::GraphError::AdapterFailure {
+                    operation: "score quantized HNSW node",
+                    message: "quantized traversal has no packed generation".to_owned(),
+                }
+            })?;
+            let prepared = self.prepared_query.as_ref().ok_or_else(|| {
+                context_index::GraphError::AdapterFailure {
+                    operation: "score quantized HNSW node",
+                    message: "quantized traversal lost its prepared query".to_owned(),
+                }
+            })?;
+            let Some((node, _)) = packed.node(node_id) else {
+                return Ok(None);
+            };
+            let code = packed.node_code(node_id).ok_or_else(|| {
+                context_index::GraphError::CorruptGraph {
+                    message: "quantized HNSW node is missing its codec row".to_owned(),
+                }
+            })?;
+            let score = prepared.score(code).map_err(|error| {
+                context_index::GraphError::CorruptGraph {
+                    message: format!("quantized HNSW score failed: {error}"),
+                }
+            })?;
+            self.node_reads = self.node_reads.saturating_add(1);
+            return Ok(Some(GraphNodeScore::new(
+                score,
+                node.point_id,
+                node.layer_count,
+            )));
+        }
+        self.with_node(node_id, |node| {
+            metric
+                .distance_slices(query.as_slice(), node.vector())
+                .map(|score| GraphNodeScore::new(score, node.point_id(), node.layer_count()))
+        })?
+        .transpose()
+        .map_err(|error| context_index::GraphError::CorruptGraph {
+            message: format!("page-native HNSW score failed: {error}"),
+        })
     }
 
     fn read_node(&mut self, node_id: HnswNodeId) -> context_index::GraphResult<Option<GraphNodeRecord>> {
@@ -418,6 +527,15 @@ impl Drop for ParallelSegmentAdmission {
 }
 
 fn projected_parallel_segment_bytes(meta: HnswMetaPage) -> Option<u64> {
+    meta.segments().iter().try_fold(0_u64, |total, segment| {
+        total.checked_add(projected_packed_segment_bytes(meta, *segment)?)
+    })
+}
+
+fn projected_packed_segment_bytes(
+    meta: HnswMetaPage,
+    segment: HnswSegmentMeta,
+) -> Option<u64> {
     let dimensions = u64::from(meta.dimensions);
     let vector_bytes = dimensions.checked_mul(size_of::<f32>() as u64)?;
     let layer_zero_links = u64::from(meta.hnsw_m)
@@ -427,13 +545,71 @@ fn projected_parallel_segment_bytes(meta: HnswMetaPage) -> Option<u64> {
         .checked_add(size_of::<PackedHnswNode>() as u64)?
         .checked_add(size_of::<PackedHnswLayer>() as u64)?
         .checked_add(layer_zero_links)?;
+    let packed_floor = segment.graph_nodes.checked_mul(per_node_floor)?;
+    let extent_blocks = segment.end_block.checked_sub(segment.start_block)?;
+    let extent_bytes = extent_blocks.checked_mul(pg_sys::BLCKSZ as u64)?;
+    if meta.quantization_mode == options::HNSW_QUANTIZATION_NONE_U16 {
+        return Some(packed_floor.max(extent_bytes));
+    }
+    let codec = projected_hnsw_codec_bytes(meta, segment.graph_nodes)?;
+    let training_sample_rows = segment
+        .graph_nodes
+        .min(HNSW_CODEC_TRAINING_SAMPLE_ROWS as u64);
+    let training_sample = training_sample_rows.checked_mul(vector_bytes)?;
+    // Page-item copies, BTreeMap/BTreeSet nodes, decoded records and nested
+    // adjacency vectors can coexist with the final packed graph and its
+    // encoded publication image. Charge four full persisted extents for the
+    // decoded/container side and three packed floors for the final arrays,
+    // publication image, and image-conversion scratch. Codec rows/codebooks
+    // can likewise coexist with their serialized artifact. These factors are
+    // deliberately conservative; admission must bound transient peak, not
+    // merely the final retained graph.
+    extent_bytes
+        .checked_mul(4)?
+        .checked_add(packed_floor.checked_mul(3)?)?
+        .checked_add(codec.checked_mul(2)?)?
+        .checked_add(training_sample)
+}
 
-    meta.segments().iter().try_fold(0_u64, |total, segment| {
-        let packed_floor = segment.graph_nodes.checked_mul(per_node_floor)?;
-        let extent_blocks = segment.end_block.checked_sub(segment.start_block)?;
-        let extent_bytes = extent_blocks.checked_mul(pg_sys::BLCKSZ as u64)?;
-        total.checked_add(packed_floor.max(extent_bytes))
-    })
+fn projected_hnsw_codec_bytes(meta: HnswMetaPage, node_count: u64) -> Option<u64> {
+    let dimensions = u64::from(meta.dimensions);
+    let (code_width, contribution_count, codebook_values) = match meta.quantization_mode {
+        options::HNSW_QUANTIZATION_NONE_U16 => return Some(0),
+        options::HNSW_QUANTIZATION_BINARY_U16 => {
+            (dimensions.checked_add(7)?.checked_div(8)?, dimensions.checked_add(7)?.checked_div(8)?.checked_mul(256)?, 0)
+        }
+        options::HNSW_QUANTIZATION_SCALAR_U16 | options::HNSW_QUANTIZATION_SQ8_U16 => (
+            dimensions,
+            dimensions.checked_mul(u64::from(meta.scalar_levels))?,
+            0,
+        ),
+        options::HNSW_QUANTIZATION_PQ_U16 => {
+            let subvector = u64::from(meta.pq_subvector_dimensions);
+            if subvector == 0 || !dimensions.is_multiple_of(subvector) {
+                return None;
+            }
+            let subvectors = dimensions / subvector;
+            (
+                subvectors,
+                subvectors.checked_mul(256)?,
+                dimensions.checked_mul(256)?,
+            )
+        }
+        _ => return None,
+    };
+    let stride = code_width
+        .checked_add(15)?
+        .checked_div(16)?
+        .checked_mul(16)?;
+    let codes = stride.checked_mul(node_count)?;
+    let codebook = codebook_values.checked_mul(size_of::<f32>() as u64)?;
+    let offsets = code_width
+        .checked_add(1)?
+        .checked_mul(size_of::<usize>() as u64)?;
+    let scorer = contribution_count
+        .checked_mul(size_of::<f32>() as u64 * 2)?
+        .checked_add(offsets)?;
+    codes.checked_add(codebook)?.checked_add(scorer)
 }
 
 fn parallel_segment_memory_admitted(meta: HnswMetaPage) -> bool {
@@ -487,6 +663,7 @@ unsafe fn try_parallel_segment_search(
         packed_bytes = next_packed_bytes;
         graphs.push(graph);
     }
+    record_hnsw_generation_bytes(packed_bytes);
 
     let requested_workers = worker_limit.min(graphs.len());
     let Some(admission) = ParallelSegmentAdmission::try_acquire(requested_workers) else {

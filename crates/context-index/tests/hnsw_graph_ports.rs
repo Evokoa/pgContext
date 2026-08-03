@@ -4,11 +4,11 @@
 
 use context_core::{DenseVector, DistanceMetric, SearchLimit};
 use context_index::{
-    CandidateMask, GraphError, GraphMetadata, GraphNeighbors, GraphNodeRecord, GraphNodeView,
-    GraphRead, GraphRecordId, GraphResult, GraphWrite, HnswConfig, HnswError, HnswNodeId,
-    HnswPointId, InMemoryGraphStore, LayerIndex, MAX_GRAPH_LAYERS, MAX_GRAPH_NEIGHBORS_PER_LAYER,
-    NeverCancel, NewGraphNode, search_graph_read, search_graph_read_with_mask,
-    search_graph_read_with_mask_budgeted,
+    CandidateMask, GraphError, GraphMetadata, GraphNeighbors, GraphNodeRecord, GraphNodeScore,
+    GraphNodeView, GraphRead, GraphRecordId, GraphResult, GraphWrite, HnswConfig, HnswError,
+    HnswNodeId, HnswPointId, InMemoryGraphStore, LayerIndex, MAX_GRAPH_LAYERS,
+    MAX_GRAPH_NEIGHBORS_PER_LAYER, NeverCancel, NewGraphNode, search_graph_read,
+    search_graph_read_with_mask, search_graph_read_with_mask_budgeted,
 };
 
 fn vector(values: &[f32]) -> DenseVector {
@@ -193,6 +193,155 @@ fn graph_read_traversal_prefers_buffer_scoped_hot_path_methods() {
     assert_eq!(graph.owned_neighbor_reads, 0);
     assert!(graph.node_visits >= 2);
     assert!(graph.neighbor_decodes >= 1);
+}
+
+#[test]
+fn graph_read_prepares_once_and_uses_adapter_scoring() {
+    struct PreparedGraph {
+        prepare_calls: usize,
+        score_calls: usize,
+    }
+
+    impl GraphRead for PreparedGraph {
+        fn metadata(&mut self) -> GraphResult<GraphMetadata> {
+            GraphMetadata::new(2, Some(HnswNodeId::new(0)), Some(2))
+        }
+
+        fn prepare_query(
+            &mut self,
+            metric: DistanceMetric,
+            query: &DenseVector,
+        ) -> GraphResult<()> {
+            assert_eq!(metric, DistanceMetric::L2);
+            assert_eq!(query.as_slice(), &[0.0, 0.0]);
+            self.prepare_calls += 1;
+            Ok(())
+        }
+
+        fn score_node(
+            &mut self,
+            node_id: HnswNodeId,
+            _metric: DistanceMetric,
+            _query: &DenseVector,
+        ) -> GraphResult<Option<GraphNodeScore>> {
+            self.score_calls += 1;
+            let Some((point_id, score)) = (match node_id.get() {
+                0 => Some((HnswPointId::new(10), 10.0)),
+                1 => Some((HnswPointId::new(20), 0.0)),
+                _ => None,
+            }) else {
+                return Ok(None);
+            };
+            Ok(Some(GraphNodeScore::new(score, point_id, 1)))
+        }
+
+        fn read_node(&mut self, _node_id: HnswNodeId) -> GraphResult<Option<GraphNodeRecord>> {
+            panic!("adapter scoring must not materialize a dense node")
+        }
+
+        fn with_node<R>(
+            &mut self,
+            node_id: HnswNodeId,
+            visitor: impl FnOnce(GraphNodeView<'_>) -> R,
+        ) -> GraphResult<Option<R>> {
+            const VECTOR: [f32; 2] = [0.0, 0.0];
+            let point_id = match node_id.get() {
+                0 => HnswPointId::new(10),
+                1 => HnswPointId::new(20),
+                _ => return Ok(None),
+            };
+            GraphNodeView::new(2, node_id, point_id, &VECTOR, 1).map(|view| Some(visitor(view)))
+        }
+
+        fn read_neighbors(
+            &mut self,
+            _node_id: HnswNodeId,
+            _layer: LayerIndex,
+        ) -> GraphResult<Option<GraphNeighbors>> {
+            panic!("hot-loop adjacency must use caller scratch")
+        }
+
+        fn read_neighbors_into(
+            &mut self,
+            node_id: HnswNodeId,
+            _layer: LayerIndex,
+            output: &mut Vec<HnswNodeId>,
+        ) -> GraphResult<bool> {
+            output.clear();
+            match node_id.get() {
+                0 => output.push(HnswNodeId::new(1)),
+                1 => output.push(HnswNodeId::new(0)),
+                _ => return Ok(false),
+            }
+            Ok(true)
+        }
+    }
+
+    let mut graph = PreparedGraph {
+        prepare_calls: 0,
+        score_calls: 0,
+    };
+    let outcome = search_graph_read(
+        &mut graph,
+        DistanceMetric::L2,
+        &vector(&[0.0, 0.0]),
+        HnswConfig::new(2, 4, 4).expect("test config should be valid"),
+        SearchLimit::new(2).expect("test limit should be valid"),
+        &mut NeverCancel,
+    )
+    .expect("prepared adapter traversal should succeed");
+
+    assert_eq!(graph.prepare_calls, 1);
+    assert!(graph.score_calls >= 2);
+    assert_eq!(outcome.results()[0].point_id(), HnswPointId::new(20));
+}
+
+#[test]
+fn empty_graph_returns_before_adapter_query_preparation() {
+    struct EmptyGraph {
+        prepare_calls: usize,
+    }
+
+    impl GraphRead for EmptyGraph {
+        fn metadata(&mut self) -> GraphResult<GraphMetadata> {
+            GraphMetadata::new(0, None, None)
+        }
+
+        fn prepare_query(
+            &mut self,
+            _metric: DistanceMetric,
+            _query: &DenseVector,
+        ) -> GraphResult<()> {
+            self.prepare_calls += 1;
+            Ok(())
+        }
+
+        fn read_node(&mut self, _node_id: HnswNodeId) -> GraphResult<Option<GraphNodeRecord>> {
+            panic!("empty traversal must not read nodes")
+        }
+
+        fn read_neighbors(
+            &mut self,
+            _node_id: HnswNodeId,
+            _layer: LayerIndex,
+        ) -> GraphResult<Option<GraphNeighbors>> {
+            panic!("empty traversal must not read adjacency")
+        }
+    }
+
+    let mut graph = EmptyGraph { prepare_calls: 0 };
+    let outcome = search_graph_read(
+        &mut graph,
+        DistanceMetric::L2,
+        &vector(&[0.0, 0.0]),
+        HnswConfig::new(2, 4, 4).expect("test config should be valid"),
+        SearchLimit::new(1).expect("test limit should be valid"),
+        &mut NeverCancel,
+    )
+    .expect("empty graph traversal should succeed");
+
+    assert!(outcome.results().is_empty());
+    assert_eq!(graph.prepare_calls, 0);
 }
 
 #[test]

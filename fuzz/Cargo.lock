@@ -9,6 +9,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
+name = "bytemuck"
+version = "1.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
+
+[[package]]
 name = "cc"
 version = "1.2.65"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -25,6 +31,15 @@ name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+
+[[package]]
+name = "context-codec"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "context-core",
+ "thiserror",
+]
 
 [[package]]
 name = "context-core"
@@ -72,6 +87,7 @@ dependencies = [
 name = "context-storage"
 version = "0.1.0"
 dependencies = [
+ "context-codec",
  "context-core",
  "libc",
 ]
@@ -136,6 +152,7 @@ checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 name = "pgcontext-fuzz"
 version = "0.0.0"
 dependencies = [
+ "context-codec",
  "context-core",
  "context-filter",
  "context-index",

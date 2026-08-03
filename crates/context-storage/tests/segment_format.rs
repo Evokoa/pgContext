@@ -12,10 +12,13 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use context_codec::{CodecRevision, ContiguousCodes, QuantizedCodebook, ReconstructionPolicy};
+use context_core::DenseVector;
 use context_storage::{
-    CURRENT_SEGMENT_FORMAT_VERSION, MAX_READABLE_SEGMENT_FORMAT_VERSION,
-    MIN_READABLE_SEGMENT_FORMAT_VERSION, SegmentBytes, SegmentError, SegmentFileError,
-    SegmentHeader, SegmentKind, SegmentVersion, SegmentWriteStage, decode_segment, encode_segment,
+    CURRENT_SEGMENT_FORMAT_VERSION, HnswGraphArtifactRecord, HnswGraphQuantization,
+    MAX_READABLE_SEGMENT_FORMAT_VERSION, MIN_READABLE_SEGMENT_FORMAT_VERSION, MappedGraphView,
+    SegmentBytes, SegmentError, SegmentFileError, SegmentHeader, SegmentKind, SegmentVersion,
+    SegmentWriteStage, decode_segment, encode_hnsw_graph_payload_current, encode_segment,
     export_segment_file, import_segment_file, is_supported_segment_format_version,
     load_segment_file, map_segment_file, reload_segment_file, validate_mmap_segment,
     write_segment_atomic, write_segment_atomic_with_hook,
@@ -71,21 +74,21 @@ fn segment_header_round_trips_payload() -> Result<(), SegmentError> {
 
     let segment = decode_segment(&encoded)?;
 
-    assert_eq!(segment.header().version(), SegmentVersion::V1);
+    assert_eq!(segment.header().version(), SegmentVersion::V2);
     assert_eq!(segment.header().kind(), SegmentKind::HnswGraph);
     assert_eq!(segment.payload(), payload);
     Ok(())
 }
 
 #[test]
-fn current_segment_format_version_is_v1() {
-    assert_eq!(CURRENT_SEGMENT_FORMAT_VERSION, 1);
-    assert_eq!(MIN_READABLE_SEGMENT_FORMAT_VERSION, 1);
+fn current_segment_format_version_is_v2() {
+    assert_eq!(CURRENT_SEGMENT_FORMAT_VERSION, 2);
+    assert_eq!(MIN_READABLE_SEGMENT_FORMAT_VERSION, 2);
     assert_eq!(
         MAX_READABLE_SEGMENT_FORMAT_VERSION,
         CURRENT_SEGMENT_FORMAT_VERSION
     );
-    assert_eq!(SegmentVersion::V1.as_u32(), CURRENT_SEGMENT_FORMAT_VERSION);
+    assert_eq!(SegmentVersion::V2.as_u32(), CURRENT_SEGMENT_FORMAT_VERSION);
     assert!(is_supported_segment_format_version(
         CURRENT_SEGMENT_FORMAT_VERSION
     ));
@@ -110,11 +113,12 @@ fn segment_loader_rejects_truncated_headers() {
 #[test]
 fn segment_loader_rejects_unknown_versions() -> Result<(), SegmentError> {
     let mut encoded = encode_segment(SegmentKind::HnswGraph, b"payload")?;
-    encoded[8..12].copy_from_slice(&2_u32.to_le_bytes());
+    let unknown = CURRENT_SEGMENT_FORMAT_VERSION + 1;
+    encoded[8..12].copy_from_slice(&unknown.to_le_bytes());
 
     assert_eq!(
         decode_segment(&encoded),
-        Err(SegmentError::UnknownVersion { version: 2 })
+        Err(SegmentError::UnknownVersion { version: unknown })
     );
     Ok(())
 }
@@ -215,6 +219,43 @@ fn mapped_segment_borrows_the_validated_file_payload() -> SegmentTestResult {
 }
 
 #[test]
+fn real_file_quantized_mmap_keeps_codec_rows_sixteen_byte_aligned() -> SegmentTestResult {
+    let records = vec![
+        HnswGraphArtifactRecord::new(0, 10, DenseVector::new(vec![1.0, -1.0])?, vec![1]),
+        HnswGraphArtifactRecord::new(1, 20, DenseVector::new(vec![-1.0, 1.0])?, vec![0]),
+    ];
+    let codebook = QuantizedCodebook::Binary { dimensions: 2 };
+    let revision = CodecRevision::new(1)
+        .ok_or_else(|| std::io::Error::other("test revision should be nonzero"))?;
+    let quantization = HnswGraphQuantization::new(
+        revision,
+        ReconstructionPolicy::ExactSourceRerank,
+        codebook.clone(),
+        ContiguousCodes::from_rows(codebook.code_len(), &[vec![0b10], vec![0b01]])?,
+    )?;
+    let payload = encode_hnsw_graph_payload_current(&records, Some(&quantization))?;
+    let directory = TempSegmentDir::create()?;
+    let path = directory.join("quantized-mapped.pgctxseg");
+    write_segment_atomic(&path, SegmentKind::HnswGraph, &payload)?;
+
+    // SAFETY: this test owns the file and does not mutate or truncate it
+    // until the returned mapping is dropped.
+    let mapped = unsafe { map_segment_file(&path)? };
+    assert_eq!(mapped.payload().as_ptr() as usize % 16, 0);
+    let graph = MappedGraphView::attach(mapped.payload())?;
+    assert_eq!(
+        graph
+            .node(0)
+            .and_then(|node| node.code())
+            .ok_or_else(|| std::io::Error::other("first quantized code should exist"))?
+            .as_ptr() as usize
+            % 16,
+        0
+    );
+    Ok(())
+}
+
+#[test]
 fn atomic_write_reloads_replaced_segments() -> Result<(), Box<dyn std::error::Error>> {
     let directory = TempSegmentDir::create()?;
     let path = directory.join("graph.pgctxseg");
@@ -306,23 +347,18 @@ fn export_and_import_round_trip_validated_artifacts() -> Result<(), Box<dyn std:
 }
 
 #[test]
-fn loader_and_import_accept_v1_compatibility_fixture() -> SegmentTestResult {
-    let decoded = decode_segment(V1_HNSW_GRAPH_PORTABLE_SEGMENT)?;
-    assert_eq!(decoded.header().version(), SegmentVersion::V1);
-    assert_eq!(decoded.header().kind(), SegmentKind::HnswGraph);
-    assert_eq!(decoded.payload(), b"portable");
-
-    let mmap_view = validate_mmap_segment(V1_HNSW_GRAPH_PORTABLE_SEGMENT)?;
-    assert_eq!(mmap_view.payload(), b"portable");
-
+fn loader_and_import_reject_v1_unaligned_fixture() -> SegmentTestResult {
     let directory = TempSegmentDir::create()?;
     let source = directory.join("v1-fixture.pgctxseg");
     let destination = directory.join("imported-v1.pgctxseg");
     fs::write(&source, V1_HNSW_GRAPH_PORTABLE_SEGMENT)?;
-
-    let imported = import_segment_file(&source, &destination)?;
-    assert_eq!(imported.payload(), b"portable");
-    assert_eq!(load_segment_file(&destination)?.payload(), b"portable");
+    assert!(matches!(
+        decode_segment(V1_HNSW_GRAPH_PORTABLE_SEGMENT),
+        Err(SegmentError::TruncatedHeader { .. })
+            | Err(SegmentError::UnknownVersion { version: 1 })
+    ));
+    assert!(import_segment_file(&source, &destination).is_err());
+    assert!(!destination.exists());
     Ok(())
 }
 
@@ -331,7 +367,7 @@ fn import_rejects_future_version_fixture_and_preserves_destination() -> SegmentT
     let directory = TempSegmentDir::create()?;
     let source = directory.join("future-fixture.pgctxseg");
     let destination = directory.join("destination.pgctxseg");
-    let mut future = V1_HNSW_GRAPH_PORTABLE_SEGMENT.to_vec();
+    let mut future = encode_segment(SegmentKind::HnswGraph, b"portable")?;
     future[8..12].copy_from_slice(&(CURRENT_SEGMENT_FORMAT_VERSION + 1).to_le_bytes());
     fs::write(&source, future)?;
     write_segment_atomic(&destination, SegmentKind::HnswGraph, b"existing")?;

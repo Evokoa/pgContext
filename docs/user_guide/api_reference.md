@@ -207,6 +207,13 @@ Operations, diagnostics, and telemetry:
   recent HNSW bulk build: `last_build_tuples`, `graph_millis` (heap scan
   plus in-memory graph construction), `write_millis` (snapshot extraction,
   page writes, Generic-WAL emission). All zeros before the first build.
+- `pgcontext.hnsw_segment_stats(index regclass)` — segmented publication,
+  compaction, and codec diagnostics. Codec columns report `codec`, the
+  build-bound codec-configuration identity as `codec_revision` (an exact
+  unsigned decimal string), fixed `codec_code_width`, current
+  `candidate_budget`, mandatory `exact_source_rerank`, and
+  `codec_serving_capability`. A null revision means the index is full precision; a
+  quantized index binds its configuration revision even when it is empty.
 - `pgcontext.recall_check(exact_point_ids bigint[], candidate_point_ids bigint[], min_recall double precision)`
 - `pgcontext.telemetry()`
 - `pgcontext.record_query_stat(collection text, cohort text, query_kind text, result_count bigint, candidate_count bigint, latency_ms double precision)`

@@ -1,10 +1,13 @@
 //! Portable quantization metadata and code validation for HNSW payload v2.
 
 use context_codec::{
-    QuantizedCodebook, validate_quantization_codebook as validate_codec_codebook,
+    CodecRevision, ContiguousCodes, QuantizedCodebook, ReconstructionPolicy,
+    validate_quantization_codebook as validate_codec_codebook,
     validate_quantized_code as validate_codec_code,
 };
 use context_core::DenseVector;
+
+use crate::{CodecArtifact, CodecArtifactError};
 
 use super::{
     HnswGraphPayloadError, read_f32, read_u16, read_u32, size_of_f32, size_of_u32, usize_to_u32,
@@ -21,27 +24,63 @@ const MAX_PRODUCT_CODEBOOKS: usize = 65_536;
 /// Persisted code bytes bound to one graph record ordering.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HnswGraphQuantization {
-    codebook: QuantizedCodebook,
-    codes: Vec<Vec<u8>>,
+    artifact: CodecArtifact,
 }
 
 impl HnswGraphQuantization {
     /// Creates persisted quantization data.
-    #[must_use]
-    pub const fn new(codebook: QuantizedCodebook, codes: Vec<Vec<u8>>) -> Self {
-        Self { codebook, codes }
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HnswGraphPayloadError::InvalidQuantization`] when the
+    /// codebook and contiguous rows are incompatible.
+    pub fn new(
+        revision: CodecRevision,
+        reconstruction_policy: ReconstructionPolicy,
+        codebook: QuantizedCodebook,
+        codes: ContiguousCodes,
+    ) -> Result<Self, HnswGraphPayloadError> {
+        let artifact = CodecArtifact::new(revision, reconstruction_policy, codebook, codes)
+            .map_err(codec_artifact_error)?;
+        Ok(Self { artifact })
     }
 
     /// Returns the persisted codebook.
     #[must_use]
     pub const fn codebook(&self) -> &QuantizedCodebook {
-        &self.codebook
+        self.artifact.codebook()
+    }
+
+    /// Returns the immutable trained-codebook revision.
+    #[must_use]
+    pub const fn revision(&self) -> CodecRevision {
+        self.artifact.revision()
+    }
+
+    /// Returns the exact final-score policy.
+    #[must_use]
+    pub const fn reconstruction_policy(&self) -> ReconstructionPolicy {
+        self.artifact.reconstruction_policy()
     }
 
     /// Returns node codes in graph-record order.
     #[must_use]
-    pub fn codes(&self) -> &[Vec<u8>] {
-        &self.codes
+    pub const fn codes(&self) -> &ContiguousCodes {
+        self.artifact.codes()
+    }
+
+    pub(crate) const fn artifact(&self) -> &CodecArtifact {
+        &self.artifact
+    }
+
+    pub(crate) fn from_artifact(artifact: CodecArtifact) -> Result<Self, HnswGraphPayloadError> {
+        let value = Self { artifact };
+        validate_quantization(
+            &value,
+            value.codes().row_count(),
+            value.codebook().dimensions(),
+        )?;
+        Ok(value)
     }
 }
 
@@ -58,17 +97,24 @@ pub(crate) fn validate_quantization(
     record_count: usize,
     dimensions: usize,
 ) -> Result<(), HnswGraphPayloadError> {
-    validate_quantization_codebook(&quantization.codebook, dimensions)?;
-    if quantization.codes.len() != record_count {
+    validate_quantization_codebook(quantization.codebook(), dimensions)?;
+    if quantization.codes().row_count() != record_count {
         return Err(HnswGraphPayloadError::InvalidQuantization(format!(
             "code count mismatch: expected {record_count}, got {}",
-            quantization.codes.len()
+            quantization.codes().row_count()
         )));
     }
-    for (node_index, code) in quantization.codes.iter().enumerate() {
-        validate_quantized_code(&quantization.codebook, node_index, code)?;
+    for node_index in 0..record_count {
+        let code = quantization.codes().code(node_index).ok_or_else(|| {
+            HnswGraphPayloadError::InvalidQuantization(format!("code row {node_index} is missing"))
+        })?;
+        validate_quantized_code(quantization.codebook(), node_index, code)?;
     }
     Ok(())
+}
+
+pub(crate) fn codec_artifact_error(error: CodecArtifactError) -> HnswGraphPayloadError {
+    HnswGraphPayloadError::InvalidQuantization(error.to_string())
 }
 
 fn validate_quantization_codebook(

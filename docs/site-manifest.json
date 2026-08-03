@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "c27bd618dcd1a386e6e0865552d17b1d60a0c704582e120ed313f2ce6a1f0c24",
+  "navigation_sha256": "26ed7be9cb76a27156bc1aefaef62633673f4f07e16b557946feb85f770582ea",
   "pages": [
     {
       "links": [],
@@ -49,7 +49,12 @@
         "reports/pgcontext-vs-pgvector.html"
       ],
       "path": "benchmarks/pgvector.md",
-      "sha256": "9e14056f705c66d75d0edd5a1a9ac42d439282737c6bfe0e0ce1970e4d7a5ee5"
+      "sha256": "55636bb43b2397e94efb0518f6f8f57d8e266870ca3ad2867667d9cb2d5e1f94"
+    },
+    {
+      "links": [],
+      "path": "benchmarks/quantized_hnsw_1m.md",
+      "sha256": "35d333fbe94aa3439ad86c669c46581ab6e87e7843b8c912adce1caec21553f9"
     },
     {
       "links": [
@@ -306,7 +311,7 @@
         "user_guide/pgvector_migration.md"
       ],
       "path": "pgcontext-vs-pgvector-vs-qdrant.md",
-      "sha256": "7c81b9fff2993aeb89e0bcb48b07d077ad583411cefcb42d730c428cf4357b7d"
+      "sha256": "f368f48ec0526cbb9556d05a1ea82a8786b768964643655ac74a65f3a7cc080c"
     },
     {
       "links": [
@@ -376,7 +381,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "3e74fc6f73fde30dc4a1f6cf0a9fc217be8550813d837b09718a72ed6366bc67"
+      "sha256": "c461a499f9ff2eb6092cfe4654081d33e0859688be634d07f18ef3ba753f3378"
     },
     {
       "links": [],
@@ -418,7 +423,7 @@
         "pgvector_coexist.md"
       ],
       "path": "user_guide/indexes.md",
-      "sha256": "4ec14eb68417956ad4dee58aa3017fbbd5398d80449adff96ae6bcdd280101de"
+      "sha256": "2a60e704f29c72f48941187ba46e3d9e84bdf2c71c0dfaa1cc60649833fb5186"
     },
     {
       "links": [
@@ -436,7 +441,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/limitations.md",
-      "sha256": "a2d12330153737f5f4577d1d8f7456e48631e739d24b8973639d0fc9260a00f1"
+      "sha256": "ab778ebec39e3f5ebbc1381315983647636814b5f90dd425d17c81a0aa8502d8"
     },
     {
       "links": [
@@ -471,7 +476,7 @@
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "6622bd9028abe3851c36eb676e1496910eb57bed9f6537ee41e093676af3d486"
+      "sha256": "4b0fbf83860b33727177c861b0ae10e8db176416adfe2dfd8ab6183a0c3a5205"
     },
     {
       "links": [
@@ -529,7 +534,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "7862b4d4f11d092f49a04ddb2a74fbb962aecdf32ce9b4a4e02a144f1e1e13e4"
+      "sha256": "4201c1c785e978b66ca006a943846e9e999f82737d4db109a31cf512f919c4c3"
     },
     {
       "links": [
@@ -606,6 +611,7 @@
         "#summary-artifacts-and-deterministic-partition-rollups",
         "#summary-artifacts-and-deterministic-partition-rollups",
         "#summary-artifacts-and-deterministic-partition-rollups",
+        "../benchmarks/quantized_hnsw_1m.md",
         "https://aclanthology.org/2025.tacl-1.36/",
         "https://aclanthology.org/P11-1101/",
         "https://arxiv.org/abs/2109.10086",
@@ -649,7 +655,7 @@
         "https://www.postgresql.org/docs/current/textsearch-indexes.html"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "415cbaa03acc82f2afc73c4ea7dff9c6a314591feeaad148db1e92fce3d15262"
+      "sha256": "48d043d55eb01e498ad88a56d53fd7ede9e93d3f1f487b084cd158e3b4cf260e"
     },
     {
       "links": [],
@@ -664,7 +670,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "438fe8925d10d099b2cdd1f3ec4dd845a175329abdfc60964235da4ec44d3a50"
+      "sha256": "02215c82b3df4020356c339fb90cd0c4ba9faf5edbf2dfd0d476d227544bc225"
     },
     {
       "links": [],
@@ -678,6 +684,7 @@
     },
     {
       "links": [
+        "../benchmarks/quantized_hnsw_1m.md",
         "api_reference.md",
         "collections.md",
         "filters.md",
@@ -696,7 +703,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "a4f324f19d6ceea7c8ac1a14377e10a0f4ea2f957933ba3c347ac29a9b344db9"
+      "sha256": "85ecb527e7c8ffc0c015c98cbeadc44d53220d6ba237b36c33e3829648031aa9"
     },
     {
       "links": [],

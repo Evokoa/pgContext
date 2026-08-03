@@ -348,14 +348,21 @@ fn hnsw_get_tuple_safe(
                     // operators while graph navigation remains f32. Emit the
                     // conservative -infinity bound so the executor rechecks
                     // and exactly reranks every bounded ANN candidate.
+                    let quantized_navigation = PgHnswGraphRead::new(
+                        (*scan.as_ptr()).indexRelation,
+                    )
+                    .meta()
+                    .quantization_mode
+                        != options::HNSW_QUANTIZATION_NONE_U16;
                     (*scan.as_ptr()).xs_recheckorderby =
                         contract.metric == HnswScoreMetric::BitJaccard
-                            || contract.exact_float8_recheck;
+                            || contract.exact_float8_recheck
+                            || quantized_navigation;
                     store_hnsw_orderby_distance(
                         scan.as_ptr(),
-                        contract.metric,
+                        contract,
                         candidate.score,
-                        contract.exact_float8_recheck,
+                        quantized_navigation,
                     );
                 } else {
                     (*scan.as_ptr()).xs_recheckorderby = false;
@@ -416,81 +423,82 @@ unsafe fn expand_hnsw_scan(scan: pg_sys::IndexScanDesc, state: &mut HnswScanStat
 
 unsafe fn store_hnsw_orderby_distance(
     scan: pg_sys::IndexScanDesc,
-    metric: HnswScoreMetric,
+    contract: HnswOrderByContract,
     score: f32,
-    exact_float8_recheck: bool,
+    quantized_navigation: bool,
 ) {
     // SAFETY: PostgreSQL allocates these arrays in `pgcontext_hnsw_begin_scan`
     // when order-by keys are present, and this function is only called after
     // `numberOfOrderBys > 0`.
     let orderby_count = unsafe { c_int_to_usize((*scan).numberOfOrderBys, "scan order-bys") };
-    if exact_float8_recheck {
+    let exact_recheck = contract.exact_float8_recheck || quantized_navigation;
+    if contract.result_type == pg_sys::FLOAT8OID {
+        let (distance, recheck) = if exact_recheck {
+            (f64::NEG_INFINITY, true)
+        } else {
+            float8_orderby_distance(contract.metric, score)
+        };
         let mut order_by_types = vec![pg_sys::FLOAT8OID; orderby_count];
         let mut distances = vec![
             pg_sys::IndexOrderByDistance {
-                value: f64::NEG_INFINITY,
+                value: distance,
                 isnull: false,
             };
             orderby_count
         ];
-        // SAFETY: The certified bridge contract requires a pgvector float8
-        // strategy operator for every active order-by key. Negative infinity
-        // is a valid common lower bound; `recheck = true` makes PostgreSQL
-        // replace it with the exact heap-operator distance before ordering.
+        // SAFETY: `contract.result_type` was read from the certified support
+        // function/operator pair for this live index. Quantized and bridge
+        // scans emit a conservative lower bound which PostgreSQL replaces by
+        // exact heap-operator recheck; native exact navigation stores `score`.
         unsafe {
             pg_sys::index_store_float8_orderby_distances(
                 scan,
                 order_by_types.as_mut_ptr(),
                 distances.as_mut_ptr(),
-                true,
+                recheck,
             );
         }
         return;
     }
-    match metric {
-        HnswScoreMetric::L2 | HnswScoreMetric::BitJaccard => {
-            let (distance, recheck) = float8_orderby_distance(metric, score);
-            let mut order_by_types = vec![pg_sys::FLOAT8OID; orderby_count];
-            let mut distances = vec![
-                pg_sys::IndexOrderByDistance {
-                    value: distance,
-                    isnull: false,
-                };
-                orderby_count
-            ];
-            // SAFETY: `scan` is a live index scan descriptor and the arrays
-            // contain one float8 distance entry per order-by key.
+    if contract.result_type == pg_sys::FLOAT4OID {
+        let distance = if exact_recheck {
+            f32::NEG_INFINITY
+        } else {
+            score
+        };
+        for index in 0..orderby_count {
+            // SAFETY: `contract.result_type` was certified as float4 and
+            // begin-scan allocated one slot per active order-by key.
             unsafe {
-                pg_sys::index_store_float8_orderby_distances(
-                    scan,
-                    order_by_types.as_mut_ptr(),
-                    distances.as_mut_ptr(),
-                    recheck,
-                );
+                *(*scan).xs_orderbyvals.add(index) = pg_sys::Float4GetDatum(distance);
+                *(*scan).xs_orderbynulls.add(index) = false;
             }
         }
-        HnswScoreMetric::NegativeInnerProduct | HnswScoreMetric::Cosine | HnswScoreMetric::L1 => {
-            for index in 0..orderby_count {
-                // SAFETY: PostgreSQL allocated one datum and null slot per
-                // active order-by key; these operators return float4.
-                unsafe {
-                    *(*scan).xs_orderbyvals.add(index) = pg_sys::Float4GetDatum(score);
-                    *(*scan).xs_orderbynulls.add(index) = false;
-                }
-            }
-        }
-        HnswScoreMetric::BitHamming => {
-            let distance = bit_hamming_orderby_distance(score);
-            for index in 0..orderby_count {
-                // SAFETY: `xs_orderbyvals` and `xs_orderbynulls` have
-                // `numberOfOrderBys` slots allocated by begin-scan.
-                unsafe {
-                    *(*scan).xs_orderbyvals.add(index) = pg_sys::Datum::from(distance);
-                    *(*scan).xs_orderbynulls.add(index) = false;
-                }
-            }
-        }
+        return;
     }
+    if contract.result_type == pg_sys::INT4OID {
+        let distance = if exact_recheck {
+            i32::MIN
+        } else {
+            bit_hamming_orderby_distance(score)
+        };
+        for index in 0..orderby_count {
+            // SAFETY: `contract.result_type` was certified as int4 and
+            // begin-scan allocated one slot per active order-by key.
+            unsafe {
+                *(*scan).xs_orderbyvals.add(index) = pg_sys::Datum::from(distance);
+                *(*scan).xs_orderbynulls.add(index) = false;
+            }
+        }
+        return;
+    }
+    raise_sql_error(
+        PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
+        format!(
+            "unsupported certified HNSW order-by result type oid: {}",
+            contract.result_type.to_u32()
+        ),
+    );
 }
 
 /// Returns a conservative lower bound for an exact `f64` Jaccard distance.

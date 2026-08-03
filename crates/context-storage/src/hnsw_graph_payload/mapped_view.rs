@@ -5,12 +5,14 @@ use core::iter::FusedIterator;
 use context_codec::QuantizedCodebook;
 use context_core::policy::MAX_VECTOR_DIMENSIONS;
 
+use crate::CodecArtifactView;
+
 use super::{
-    CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1,
-    HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2, HNSW_GRAPH_PAYLOAD_MAGIC, HNSW_GRAPH_PAYLOAD_VERSION_V1,
+    CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HNSW_GRAPH_PAYLOAD_HEADER_LEN_CURRENT,
+    HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1, HNSW_GRAPH_PAYLOAD_MAGIC, HNSW_GRAPH_PAYLOAD_VERSION_V1,
     HNSW_GRAPH_RECORD_HEADER_LEN, HnswGraphPayloadError, MAX_HNSW_GRAPH_RECORDS,
-    decode_quantization_codebook, read_f32, read_u32, read_u64, require_no_trailing_bytes,
-    require_payload_bytes, size_of_f32, size_of_u32, validate_quantized_code,
+    codec_artifact_error, read_f32, read_u32, read_u64, require_no_trailing_bytes,
+    require_payload_bytes, size_of_f32, size_of_u32,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -19,7 +21,6 @@ struct NodeLocation {
     vector_offset: usize,
     neighbors_offset: usize,
     neighbor_count: usize,
-    code_offset: usize,
 }
 
 /// Validated borrowed view of one mapped HNSW base-layer node.
@@ -110,13 +111,12 @@ pub struct MappedGraphView<'a> {
     payload: &'a [u8],
     version: u32,
     dimensions: usize,
-    code_len: usize,
-    codebook: Option<QuantizedCodebook>,
+    codec: Option<CodecArtifactView<'a>>,
     nodes: Vec<NodeLocation>,
 }
 
 impl<'a> MappedGraphView<'a> {
-    /// Attaches to a version-1 or version-2 HNSW payload without copying it.
+    /// Attaches to a version-1 or current HNSW payload without copying it.
     ///
     /// # Errors
     ///
@@ -136,48 +136,28 @@ impl<'a> MappedGraphView<'a> {
         let version = read_u32(payload, 8);
         let record_count_u32 = read_u32(payload, 12);
         let dimensions = read_u32(payload, 16) as usize;
-        let (records_offset, code_len, codebook) = match version {
+        let (records_offset, codec_len) = match version {
             HNSW_GRAPH_PAYLOAD_VERSION_V1 => {
                 let reserved = read_u32(payload, 20);
                 if reserved != 0 {
                     return Err(HnswGraphPayloadError::NonZeroReserved { value: reserved });
                 }
-                (HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1, 0, None)
+                (HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1, 0)
             }
             CURRENT_HNSW_GRAPH_PAYLOAD_VERSION => {
-                if payload.len() < HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2 {
+                if payload.len() < HNSW_GRAPH_PAYLOAD_HEADER_LEN_CURRENT {
                     return Err(HnswGraphPayloadError::TruncatedHeader {
                         actual: payload.len(),
-                        minimum: HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2,
+                        minimum: HNSW_GRAPH_PAYLOAD_HEADER_LEN_CURRENT,
                     });
                 }
-                for offset in [32, 36] {
-                    let reserved = read_u32(payload, offset);
-                    if reserved != 0 {
-                        return Err(HnswGraphPayloadError::NonZeroReserved { value: reserved });
-                    }
+                let reserved = read_u32(payload, 20);
+                if reserved != 0 {
+                    return Err(HnswGraphPayloadError::NonZeroReserved { value: reserved });
                 }
-                let mode = read_u32(payload, 20);
-                let code_len = read_u32(payload, 24) as usize;
-                let codebook_len = read_u32(payload, 28) as usize;
-                let codebook_end = HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2
-                    .checked_add(codebook_len)
-                    .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
-                if payload.len() < codebook_end {
-                    return Err(HnswGraphPayloadError::InvalidQuantization(format!(
-                        "truncated codebook: expected {codebook_len} bytes, got {}",
-                        payload
-                            .len()
-                            .saturating_sub(HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2)
-                    )));
-                }
-                let codebook = decode_quantization_codebook(
-                    mode,
-                    dimensions,
-                    code_len,
-                    &payload[HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2..codebook_end],
-                )?;
-                (codebook_end, code_len, codebook)
+                let codec_len = usize::try_from(read_u64(payload, 24))
+                    .map_err(|_| HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+                (HNSW_GRAPH_PAYLOAD_HEADER_LEN_CURRENT, codec_len)
             }
             version => return Err(HnswGraphPayloadError::UnsupportedVersion { version }),
         };
@@ -206,7 +186,6 @@ impl<'a> MappedGraphView<'a> {
             .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
         let minimum_record_bytes = HNSW_GRAPH_RECORD_HEADER_LEN
             .checked_add(vector_bytes)
-            .and_then(|bytes| bytes.checked_add(code_len))
             .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
         let minimum_payload_bytes = record_count
             .checked_mul(minimum_record_bytes)
@@ -268,31 +247,58 @@ impl<'a> MappedGraphView<'a> {
             }
             offset += neighbor_bytes;
 
-            require_payload_bytes(payload, offset, code_len, record_index)?;
-            if let Some(codebook) = &codebook {
-                validate_quantized_code(
-                    codebook,
-                    record_index,
-                    &payload[offset..offset + code_len],
-                )?;
-            }
             nodes.push(NodeLocation {
                 point_id,
                 vector_offset,
                 neighbors_offset,
                 neighbor_count,
-                code_offset: offset,
             });
-            offset += code_len;
         }
-        require_no_trailing_bytes(payload, offset)?;
+        let codec_offset = if codec_len == 0 {
+            offset
+        } else {
+            let aligned = super::align_up_16(offset)
+                .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+            if payload
+                .get(offset..aligned)
+                .is_none_or(|padding| padding.iter().any(|byte| *byte != 0))
+            {
+                return Err(HnswGraphPayloadError::InvalidQuantization(
+                    "codec artifact alignment padding is invalid".to_owned(),
+                ));
+            }
+            aligned
+        };
+        let codec_end = codec_offset
+            .checked_add(codec_len)
+            .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+        if codec_end != payload.len() {
+            return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+                "codec artifact length mismatch: declared {codec_len}, available {}",
+                payload.len().saturating_sub(codec_offset)
+            )));
+        }
+        let codec = if codec_len == 0 {
+            require_no_trailing_bytes(payload, offset)?;
+            None
+        } else {
+            let codec = CodecArtifactView::attach(&payload[codec_offset..codec_end])
+                .map_err(codec_artifact_error)?;
+            if codec.dimensions() != dimensions || codec.codes().row_count() != record_count {
+                return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+                    "codec artifact binding mismatch: expected {record_count} rows of {dimensions} dimensions, got {} rows of {} dimensions",
+                    codec.codes().row_count(),
+                    codec.dimensions()
+                )));
+            }
+            Some(codec)
+        };
 
         Ok(Self {
             payload,
             version,
             dimensions,
-            code_len,
-            codebook,
+            codec,
             nodes,
         })
     }
@@ -324,7 +330,10 @@ impl<'a> MappedGraphView<'a> {
     /// Returns the quantization codebook for encoded generations.
     #[must_use]
     pub const fn codebook(&self) -> Option<&QuantizedCodebook> {
-        self.codebook.as_ref()
+        match &self.codec {
+            Some(codec) => Some(codec.codebook()),
+            None => None,
+        }
     }
 
     /// Borrows one validated node by its contiguous node id.
@@ -333,12 +342,17 @@ impl<'a> MappedGraphView<'a> {
         let location = self.nodes.get(node_id)?;
         let vector_bytes = self.dimensions * size_of_f32();
         let neighbor_bytes = location.neighbor_count * size_of_u32();
+        let code = self
+            .codec
+            .as_ref()
+            .and_then(|codec| codec.codes().code(node_id))
+            .unwrap_or(&[]);
         Some(MappedGraphNodeView {
             point_id: location.point_id,
             vector: &self.payload[location.vector_offset..location.vector_offset + vector_bytes],
             neighbors: &self.payload
                 [location.neighbors_offset..location.neighbors_offset + neighbor_bytes],
-            code: &self.payload[location.code_offset..location.code_offset + self.code_len],
+            code,
         })
     }
 }

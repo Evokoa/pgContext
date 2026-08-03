@@ -60,19 +60,50 @@ impl TrainedQuantizer {
     ///
     /// Returns an error for dimension mismatches or invalid codebook state.
     pub fn quantize(&self, vector: &DenseVector) -> Result<Vec<u8>> {
+        let mut output = Vec::with_capacity(self.code_len());
+        self.quantize_into(vector, &mut output)?;
+        Ok(output)
+    }
+
+    /// Encodes one vector into a caller-owned reusable byte buffer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for dimension mismatches or invalid codebook state.
+    pub fn quantize_into(&self, vector: &DenseVector, output: &mut Vec<u8>) -> Result<()> {
+        output.clear();
+        output.reserve(self.code_len());
         match self {
             Self::Binary { dimensions } => {
                 require_dimensions(*dimensions, vector.dimension())?;
-                Ok(pack_sign_bits(vector))
+                output.resize(dimensions.div_ceil(8), 0);
+                for (index, value) in vector.as_slice().iter().enumerate() {
+                    if *value >= 0.0 {
+                        output[index / 8] |= 1 << (index % 8);
+                    }
+                }
             }
             Self::Scalar {
                 quantizer,
                 dimensions,
             } => {
                 require_dimensions(*dimensions, vector.dimension())?;
-                Ok(quantizer.quantize(vector)?.codes().to_vec())
+                for value in vector.as_slice() {
+                    output.push(quantizer.quantize_value(*value)?);
+                }
             }
-            Self::Product(quantizer) => Ok(quantizer.quantize(vector)?.codes().to_vec()),
+            Self::Product(quantizer) => quantizer.quantize_into(vector, output)?,
+        }
+        Ok(())
+    }
+
+    /// Returns the fixed encoded width for this trained quantizer.
+    #[must_use]
+    pub fn code_len(&self) -> usize {
+        match self {
+            Self::Binary { dimensions } => dimensions.div_ceil(8),
+            Self::Scalar { dimensions, .. } => *dimensions,
+            Self::Product(quantizer) => quantizer.codebooks().len(),
         }
     }
 
@@ -278,16 +309,6 @@ fn nearest_centroid(vector: &DenseVector, centroids: &[DenseVector]) -> Result<u
         }
     }
     Ok(best.0)
-}
-
-fn pack_sign_bits(vector: &DenseVector) -> Vec<u8> {
-    let mut code = vec![0_u8; vector.dimension().div_ceil(8)];
-    for (index, value) in vector.as_slice().iter().enumerate() {
-        if *value >= 0.0 {
-            code[index / 8] |= 1 << (index % 8);
-        }
-    }
-    code
 }
 
 fn unpack_sign_bits(code: &[u8], dimensions: usize) -> Result<DenseVector> {

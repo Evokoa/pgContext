@@ -51,7 +51,7 @@ struct HnswMetaPage {
     scalar_max_bits: u64,
     scalar_levels: u32,
     pq_subvector_dimensions: u32,
-    pq_codebooks_hash: u64,
+    codec_config_revision: u64,
     hnsw_m: u32,
     hnsw_ef_construction: u32,
     directory_epoch: u64,
@@ -107,6 +107,21 @@ struct HnswMetaPage {
     segments: [HnswSegmentMeta; HNSW_MAX_SEGMENTS],
 }
 
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "validated SQL f64 reloptions are explicitly narrowed to the f32 vector domain"
+)]
+fn stored_codec_bound(bits: u64, name: &'static str) -> f32 {
+    let value = f64::from_bits(bits);
+    if !value.is_finite() || value < f64::from(f32::MIN) || value > f64::from(f32::MAX) {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            format!("stored HNSW scalar {name} bound is outside the f32 vector domain"),
+        );
+    }
+    value as f32
+}
+
 impl HnswMetaPage {
     const fn empty() -> Self {
         Self {
@@ -122,7 +137,7 @@ impl HnswMetaPage {
             scalar_max_bits: 0,
             scalar_levels: 0,
             pq_subvector_dimensions: 0,
-            pq_codebooks_hash: 0,
+            codec_config_revision: 0,
             hnsw_m: 0,
             hnsw_ef_construction: 0,
             directory_epoch: 0,
@@ -137,6 +152,133 @@ impl HnswMetaPage {
             segment_reserved32: 0,
             next_segment_id: 1,
             segments: [HnswSegmentMeta::EMPTY; HNSW_MAX_SEGMENTS],
+        }
+    }
+
+    fn codec_spec(self) -> Option<CodecSpec> {
+        match self.quantization_mode {
+            options::HNSW_QUANTIZATION_NONE_U16 => None,
+            options::HNSW_QUANTIZATION_BINARY_U16 => Some(CodecSpec::binary()),
+            options::HNSW_QUANTIZATION_SCALAR_U16 | options::HNSW_QUANTIZATION_SQ8_U16 => {
+                let bounds = ScalarBounds::new(
+                    stored_codec_bound(self.scalar_min_bits, "minimum"),
+                    stored_codec_bound(self.scalar_max_bits, "maximum"),
+                )
+                .unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                        format!("invalid stored HNSW scalar codec bounds: {error}"),
+                    )
+                });
+                let levels = u16::try_from(self.scalar_levels).unwrap_or_else(|_| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                        "stored HNSW scalar levels exceed codec range",
+                    )
+                });
+                Some(CodecSpec::scalar(levels, Some(bounds)).unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                        format!("invalid stored HNSW scalar codec: {error}"),
+                    )
+                }))
+            }
+            options::HNSW_QUANTIZATION_PQ_U16 => {
+                let subvector_dimensions = usize::try_from(self.pq_subvector_dimensions)
+                    .unwrap_or_else(|_| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                            "stored HNSW product subvector width exceeds platform range",
+                        )
+                    });
+                Some(
+                    CodecSpec::product(subvector_dimensions, 256, 8).unwrap_or_else(|error| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                            format!("invalid stored HNSW product codec: {error}"),
+                        )
+                    }),
+                )
+            }
+            _ => raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "stored HNSW quantization mode is unsupported",
+            ),
+        }
+    }
+
+    fn accepts_codec_codebook(self, codebook: Option<&QuantizedCodebook>) -> bool {
+        let Some(spec) = self.codec_spec() else {
+            return codebook.is_none();
+        };
+        let Some(codebook) = codebook else {
+            return false;
+        };
+        if codebook.dimensions() != self.dimensions as usize {
+            return false;
+        }
+        match (spec.kind(), codebook) {
+            (CodecKind::Binary, QuantizedCodebook::Binary { .. }) => true,
+            (
+                CodecKind::Scalar,
+                QuantizedCodebook::Scalar {
+                    minimum,
+                    maximum,
+                    levels,
+                    ..
+                },
+            ) => spec.scalar_parameters().is_some_and(|(expected_levels, bounds)| {
+                *levels == expected_levels
+                    && bounds.is_none_or(|bounds| {
+                        minimum.to_bits() == bounds.minimum().to_bits()
+                            && maximum.to_bits() == bounds.maximum().to_bits()
+                    })
+            }),
+            (
+                CodecKind::Product,
+                QuantizedCodebook::Product {
+                    subvector_dimensions,
+                    codebooks,
+                    ..
+                },
+            ) => spec.product_parameters().is_some_and(
+                |(expected_subvector_dimensions, maximum_centroids, _)| {
+                    expected_subvector_dimensions
+                        .is_none_or(|expected| expected == *subvector_dimensions)
+                        && codebooks.iter().all(|centroids| {
+                            !centroids.is_empty() && centroids.len() <= maximum_centroids
+                        })
+                },
+            ),
+            (CodecKind::Plain, _) | (_, _) => false,
+        }
+    }
+
+    const fn codec_name(self) -> &'static str {
+        match self.quantization_mode {
+            options::HNSW_QUANTIZATION_NONE_U16 => "none",
+            options::HNSW_QUANTIZATION_BINARY_U16 => "binary",
+            options::HNSW_QUANTIZATION_SCALAR_U16 => "scalar",
+            options::HNSW_QUANTIZATION_SQ8_U16 => "sq8",
+            options::HNSW_QUANTIZATION_PQ_U16 => "pq",
+            _ => "unsupported",
+        }
+    }
+
+    fn codec_code_width(self) -> Option<usize> {
+        let dimensions = usize::try_from(self.dimensions).ok()?;
+        match self.quantization_mode {
+            options::HNSW_QUANTIZATION_NONE_U16 => None,
+            options::HNSW_QUANTIZATION_BINARY_U16 => Some(dimensions.div_ceil(8)),
+            options::HNSW_QUANTIZATION_SCALAR_U16 | options::HNSW_QUANTIZATION_SQ8_U16 => {
+                Some(dimensions)
+            }
+            options::HNSW_QUANTIZATION_PQ_U16 => {
+                let subvector = usize::try_from(self.pq_subvector_dimensions).ok()?;
+                (subvector != 0 && dimensions.is_multiple_of(subvector))
+                    .then_some(dimensions / subvector)
+            }
+            _ => None,
         }
     }
 
@@ -476,6 +618,7 @@ impl HnswMetaPage {
         }
         self.graph_nodes = graph_nodes;
         self.entry_node_id = entry_point.map_or(u64::MAX, |node| node.get() as u64);
+        self.codec_config_revision = self.codec_spec().map_or(0, |spec| spec.revision().get());
         self.record_directory_mutation();
     }
 
@@ -599,7 +742,7 @@ impl HnswMetaPage {
         self.scalar_max_bits = metadata.scalar_max_bits;
         self.scalar_levels = metadata.scalar_levels;
         self.pq_subvector_dimensions = metadata.pq_subvector_dimensions;
-        self.pq_codebooks_hash = metadata.pq_codebooks_hash;
+        self.codec_config_revision = metadata.codec_config_revision;
     }
 }
 

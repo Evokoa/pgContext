@@ -5,18 +5,23 @@
     reason = "PostgreSQL fixes access-method callback signatures and their guarded delegates"
 )]
 
+use context_codec::{
+    CodecKind, CodecSpec, PreparedQuantizedQuery, QuantizedCodebook, ScalarBounds,
+    TrainedCodecArtifact,
+};
 use context_core::{DenseVector, DistanceMetric, SearchLimit};
 use context_index::{
     CandidateMask, ConcurrentHnswBuilder, DeltaHit, DeltaScanEntry, GraphDirectoryKeyKind,
-    GraphMetadata, GraphNeighbors, GraphNodeRecord, GraphNodeView, GraphPageId, GraphPageKind,
-    GraphRead, GraphRecordId, HnswCancellation, HnswConfig, HnswError, HnswGraph,
+    GraphMetadata, GraphNeighbors, GraphNodeRecord, GraphNodeScore, GraphNodeView, GraphPageId,
+    GraphPageKind, GraphRead, GraphRecordId, HnswCancellation, HnswConfig, HnswError, HnswGraph,
     HnswGraphNodeSnapshot, HnswNodeId, HnswPointId, LayerIndex, search_graph_read,
     search_graph_read_with_mask_budgeted,
 };
 use context_storage::{
-    DeltaRecordKind, MappedGraphIdentity, MappedPackedGraphImage, PackedGraphImageError,
-    PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView, SegmentHeader, SegmentKind,
-    encode_mapped_packed_graph, encode_packed_graph_image, write_segment_atomic,
+    DeltaRecordKind, HnswGraphQuantization, MappedGraphIdentity, MappedPackedGraphImage,
+    PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView,
+    SegmentHeader, SegmentKind, encode_mapped_packed_graph, encode_packed_graph_image_current,
+    write_segment_atomic,
 };
 use pgrx::datum::{AnyArray, AnyElement};
 use pgrx::itemptr::{
@@ -990,7 +995,14 @@ enum HnswScoreMetric {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HnswOrderByContract {
     metric: HnswScoreMetric,
+    result_type: pg_sys::Oid,
     exact_float8_recheck: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HnswMetricContract {
+    metric: HnswScoreMetric,
+    result_type: pg_sys::Oid,
 }
 
 include!("hnsw_am_metric.rs");

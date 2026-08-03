@@ -4,8 +4,8 @@ use std::error::Error;
 
 use context_core::DenseVector;
 use context_storage::{
-    HnswGraphArtifactRecord, HnswGraphPayloadError, MappedGraphView, encode_hnsw_graph_payload,
-    encode_hnsw_graph_payload_v2,
+    CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HnswGraphArtifactRecord, HnswGraphPayloadError,
+    MappedGraphView, encode_hnsw_graph_payload, encode_hnsw_graph_payload_current,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -42,15 +42,15 @@ fn mapped_view_borrows_v1_nodes_and_decodes_one_vector_into_scratch() -> TestRes
 }
 
 #[test]
-fn mapped_view_borrows_unquantized_v2_nodes() -> TestResult {
-    let payload = encode_hnsw_graph_payload_v2(&records()?, None)?;
+fn mapped_view_borrows_unquantized_current_nodes() -> TestResult {
+    let payload = encode_hnsw_graph_payload_current(&records()?, None)?;
     let view = MappedGraphView::attach(&payload)?;
     let mut scratch = vec![99.0; 64];
     let node = view
         .node(1)
         .ok_or_else(|| std::io::Error::other("second node should exist"))?;
 
-    assert_eq!(view.version(), 2);
+    assert_eq!(view.version(), CURRENT_HNSW_GRAPH_PAYLOAD_VERSION);
     assert_eq!(node.point_id(), 20);
     assert_eq!(node.decode_vector_into(&mut scratch), &[2.0, 0.5]);
     assert_eq!(scratch.capacity(), 64);

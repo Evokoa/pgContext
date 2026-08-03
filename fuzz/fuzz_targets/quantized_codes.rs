@@ -1,9 +1,12 @@
 #![no_main]
 
+use context_codec::{
+    CodecRevision, ContiguousCodes, QuantizedCodebook, ReconstructionPolicy,
+};
 use context_core::{DenseVector, DistanceMetric};
 use context_storage::{
-    HnswGraphArtifactRecord, HnswGraphQuantization, HnswGraphQuantizationCodebook,
-    QuantizedHnswGraphView, decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload_v2,
+    HnswGraphArtifactRecord, HnswGraphQuantization, QuantizedHnswGraphView,
+    decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload_current,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -20,11 +23,21 @@ fuzz_target!(|data: &[u8]| {
         HnswGraphArtifactRecord::new(0, 1, left, vec![1]),
         HnswGraphArtifactRecord::new(1, 2, right, vec![0]),
     ];
-    let quantization = HnswGraphQuantization::new(
-        HnswGraphQuantizationCodebook::Binary { dimensions: 4 },
-        vec![vec![0b1010], vec![0b0101]],
-    );
-    let Ok(mut encoded) = encode_hnsw_graph_payload_v2(&records, Some(&quantization)) else {
+    let Some(revision) = CodecRevision::new(1) else {
+        return;
+    };
+    let Ok(codes) = ContiguousCodes::from_rows(1, &[vec![0b1010], vec![0b0101]]) else {
+        return;
+    };
+    let Ok(quantization) = HnswGraphQuantization::new(
+        revision,
+        ReconstructionPolicy::ExactSourceRerank,
+        QuantizedCodebook::Binary { dimensions: 4 },
+        codes,
+    ) else {
+        return;
+    };
+    let Ok(mut encoded) = encode_hnsw_graph_payload_current(&records, Some(&quantization)) else {
         return;
     };
     if let Some(first) = data.first() {
@@ -45,7 +58,10 @@ fn exercise(data: &[u8]) {
     let Some(query) = payload.records().first().map(|record| record.vector()) else {
         return;
     };
-    for code in quantization.codes() {
+    for row in 0..quantization.codes().row_count() {
+        let Some(code) = quantization.codes().code(row) else {
+            continue;
+        };
         let _ = quantization.codebook().reconstruct(code);
         for metric in [
             DistanceMetric::L2,

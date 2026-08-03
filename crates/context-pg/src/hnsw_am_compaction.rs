@@ -872,6 +872,12 @@ fn hnsw_segment_stats(
         name!(frozen_mutation_records, i64),
         name!(active_delta_blocks, i64),
         name!(directory_epoch, i64),
+        name!(codec, String),
+        name!(codec_revision, Option<String>),
+        name!(codec_code_width, Option<i32>),
+        name!(candidate_budget, i32),
+        name!(exact_source_rerank, bool),
+        name!(codec_serving_capability, String),
     ),
 > {
     let index_relation = index.as_ptr();
@@ -924,6 +930,18 @@ fn hnsw_segment_stats(
         i64::try_from(meta.delta_end_block.saturating_sub(meta.delta_start_block))
             .unwrap_or(i64::MAX),
         i64::try_from(meta.directory_epoch).unwrap_or(i64::MAX),
+        meta.codec_name().to_owned(),
+        (meta.codec_config_revision != 0).then(|| meta.codec_config_revision.to_string()),
+        meta.codec_code_width()
+            .map(|width| i32::try_from(width).unwrap_or(i32::MAX)),
+        i32::try_from(crate::settings::hnsw_candidate_budget_from_guc()).unwrap_or(i32::MAX),
+        meta.quantization_mode != options::HNSW_QUANTIZATION_NONE_U16,
+        if meta.quantization_mode == options::HNSW_QUANTIZATION_NONE_U16 {
+            "full_precision_pages"
+        } else {
+            "packed_generation_required"
+        }
+        .to_owned(),
     ))
 }
 

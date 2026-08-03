@@ -216,11 +216,26 @@ fn hnsw_insert_lock_keys_are_namespaced_per_index() {
 }
 
 #[test]
+fn quantized_training_sample_is_deterministic_and_capped() {
+    let indices = hnsw_codec_training_sample_indices(1_000_000);
+    assert_eq!(indices.len(), HNSW_CODEC_TRAINING_SAMPLE_ROWS);
+    assert_eq!(indices.first(), Some(&0));
+    assert!(indices.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(indices.last().is_some_and(|index| *index < 1_000_000));
+    assert_eq!(
+        hnsw_codec_training_sample_indices(3),
+        vec![0, 1, 2],
+        "small segments must retain every row"
+    );
+}
+
+#[test]
 fn hnsw_scan_state_rescan_discards_position_and_candidates() {
     let mut state = HnswScanState {
         prepared: true,
         orderby_contract: Some(HnswOrderByContract {
             metric: HnswScoreMetric::Cosine,
+            result_type: pg_sys::FLOAT8OID,
             exact_float8_recheck: true,
         }),
         position: 1,
@@ -397,6 +412,53 @@ fn hnsw_metapage_records_build_dimensions_and_nodes() {
 
     assert_eq!(meta.dimensions, 3);
     assert_eq!(meta.graph_nodes, 42);
+}
+
+#[test]
+fn hnsw_metapage_binds_codec_revision_and_diagnostics_at_build() {
+    let mut meta = HnswMetaPage::empty();
+    meta.record_quantization(options::HnswQuantizationMetadata {
+        mode: options::HNSW_QUANTIZATION_BINARY_U16,
+        version: options::HNSW_QUANTIZATION_METADATA_VERSION,
+        scalar_min_bits: 0,
+        scalar_max_bits: 0,
+        scalar_levels: 0,
+        pq_subvector_dimensions: 0,
+        codec_config_revision: 0,
+    });
+
+    meta.record_build(Some(17), 2, Some(HnswNodeId::new(0)));
+
+    assert_eq!(meta.codec_name(), "binary");
+    assert_eq!(meta.codec_code_width(), Some(3));
+    assert_eq!(
+        meta.codec_config_revision,
+        CodecSpec::binary().revision().get()
+    );
+}
+
+#[test]
+fn hnsw_metapage_rejects_a_different_persisted_codec_family() {
+    let mut meta = HnswMetaPage::empty();
+    meta.record_quantization(options::HnswQuantizationMetadata {
+        mode: options::HNSW_QUANTIZATION_BINARY_U16,
+        version: options::HNSW_QUANTIZATION_METADATA_VERSION,
+        scalar_min_bits: 0,
+        scalar_max_bits: 0,
+        scalar_levels: 0,
+        pq_subvector_dimensions: 0,
+        codec_config_revision: 0,
+    });
+    meta.record_build(Some(8), 2, Some(HnswNodeId::new(0)));
+
+    let wrong = QuantizedCodebook::Scalar {
+        dimensions: 8,
+        minimum: -1.0,
+        maximum: 1.0,
+        levels: 256,
+    };
+    assert!(!meta.accepts_codec_codebook(Some(&wrong)));
+    assert!(meta.accepts_codec_codebook(Some(&QuantizedCodebook::Binary { dimensions: 8 })));
 }
 
 #[test]

@@ -83,6 +83,36 @@ unsafe extern "C-unwind" fn hnsw_shared_registry_init_callback(ptr: *mut c_void)
 
 thread_local! {
     static HNSW_SHARED_REGISTRY_TRANCHE_REGISTERED: Cell<bool> = const { Cell::new(false) };
+    static HNSW_SHARED_EXIT_HOOK_REGISTERED: Cell<bool> = const { Cell::new(false) };
+}
+
+unsafe extern "C-unwind" fn hnsw_shared_before_shmem_exit(
+    _code: i32,
+    _argument: pg_sys::Datum,
+) {
+    // Dynamic shared-memory teardown invalidates PostgreSQL's attachment list.
+    // Drop every cached `AttachedSharedImage` while that list is still live;
+    // waiting for Rust's process-exit TLS destructors would call `dsm_detach`
+    // after PostgreSQL has already dismantled the DSM bookkeeping.
+    HNSW_PACKED_GRAPH_CACHE.with(|cache| cache.borrow_mut().clear());
+}
+
+fn register_hnsw_shared_exit_hook() {
+    HNSW_SHARED_EXIT_HOOK_REGISTERED.with(|registered| {
+        if registered.replace(true) {
+            return;
+        }
+        // SAFETY: registration occurs after this backend's first successful
+        // `dsm_attach`, so PostgreSQL invokes this LIFO callback before its DSM
+        // subsystem cleanup. The callback touches only backend-local cache
+        // owners and performs no allocation-dependent PostgreSQL work.
+        unsafe {
+            pg_sys::before_shmem_exit(
+                Some(hnsw_shared_before_shmem_exit),
+                pg_sys::Datum::from(0_usize),
+            );
+        }
+    });
 }
 
 /// Attaches (creating on first call server-wide) the shared registry header.
@@ -337,6 +367,7 @@ impl AttachedSharedImage {
         // SAFETY: pins this backend's own just-attached mapping so it
         // outlives the current resource owner; `Drop` detaches it later.
         unsafe { pg_sys::dsm_pin_mapping(segment) };
+        register_hnsw_shared_exit_hook();
         // `dsm_segment_map_length` reports the segment's rounded-up
         // allocation size, not the exact payload length recorded in the
         // registry, so this only bounds `expected_len` — it must never be

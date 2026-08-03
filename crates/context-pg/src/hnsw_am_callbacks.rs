@@ -16,6 +16,7 @@ fn hnsw_build_safe(
     // and `rd_options` has the layout returned by this AM's options callback.
     let quantization_metadata =
         unsafe { options::hnsw_quantization_metadata(index_relation.as_ptr()) };
+    ensure_hnsw_quantized_metric_supported(score_metric, quantization_metadata);
     // SAFETY: PostgreSQL passes a valid index relation for the build callback.
     unsafe { ensure_hnsw_metapage(index_relation.as_ptr()) };
     let graph_started = std::time::Instant::now();
@@ -37,6 +38,9 @@ fn hnsw_build_safe(
     state.finish_parallel_build();
     let graph_millis = saturating_elapsed_millis(graph_started);
     state.enforce_maintenance_work_mem();
+    if let Some(dimensions) = state.dimensions {
+        ensure_hnsw_quantized_dimensions_supported(quantization_metadata, dimensions);
+    }
     let write_started = std::time::Instant::now();
     // SAFETY: PostgreSQL passes a valid index relation for the build callback.
     unsafe {
@@ -55,11 +59,8 @@ fn hnsw_build_safe(
     let segment_rows = HNSW_TARGET_SEGMENT_ROWS.max(minimum_rows).max(1);
     let original_entry = state.graph.entry_point();
     let source_snapshots = state.graph.into_node_snapshots();
-    let build_generation = unsafe {
-        PgHnswGraphRead::new(index_relation.as_ptr())
-            .meta()
-            .page_generation()
-    };
+    let build_meta = unsafe { PgHnswGraphRead::new(index_relation.as_ptr()).meta() };
+    let build_generation = build_meta.page_generation();
     let mut published_segments = Vec::with_capacity(source_rows.div_ceil(segment_rows));
     let mut rows = source_snapshots.into_iter();
     for index in 0..HNSW_MAX_SEGMENTS {
@@ -191,6 +192,7 @@ fn hnsw_build_empty_safe(index_relation: PgCallbackRef<'_, pg_sys::RelationData>
         unsafe { options::hnsw_quantization_metadata(index_relation.as_ptr()) };
     // SAFETY: PostgreSQL passes a valid initialized index relation.
     let score_metric = unsafe { hnsw_score_metric(index_relation.as_ptr()) };
+    ensure_hnsw_quantized_metric_supported(score_metric, quantization_metadata);
     let config = hnsw_config_from_gucs();
     // SAFETY: PostgreSQL passes a valid index relation for the empty-build
     // callback.
@@ -208,9 +210,42 @@ fn hnsw_build_empty_safe(index_relation: PgCallbackRef<'_, pg_sys::RelationData>
         update_hnsw_metapage(index_relation.as_ptr(), |meta| {
             meta.record_index_identity(score_metric, config);
             meta.record_quantization(quantization_metadata);
+            meta.record_build(None, 0, None);
             meta.open_delta_region(post_build_block_count);
         })
     };
+}
+
+fn ensure_hnsw_quantized_metric_supported(
+    metric: HnswScoreMetric,
+    metadata: options::HnswQuantizationMetadata,
+) {
+    if metadata.mode != options::HNSW_QUANTIZATION_NONE_U16
+        && matches!(metric, HnswScoreMetric::BitHamming | HnswScoreMetric::BitJaccard)
+    {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            "quantized pgcontext_hnsw indexes do not support bitvec Hamming or Jaccard opclasses",
+        );
+    }
+}
+
+fn ensure_hnsw_quantized_dimensions_supported(
+    metadata: options::HnswQuantizationMetadata,
+    dimensions: u32,
+) {
+    if metadata.mode == options::HNSW_QUANTIZATION_PQ_U16
+        && (metadata.pq_subvector_dimensions == 0
+            || !dimensions.is_multiple_of(metadata.pq_subvector_dimensions))
+    {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            format!(
+                "product-quantized pgcontext_hnsw dimensions {dimensions} must be divisible by pq_subvector_dimensions {}",
+                metadata.pq_subvector_dimensions
+            ),
+        );
+    }
 }
 
 #[pg_guard]
@@ -373,7 +408,8 @@ unsafe fn hnsw_insert_via_delta_safe(
     // legacy inline path's, so the error contract is one shape regardless of
     // which insert path served the row.
     // SAFETY: the caller owns the live index relation for this read.
-    let stored_dimensions = unsafe { PgHnswGraphRead::new(index_relation).meta() }.dimensions;
+    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+    let stored_dimensions = meta.dimensions;
     if stored_dimensions != 0 && stored_dimensions != dimensions {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
@@ -383,6 +419,18 @@ unsafe fn hnsw_insert_via_delta_safe(
             ),
         );
     }
+    ensure_hnsw_quantized_dimensions_supported(
+        options::HnswQuantizationMetadata {
+            mode: meta.quantization_mode,
+            version: meta.quantization_metadata_version,
+            scalar_min_bits: meta.scalar_min_bits,
+            scalar_max_bits: meta.scalar_max_bits,
+            scalar_levels: meta.scalar_levels,
+            pq_subvector_dimensions: meta.pq_subvector_dimensions,
+            codec_config_revision: meta.codec_config_revision,
+        },
+        dimensions,
+    );
     let record = context_storage::DeltaRecord::live(heap_tid, vector.into_values())
         .unwrap_or_else(|error| {
             raise_sql_error(

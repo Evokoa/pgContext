@@ -114,7 +114,6 @@ fn search_graph_read_impl(
     cancellation: &mut impl HnswCancellation,
 ) -> Result<HnswSearchOutcome> {
     ensure_hnsw_metric(metric)?;
-    let scorer = HnswScorer { metric, query };
     let metadata = graph.metadata()?;
     let Some(mut current) = metadata.entry_point() else {
         return Ok(HnswSearchOutcome {
@@ -131,6 +130,8 @@ fn search_graph_read_impl(
             right: query.dimension(),
         });
     }
+    graph.prepare_query(metric, query)?;
+    let scorer = HnswScorer { metric, query };
     let mut work = HnswWork::default();
     work.check_cancellation(cancellation)?;
     let entry_layer_count = graph_read_node_score(graph, &scorer, current)?.2;
@@ -379,14 +380,12 @@ fn graph_read_node_score(
     scorer: &HnswScorer<'_>,
     node_id: HnswNodeId,
 ) -> Result<(f32, HnswPointId, usize)> {
-    let scored = graph.with_node(node_id, |node| {
-        scorer
-            .distance(node.vector())
-            .map(|score| (score, node.point_id(), node.layer_count()))
-    })?;
-    scored.ok_or(HnswError::InvalidSnapshot {
-        reason: "traversal node is missing",
-    })?
+    let scored = graph.score_node(node_id, scorer.metric, scorer.query)?;
+    scored
+        .map(|scored| (scored.score(), scored.point_id(), scored.layer_count()))
+        .ok_or(HnswError::InvalidSnapshot {
+            reason: "traversal node is missing",
+        })
 }
 
 fn graph_read_point_id(graph: &mut impl GraphRead, node_id: HnswNodeId) -> Result<HnswPointId> {
@@ -400,12 +399,6 @@ fn graph_read_point_id(graph: &mut impl GraphRead, node_id: HnswNodeId) -> Resul
 struct HnswScorer<'a> {
     metric: DistanceMetric,
     query: &'a DenseVector,
-}
-
-impl HnswScorer<'_> {
-    fn distance(&self, vector: &[f32]) -> Result<f32> {
-        Ok(self.metric.distance_slices(self.query.as_slice(), vector)?)
-    }
 }
 
 fn ensure_hnsw_metric(metric: DistanceMetric) -> Result<()> {

@@ -477,10 +477,11 @@ fn serving_stats_record_builds_and_reuses() {
     record_hnsw_pack_reuse();
     record_hnsw_pack_reuse();
     record_hnsw_pack_build(2048, 3);
+    record_hnsw_generation_bytes(3072);
     let stats = hnsw_serving_stats_snapshot();
     assert_eq!(stats.pack_builds, baseline.pack_builds + 2);
     assert_eq!(stats.pack_reuses, baseline.pack_reuses + 2);
-    assert_eq!(stats.last_pack_bytes, 2048);
+    assert_eq!(stats.last_pack_bytes, 3072);
     assert_eq!(stats.last_pack_millis, 3);
     assert_eq!(stats.total_pack_millis, baseline.total_pack_millis + 10);
 }
@@ -627,6 +628,42 @@ fn parallel_segment_projection_accounts_for_every_extent_before_loading() {
         None,
         "projection overflow must deny parallel admission"
     );
+}
+
+#[test]
+fn pq_projection_accounts_for_codes_codebook_scorer_and_boundary_budget() {
+    let mut meta = HnswMetaPage::empty();
+    meta.dimensions = 128;
+    meta.hnsw_m = 16;
+    meta.quantization_mode = options::HNSW_QUANTIZATION_PQ_U16;
+    meta.pq_subvector_dimensions = 8;
+    let segment = HnswSegmentMeta {
+        segment_id: 1,
+        generation: 1,
+        start_block: 1,
+        end_block: 257,
+        graph_nodes: 100_000,
+        entry_node_id: 0,
+        mutation_generation: u64::MAX,
+        mutation_start_block: u64::MAX,
+        mutation_end_block: u64::MAX,
+        mutation_record_count: 0,
+    };
+    let projected =
+        projected_packed_segment_bytes(meta, segment).expect("valid PQ projection should fit u64");
+    let codec = projected_hnsw_codec_bytes(meta, segment.graph_nodes)
+        .expect("valid PQ codec projection should fit u64");
+    let extent = (segment.end_block - segment.start_block) * pg_sys::BLCKSZ as u64;
+    assert!(
+        codec > segment.graph_nodes * 16,
+        "PQ projection must include more than code rows"
+    );
+    assert!(
+        projected > extent * 4 + codec * 2,
+        "projection must charge decoded containers, publication scratch, and duplicate codec state"
+    );
+    assert!(hnsw_packed_projection_admitted(projected, projected));
+    assert!(!hnsw_packed_projection_admitted(projected, projected - 1));
 }
 
 #[test]

@@ -147,6 +147,12 @@ unsafe fn hnsw_dense_from_datum(
 unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric {
     // SAFETY: The caller passes a valid index relation for the current AM
     // callback.
+    unsafe { hnsw_score_metric_contract(index_relation) }.metric
+}
+
+unsafe fn hnsw_score_metric_contract(index_relation: pg_sys::Relation) -> HnswMetricContract {
+    // SAFETY: The caller passes a valid index relation for the current AM
+    // callback.
     let type_oid = unsafe { hnsw_index_opcintype(index_relation) };
     // SAFETY: These are static, nul-terminated type names resolved in the
     // active PostgreSQL backend catalog.
@@ -171,7 +177,7 @@ unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric
     if type_oid == vector_oid {
         // SAFETY: The live single-column index relation owns initialized
         // support-proc and operator-family metadata.
-        unsafe { hnsw_dense_score_metric(index_relation) }
+        unsafe { hnsw_dense_score_metric_contract(index_relation) }
     } else if type_oid == halfvec_oid {
         let candidates = [
             (HnswScoreMetric::L2, "halfvec_l2_distance", pg_sys::FLOAT4OID, "<->"),
@@ -338,8 +344,10 @@ unsafe fn hnsw_index_uses_certified_pgvector_type(index_relation: pg_sys::Relati
 unsafe fn hnsw_orderby_contract(index_relation: pg_sys::Relation) -> HnswOrderByContract {
     // SAFETY: Both helpers inspect the same live single-column index relation;
     // score-metric validation also certifies the operator/support pairing.
+    let certified = unsafe { hnsw_score_metric_contract(index_relation) };
     HnswOrderByContract {
-        metric: unsafe { hnsw_score_metric(index_relation) },
+        metric: certified.metric,
+        result_type: certified.result_type,
         exact_float8_recheck: unsafe {
             hnsw_index_uses_certified_pgvector_type(index_relation)
                 || hnsw_index_uses_integer_source_type(index_relation)
@@ -355,7 +363,9 @@ unsafe fn hnsw_index_uses_integer_source_type(index_relation: pg_sys::Relation) 
         || type_oid == unsafe { hnsw_pgcontext_type_oid(c"uint8vec") }
 }
 
-unsafe fn hnsw_dense_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric {
+unsafe fn hnsw_dense_score_metric_contract(
+    index_relation: pg_sys::Relation,
+) -> HnswMetricContract {
     let candidates = [
         (
             HnswScoreMetric::L2,
@@ -395,7 +405,7 @@ unsafe fn hnsw_score_metric_from_candidates(
         &'static str,
     )],
     type_name: &str,
-) -> HnswScoreMetric {
+) -> HnswMetricContract {
     for &(metric, support_name, return_type, operator_name) in candidates {
         // SAFETY: The caller provides a live initialized index relation.
         let type_oid = unsafe { hnsw_index_opcintype(index_relation) };
@@ -419,7 +429,10 @@ unsafe fn hnsw_score_metric_from_candidates(
                     "pgcontext",
                 )
             };
-            return metric;
+            return HnswMetricContract {
+                metric,
+                result_type: return_type,
+            };
         }
     }
     raise_sql_error(
@@ -433,7 +446,7 @@ unsafe fn hnsw_score_metric_from_bridge_candidates(
     type_oid: pg_sys::Oid,
     candidates: &[(HnswScoreMetric, &'static str, pg_sys::Oid, &'static str)],
     type_name: &str,
-) -> HnswScoreMetric {
+) -> HnswMetricContract {
     // SAFETY: Bridge input types may only be used through an opclass that is a
     // member of the separately removable companion extension.
     unsafe { ensure_hnsw_opclass_owner(index_relation, "pgcontext_pgvector") };
@@ -460,7 +473,10 @@ unsafe fn hnsw_score_metric_from_bridge_candidates(
                     "vector",
                 )
             };
-            return metric;
+            return HnswMetricContract {
+                metric,
+                result_type: return_type,
+            };
         }
     }
     raise_sql_error(

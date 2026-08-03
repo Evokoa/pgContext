@@ -13,7 +13,7 @@
 //! | Offset | Size | Field |
 //! |---:|---:|---|
 //! | 0 | 8 | magic bytes `PGCTXPKG` |
-//! | 8 | 4 | image format version (`1` or `2`) |
+//! | 8 | 4 | image format version (`1` or `3`) |
 //! | 12 | 4 | endian marker `0x01020304` |
 //! | 16 | 4 | vector dimensions |
 //! | 20 | 4 | reserved, currently zero |
@@ -28,10 +28,9 @@
 //! then vector values (4-byte IEEE-754 `f32`, last so its offset stays
 //! 4-aligned without padding bookkeeping).
 //!
-//! Version 2 extends the header to 96 bytes and appends an optional trained
-//! quantization-codebook block followed by fixed-size per-node codes. The
-//! header records quantization mode, code length, codebook length, and total
-//! code bytes. Full vectors remain present as recovery/oracle data.
+//! Version 3 extends the header to 96 bytes and appends an optional portable
+//! [`CodecArtifact`](crate::CodecArtifact). The header records the artifact
+//! offset and length. Full vectors remain present as recovery/oracle data.
 //!
 //! Integer sections are decoded by copy on access, so the view has no
 //! alignment requirement for them. The vector section is reinterpreted
@@ -46,27 +45,20 @@
     reason = "zero-copy float views and aligned copies validate length and alignment before every raw-pointer construction"
 )]
 
-use context_codec::QuantizedCodebook;
-use core::{
-    fmt,
-    mem::{size_of, size_of_val},
-};
+use core::{fmt, mem::size_of};
 
-use crate::hnsw_graph_payload::{
-    HnswGraphQuantization, QUANTIZATION_NONE, decode_quantization_codebook,
-    encode_quantization_codebook, quantization_mode, validate_quantization,
-    validate_quantized_code,
-};
+use crate::hnsw_graph_payload::{HnswGraphQuantization, validate_quantization};
+use crate::{CodecArtifactView, encode_codec_artifact};
 
 const PACKED_GRAPH_IMAGE_MAGIC: [u8; 8] = *b"PGCTXPKG";
 const PACKED_GRAPH_IMAGE_VERSION_V1: u32 = 1;
 /// Current packed graph image version.
-pub const CURRENT_PACKED_GRAPH_IMAGE_VERSION: u32 = 2;
+pub const CURRENT_PACKED_GRAPH_IMAGE_VERSION: u32 = 3;
 /// Oldest packed graph image version accepted by the reader.
 pub const MIN_READABLE_PACKED_GRAPH_IMAGE_VERSION: u32 = 1;
 const PACKED_GRAPH_IMAGE_ENDIAN_MARKER: u32 = 0x0102_0304;
 const PACKED_GRAPH_IMAGE_HEADER_LEN_V1: usize = 64;
-const PACKED_GRAPH_IMAGE_HEADER_LEN_V2: usize = 96;
+const PACKED_GRAPH_IMAGE_HEADER_LEN_CURRENT: usize = 96;
 const PACKED_GRAPH_IMAGE_NODE_LEN: usize = 32;
 const PACKED_GRAPH_IMAGE_LAYER_LEN: usize = 16;
 const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
@@ -280,13 +272,13 @@ pub fn encode_packed_graph_image(
     Ok(image)
 }
 
-/// Encodes a version-2 packed graph image with optional quantized navigation.
+/// Encodes the current packed graph image with optional quantized navigation.
 ///
 /// # Errors
 ///
 /// Returns [`PackedGraphImageError`] when topology, vector counts,
 /// quantization metadata, code counts, or encoded lengths are invalid.
-pub fn encode_packed_graph_image_v2(
+pub fn encode_packed_graph_image_current(
     dimensions: u32,
     nodes: &[PackedGraphImageNode],
     layers: &[PackedGraphImageLayer],
@@ -305,40 +297,30 @@ pub fn encode_packed_graph_image_v2(
         |index| neighbors.get(index).copied(),
     )?;
     let dimensions_usize = dimensions as usize;
-    let (mode, code_len, codebook_bytes, code_bytes) = match quantization {
+    let codec_artifact = match quantization {
         Some(quantization) => {
             validate_quantization(quantization, nodes.len(), dimensions_usize)
                 .map_err(|_| PackedGraphImageError::InvalidQuantization)?;
-            let codebook_bytes = encode_quantization_codebook(quantization.codebook())
-                .map_err(|_| PackedGraphImageError::InvalidQuantization)?;
-            if quantization.codebook().code_len() == 0 {
-                return Err(PackedGraphImageError::InvalidQuantization);
-            }
-            let code_bytes = quantization
-                .codes()
-                .iter()
-                .flatten()
-                .copied()
-                .collect::<Vec<_>>();
-            (
-                quantization_mode(quantization.codebook()),
-                quantization.codebook().code_len(),
-                codebook_bytes,
-                code_bytes,
-            )
+            encode_codec_artifact(quantization.artifact())
+                .map_err(|_| PackedGraphImageError::InvalidQuantization)?
         }
-        None => (QUANTIZATION_NONE, 0, Vec::new(), Vec::new()),
+        None => Vec::new(),
     };
-    let total = packed_graph_image_len_v2(
-        nodes.len(),
-        layers.len(),
-        neighbors.len(),
-        vectors.len(),
-        codebook_bytes.len(),
-        code_bytes.len(),
-    )
-    .ok_or(PackedGraphImageError::CountOverflow)?;
-    let code_len_u32 = u32::try_from(code_len).map_err(|_| PackedGraphImageError::CountOverflow)?;
+    let sections_len =
+        packed_graph_image_sections_len(nodes.len(), layers.len(), neighbors.len(), vectors.len())
+            .ok_or(PackedGraphImageError::CountOverflow)?;
+    let artifact_offset = if codec_artifact.is_empty() {
+        0
+    } else {
+        align_up_16(sections_len).ok_or(PackedGraphImageError::CountOverflow)?
+    };
+    let total = if codec_artifact.is_empty() {
+        sections_len
+    } else {
+        artifact_offset
+            .checked_add(codec_artifact.len())
+            .ok_or(PackedGraphImageError::CountOverflow)?
+    };
     let mut image = Vec::with_capacity(total);
     image.extend_from_slice(&PACKED_GRAPH_IMAGE_MAGIC);
     image.extend_from_slice(&CURRENT_PACKED_GRAPH_IMAGE_VERSION.to_le_bytes());
@@ -350,39 +332,38 @@ pub fn encode_packed_graph_image_v2(
     image.extend_from_slice(&(neighbors.len() as u64).to_le_bytes());
     image.extend_from_slice(&(vectors.len() as u64).to_le_bytes());
     image.extend_from_slice(&0_u64.to_le_bytes());
-    image.extend_from_slice(&mode.to_le_bytes());
-    image.extend_from_slice(&code_len_u32.to_le_bytes());
-    image.extend_from_slice(&(codebook_bytes.len() as u64).to_le_bytes());
-    image.extend_from_slice(&(code_bytes.len() as u64).to_le_bytes());
+    image.extend_from_slice(&(codec_artifact.len() as u64).to_le_bytes());
+    image.extend_from_slice(&(artifact_offset as u64).to_le_bytes());
+    image.extend_from_slice(&0_u64.to_le_bytes());
     image.extend_from_slice(&0_u64.to_le_bytes());
     encode_sections(&mut image, nodes, layers, neighbors, vectors);
-    image.extend_from_slice(&codebook_bytes);
-    image.extend_from_slice(&code_bytes);
+    image.resize(artifact_offset.max(image.len()), 0);
+    image.extend_from_slice(&codec_artifact);
     debug_assert_eq!(image.len(), total);
     let checksum = fnv1a(FNV_OFFSET_BASIS, &image);
     image[56..64].copy_from_slice(&checksum.to_le_bytes());
     Ok(image)
 }
 
-fn packed_graph_image_len_v2(
+fn packed_graph_image_sections_len(
     node_count: usize,
     layer_count: usize,
     neighbor_count: usize,
     vector_count: usize,
-    codebook_bytes: usize,
-    code_bytes: usize,
 ) -> Option<usize> {
     let nodes = node_count.checked_mul(PACKED_GRAPH_IMAGE_NODE_LEN)?;
     let layers = layer_count.checked_mul(PACKED_GRAPH_IMAGE_LAYER_LEN)?;
     let neighbors = neighbor_count.checked_mul(size_of::<u64>())?;
     let vectors = vector_count.checked_mul(size_of::<f32>())?;
-    PACKED_GRAPH_IMAGE_HEADER_LEN_V2
+    PACKED_GRAPH_IMAGE_HEADER_LEN_CURRENT
         .checked_add(nodes)?
         .checked_add(layers)?
         .checked_add(neighbors)?
-        .checked_add(vectors)?
-        .checked_add(codebook_bytes)?
-        .checked_add(code_bytes)
+        .checked_add(vectors)
+}
+
+fn align_up_16(value: usize) -> Option<usize> {
+    value.checked_add(15).map(|end| end / 16 * 16)
 }
 
 fn encode_sections(
@@ -485,10 +466,9 @@ pub struct PackedGraphImageView<'a> {
     node_count: usize,
     layers_offset: usize,
     neighbors_offset: usize,
+    vectors_offset: usize,
     vectors: &'a [f32],
-    quantization_codebook: Option<QuantizedCodebook>,
-    code_len: usize,
-    codes: &'a [u8],
+    codec_artifact: Option<CodecArtifactView<'a>>,
 }
 
 impl<'a> PackedGraphImageView<'a> {
@@ -515,7 +495,7 @@ impl<'a> PackedGraphImageView<'a> {
         let version = read_u32(bytes, 8);
         let header_len = match version {
             PACKED_GRAPH_IMAGE_VERSION_V1 => PACKED_GRAPH_IMAGE_HEADER_LEN_V1,
-            CURRENT_PACKED_GRAPH_IMAGE_VERSION => PACKED_GRAPH_IMAGE_HEADER_LEN_V2,
+            CURRENT_PACKED_GRAPH_IMAGE_VERSION => PACKED_GRAPH_IMAGE_HEADER_LEN_CURRENT,
             _ => return Err(PackedGraphImageError::UnsupportedVersion(version)),
         };
         if bytes.len() < header_len {
@@ -533,41 +513,40 @@ impl<'a> PackedGraphImageView<'a> {
             .map_err(|_| PackedGraphImageError::CountOverflow)?;
         let vector_count = usize::try_from(read_u64(bytes, 48))
             .map_err(|_| PackedGraphImageError::CountOverflow)?;
-        let (mode, code_len, codebook_len, codes_len) = if version == PACKED_GRAPH_IMAGE_VERSION_V1
-        {
-            (QUANTIZATION_NONE, 0, 0, 0)
+        let (artifact_len, artifact_offset) = if version == PACKED_GRAPH_IMAGE_VERSION_V1 {
+            (0, 0)
         } else {
-            if read_u64(bytes, 88) != 0 {
+            if read_u64(bytes, 80) != 0 || read_u64(bytes, 88) != 0 {
                 return Err(PackedGraphImageError::InvalidQuantization);
             }
             (
-                read_u32(bytes, 64),
-                read_u32(bytes, 68) as usize,
-                usize::try_from(read_u64(bytes, 72))
+                usize::try_from(read_u64(bytes, 64))
                     .map_err(|_| PackedGraphImageError::CountOverflow)?,
-                usize::try_from(read_u64(bytes, 80))
+                usize::try_from(read_u64(bytes, 72))
                     .map_err(|_| PackedGraphImageError::CountOverflow)?,
             )
         };
-        let expected_codes_len = node_count
-            .checked_mul(code_len)
-            .ok_or(PackedGraphImageError::CountOverflow)?;
-        if codes_len != expected_codes_len {
-            return Err(PackedGraphImageError::InvalidQuantization);
-        }
-        let expected_len = if version == PACKED_GRAPH_IMAGE_VERSION_V1 {
+        let sections_len = if version == PACKED_GRAPH_IMAGE_VERSION_V1 {
             packed_graph_image_len(node_count, layer_count, neighbor_count, vector_count)
         } else {
-            packed_graph_image_len_v2(
-                node_count,
-                layer_count,
-                neighbor_count,
-                vector_count,
-                codebook_len,
-                codes_len,
-            )
+            packed_graph_image_sections_len(node_count, layer_count, neighbor_count, vector_count)
         }
         .ok_or(PackedGraphImageError::CountOverflow)?;
+        let expected_len = if artifact_len == 0 {
+            if artifact_offset != 0 {
+                return Err(PackedGraphImageError::InvalidQuantization);
+            }
+            sections_len
+        } else {
+            if artifact_offset
+                != align_up_16(sections_len).ok_or(PackedGraphImageError::CountOverflow)?
+            {
+                return Err(PackedGraphImageError::InvalidQuantization);
+            }
+            artifact_offset
+                .checked_add(artifact_len)
+                .ok_or(PackedGraphImageError::CountOverflow)?
+        };
         if bytes.len() != expected_len {
             return Err(PackedGraphImageError::TruncatedPayload);
         }
@@ -585,7 +564,12 @@ impl<'a> PackedGraphImageView<'a> {
         let neighbors_offset = layers_offset + layer_count * PACKED_GRAPH_IMAGE_LAYER_LEN;
         let vectors_offset = neighbors_offset + neighbor_count * size_of::<u64>();
         let vectors_end = vectors_offset + vector_count * size_of::<f32>();
-        let codebook_end = vectors_end + codebook_len;
+        if bytes[vectors_end..artifact_offset.max(vectors_end)]
+            .iter()
+            .any(|byte| *byte != 0)
+        {
+            return Err(PackedGraphImageError::InvalidQuantization);
+        }
         let vectors_bytes = &bytes[vectors_offset..vectors_end];
         if vectors_bytes.as_ptr().align_offset(size_of::<f32>()) != 0 {
             return Err(PackedGraphImageError::MisalignedVectors);
@@ -597,23 +581,18 @@ impl<'a> PackedGraphImageView<'a> {
         let vectors = unsafe {
             core::slice::from_raw_parts(vectors_bytes.as_ptr().cast::<f32>(), vector_count)
         };
-        let quantization_codebook = decode_quantization_codebook(
-            mode,
-            dimensions_raw as usize,
-            code_len,
-            &bytes[vectors_end..codebook_end],
-        )
-        .map_err(|_| PackedGraphImageError::InvalidQuantization)?;
-        if quantization_codebook.is_some() && code_len == 0 {
-            return Err(PackedGraphImageError::InvalidQuantization);
-        }
-        let codes = &bytes[codebook_end..];
-        if let Some(codebook) = &quantization_codebook {
-            for (node_index, code) in codes.chunks_exact(code_len).enumerate() {
-                validate_quantized_code(codebook, node_index, code)
-                    .map_err(|_| PackedGraphImageError::InvalidQuantization)?;
+        let codec_artifact = if artifact_len == 0 {
+            None
+        } else {
+            let artifact = CodecArtifactView::attach(&bytes[artifact_offset..])
+                .map_err(|_| PackedGraphImageError::InvalidQuantization)?;
+            if artifact.dimensions() != dimensions_raw as usize
+                || artifact.codes().row_count() != node_count
+            {
+                return Err(PackedGraphImageError::InvalidQuantization);
             }
-        }
+            Some(artifact)
+        };
         let view = Self {
             bytes,
             header_len,
@@ -621,10 +600,9 @@ impl<'a> PackedGraphImageView<'a> {
             node_count,
             layers_offset,
             neighbors_offset,
+            vectors_offset,
             vectors,
-            quantization_codebook,
-            code_len,
-            codes,
+            codec_artifact,
         };
         validate_topology(
             dimensions_raw,
@@ -683,7 +661,7 @@ impl<'a> PackedGraphImageView<'a> {
         let offset = self
             .neighbors_offset
             .checked_add(index.checked_mul(size_of::<u64>())?)?;
-        if offset + size_of::<u64>() > self.bytes.len() - size_of_val(self.vectors) {
+        if offset + size_of::<u64>() > self.vectors_offset {
             return None;
         }
         Some(read_u64(self.bytes, offset))
@@ -699,18 +677,16 @@ impl<'a> PackedGraphImageView<'a> {
 
     /// Returns the optional trained navigation codebook.
     #[must_use]
-    pub const fn quantization_codebook(&self) -> Option<&QuantizedCodebook> {
-        self.quantization_codebook.as_ref()
+    pub fn quantization_codebook(&self) -> Option<&context_codec::QuantizedCodebook> {
+        self.codec_artifact
+            .as_ref()
+            .map(CodecArtifactView::codebook)
     }
 
     /// Returns the zero-copy quantized code for a node index.
     #[must_use]
     pub fn node_code(&self, index: usize) -> Option<&'a [u8]> {
-        if index >= self.node_count || self.code_len == 0 {
-            return None;
-        }
-        let start = index.checked_mul(self.code_len)?;
-        self.codes.get(start..start + self.code_len)
+        self.codec_artifact.as_ref()?.codes().code(index)
     }
 
     /// Returns an iterator over one layer's neighbor ids for a node entry.
@@ -743,22 +719,22 @@ impl<'a> PackedGraphImageView<'a> {
     }
 }
 
-/// Owning 8-byte-aligned copy of an image, for callers whose source buffer
+/// Owning 16-byte-aligned copy of an image, for callers whose source buffer
 /// cannot guarantee the vector section's alignment (arbitrary `Vec<u8>`
 /// heap buffers, network reads).
 pub struct AlignedImageBuf {
-    storage: Vec<u64>,
+    storage: Vec<u128>,
     len: usize,
 }
 
 impl AlignedImageBuf {
-    /// Copies `bytes` into 8-byte-aligned storage.
+    /// Copies `bytes` into 16-byte-aligned storage.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        let words = bytes.len().div_ceil(size_of::<u64>());
-        let mut storage = vec![0_u64; words];
-        // SAFETY: the destination allocation is `words * 8 >= bytes.len()`
-        // bytes long, u64 storage may alias as bytes, and the ranges do not
+        let words = bytes.len().div_ceil(size_of::<u128>());
+        let mut storage = vec![0_u128; words];
+        // SAFETY: the destination allocation is `words * 16 >= bytes.len()`
+        // bytes long, u128 storage may alias as bytes, and the ranges do not
         // overlap because `storage` is freshly allocated.
         unsafe {
             core::ptr::copy_nonoverlapping(
@@ -773,11 +749,11 @@ impl AlignedImageBuf {
         }
     }
 
-    /// Returns the image bytes at guaranteed 8-byte base alignment.
+    /// Returns the image bytes at guaranteed 16-byte base alignment.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: the storage allocation holds at least `self.len`
-        // initialized bytes written by `from_bytes`, and u64 storage may
+        // initialized bytes written by `from_bytes`, and u128 storage may
         // alias as bytes.
         unsafe { core::slice::from_raw_parts(self.storage.as_ptr().cast::<u8>(), self.len) }
     }

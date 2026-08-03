@@ -1,5 +1,7 @@
 //! Runtime trained quantization state and encoded query scoring.
 
+use core::mem::size_of;
+
 use context_core::{DenseVector, DistanceMetric};
 
 use crate::{CodecError, Result};
@@ -53,6 +55,47 @@ impl QuantizedCodebook {
             Self::Scalar { dimensions, .. } => *dimensions,
             Self::Product { codebooks, .. } => codebooks.len(),
         }
+    }
+
+    /// Returns the dynamic payload bytes retained by this codebook.
+    ///
+    /// The count excludes allocator bookkeeping but includes nested product
+    /// centroid vectors and their floating-point values.
+    #[must_use]
+    pub fn resident_bytes(&self) -> usize {
+        match self {
+            Self::Binary { .. } | Self::Scalar { .. } => 0,
+            Self::Product { codebooks, .. } => {
+                let outer = codebooks
+                    .len()
+                    .saturating_mul(size_of::<Vec<DenseVector>>());
+                codebooks.iter().fold(outer, |total, centroids| {
+                    let centroid_headers = centroids.len().saturating_mul(size_of::<DenseVector>());
+                    let values = centroids.iter().fold(0_usize, |bytes, centroid| {
+                        bytes.saturating_add(centroid.dimension().saturating_mul(size_of::<f32>()))
+                    });
+                    total
+                        .saturating_add(centroid_headers)
+                        .saturating_add(values)
+                })
+            }
+        }
+    }
+
+    /// Returns the dynamic bytes required by one prepared-query scorer.
+    #[must_use]
+    pub fn prepared_query_bytes(&self) -> usize {
+        let contribution_count = match self {
+            Self::Binary { dimensions } => dimensions.div_ceil(8).saturating_mul(256),
+            Self::Scalar {
+                dimensions, levels, ..
+            } => dimensions.saturating_mul(usize::from(*levels)),
+            Self::Product { codebooks, .. } => codebooks.iter().map(Vec::len).sum(),
+        };
+        self.code_len()
+            .saturating_add(1)
+            .saturating_mul(size_of::<usize>())
+            .saturating_add(contribution_count.saturating_mul(size_of::<DistanceContribution>()))
     }
 
     /// Reconstructs the approximate navigation vector for one persisted code.
@@ -342,7 +385,7 @@ impl DistanceContribution {
 }
 
 /// Query-scoped lookup scorer for compact quantized node codes.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PreparedQuantizedQuery {
     metric: DistanceMetric,
     query_norm: f32,
@@ -352,6 +395,19 @@ pub struct PreparedQuantizedQuery {
 }
 
 impl PreparedQuantizedQuery {
+    /// Returns dynamic bytes retained by this prepared scorer.
+    #[must_use]
+    pub fn resident_bytes(&self) -> usize {
+        self.offsets
+            .len()
+            .saturating_mul(size_of::<usize>())
+            .saturating_add(
+                self.contributions
+                    .len()
+                    .saturating_mul(size_of::<DistanceContribution>()),
+            )
+    }
+
     /// Scores one encoded node in work proportional to code bytes.
     ///
     /// # Errors

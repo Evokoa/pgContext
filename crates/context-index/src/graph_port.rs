@@ -1,11 +1,49 @@
 //! Storage-agnostic HNSW graph read and write ports.
 
-use context_core::DenseVector;
+use context_core::{DenseVector, DistanceMetric};
 
 use crate::{HnswNodeId, HnswPointId, LayerIndex};
 
 /// Result type for graph adapter operations.
 pub type GraphResult<T> = Result<T, GraphError>;
+
+/// Adapter-produced navigation score and stable node identity.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GraphNodeScore {
+    score: f32,
+    point_id: HnswPointId,
+    layer_count: usize,
+}
+
+impl GraphNodeScore {
+    /// Creates a score returned by a validated graph adapter.
+    #[must_use]
+    pub const fn new(score: f32, point_id: HnswPointId, layer_count: usize) -> Self {
+        Self {
+            score,
+            point_id,
+            layer_count,
+        }
+    }
+
+    /// Returns the ascending navigation distance.
+    #[must_use]
+    pub const fn score(self) -> f32 {
+        self.score
+    }
+
+    /// Returns the authoritative point identity attached to the node.
+    #[must_use]
+    pub const fn point_id(self) -> HnswPointId {
+        self.point_id
+    }
+
+    /// Returns the number of adjacency layers owned by the node.
+    #[must_use]
+    pub const fn layer_count(self) -> usize {
+        self.layer_count
+    }
+}
 
 /// Maximum number of layers accepted in one owned graph node DTO.
 pub const MAX_GRAPH_LAYERS: usize = 64;
@@ -508,6 +546,36 @@ impl NewGraphNode {
 pub trait GraphRead {
     /// Reads graph-wide traversal metadata.
     fn metadata(&mut self) -> GraphResult<GraphMetadata>;
+
+    /// Prepares adapter-local scoring state once for one traversal query.
+    ///
+    /// Full-precision adapters need no preparation. Codec-backed adapters
+    /// override this to build immutable lookup tables outside the hot loop.
+    fn prepare_query(&mut self, _metric: DistanceMetric, _query: &DenseVector) -> GraphResult<()> {
+        Ok(())
+    }
+
+    /// Scores one node using the adapter's prepared representation.
+    ///
+    /// The default visits the authoritative dense vector. Quantized adapters
+    /// override this method and must retain exact source reranking at the
+    /// caller boundary.
+    fn score_node(
+        &mut self,
+        node_id: HnswNodeId,
+        metric: DistanceMetric,
+        query: &DenseVector,
+    ) -> GraphResult<Option<GraphNodeScore>> {
+        self.with_node(node_id, |node| {
+            metric
+                .distance_slices(query.as_slice(), node.vector())
+                .map(|score| GraphNodeScore::new(score, node.point_id(), node.layer_count()))
+        })?
+        .transpose()
+        .map_err(|error| GraphError::CorruptGraph {
+            message: format!("graph node scoring failed: {error}"),
+        })
+    }
 
     /// Reads one owned node, or `None` when the identifier is absent.
     fn read_node(&mut self, node_id: HnswNodeId) -> GraphResult<Option<GraphNodeRecord>>;

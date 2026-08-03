@@ -116,12 +116,11 @@ operator_count() {
   printf '\n%s\n\n' '## `pgcontext_hnsw` Index Reloptions'
   printf '%s\n' '| Option | Accepted shape | Lifecycle |'
   printf '%s\n' '|---|---|---|'
-  printf '%s\n' '| `quantization` | `none`, `scalar`, `sq8`, or `pq` | Experimental until quantized serving is complete |'
+  printf '%s\n' '| `quantization` | `none`, `scalar`, `sq8`, `pq`, or `binary` | Candidate codec; exact source rerank is mandatory |'
   printf '%s\n' '| `scalar_min` | finite lower bound | Experimental |'
   printf '%s\n' '| `scalar_max` | finite upper bound greater than `scalar_min` | Experimental |'
   printf '%s\n' '| `scalar_levels` | integer from 2 through 256 | Experimental |'
   printf '%s\n' '| `pq_subvector_dimensions` | positive divisor of vector dimensions | Experimental |'
-  printf '%s\n' '| `pq_codebooks` | validated JSON codebook array | Experimental |'
 
   printf '\n%s\n\n' '## HNSW GUCs'
   printf '%s\n' '| Setting | Default | Lifecycle |'
@@ -134,7 +133,7 @@ operator_count() {
   printf '%s\n' '| `pgcontext.hnsw_recall_threshold` | `0.95` | Experimental recall-health policy |'
 } >"${tmp}"
 
-for option in quantization scalar_min scalar_max scalar_levels pq_subvector_dimensions pq_codebooks; do
+for option in quantization scalar_min scalar_max scalar_levels pq_subvector_dimensions; do
   if ! grep -Fq "c\"${option}\"" "${OPTIONS_SOURCE}"; then
     echo "documented HNSW reloption is not registered: ${option}" >&2
     exit 1
@@ -150,7 +149,7 @@ awk '
   }
 ' "${OPTIONS_SOURCE}" | sort -u >"${source_reloptions}"
 printf '%s\n' quantization scalar_min scalar_max scalar_levels \
-  pq_subvector_dimensions pq_codebooks | sort -u >"${documented_reloptions}"
+  pq_subvector_dimensions | sort -u >"${documented_reloptions}"
 if ! diff -u "${documented_reloptions}" "${source_reloptions}" >&2; then
   echo "HNSW reloption inventory is not exhaustive" >&2
   exit 1
@@ -164,7 +163,7 @@ awk '
     print member
   }
 ' "${OPTIONS_SOURCE}" | sort -u >"${source_quantization}"
-printf '%s\n' none scalar sq8 pq | sort -u >"${documented_quantization}"
+printf '%s\n' none scalar sq8 pq binary | sort -u >"${documented_quantization}"
 if ! diff -u "${documented_quantization}" "${source_quantization}" >&2; then
   echo "HNSW quantization enum inventory is not exhaustive" >&2
   exit 1
@@ -173,11 +172,10 @@ fi
 for fragment in \
   'HNSW_SCALAR_MIN_LEVELS: i32 = 2;' \
   'HNSW_SCALAR_MAX_LEVELS: i32 = 256;' \
-  'c"none".as_ptr()' 'c"scalar".as_ptr()' 'c"sq8".as_ptr()' 'c"pq".as_ptr()' \
+  'c"none".as_ptr()' 'c"scalar".as_ptr()' 'c"sq8".as_ptr()' 'c"pq".as_ptr()' 'c"binary".as_ptr()' \
   'scalar_min and scalar_max must be finite' \
   'scalar_min must be less than scalar_max' \
-  'pq_subvector_dimensions must be positive when quantization is pq' \
-  'pq_codebooks must be a JSON array'; do
+  'pq_subvector_dimensions must be positive when quantization is pq'; do
   if ! grep -Fq "${fragment}" "${OPTIONS_SOURCE}"; then
     echo "documented HNSW reloption rule is not source-backed: ${fragment}" >&2
     exit 1

@@ -18,6 +18,10 @@
           "path": "benchmarks/pgvector.md"
         },
         {
+          "title": "Quantized HNSW one-million-row certification",
+          "path": "benchmarks/quantized_hnsw_1m.md"
+        },
+        {
           "title": "Owned late-interaction storage benchmark",
           "path": "benchmarks/late_interaction_owned.md"
         },

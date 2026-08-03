@@ -10,6 +10,7 @@ license = "Apache-2.0"
 cargo-fuzz = true
 
 [dependencies]
+context-codec = { path = "../crates/context-codec", version = "0.1.0" }
 context-core = { path = "../crates/context-core", version = "0.1.0" }
 context-filter = { path = "../crates/context-filter", version = "0.1.0" }
 context-index = { path = "../crates/context-index", version = "0.1.0" }

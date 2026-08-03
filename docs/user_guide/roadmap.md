@@ -791,7 +791,9 @@ type is marked stable.
 
 ## Quantized HNSW
 
-Status: implemented experimentally for the PostgreSQL 17 profile.
+Status: stable for scalar/SQ8, product, and binary HNSW serving on PostgreSQL
+17 and 18. The retained one-million-row certification is documented in
+[Quantized HNSW one-million-row certification](../benchmarks/quantized_hnsw_1m.md).
 
 Depends on: PG17 V1 freeze, dense HNSW, and resumable generation
 infrastructure.
@@ -812,8 +814,9 @@ Validated by an end-to-end serving test with exact-oracle and bounded-work asser
 
 ## Full Quantized Serving and TurboQuant
 
-Status: planned. The mapped-HNSW scalar, product, and binary candidate path is
-the experimental starting point, not yet the complete serving contract.
+Status: baseline scalar/SQ8, product, and binary HNSW serving is stable.
+Quantized IVFFlat and the RaBitQ, TurboQuant, QJL, and PolarQuant research
+families remain planned and are promoted independently.
 
 Depends on: versioned vector-codec and configuration contracts, mapped HNSW
 serving, authoritative full-precision source vectors, exact reranking, and the
@@ -872,9 +875,9 @@ Scope:
   stride/offset arithmetic rather than one allocation per vector; use the same
   code views for page-native, mapped, and benchmark paths, with scalar reference
   kernels as the oracle for every SIMD implementation;
-- preserve backward reads for certified formats while making the next generic
-  codec format index-independent, explicitly versioned, checksummed, and
-  rebuildable from source vectors;
+- make the generic codec format index-independent, explicitly versioned,
+  checksummed, and rebuildable from source vectors; incompatible older
+  acceleration formats fail closed and require rebuilding;
 - record the exact paper/version, independent derivation notes, generated test
   vectors, dependency/license inventory, and required project intellectual
   property review before exposing a research method as a public codec;

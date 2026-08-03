@@ -76,7 +76,7 @@ def exact_dependencies(
 
 exact_dependencies(
     "context-codec",
-    {"context-core", "thiserror"},
+    {"bytemuck", "context-core", "thiserror"},
     {"proptest"},
 )
 exact_dependencies(

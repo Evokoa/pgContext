@@ -86,10 +86,11 @@ graph configuration used for maintenance.
 payload bytes and graph-link bytes. The estimate excludes allocator-dependent
 container overhead.
 
-The pure index crate includes binary quantization for dense vectors. It emits a
-core `BitVector` sign code where non-negative dimensions become `1` and
-negative dimensions become `0`. The SQL API exposes `pgcontext.binary_quantize`
-for the same sign-code transformation. SQL exposes
+The shared codec crate includes binary quantization for dense vectors and the
+HNSW access method serves those codes directly during candidate traversal. It
+emits a core `BitVector` sign code where non-negative dimensions become `1`
+and negative dimensions become `0`. The SQL API exposes
+`pgcontext.binary_quantize` for the same sign-code transformation. SQL exposes
 `pgcontext.rerank_quantized_candidates` as the final quantized-candidate gate:
 approximate candidate order is ignored, every surviving point must supply its
 original dense vector, and final SQL scores are exact metric scores against
@@ -98,15 +99,14 @@ candidates whose original vector data is missing.
 Fixed recall fixtures compare binary-quantized candidate selection plus exact
 rerank against exact top-k ordering.
 
-Scalar quantization is available in the pure index crate through uniform
-codebooks with 2 to 256 reconstruction levels. Values are mapped to nearest
-byte codes, values outside the codebook range are clamped to the nearest
-endpoint, and reconstruction rejects codes that do not fit the codebook. SQL
-helpers expose scalar/SQ8-style byte-code quantize and reconstruct operations.
-The pure index crate also includes a product-quantization prototype with
-fixed-size subvectors, one centroid codebook per subvector, nearest-centroid
-encoding, and reconstruction by concatenating coded centroids. SQL product
-quantization accepts JSONB centroid codebooks for encode/reconstruct tests.
+Scalar quantization uses uniform codebooks with 2 to 256 reconstruction levels.
+Values are mapped to nearest byte codes, values outside the codebook range are
+clamped to the nearest endpoint, and reconstruction rejects codes that do not
+fit the codebook. Product quantization uses fixed-size subvectors, one trained
+centroid codebook per subvector, nearest-centroid encoding, and reconstruction
+by concatenating coded centroids. HNSW trains both serving artifacts from a
+bounded deterministic sample; the standalone SQL helpers remain available for
+encode/reconstruct inspection and tests.
 
 `pgcontext_hnsw` accepts validated quantization index options so operators can
 record the intended candidate-encoding mode at index creation:
@@ -125,26 +125,56 @@ CREATE INDEX docs_embedding_pq_idx
     ON docs USING pgcontext_hnsw (embedding)
   WITH (
       quantization = 'pq',
-      pq_subvector_dimensions = 2,
-      pq_codebooks = '[[[0,0],[1,1]],[[1,0],[0,1]]]'
+      pq_subvector_dimensions = 2
   );
+
+CREATE INDEX docs_embedding_binary_idx
+    ON docs USING pgcontext_hnsw (embedding)
+  WITH (quantization = 'binary');
 ```
 
-`quantization` accepts `none`, `scalar`, `sq8`, or `pq`. Scalar and SQ8 modes
+`quantization` accepts `none`, `scalar`, `sq8`, `pq`, or `binary`. Scalar and SQ8 modes
 validate finite `scalar_min`/`scalar_max` bounds and `scalar_levels` in the
 `2..=256` byte-code range. PQ mode validates a positive
-`pq_subvector_dimensions` value and JSON-array `pq_codebooks`. Invalid options
+`pq_subvector_dimensions` value; pgContext trains its codebooks deterministically
+from authoritative index rows. Invalid options
 fail `CREATE INDEX` with SQLSTATE `22023` (`invalid_parameter_value`).
-These reloptions are catalog-visible configuration today; storing quantized
+These reloptions are catalog-visible configuration. Storing quantized
 metadata in the HNSW metapage records the selected mode, metadata version,
-scalar bounds/levels, PQ subvector width, and a deterministic PQ codebook hash
-so restart and upgrade checks can reject incompatible metadata safely. The
-PostgreSQL index-AM page graph remains full precision. Encoded candidate
-traversal is served by revision-bound mapped HNSW artifacts for an unfiltered
-default-vector composite leaf. Named or filtered leaves use their validated
-full-precision HNSW binding until mapped artifacts carry an equally strong
-vector/filter identity. Every candidate still passes through exact source
-rerank before rows are returned to SQL.
+scalar bounds/levels, and PQ subvector width. Packed, shared-memory, and mapped
+generations use one index-bound codec-spec revision and one deterministic,
+revision-bound, checksummed codec artifact per immutable segment. Every segment
+artifact uses a 16-byte-aligned, fixed-stride code layout for candidate
+traversal. Segment-local codebooks let bounded rotation and compaction replace
+one generation without mixing artifacts inside a traversal adapter.
+PostgreSQL's exact order-by recheck reads the
+authoritative source value before final ranking; encoded bytes are never source
+data.
+
+Codec training uses at most 4,096 deterministic, evenly distributed segment
+rows. Encoding streams through one reusable scratch row into the aligned code
+section; it does not allocate one retained byte vector per indexed row. Before
+reading an entire segment for first-use packing, pgContext conservatively
+projects page-item copies, decoded maps/sets/records and nested adjacency,
+packed topology/vectors, publication-image scratch, code rows, duplicate
+codebook/artifact state, prepared scorer, and training sample against
+`pgcontext.hnsw_shared_serving_budget_mb`. An
+over-budget generation fails before complete-segment allocation. `bitvec`
+Hamming and Jaccard opclasses currently reject every quantization reloption
+with SQLSTATE `22023`; their native full-precision HNSW paths are unchanged.
+
+`CREATE INDEX` and `REINDEX` publish only PostgreSQL pages and metapage state.
+They do not eagerly create mapped files or shared-registry entries inside the
+building transaction. The first committed scan trains/packs and may publish
+those derived artifacts, so an aborted build cannot leak external generations.
+
+Changing `quantization`, scalar bounds/levels, or PQ subvector width requires a
+fresh index build. Use `REINDEX` (or build a replacement index and switch to it)
+to train, validate, and publish one complete revision. Existing mapped/shared
+readers keep their generation pinned while a replacement is published; a scan
+never combines code rows from different codebook revisions. `ALTER INDEX ...
+SET` records requested reloptions but does not rewrite existing code rows by
+itself.
 
 The SQL extension registers the `pgcontext_hnsw` index access method and can
 create HNSW indexes on empty or populated `vector` columns. Static builds scan

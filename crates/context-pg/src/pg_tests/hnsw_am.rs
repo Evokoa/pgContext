@@ -732,8 +732,7 @@ fn hnsw_quantized_pq_index_options_are_persisted() {
             ON hnsw_pq_options_items USING pgcontext_hnsw (embedding)
           WITH (
               quantization = 'pq',
-              pq_subvector_dimensions = 2,
-              pq_codebooks = '[[[0,0],[1,1]],[[1,0],[0,1]]]'
+              pq_subvector_dimensions = 2
           )",
     )
     .expect("PQ quantized HNSW options should build");
@@ -748,7 +747,526 @@ fn hnsw_quantized_pq_index_options_are_persisted() {
 
     assert!(options.contains("quantization=pq"));
     assert!(options.contains("pq_subvector_dimensions=2"));
-    assert!(options.contains("pq_codebooks=[[[0,0],[1,1]],[[1,0],[0,1]]]"));
+}
+
+#[pg_test]
+fn empty_quantized_indexes_bind_codec_configuration_revisions() {
+    Spi::run(
+        "CREATE TABLE hnsw_empty_quantized_items (
+            embedding vector
+         )",
+    )
+    .expect("empty quantized fixture table should be created");
+
+    let scalar_revision = context_codec::CodecSpec::scalar(
+        256,
+        Some(
+            context_codec::ScalarBounds::new(-1.0, 1.0)
+                .expect("scalar fixture bounds should be valid"),
+        ),
+    )
+    .expect("scalar fixture codec should be valid")
+    .revision()
+    .get();
+    let cases = [
+        (
+            "scalar",
+            "quantization = 'scalar', scalar_min = -1.0, scalar_max = 1.0, scalar_levels = 256",
+            scalar_revision,
+        ),
+        (
+            "pq",
+            "quantization = 'pq', pq_subvector_dimensions = 2",
+            context_codec::CodecSpec::product(2, 256, 8)
+                .expect("PQ fixture codec should be valid")
+                .revision()
+                .get(),
+        ),
+        (
+            "binary",
+            "quantization = 'binary'",
+            context_codec::CodecSpec::binary().revision().get(),
+        ),
+    ];
+
+    for (codec, options, expected_revision) in cases {
+        let index_name = format!("hnsw_empty_quantized_{codec}_idx");
+        Spi::run(&format!(
+            "CREATE INDEX {index_name}
+                ON hnsw_empty_quantized_items
+             USING pgcontext_hnsw (embedding)
+              WITH ({options})"
+        ))
+        .expect("empty quantized index should build");
+        let revision = Spi::get_one::<String>(&format!(
+            "SELECT codec_revision
+               FROM pgcontext.hnsw_segment_stats('{index_name}'::regclass)"
+        ))
+        .expect("empty quantized codec revision should be queryable")
+        .expect("empty quantized codec revision should be bound");
+        assert_eq!(revision, expected_revision.to_string());
+    }
+
+    Spi::run(
+        "SET LOCAL pgcontext.hnsw_ef_search = 7;
+         SET LOCAL pgcontext.hnsw_candidate_budget = 23",
+    )
+    .expect("distinct HNSW effort and candidate settings should be accepted");
+    let candidate_budget = Spi::get_one::<i32>(
+        "SELECT candidate_budget
+           FROM pgcontext.hnsw_segment_stats(
+                    'hnsw_empty_quantized_binary_idx'::regclass
+                )",
+    )
+    .expect("HNSW candidate-budget diagnostic should be queryable")
+    .expect("HNSW candidate-budget diagnostic should not be null");
+    assert_eq!(candidate_budget, 23);
+}
+
+#[pg_test]
+fn quantized_dense_metrics_preserve_native_orderby_types_and_exact_rerank() {
+    Spi::run(
+        "CREATE TABLE hnsw_quantized_metric_items (
+             id integer PRIMARY KEY,
+             embedding vector NOT NULL
+         );
+         INSERT INTO hnsw_quantized_metric_items VALUES
+             (1, '[0,0,0,0]'::vector),
+             (2, '[1,0.5,-1,2]'::vector),
+             (3, '[-2,1,0.25,0.5]'::vector),
+             (4, '[3,-1,2,-0.5]'::vector),
+             (5, '[0.5,2,-2,1]'::vector),
+             (6, '[-1,-2,1,3]'::vector),
+             (7, '[2,3,0,-2]'::vector),
+             (8, '[-3,0.5,2,1]'::vector)",
+    )
+    .expect("quantized metric fixture should be created");
+
+    let metrics = [
+        ("l2", "vector_hnsw_ops", "<->"),
+        ("ip", "vector_hnsw_ip_ops", "<#>"),
+        ("cosine", "vector_hnsw_cosine_ops", "<=>"),
+        ("l1", "vector_hnsw_l1_ops", "<+>"),
+    ];
+    let codecs = [
+        (
+            "scalar",
+            "quantization = 'scalar', scalar_min = -10.0, scalar_max = 10.0, scalar_levels = 256",
+        ),
+        (
+            "pq",
+            "quantization = 'pq', pq_subvector_dimensions = 2",
+        ),
+        ("binary", "quantization = 'binary'"),
+    ];
+
+    for (metric, opclass, operator) in metrics {
+        let ordered = format!(
+            "SELECT id
+               FROM hnsw_quantized_metric_items
+              ORDER BY embedding OPERATOR(pgcontext.{operator})
+                       '[0.25,-0.5,1.5,0.75]'::vector,
+                       id
+              LIMIT 6"
+        );
+        let ranked = format!("SELECT array_agg(id) FROM ({ordered}) ranked");
+        Spi::run(
+            "SET LOCAL enable_indexscan = off;
+             SET LOCAL enable_bitmapscan = off;
+             SET LOCAL enable_seqscan = on",
+        )
+        .expect("exact quantized metric oracle should force a sequential scan");
+        let exact = Spi::get_one::<Vec<i32>>(&ranked)
+            .expect("exact quantized metric oracle should execute")
+            .expect("exact quantized metric oracle should return ids");
+
+        for (codec, options) in codecs {
+            let index_name = format!("hnsw_quantized_{metric}_{codec}_idx");
+            Spi::run(&format!(
+                "CREATE INDEX {index_name}
+                    ON hnsw_quantized_metric_items
+                 USING pgcontext_hnsw (embedding pgcontext.{opclass})
+                  WITH ({options});
+                 SET LOCAL enable_indexscan = on;
+                 SET LOCAL enable_bitmapscan = off;
+                 SET LOCAL enable_seqscan = off"
+            ))
+            .expect("quantized metric index should build and become forced");
+            assert_hnsw_index_plan(&ordered, &index_name);
+            let actual = Spi::get_one::<Vec<i32>>(&ranked)
+                .expect("forced quantized metric scan should execute")
+                .expect("forced quantized metric scan should return ids");
+            assert_eq!(actual, exact, "unexpected exact {metric}/{codec} rerank");
+            Spi::run(&format!(
+                "DROP INDEX {index_name};
+                 SET LOCAL enable_indexscan = off;
+                 SET LOCAL enable_seqscan = on"
+            ))
+            .expect("quantized metric index should drop before the next case");
+        }
+    }
+}
+
+#[pg_test]
+fn quantized_native_source_types_preserve_certified_orderby_datums() {
+    Spi::run(
+        "CREATE TABLE hnsw_quantized_native_items (
+             id integer PRIMARY KEY,
+             half_value halfvec NOT NULL,
+             sparse_value sparsevec NOT NULL,
+             int_value int8vec NOT NULL,
+             uint_value uint8vec NOT NULL
+         );
+         INSERT INTO hnsw_quantized_native_items
+         SELECT id,
+                format('[%s,%s,%s,%s]', id, id + 1, id + 2, id + 3)::halfvec,
+                format('{1:%s,2:%s,3:%s,4:%s}/4', id, id + 1, id + 2, id + 3)::sparsevec,
+                pgcontext.int8vec(format('[%s,%s,%s,%s]', id, id + 1, id + 2, id + 3)),
+                pgcontext.uint8vec(format('[%s,%s,%s,%s]', id, id + 1, id + 2, id + 3))
+           FROM generate_series(1, 16) AS id",
+    )
+    .expect("native quantized source fixture should be created");
+
+    let cases = [
+        (
+            "half",
+            "half_value",
+            "halfvec_hnsw_ops",
+            "pgcontext.halfvec('[3,4,5,6]')",
+        ),
+        (
+            "sparse",
+            "sparse_value",
+            "sparsevec_hnsw_ops",
+            "pgcontext.sparsevec('{1:3,2:4,3:5,4:6}/4')",
+        ),
+        (
+            "int8",
+            "int_value",
+            "int8vec_hnsw_ops",
+            "pgcontext.int8vec('[3,4,5,6]')",
+        ),
+        (
+            "uint8",
+            "uint_value",
+            "uint8vec_hnsw_ops",
+            "pgcontext.uint8vec('[3,4,5,6]')",
+        ),
+    ];
+    for (source, column, opclass, query) in cases {
+        let ordered = format!(
+            "SELECT id FROM hnsw_quantized_native_items
+              ORDER BY {column} OPERATOR(pgcontext.<->) {query}, id
+              LIMIT 8"
+        );
+        let ranked = format!("SELECT array_agg(id) FROM ({ordered}) ranked");
+        Spi::run(
+            "SET LOCAL enable_indexscan = off;
+             SET LOCAL enable_bitmapscan = off;
+             SET LOCAL enable_seqscan = on",
+        )
+        .expect("native exact oracle should force a sequential scan");
+        let exact = Spi::get_one::<Vec<i32>>(&ranked)
+            .expect("native exact oracle should execute")
+            .expect("native exact oracle should return ids");
+        let index_name = format!("hnsw_quantized_native_{source}_idx");
+        Spi::run(&format!(
+            "CREATE INDEX {index_name}
+                ON hnsw_quantized_native_items
+             USING pgcontext_hnsw ({column} pgcontext.{opclass})
+              WITH (quantization = 'scalar', scalar_min = -128, scalar_max = 255);
+             SET LOCAL enable_indexscan = on;
+             SET LOCAL enable_seqscan = off"
+        ))
+        .expect("native quantized index should build");
+        assert_hnsw_index_plan(&ordered, &index_name);
+        let actual = Spi::get_one::<Vec<i32>>(&ranked)
+            .expect("native quantized scan should execute")
+            .expect("native quantized scan should return ids");
+        assert_eq!(actual, exact, "native {source} exact rerank drifted");
+        Spi::run(&format!("DROP INDEX {index_name}"))
+            .expect("native quantized index should drop");
+    }
+}
+
+#[pg_test]
+fn quantized_hnsw_rejects_unsupported_bit_metrics_and_pq_dimensions() {
+    Spi::run(
+        "CREATE TABLE hnsw_quantized_rejection_items (
+             embedding vector,
+             bits bitvec
+         );
+         INSERT INTO hnsw_quantized_rejection_items VALUES
+             ('[1,2,3]'::vector, '101'::bitvec)",
+    )
+    .expect("quantized rejection fixture should be created");
+    for (suffix, opclass) in [
+        ("hamming", "bitvec_hnsw_hamming_ops"),
+        ("jaccard", "bitvec_hnsw_jaccard_ops"),
+    ] {
+        Spi::run(&format!(
+            "DO $$ BEGIN
+                 BEGIN
+                     CREATE INDEX hnsw_quantized_reject_{suffix}_idx
+                         ON hnsw_quantized_rejection_items
+                      USING pgcontext_hnsw (bits pgcontext.{opclass})
+                       WITH (quantization = 'binary');
+                     RAISE EXCEPTION 'expected quantized bitvec rejection';
+                 EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+                 END;
+             END $$"
+        ))
+        .expect("quantized bitvec build should fail with SQLSTATE 22023");
+    }
+    Spi::run(
+        "DO $$ BEGIN
+             BEGIN
+                 CREATE INDEX hnsw_quantized_reject_pq_width_idx
+                     ON hnsw_quantized_rejection_items
+                  USING pgcontext_hnsw (embedding)
+                   WITH (quantization = 'pq', pq_subvector_dimensions = 2);
+                 RAISE EXCEPTION 'expected PQ dimension rejection';
+             EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+             END;
+         END $$;
+         CREATE TABLE hnsw_empty_pq_dimension_items (embedding vector);
+         CREATE INDEX hnsw_empty_pq_dimension_idx
+             ON hnsw_empty_pq_dimension_items USING pgcontext_hnsw (embedding)
+          WITH (quantization = 'pq', pq_subvector_dimensions = 2);
+         DO $$ BEGIN
+             BEGIN
+                 INSERT INTO hnsw_empty_pq_dimension_items VALUES ('[1,2,3]'::vector);
+                 RAISE EXCEPTION 'expected first-insert PQ dimension rejection';
+             EXCEPTION WHEN SQLSTATE '22023' THEN NULL;
+             END;
+         END $$",
+    )
+    .expect("PQ dimension mismatches should fail with SQLSTATE 22023");
+    let rows = Spi::get_one::<i64>("SELECT count(*) FROM hnsw_empty_pq_dimension_items")
+        .expect("empty PQ row count should be queryable")
+        .expect("empty PQ row count should not be null");
+    assert_eq!(rows, 0, "rejected first insert must not reach the heap");
+}
+
+#[pg_test]
+fn quantized_build_abort_cannot_publish_external_generations() {
+    Spi::run(
+        "CREATE TABLE hnsw_quantized_abort_items (
+             id integer PRIMARY KEY,
+             embedding vector NOT NULL
+         );
+         INSERT INTO hnsw_quantized_abort_items VALUES
+             (1, '[1,0,0,0]'::vector),
+             (2, '[0,1,0,0]'::vector)",
+    )
+    .expect("quantized abort fixture should be created");
+    let before = hnsw_quantized_publication_counts();
+    Spi::run(
+        "DO $$ BEGIN
+             BEGIN
+                 CREATE INDEX hnsw_quantized_aborted_idx
+                     ON hnsw_quantized_abort_items USING pgcontext_hnsw (embedding)
+                  WITH (quantization = 'scalar');
+                 RAISE EXCEPTION USING ERRCODE = 'P0001', MESSAGE = 'rollback quantized build';
+             EXCEPTION WHEN SQLSTATE 'P0001' THEN NULL;
+             END;
+         END $$",
+    )
+    .expect("aborted quantized build should roll back inside a subtransaction");
+    let after = hnsw_quantized_publication_counts();
+    assert_eq!(after, before, "CREATE INDEX must not eagerly publish external artifacts");
+    let exists = Spi::get_one::<bool>(
+        "SELECT to_regclass('hnsw_quantized_aborted_idx') IS NOT NULL",
+    )
+    .expect("aborted index lookup should execute")
+    .expect("aborted index lookup should not be null");
+    assert!(!exists, "aborted quantized index must not remain catalog-visible");
+}
+
+fn hnsw_quantized_publication_counts() -> (i64, i64, i64) {
+    let read = |column: &str| {
+        Spi::get_one::<i64>(&format!(
+            "SELECT {column}::bigint FROM pgcontext.hnsw_serving_stats()"
+        ))
+        .expect("quantized publication counter should be queryable")
+        .expect("quantized publication counter should not be null")
+    };
+    (
+        read("pack_builds"),
+        read("shared_publishes"),
+        read("mapped_publishes"),
+    )
+}
+
+#[pg_test]
+fn quantized_pack_memory_preflight_rejects_before_pack_work() {
+    Spi::run(
+        "CREATE TABLE hnsw_quantized_budget_items (
+             id integer PRIMARY KEY,
+             embedding vector NOT NULL
+         );
+         INSERT INTO hnsw_quantized_budget_items
+         SELECT id, format('[%s,%s,%s,%s]', id, id + 1, id + 2, id + 3)::vector
+           FROM generate_series(1, 32) AS id;
+         CREATE INDEX hnsw_quantized_budget_idx
+             ON hnsw_quantized_budget_items USING pgcontext_hnsw (embedding)
+          WITH (quantization = 'pq', pq_subvector_dimensions = 2);
+         SET LOCAL pgcontext.hnsw_shared_serving_budget_mb = 0;
+         SET LOCAL enable_indexscan = on;
+         SET LOCAL enable_seqscan = off",
+    )
+    .expect("quantized budget fixture should be created");
+    let before = Spi::get_one::<i64>(
+        "SELECT pack_builds::bigint FROM pgcontext.hnsw_serving_stats()",
+    )
+    .expect("preflight pack count should be queryable")
+    .expect("preflight pack count should not be null");
+    Spi::run(
+        "DO $$ BEGIN
+             BEGIN
+                 PERFORM id
+                   FROM hnsw_quantized_budget_items
+                  ORDER BY embedding OPERATOR(pgcontext.<->) '[1,2,3,4]'::vector
+                  LIMIT 4;
+                 RAISE EXCEPTION 'expected quantized memory preflight rejection';
+             EXCEPTION WHEN OTHERS THEN
+                 IF position('projected peak memory' IN SQLERRM) = 0 THEN
+                     RAISE;
+                 END IF;
+             END;
+         END $$",
+    )
+    .expect("quantized memory preflight should fail with its bounded diagnostic");
+    let after = Spi::get_one::<i64>(
+        "SELECT pack_builds::bigint FROM pgcontext.hnsw_serving_stats()",
+    )
+    .expect("post-preflight pack count should be queryable")
+    .expect("post-preflight pack count should not be null");
+    assert_eq!(after, before, "denied projection must not record pack work");
+}
+
+#[pg_test]
+fn quantized_hnsw_lifecycle_keeps_delta_delete_and_reindex_exact() {
+    Spi::run(
+        "CREATE TABLE hnsw_quantized_lifecycle_items (
+             id integer PRIMARY KEY,
+             embedding vector NOT NULL
+         );
+         INSERT INTO hnsw_quantized_lifecycle_items VALUES
+             (1, '[0,0,0,0]'::vector),
+             (2, '[1,0.5,-1,2]'::vector),
+             (3, '[-2,1,0.25,0.5]'::vector),
+             (4, '[3,-1,2,-0.5]'::vector),
+             (5, '[0.5,2,-2,1]'::vector),
+             (6, '[-1,-2,1,3]'::vector),
+             (7, '[2,3,0,-2]'::vector),
+             (8, '[-3,0.5,2,1]'::vector)",
+    )
+    .expect("quantized lifecycle fixture should be created");
+    let ranked = "SELECT array_agg(id)
+                    FROM (
+                         SELECT id
+                           FROM hnsw_quantized_lifecycle_items
+                          ORDER BY embedding OPERATOR(pgcontext.<->)
+                                   '[0.25,-0.5,1.5,0.75]'::vector,
+                                   id
+                          LIMIT 6
+                    ) ranked";
+    let codecs = [
+        (
+            "scalar",
+            "quantization = 'scalar', scalar_min = -10.0, scalar_max = 10.0, scalar_levels = 256",
+        ),
+        (
+            "pq",
+            "quantization = 'pq', pq_subvector_dimensions = 2",
+        ),
+        ("binary", "quantization = 'binary'"),
+    ];
+
+    for (codec, options) in codecs {
+        let index_name = format!("hnsw_quantized_lifecycle_{codec}_idx");
+        Spi::run(&format!(
+            "CREATE INDEX {index_name}
+                ON hnsw_quantized_lifecycle_items
+             USING pgcontext_hnsw (embedding)
+              WITH ({options});
+             SET LOCAL enable_indexscan = on;
+             SET LOCAL enable_bitmapscan = off;
+             SET LOCAL enable_seqscan = off"
+        ))
+        .expect("quantized lifecycle index should build");
+        assert_hnsw_index_plan(
+            "SELECT id FROM hnsw_quantized_lifecycle_items
+              ORDER BY embedding OPERATOR(pgcontext.<->)
+                       '[0.25,-0.5,1.5,0.75]'::vector, id
+              LIMIT 6",
+            &index_name,
+        );
+
+        Spi::run(
+            "INSERT INTO hnsw_quantized_lifecycle_items
+             VALUES (99, '[0.25,-0.5,1.5,0.75]'::vector)",
+        )
+        .expect("quantized lifecycle delta row should insert");
+        let with_delta = Spi::get_one::<Vec<i32>>(ranked)
+            .expect("quantized lifecycle delta query should execute")
+            .expect("quantized lifecycle delta query should return ids");
+        assert_eq!(with_delta.first(), Some(&99), "{codec} delta row was not exact");
+
+        Spi::run("DELETE FROM hnsw_quantized_lifecycle_items WHERE id = 99")
+            .expect("quantized lifecycle delta row should delete");
+        let after_delete = Spi::get_one::<Vec<i32>>(ranked)
+            .expect("quantized lifecycle post-delete query should execute")
+            .expect("quantized lifecycle post-delete query should return ids");
+        assert!(!after_delete.contains(&99), "{codec} served a deleted delta row");
+
+        Spi::run(&format!(
+            "REINDEX INDEX {index_name};
+             SELECT pgcontext.test_clear_hnsw_packed_cache();
+             SET LOCAL enable_indexscan = off;
+             SET LOCAL enable_seqscan = on"
+        ))
+        .expect("quantized lifecycle index should reindex and release cached generations");
+        let exact = Spi::get_one::<Vec<i32>>(ranked)
+            .expect("quantized lifecycle exact oracle should execute")
+            .expect("quantized lifecycle exact oracle should return ids");
+        Spi::run(
+            "SET LOCAL enable_indexscan = on;
+             SET LOCAL enable_seqscan = off",
+        )
+        .expect("quantized lifecycle reindexed scan should be forced");
+        assert_hnsw_index_plan(
+            "SELECT id FROM hnsw_quantized_lifecycle_items
+              ORDER BY embedding OPERATOR(pgcontext.<->)
+                       '[0.25,-0.5,1.5,0.75]'::vector, id
+              LIMIT 6",
+            &index_name,
+        );
+        let after_reindex = Spi::get_one::<Vec<i32>>(ranked)
+            .expect("quantized lifecycle post-reindex query should execute")
+            .expect("quantized lifecycle post-reindex query should return ids");
+        assert_eq!(after_reindex, exact, "{codec} post-REINDEX rerank drifted");
+
+        Spi::run(&format!("DROP INDEX {index_name}"))
+            .expect("quantized lifecycle index should drop before the next codec");
+    }
+}
+
+fn assert_hnsw_index_plan(query: &str, index_name: &str) {
+    let plan = Spi::connect(|client| {
+        let result = client.select(&format!("EXPLAIN (FORMAT TEXT) {query}"), None, &[])?;
+        let mut lines = Vec::new();
+        for row in result {
+            lines.push(row.get::<String>(1)?.unwrap_or_default());
+        }
+        Ok::<_, spi::Error>(lines.join("\n"))
+    })
+    .expect("quantized HNSW EXPLAIN should decode");
+    assert!(
+        plan.contains(&format!("Index Scan using {index_name}")),
+        "expected named quantized HNSW index scan:\n{plan}"
+    );
 }
 
 #[pg_test]
@@ -767,16 +1285,14 @@ fn hnsw_quantized_pq_options_persist_metapage_metadata() {
     )
     .expect("PQ metapage fixture rows should be inserted");
 
-    let codebooks = "[[[0,0],[1,1]],[[1,0],[0,1]]]";
-    Spi::run(&format!(
+    Spi::run(
         "CREATE INDEX hnsw_pq_meta_items_embedding_idx
             ON hnsw_pq_meta_items USING pgcontext_hnsw (embedding)
           WITH (
               quantization = 'pq',
-              pq_subvector_dimensions = 2,
-              pq_codebooks = '{codebooks}'
+              pq_subvector_dimensions = 2
           )"
-    ))
+    )
     .expect("PQ quantized HNSW index should build with metapage metadata");
 
     let metadata = Spi::get_one::<String>(
@@ -819,10 +1335,11 @@ fn hnsw_quantized_pq_options_persist_metapage_metadata() {
     .expect("PQ metapage metadata query should succeed")
     .expect("PQ metapage metadata should not be null");
 
-    assert_eq!(
-        metadata,
-        format!("3,1,2,{}", fnv1a64_for_test(codebooks.as_bytes()))
-    );
+    let expected_revision = context_codec::CodecSpec::product(2, 256, 8)
+        .expect("PQ fixture codec should be valid")
+        .revision()
+        .get();
+    assert_eq!(metadata, format!("3,1,2,{expected_revision}"));
 }
 
 #[pg_test]
@@ -856,14 +1373,14 @@ fn hnsw_quantized_index_options_reject_bad_inputs_with_sqlstate() {
             "value 1 out of bounds for option \"scalar_levels\"",
         ),
         (
-            "hnsw_bad_pq_missing_codebooks_idx",
-            "quantization = 'pq', pq_subvector_dimensions = 2",
-            "pq_codebooks is required when quantization is pq",
+            "hnsw_bad_pq_subvector_width_idx",
+            "quantization = 'pq', pq_subvector_dimensions = 0",
+            "pq_subvector_dimensions must be positive when quantization is pq",
         ),
         (
-            "hnsw_bad_pq_codebooks_json_idx",
-            "quantization = 'pq', pq_subvector_dimensions = 2, pq_codebooks = '{}'",
-            "pq_codebooks must be a JSON array",
+            "hnsw_bad_pq_dimension_divisor_idx",
+            "quantization = 'pq', pq_subvector_dimensions = 3",
+            "failed to train HNSW codec during index build",
         ),
     ] {
         let sql = format!(
@@ -887,15 +1404,6 @@ fn hnsw_quantized_index_options_reject_bad_inputs_with_sqlstate() {
 
         Spi::run(&sql).expect("bad quantized HNSW option should raise 22023");
     }
-}
-
-fn fnv1a64_for_test(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 #[pg_test]

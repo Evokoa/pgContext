@@ -75,8 +75,6 @@ Extended production certification and unimplemented product behavior live in
 
 ## Experimental or Unimplemented Serving Paths
 
-- Quantized HNSW traversal is experimental: encoded scalar, product, and binary
-  candidates are always exactly reranked from authoritative source vectors.
 - Named sparse ANN densifies sparse values for graph traversal, then exactly
   rechecks authoritative sparse source rows. Its index records therefore share
   the documented single-page dimension/degree envelope, and the feature is not

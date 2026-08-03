@@ -13,6 +13,7 @@ use context_query::CandidateBranch;
 
 mod certification;
 mod late_interaction;
+mod p5_codec;
 
 pub use certification::{
     CertificationArtifactKind, CertificationArtifactManifest, CertificationDatasetManifest,
@@ -22,6 +23,11 @@ pub use certification::{
 pub use late_interaction::{
     LATE_INTERACTION_BASELINE_LIMIT, LATE_INTERACTION_CANDIDATES_PER_QUERY,
     LateInteractionAnnBaselineWorkload, LateInteractionAnnSummary, LateInteractionPoint,
+};
+pub use p5_codec::{
+    P5_CODEC_DIMENSIONS, P5_CODEC_GATES, P5_CODEC_GENERATOR_REVISION, P5_CODEC_QUERY_COUNT,
+    P5_CODEC_QUERY_IDS, P5_CODEC_ROWS, P5_CODEC_SEED, P5_CODEC_TOP_K,
+    P5_CODEC_TRAINING_SAMPLE_ROWS, P5CodecGate, p5_codec_manifest_hash,
 };
 
 /// Maximum accepted latency regression before explicit review is required.

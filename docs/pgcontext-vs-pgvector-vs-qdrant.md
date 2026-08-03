@@ -234,12 +234,12 @@ result; they mean it does not ship a dedicated API for that workflow.
 
 | Capability | pgContext | pgvector | Qdrant | Parity and caveat |
 |---|---|---|---|---|
-| Binary quantization helper | **Experimental** | **Native** function/expression index | [**Native** serving](https://qdrant.tech/documentation/quantization/) | pgContext does not yet serve quantized HNSW candidates. |
-| Scalar/SQ8 quantization | **Experimental** encode/reconstruct helper | No dedicated serving type | [**Native** scalar quantization](https://qdrant.tech/documentation/quantization/) | Qdrant is production-serving; pgContext is a helper surface only. |
-| Product quantization | **Experimental** encode/reconstruct helper | No dedicated core serving feature | [**Native** product quantization](https://qdrant.tech/documentation/quantization/) | Qdrant is production-serving. |
+| Quantized HNSW serving | **Stable** scalar/SQ8, product, and binary candidate traversal with exact source rerank | **Native** function/expression index | [**Native** serving](https://qdrant.tech/documentation/quantization/) | pgContext's frozen 1M release lane passed on PG17/18; pgvector and Qdrant differ in codec and rerank controls. |
+| Scalar/SQ8 quantization | **Stable** HNSW serving plus encode/reconstruct helpers | No dedicated serving type | [**Native** scalar quantization](https://qdrant.tech/documentation/quantization/) | pgContext retains PostgreSQL source rows as the exact rerank authority. |
+| Product quantization | **Stable** HNSW serving plus encode/reconstruct helpers | No dedicated core serving feature | [**Native** product quantization](https://qdrant.tech/documentation/quantization/) | pgContext trains a bounded deterministic codebook and exact-reranks from source rows. |
 | TurboQuant | Not implemented | Not implemented | [**Native**](https://qdrant.tech/documentation/quantization/) | Qdrant-only in this comparison. |
-| Quantized index traversal | **Planned** | Binary expression-index pattern | **Native** | Do not infer pgContext serving support from quantization metadata. |
-| Exact/full-precision rescore | **Experimental** helper; exact source rechecks on implemented paths | **SQL/application** | **Native** query-time rescore controls | Qdrant has the broadest integrated quantized serving path. |
+| Quantized index traversal | **Stable** HNSW serving | Binary expression-index pattern | **Native** | pgContext binds one validated codec revision to each committed serving generation. |
+| Exact/full-precision rescore | **Stable** source-operator recheck for quantized HNSW | **SQL/application** | **Native** query-time rescore controls | pgContext never treats derived codes as authoritative source data. |
 
 ## Security, durability, and operations
 
@@ -315,5 +315,5 @@ Choose **pgContext** when you want **Qdrant-like retrieval workflows, but want P
 - **pgContext** places a high-level, AI-ready retrieval contract directly over your authoritative PostgreSQL rows: structured filters, hybrid retrieval, and operational controls, with no second data store to run or keep in sync.
 
 pgContext's dense HNSW and filtered ANN paths are implemented and measured.
-Non-dense, quantized, and late-interaction serving are on the roadmap, so
+Additional non-dense codecs and late-interaction serving are on the roadmap, so
 capability claims stay specific to each row above.

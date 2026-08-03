@@ -197,15 +197,14 @@ These types are useful for experimentation and migration work. Their HNSW
 opclass names and metric bindings are stable, while the SQL types and HNSW
 on-disk format remain experimental.
 
-### Quantization building blocks
+### Quantized HNSW serving
 
-Experimental binary, scalar/SQ8-style, and product-quantization functions are
-available for encoding, reconstruction, and exact reranking of quantized
-candidates against source vectors.
-
-These are real SQL-visible algorithms, not configuration placeholders. What
-does not ship yet is a production serving path that builds and traverses a
-quantized HNSW index end to end.
+Binary, scalar/SQ8-style, and product-quantization functions are available for
+encoding, reconstruction, and exact reranking. The same canonical codec
+contract now builds and traverses revision-bound segmented HNSW artifacts end
+to end, with checksummed aligned code rows and authoritative source-vector
+reranking. The retained one-million-row release lane certifies all three codecs
+on PostgreSQL 17 and 18.
 
 ### Sparse, multi-vector, and late-interaction experiments
 
@@ -293,7 +292,7 @@ We use maturity labels deliberately:
 | Dense HNSW access method | Experimental |
 | Metadata-filtered ANN | Experimental |
 | `halfvec`, `sparsevec`, and `bitvec` SQL/selected indexes | Experimental |
-| Quantization helpers and exact reranking | Experimental |
+| Quantized HNSW serving and exact reranking | Stable |
 | Named sparse and late-interaction advanced paths | Experimental |
 
 ## Parity Matrix Alignment
@@ -309,7 +308,7 @@ deliberately different feature cannot be mistaken for stable parity.
 | SQL halfvec | `experimental` | Exact SQL and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist. |
 | SQL sparsevec | `experimental` | Exact SQL and stable explicit L2, inner-product, cosine, and L1 HNSW opclass names exist; named sparse search can attach those indexes for bounded candidates and authoritative exact rerank. |
 | SQL bit vectors | `experimental` | Exact Hamming/Jaccard SQL and stable explicit Hamming/Jaccard HNSW opclass names exist; Jaccard ordering is heap-rechecked exactly. |
-| SQL quantization APIs | `experimental` | Binary, scalar, and product helpers plus revision-bound mapped-HNSW encoded traversal and exact source rerank are available; index-AM pages remain full precision. |
+| SQL quantization APIs | `stable` | Binary, scalar/SQ8, and product encodings serve from revision-bound segmented packed shared or mapped HNSW artifacts with exact source rerank; the frozen one-million-row release lane passes on PG17 and PG18. |
 | Per-vector dense index and quantization metadata | `experimental` | Validated configuration metadata exists; complete build-and-scan consumption is planned. |
 | Named sparse vectors per collection | `experimental` | Registration, exact fallback, validated HNSW binding, filters, bounded-work explain counters, exact rerank, and exact fusion exist. |
 | Multi-vector and late-interaction query | `experimental` | Exact MaxSim and experimental token candidates exist; internal token-index maintenance is planned. |
@@ -329,8 +328,9 @@ Important current limits:
 - IVFFlat is not implemented.
 - Non-dense SQL types and the HNSW on-disk format remain experimental, and
   densified node records must fit the documented 8,064-byte page envelope.
-- Quantized and mapped HNSW serving remain experimental and require
-  revision-bound generated artifacts plus exact source reranking.
+- Binary, scalar/SQ8, and product-quantized HNSW serving is stable with
+  revision-bound generated artifacts and exact source reranking. Plain mapped
+  HNSW and the general HNSW on-disk compatibility contract remain experimental.
 - Named sparse ANN is experimental, explicitly attached, and densifies graph
   traversal while retaining exact sparse source rerank and exact fallback.
 - Internally maintained late-interaction and typed composite execution are

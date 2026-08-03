@@ -18,6 +18,7 @@ struct PgHnswGraphRead {
     nodes: BTreeMap<usize, HnswVectorRecord>,
     page_visits: usize,
     node_reads: usize,
+    prepared_query: Option<PreparedQuantizedQuery>,
 }
 
 /// Pure, owned traversal adapter admitted to segment worker threads only
@@ -27,6 +28,7 @@ struct ParallelPackedGraphRead {
     graph: Arc<PackedHnswGraph>,
     metadata: GraphMetadata,
     node_reads: usize,
+    prepared_query: Option<PreparedQuantizedQuery>,
 }
 
 impl ParallelPackedGraphRead {
@@ -55,6 +57,7 @@ impl ParallelPackedGraphRead {
             graph,
             metadata: GraphMetadata::new(node_count, entry, Some(dimensions))?,
             node_reads: 0,
+            prepared_query: None,
         })
     }
 }
@@ -84,6 +87,7 @@ impl PgHnswGraphRead {
             nodes: BTreeMap::new(),
             page_visits: 0,
             node_reads: 0,
+            prepared_query: None,
         }
     }
 
@@ -346,7 +350,10 @@ impl PgHnswGraphRead {
             cache
                 .borrow()
                 .get(&cache_key)
-                .filter(|cached| cached.rel_file_number == rel_file_number)
+                .filter(|cached| {
+                    cached.rel_file_number == rel_file_number
+                        && cached.graph.matches_codec(meta)
+                })
                 .cloned()
         });
         if let Some(cached) = &cached_entry {
@@ -386,6 +393,9 @@ impl PgHnswGraphRead {
             let graph = HnswPackedGeneration {
                 base: PackedGraphStore::Mapped(Rc::new(image)),
             };
+            if !graph.matches_codec(meta) {
+                record_hnsw_mapped_publish(false);
+            } else {
             HNSW_PACKED_GRAPH_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
                 if cache.len() >= 4 {
@@ -401,6 +411,7 @@ impl PgHnswGraphRead {
             });
             self.packed = Some(graph.clone());
             return Ok(Some(graph));
+            }
         }
 
         let shared_enabled = crate::settings::hnsw_shared_serving_enabled_from_guc();
@@ -423,6 +434,9 @@ impl PgHnswGraphRead {
                 let graph = HnswPackedGeneration {
                     base: PackedGraphStore::Shared(Rc::new(image)),
                 };
+                if !graph.matches_codec(meta) {
+                    record_hnsw_shared_publish(false);
+                } else {
                 HNSW_PACKED_GRAPH_CACHE.with(|cache| {
                     let mut cache = cache.borrow_mut();
                     if cache.len() >= 4 {
@@ -438,10 +452,13 @@ impl PgHnswGraphRead {
                 });
                 self.packed = Some(graph.clone());
                 return Ok(Some(graph));
+                }
             }
         }
 
-        if !crate::settings::hnsw_pack_on_first_use_from_guc() {
+        if !crate::settings::hnsw_pack_on_first_use_from_guc()
+            && meta.quantization_mode == options::HNSW_QUANTIZATION_NONE_U16
+        {
             // No pack is available anywhere and inline packing is disabled:
             // serve this query from unpacked directory reads instead of
             // paying the full pack cost synchronously. Caches nothing, so
@@ -452,9 +469,6 @@ impl PgHnswGraphRead {
         }
 
         let pack_started = std::time::Instant::now();
-        // SAFETY: all relation pages are copied and decoded while individually
-        // pinned; the returned records own their vectors and links.
-        let records = unsafe { read_hnsw_segment_records(self.index_relation, segment) };
         let node_count = usize::try_from(segment.graph_nodes).map_err(|_| {
             context_index::GraphError::CapacityExceeded {
                 operation: "packed HNSW graph nodes",
@@ -465,7 +479,41 @@ impl PgHnswGraphRead {
                 operation: "packed HNSW dimensions",
             }
         })?;
-        let local_graph = PackedHnswGraph::from_records(records, node_count, dimensions)?;
+        if meta.quantization_mode != options::HNSW_QUANTIZATION_NONE_U16 {
+            let projected = projected_packed_segment_bytes(meta, segment).ok_or(
+                context_index::GraphError::CapacityExceeded {
+                    operation: "quantized HNSW serving projection",
+                },
+            )?;
+            let budget = crate::settings::hnsw_shared_serving_budget_bytes_from_guc();
+            if !hnsw_packed_projection_admitted(projected, budget) {
+                return Err(context_index::GraphError::AdapterFailure {
+                    operation: "pack quantized HNSW generation",
+                    message: format!(
+                        "projected peak memory {projected} bytes exceeds pgcontext.hnsw_shared_serving_budget_mb budget {budget} bytes"
+                    ),
+                });
+            }
+        }
+        // SAFETY: admission above completed before any complete-segment
+        // allocation. Pages are now copied and decoded while individually
+        // pinned; the returned records own their vectors and links.
+        let records = unsafe { read_hnsw_segment_records(self.index_relation, segment) };
+        let local_graph = PackedHnswGraph::from_records(
+            records,
+            node_count,
+            dimensions,
+            meta.codec_spec(),
+        )?;
+        if meta.quantization_mode != options::HNSW_QUANTIZATION_NONE_U16
+            && local_graph.byte_size()
+                > crate::settings::hnsw_shared_serving_budget_bytes_from_guc()
+        {
+            return Err(context_index::GraphError::AdapterFailure {
+                operation: "pack quantized HNSW generation",
+                message: "actual packed generation exceeds the serving memory budget".to_owned(),
+            });
+        }
         record_hnsw_pack_build(
             local_graph.byte_size(),
             u64::try_from(pack_started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -654,4 +702,8 @@ impl PgHnswGraphRead {
         self.nodes.insert(wanted.get(), record.clone());
         Some(record)
     }
+}
+
+const fn hnsw_packed_projection_admitted(projected: u64, budget: u64) -> bool {
+    projected <= budget
 }

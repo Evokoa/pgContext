@@ -2,11 +2,11 @@
 //! graph image codec.
 #![allow(clippy::expect_used, clippy::cast_possible_truncation)]
 
-use context_codec::QuantizedCodebook;
+use context_codec::{CodecRevision, ContiguousCodes, QuantizedCodebook, ReconstructionPolicy};
 use context_storage::{
     AlignedImageBuf, CURRENT_PACKED_GRAPH_IMAGE_VERSION, HnswGraphQuantization,
     PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView,
-    encode_packed_graph_image, encode_packed_graph_image_v2, packed_graph_image_len,
+    encode_packed_graph_image, encode_packed_graph_image_current, packed_graph_image_len,
 };
 use proptest::prelude::*;
 
@@ -92,9 +92,9 @@ fn round_trip_preserves_nodes_vectors_and_neighbors() {
 }
 
 #[test]
-fn quantized_v2_round_trip_keeps_codes_zero_copy() {
+fn current_quantized_round_trip_keeps_codes_zero_copy() {
     let (dimensions, nodes, layers, neighbors, vectors) = sample_graph();
-    let quantization = HnswGraphQuantization::new(
+    let quantization = test_quantization(
         QuantizedCodebook::Scalar {
             dimensions: dimensions as usize,
             minimum: -2.0,
@@ -103,7 +103,7 @@ fn quantized_v2_round_trip_keeps_codes_zero_copy() {
         },
         vec![vec![8, 4, 10], vec![7, 15, 5]],
     );
-    let encoded = encode_packed_graph_image_v2(
+    let encoded = encode_packed_graph_image_current(
         dimensions,
         &nodes,
         &layers,
@@ -125,13 +125,23 @@ fn quantized_v2_round_trip_keeps_codes_zero_copy() {
     assert_eq!(view.quantization_codebook(), Some(quantization.codebook()));
     assert_eq!(view.node_code(0), Some(&[8, 4, 10][..]));
     assert_eq!(view.node_code(1), Some(&[7, 15, 5][..]));
+    assert_eq!(
+        view.node_code(0).expect("first code").as_ptr() as usize % 16,
+        0,
+        "mapped serving codes must begin at a 16-byte boundary"
+    );
+    assert_eq!(
+        view.node_code(1).expect("second code").as_ptr() as usize % 16,
+        0,
+        "each fixed-stride mapped row must retain 16-byte alignment"
+    );
     assert!(view.node_code(2).is_none());
 }
 
 #[test]
-fn quantized_v2_rejects_corrupt_codes_without_checksum() {
+fn current_quantized_rejects_corrupt_codes_without_checksum() {
     let (dimensions, nodes, layers, neighbors, vectors) = sample_graph();
-    let quantization = HnswGraphQuantization::new(
+    let quantization = test_quantization(
         QuantizedCodebook::Scalar {
             dimensions: dimensions as usize,
             minimum: -2.0,
@@ -140,7 +150,7 @@ fn quantized_v2_rejects_corrupt_codes_without_checksum() {
         },
         vec![vec![0, 1, 0], vec![1, 0, 1]],
     );
-    let mut encoded = encode_packed_graph_image_v2(
+    let mut encoded = encode_packed_graph_image_current(
         dimensions,
         &nodes,
         &layers,
@@ -167,6 +177,18 @@ fn image_len_matches_encoded_len() {
         packed_graph_image_len(nodes.len(), layers.len(), neighbors.len(), vectors.len()),
         Some(encoded.len())
     );
+}
+
+fn test_quantization(codebook: QuantizedCodebook, rows: Vec<Vec<u8>>) -> HnswGraphQuantization {
+    let codes = ContiguousCodes::from_rows(codebook.code_len(), &rows)
+        .expect("test rows should form contiguous codes");
+    HnswGraphQuantization::new(
+        CodecRevision::new(1).expect("test revision is nonzero"),
+        ReconstructionPolicy::ExactSourceRerank,
+        codebook,
+        codes,
+    )
+    .expect("test quantization should be valid")
 }
 
 #[test]
