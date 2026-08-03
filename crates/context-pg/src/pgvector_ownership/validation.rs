@@ -26,29 +26,52 @@ pub(super) struct DependencyInventory {
 #[derive(Debug, Clone)]
 pub(super) struct IndexPlan {
     pub(super) index_name: String,
+    pub(super) target_access_method: TargetAccessMethod,
     pub(super) canonical_opclass: &'static str,
     pub(super) options: Vec<String>,
     pub(super) tablespace: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TargetAccessMethod {
+    Hnsw,
+    Ivfflat,
+}
+
+impl TargetAccessMethod {
+    pub(super) const fn sql_name(self) -> &'static str {
+        match self {
+            Self::Hnsw => "pgcontext_hnsw",
+            Self::Ivfflat => "pgcontext_ivfflat",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReloptionError {
+    UnsupportedHnswOption,
+    UnsupportedIvfflatOption,
+}
+
 pub(super) fn ensure_certified_bridge() {
     let certified = Spi::get_one::<bool>(
         "WITH certified_extensions AS (
-             SELECT bridge.oid AS bridge_oid,
-                    pgcontext.oid AS pgcontext_oid,
+             SELECT pgcontext.oid AS pgcontext_oid,
+                    pgcontext.extowner AS pgcontext_owner,
                     pgvector.oid AS pgvector_oid
-               FROM pg_catalog.pg_extension AS bridge
-               JOIN pg_catalog.pg_extension AS pgcontext
-                 ON pgcontext.extname = 'pgcontext'
+               FROM pg_catalog.pg_extension AS pgcontext
                JOIN pg_catalog.pg_extension AS pgvector
                  ON pgvector.extname = 'vector'
                JOIN pg_catalog.pg_namespace AS pgvector_namespace
                  ON pgvector_namespace.oid = pgvector.extnamespace
-              WHERE bridge.extname = 'pgcontext_pgvector'
-                AND bridge.extversion = '0.2.0'
-                AND pgcontext.extversion = '0.2.0'
+              WHERE pgcontext.extname = 'pgcontext'
                 AND pgvector.extversion ~ '^0[.]8[.][0-9]+$'
                 AND pgvector_namespace.nspname = 'public'
+                AND NOT EXISTS (
+                    SELECT 1
+                      FROM pg_catalog.pg_extension
+                     WHERE extname = 'pgcontext_pgvector'
+                )
          )
          SELECT EXISTS (
              SELECT 1
@@ -88,11 +111,6 @@ pub(super) fn ensure_certified_bridge() {
                 AND (
                     SELECT count(*)
                       FROM pg_catalog.pg_cast AS cast_entry
-                      JOIN pg_catalog.pg_depend AS dependency
-                        ON dependency.classid = 'pg_catalog.pg_cast'::pg_catalog.regclass
-                       AND dependency.objid = cast_entry.oid
-                       AND dependency.refobjid = extensions.bridge_oid
-                       AND dependency.deptype = 'e'
                      WHERE cast_entry.castsource IN (
                                pg_catalog.to_regtype('public.vector'),
                                pg_catalog.to_regtype('public.halfvec')
@@ -107,11 +125,6 @@ pub(super) fn ensure_certified_bridge() {
                 AND (
                     SELECT count(*)
                       FROM pg_catalog.pg_cast AS cast_entry
-                      JOIN pg_catalog.pg_depend AS dependency
-                        ON dependency.classid = 'pg_catalog.pg_cast'::pg_catalog.regclass
-                       AND dependency.objid = cast_entry.oid
-                       AND dependency.refobjid = extensions.bridge_oid
-                       AND dependency.deptype = 'e'
                      WHERE (
                                cast_entry.castsource = pg_catalog.to_regtype('public.sparsevec')
                            AND cast_entry.casttarget = pg_catalog.to_regtype('pgcontext.sparsevec')
@@ -124,21 +137,23 @@ pub(super) fn ensure_certified_bridge() {
                 AND (
                     SELECT count(*) = 12 AND bool_and(pg_catalog.amvalidate(opclass.oid))
                       FROM pg_catalog.pg_opclass AS opclass
-                      JOIN pg_catalog.pg_depend AS dependency
-                        ON dependency.classid = 'pg_catalog.pg_opclass'::pg_catalog.regclass
-                       AND dependency.objid = opclass.oid
-                       AND dependency.refobjid = extensions.bridge_oid
-                       AND dependency.deptype = 'e'
+                      JOIN pg_catalog.pg_namespace AS namespace
+                        ON namespace.oid = opclass.opcnamespace
+                      JOIN pg_catalog.pg_am AS access_method
+                        ON access_method.oid = opclass.opcmethod
+                     WHERE namespace.nspname = 'pgcontext'
+                       AND access_method.amname = 'pgcontext_hnsw'
+                       AND opclass.opcowner = extensions.pgcontext_owner
+                       AND opclass.opcname LIKE '%_hnsw_pgvector_%_ops'
                    )
                 AND (
                     SELECT count(*)
                       FROM pg_catalog.pg_proc AS procedure
-                      JOIN pg_catalog.pg_depend AS dependency
-                        ON dependency.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass
-                       AND dependency.objid = procedure.oid
-                       AND dependency.refobjid = extensions.bridge_oid
-                       AND dependency.deptype = 'e'
-                     WHERE procedure.proname LIKE '_pgvector_%_support'
+                      JOIN pg_catalog.pg_namespace AS namespace
+                        ON namespace.oid = procedure.pronamespace
+                     WHERE namespace.nspname = 'pgcontext'
+                       AND procedure.proowner = extensions.pgcontext_owner
+                       AND procedure.proname LIKE '_pgvector_%_support'
                    ) = 12
          )",
     )
@@ -147,9 +162,16 @@ pub(super) fn ensure_certified_bridge() {
     if !certified {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-            "pgvector ownership conversion requires the certified \
-             pgcontext_pgvector 0.2.0 bridge with pgcontext 0.2.0 and \
-             pgvector 0.8.x",
+            "pgvector ownership conversion requires pgvector 0.8.x in public \
+             and the pgcontext-owned binding installed by \
+             pgcontext.enable_pgvector_binding()",
+        );
+    }
+    if !crate::pgvector_compat::pgvector_binding_installed() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+            "pgvector ownership conversion requires the exact binding installed by \
+             pgcontext.enable_pgvector_binding()",
         );
     }
 }
@@ -311,6 +333,21 @@ pub(super) fn target_type_sql(target: &ConversionTarget) -> String {
 }
 
 pub(super) fn canonical_opclass(type_name: &str, metric: &str) -> Option<&'static str> {
+    canonical_opclass_for_access_method(type_name, metric, TargetAccessMethod::Hnsw)
+}
+
+pub(super) fn canonical_opclass_for_access_method(
+    type_name: &str,
+    metric: &str,
+    access_method: TargetAccessMethod,
+) -> Option<&'static str> {
+    match access_method {
+        TargetAccessMethod::Hnsw => canonical_hnsw_opclass(type_name, metric),
+        TargetAccessMethod::Ivfflat => canonical_ivfflat_opclass(type_name, metric),
+    }
+}
+
+fn canonical_hnsw_opclass(type_name: &str, metric: &str) -> Option<&'static str> {
     match (type_name, metric) {
         ("vector", "l2") => Some("pgcontext.vector_hnsw_ops"),
         ("vector", "inner_product") => Some("pgcontext.vector_hnsw_ip_ops"),
@@ -328,32 +365,62 @@ pub(super) fn canonical_opclass(type_name: &str, metric: &str) -> Option<&'stati
     }
 }
 
+fn canonical_ivfflat_opclass(type_name: &str, metric: &str) -> Option<&'static str> {
+    match (type_name, metric) {
+        ("vector", "l2") => Some("pgcontext.vector_ivfflat_ops"),
+        ("vector", "inner_product") => Some("pgcontext.vector_ivfflat_ip_ops"),
+        ("vector", "cosine") => Some("pgcontext.vector_ivfflat_cosine_ops"),
+        ("vector", "l1") => Some("pgcontext.vector_ivfflat_l1_ops"),
+        ("halfvec", "l2") => Some("pgcontext.halfvec_ivfflat_ops"),
+        ("halfvec", "inner_product") => Some("pgcontext.halfvec_ivfflat_ip_ops"),
+        ("halfvec", "cosine") => Some("pgcontext.halfvec_ivfflat_cosine_ops"),
+        ("halfvec", "l1") => Some("pgcontext.halfvec_ivfflat_l1_ops"),
+        _ => None,
+    }
+}
+
+fn translate_reloptions(
+    access_method: TargetAccessMethod,
+    options: &[String],
+) -> Result<Vec<String>, ReloptionError> {
+    match access_method {
+        TargetAccessMethod::Hnsw if options.is_empty() => Ok(Vec::new()),
+        TargetAccessMethod::Hnsw => Err(ReloptionError::UnsupportedHnswOption),
+        TargetAccessMethod::Ivfflat
+            if options.iter().all(|option| option.starts_with("lists=")) =>
+        {
+            Ok(options.to_vec())
+        }
+        TargetAccessMethod::Ivfflat => Err(ReloptionError::UnsupportedIvfflatOption),
+    }
+}
+
 fn source_metric(extension: &str, opclass: &str) -> Option<&'static str> {
     match (extension, opclass) {
         ("vector", "vector_l2_ops" | "halfvec_l2_ops" | "sparsevec_l2_ops")
         | (
-            "pgcontext_pgvector",
+            "pgcontext",
             "vector_hnsw_pgvector_l2_ops"
             | "halfvec_hnsw_pgvector_l2_ops"
             | "sparsevec_hnsw_pgvector_l2_ops",
         ) => Some("l2"),
         ("vector", "vector_ip_ops" | "halfvec_ip_ops" | "sparsevec_ip_ops")
         | (
-            "pgcontext_pgvector",
+            "pgcontext",
             "vector_hnsw_pgvector_ip_ops"
             | "halfvec_hnsw_pgvector_ip_ops"
             | "sparsevec_hnsw_pgvector_ip_ops",
         ) => Some("inner_product"),
         ("vector", "vector_cosine_ops" | "halfvec_cosine_ops" | "sparsevec_cosine_ops")
         | (
-            "pgcontext_pgvector",
+            "pgcontext",
             "vector_hnsw_pgvector_cosine_ops"
             | "halfvec_hnsw_pgvector_cosine_ops"
             | "sparsevec_hnsw_pgvector_cosine_ops",
         ) => Some("cosine"),
         ("vector", "vector_l1_ops" | "halfvec_l1_ops" | "sparsevec_l1_ops")
         | (
-            "pgcontext_pgvector",
+            "pgcontext",
             "vector_hnsw_pgvector_l1_ops"
             | "halfvec_hnsw_pgvector_l1_ops"
             | "sparsevec_hnsw_pgvector_l1_ops",
@@ -463,7 +530,9 @@ WITH target AS (
       FROM target
      WHERE EXISTS (
          SELECT 1 FROM pg_catalog.pg_constraint
-          WHERE conrelid = table_oid AND attnum = ANY (conkey)
+          WHERE conrelid = table_oid
+            AND contype <> 'n'
+            AND attnum = ANY (conkey)
      )
     UNION ALL
     SELECT 'blocker', 'row-level security policies are not supported'
@@ -530,7 +599,9 @@ WITH target AS (
                 OR index.indnkeyatts <> 1
                 OR index.indnatts <> 1
                 OR index.indkey[0] <> attnum
-                OR access_method.amname NOT IN ('hnsw', 'ivfflat', 'pgcontext_hnsw')
+                OR access_method.amname NOT IN (
+                    'hnsw', 'ivfflat', 'pgcontext_hnsw', 'pgcontext_ivfflat'
+                )
             )
      )
     UNION ALL
@@ -729,28 +800,44 @@ pub(super) fn collect_fast_index_plans(target: &ConversionTarget) -> Vec<IndexPl
                     ),
                 );
             };
-            let canonical_opclass = canonical_opclass(&target.source_type_name, metric)
+            let target_access_method = match access_method.as_str() {
+                "hnsw" | "pgcontext_hnsw" => TargetAccessMethod::Hnsw,
+                "ivfflat" | "pgcontext_ivfflat" => TargetAccessMethod::Ivfflat,
+                _ => raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+                    format!("unsupported source access method {access_method}"),
+                ),
+            };
+            let canonical_opclass = canonical_opclass_for_access_method(
+                &target.source_type_name,
+                metric,
+                target_access_method,
+            )
                 .unwrap_or_else(|| {
                     raise_sql_error(
                         PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
                         format!(
-                            "no canonical pgContext opclass for {} metric {metric}",
-                            target.source_type_name
+                            "no canonical pgContext {} opclass for {} metric {metric}",
+                            target_access_method.sql_name(), target.source_type_name
                         ),
                     )
                 });
-            if access_method != "ivfflat" && !options.is_empty() {
-                raise_sql_error(
-                    PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-                    format!(
-                        "source index {index_name} has per-index options that pgcontext_hnsw cannot preserve"
-                    ),
-                );
-            }
+            let options = translate_reloptions(target_access_method, &options).unwrap_or_else(
+                |error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+                        format!(
+                            "source index {index_name} has reloptions that {} cannot preserve: {error:?}",
+                            target_access_method.sql_name()
+                        ),
+                    )
+                },
+            );
             IndexPlan {
                 index_name,
+                target_access_method,
                 canonical_opclass,
-                options: Vec::new(),
+                options,
                 tablespace,
             }
             },
@@ -803,8 +890,12 @@ pub(super) fn ensure_online_index_profile(target: &ConversionTarget, requested_m
         );
     }
     if let Some(plan) = plans.first() {
-        let expected =
-            canonical_opclass(&target.source_type_name, requested_metric).unwrap_or_default();
+        let expected = canonical_opclass_for_access_method(
+            &target.source_type_name,
+            requested_metric,
+            plan.target_access_method,
+        )
+        .unwrap_or_default();
         if plan.canonical_opclass != expected {
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
@@ -814,5 +905,62 @@ pub(super) fn ensure_online_index_profile(target: &ConversionTarget, requested_m
                 ),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TargetAccessMethod, canonical_opclass_for_access_method, translate_reloptions};
+
+    #[test]
+    fn maps_pgvector_ivfflat_to_native_ivfflat_without_changing_the_algorithm() {
+        assert_eq!(
+            canonical_opclass_for_access_method("vector", "cosine", TargetAccessMethod::Ivfflat,),
+            Some("pgcontext.vector_ivfflat_cosine_ops")
+        );
+        assert_eq!(
+            canonical_opclass_for_access_method("halfvec", "l2", TargetAccessMethod::Ivfflat,),
+            Some("pgcontext.halfvec_ivfflat_ops")
+        );
+    }
+
+    #[test]
+    fn keeps_hnsw_on_the_native_hnsw_access_method() {
+        assert_eq!(
+            canonical_opclass_for_access_method(
+                "vector",
+                "inner_product",
+                TargetAccessMethod::Hnsw,
+            ),
+            Some("pgcontext.vector_hnsw_ip_ops")
+        );
+    }
+
+    #[test]
+    fn rejects_sparse_ivfflat_until_the_native_am_supports_it() {
+        assert_eq!(
+            canonical_opclass_for_access_method("sparsevec", "cosine", TargetAccessMethod::Ivfflat,),
+            None
+        );
+    }
+
+    #[test]
+    fn preserves_only_the_ivfflat_lists_option() {
+        assert_eq!(
+            translate_reloptions(TargetAccessMethod::Ivfflat, &["lists=37".to_owned()]),
+            Ok(vec!["lists=37".to_owned()])
+        );
+        assert_eq!(
+            translate_reloptions(TargetAccessMethod::Hnsw, &[]),
+            Ok(Vec::new())
+        );
+        assert!(
+            translate_reloptions(
+                TargetAccessMethod::Ivfflat,
+                &["lists=37".to_owned(), "unknown=1".to_owned()],
+            )
+            .is_err()
+        );
+        assert!(translate_reloptions(TargetAccessMethod::Hnsw, &["m=32".to_owned()]).is_err());
     }
 }

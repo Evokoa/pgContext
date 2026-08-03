@@ -3,8 +3,8 @@
 //! Mirrors `vector_datum.rs`'s treatment of `Vector`: the varlena payload is
 //! byte-for-byte pgvector's `struct HalfVector`
 //! (`{ int16 dim; int16 unused; uint16 x[dim] }`, elements as IEEE 754
-//! binary16 bits), allowing the companion bridge to bind pgvector's `halfvec` type
-//! lossless in both directions. The reserved word is written zero and
+//! binary16 bits), allowing the main extension's optional binding to expose
+//! lossless pgvector `halfvec` interoperability. The reserved word is written zero and
 //! required zero on decode (fail closed on corruption).
 
 use core::ptr;

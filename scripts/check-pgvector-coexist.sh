@@ -2,9 +2,8 @@
 # Live ownership-boundary verification for pgContext and pgvector.
 #
 # Preconditions: a running PostgreSQL with both extension artifacts installed.
-# The bridge extension is tested separately; this gate proves that the main
-# pgContext extension owns only canonical pgcontext.* vector types and has no
-# catalog dependency on pgvector.
+# This gate proves that the main extension's canonical objects remain independent
+# until its optional pgvector binding is explicitly enabled.
 set -euo pipefail
 
 PSQL="${PGCONTEXT_COEXIST_PSQL:-psql}"

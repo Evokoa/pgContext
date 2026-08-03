@@ -2,10 +2,11 @@
 //! and the once-per-backend bridge advisory.
 //!
 //! The main extension owns canonical vector types in `pgcontext` and has no
-//! dependency on pgvector. Direct service over pgvector-owned columns belongs
-//! to the separately installed, certified `pgcontext_pgvector` bridge. The
-//! inventory remains useful without that bridge because it discovers objects
-//! by extension ownership rather than by unqualified type names.
+//! dependency on pgvector until the extension owner explicitly enables the
+//! conflict-safe binding. Optional binding and facade objects are owned by the
+//! exact main-extension owner but remain outside extension membership so
+//! `pg_dump` emits their DDL. Inventory remains useful without them because it
+//! discovers objects by extension ownership rather than unqualified type names.
 
 #![allow(
     unsafe_code,
@@ -40,6 +41,119 @@ type MigrationReportRow = (
     Vec<String>,
     String,
 );
+
+const COMPATIBILITY_INVENTORY: &[(&str, &str, &str, &str, &str)] = &[
+    (
+        "type",
+        "vector, halfvec",
+        "compatible",
+        "pgcontext.vector, pgcontext.halfvec",
+        "dense values have a certified lossless ownership conversion",
+    ),
+    (
+        "type",
+        "sparsevec",
+        "translated",
+        "pgcontext.sparsevec",
+        "validated value rewrite; coordinates above the pgContext limit fail explicitly",
+    ),
+    (
+        "type",
+        "bit",
+        "compatible",
+        "pgcontext.bitvec or PostgreSQL bit",
+        "bit uses PostgreSQL ownership or explicit bitvec; expression indexes are preflighted separately",
+    ),
+    (
+        "operator",
+        "<->, <#>, <=>, <+>, <~>, <%>",
+        "compatible",
+        "same operator spellings in the owning type schema",
+        "operator OIDs remain type-owner-specific; search_path never changes ownership",
+    ),
+    (
+        "function",
+        "distance, dimensions, norm, aggregate, casts",
+        "compatible",
+        "schema-qualified pgContext equivalents",
+        "prepared statements must be drained across a type-OID cutover",
+    ),
+    (
+        "function",
+        "subvector, binary_quantize, and vector arithmetic",
+        "unsupported",
+        "retain pgvector expression until explicitly rewritten",
+        "migration preflight reports expression dependencies instead of guessing",
+    ),
+    (
+        "access_method",
+        "hnsw",
+        "translated",
+        "pgcontext_hnsw",
+        "never claims binary index-page compatibility",
+    ),
+    (
+        "access_method",
+        "ivfflat",
+        "translated",
+        "pgcontext_ivfflat",
+        "lists is preserved; source rows stay authoritative during rebuild and rollback",
+    ),
+    (
+        "setting",
+        "ivfflat.probes",
+        "translated",
+        "pgcontext.ivfflat_probes",
+        "same initial-list meaning; pgContext work budgets remain independently bounded",
+    ),
+    (
+        "setting",
+        "hnsw.ef_search",
+        "translated",
+        "pgcontext.hnsw_ef_search",
+        "candidate-search width only; no ignored alias",
+    ),
+    (
+        "setting",
+        "hnsw.iterative_scan",
+        "unsupported",
+        "use pgContext filtered-search budgets",
+        "pgContext does not silently accept pgvector ordering modes it cannot preserve",
+    ),
+    (
+        "setting",
+        "ivfflat.iterative_scan",
+        "translated",
+        "pgcontext.ivfflat_iterative_scan",
+        "off, strict_order, and relaxed_order are preserved",
+    ),
+];
+
+/// Published compatibility matrix for pgvector SQL and migration surfaces.
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext)]
+fn pgvector_compatibility_inventory() -> TableIterator<
+    'static,
+    (
+        name!(category, String),
+        name!(pgvector_surface, String),
+        name!(status, String),
+        name!(pgcontext_surface, String),
+        name!(notes, String),
+    ),
+> {
+    TableIterator::new(COMPATIBILITY_INVENTORY.iter().map(
+        |(category, pgvector_surface, status, pgcontext_surface, notes)| {
+            (
+                (*category).to_owned(),
+                (*pgvector_surface).to_owned(),
+                (*status).to_owned(),
+                (*pgcontext_surface).to_owned(),
+                (*notes).to_owned(),
+            )
+        },
+    ))
+}
 
 /// Returns whether `type_oid` belongs to the pgvector extension.
 pub(crate) fn type_owned_by_pgvector(type_oid: pg_sys::Oid) -> bool {
@@ -111,13 +225,122 @@ fn map_pgvector_opclass(opclass: &str) -> Option<&'static str> {
     }
 }
 
-fn pgvector_bridge_installed() -> bool {
+fn pgvector_binding_object_count() -> i64 {
+    Spi::get_one::<i64>(
+        "SELECT
+           (SELECT count(*)
+              FROM pg_catalog.pg_opclass AS opclass
+              JOIN pg_catalog.pg_namespace AS namespace
+                ON namespace.oid = opclass.opcnamespace
+              JOIN pg_catalog.pg_am AS access_method
+                ON access_method.oid = opclass.opcmethod
+              JOIN pg_catalog.pg_extension AS extension
+                ON extension.extname = 'pgcontext'
+             WHERE namespace.nspname = 'pgcontext'
+               AND access_method.amname = 'pgcontext_hnsw'
+               AND opclass.opcowner = extension.extowner
+               AND opclass.opcname LIKE '%_hnsw_pgvector_%_ops')
+         + (SELECT count(*)
+              FROM pg_catalog.pg_proc AS procedure
+              JOIN pg_catalog.pg_namespace AS namespace
+                ON namespace.oid = procedure.pronamespace
+              JOIN pg_catalog.pg_extension AS extension
+                ON extension.extname = 'pgcontext'
+             WHERE namespace.nspname = 'pgcontext'
+               AND procedure.proowner = extension.extowner
+               AND (procedure.proname LIKE '_pgvector_%_support'
+                    OR procedure.proname IN (
+                        '_pgvector_sparsevec_to_pgcontext',
+                        '_pgcontext_sparsevec_to_pgvector'
+                    )))
+         + (SELECT count(*)
+              FROM pg_catalog.pg_cast AS cast_entry
+             WHERE (cast_entry.castsource, cast_entry.casttarget) IN (
+                   (pg_catalog.to_regtype('public.vector'), pg_catalog.to_regtype('pgcontext.vector')),
+                   (pg_catalog.to_regtype('public.halfvec'), pg_catalog.to_regtype('pgcontext.halfvec')),
+                   (pg_catalog.to_regtype('public.sparsevec'), pg_catalog.to_regtype('pgcontext.sparsevec')),
+                   (pg_catalog.to_regtype('pgcontext.sparsevec'), pg_catalog.to_regtype('public.sparsevec'))
+               ))",
+    )
+    .unwrap_or(Some(0))
+    .unwrap_or(0)
+}
+
+pub(crate) fn pgvector_binding_installed() -> bool {
     Spi::get_one::<bool>(
-        "SELECT EXISTS (
-             SELECT 1
-               FROM pg_catalog.pg_extension
-              WHERE extname = 'pgcontext_pgvector'
-         )",
+        "SELECT
+           (SELECT count(*) = 12 AND bool_and(pg_catalog.amvalidate(opclass.oid))
+              FROM pg_catalog.pg_opclass AS opclass
+              JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = opclass.opcnamespace
+              JOIN pg_catalog.pg_am AS method ON method.oid = opclass.opcmethod
+              JOIN pg_catalog.pg_extension AS extension ON extension.extname = 'pgcontext'
+             WHERE namespace.nspname = 'pgcontext'
+               AND method.amname = 'pgcontext_hnsw'
+               AND opclass.opcowner = extension.extowner
+               AND opclass.opcname = ANY (ARRAY[
+                   'vector_hnsw_pgvector_l2_ops', 'vector_hnsw_pgvector_ip_ops',
+                   'vector_hnsw_pgvector_cosine_ops', 'vector_hnsw_pgvector_l1_ops',
+                   'halfvec_hnsw_pgvector_l2_ops', 'halfvec_hnsw_pgvector_ip_ops',
+                   'halfvec_hnsw_pgvector_cosine_ops', 'halfvec_hnsw_pgvector_l1_ops',
+                   'sparsevec_hnsw_pgvector_l2_ops', 'sparsevec_hnsw_pgvector_ip_ops',
+                   'sparsevec_hnsw_pgvector_cosine_ops', 'sparsevec_hnsw_pgvector_l1_ops'
+               ])
+               AND (
+                    opclass.opcname LIKE 'vector_%' AND opclass.opcintype = pg_catalog.to_regtype('public.vector')
+                    OR opclass.opcname LIKE 'halfvec_%' AND opclass.opcintype = pg_catalog.to_regtype('public.halfvec')
+                    OR opclass.opcname LIKE 'sparsevec_%' AND opclass.opcintype = pg_catalog.to_regtype('public.sparsevec')
+               ))
+         AND
+           (SELECT count(*) = 12
+              FROM pg_catalog.pg_proc AS procedure
+              JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+              JOIN pg_catalog.pg_extension AS extension ON extension.extname = 'pgcontext'
+             WHERE namespace.nspname = 'pgcontext'
+               AND procedure.proowner = extension.extowner
+               AND procedure.proname = ANY (ARRAY[
+                   '_pgvector_vector_l2_support', '_pgvector_vector_ip_support',
+                   '_pgvector_vector_cosine_support', '_pgvector_vector_l1_support',
+                   '_pgvector_halfvec_l2_support', '_pgvector_halfvec_ip_support',
+                   '_pgvector_halfvec_cosine_support', '_pgvector_halfvec_l1_support',
+                   '_pgvector_sparsevec_l2_support', '_pgvector_sparsevec_ip_support',
+                   '_pgvector_sparsevec_cosine_support', '_pgvector_sparsevec_l1_support'
+               ])
+               AND procedure.prorettype = 'pg_catalog.float8'::pg_catalog.regtype
+               AND procedure.pronargs = 2
+               AND procedure.proargtypes[0] = procedure.proargtypes[1]
+               AND (
+                    procedure.proname LIKE '_pgvector_vector_%' AND procedure.proargtypes[0] = pg_catalog.to_regtype('public.vector')
+                    OR procedure.proname LIKE '_pgvector_halfvec_%' AND procedure.proargtypes[0] = pg_catalog.to_regtype('public.halfvec')
+                    OR procedure.proname LIKE '_pgvector_sparsevec_%' AND procedure.proargtypes[0] = pg_catalog.to_regtype('public.sparsevec')
+               ))
+         AND
+           (SELECT count(*) = 2
+              FROM pg_catalog.pg_proc AS procedure
+              JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = procedure.pronamespace
+              JOIN pg_catalog.pg_extension AS extension ON extension.extname = 'pgcontext'
+             WHERE namespace.nspname = 'pgcontext'
+               AND procedure.proowner = extension.extowner
+               AND (
+                    procedure.proname = '_pgvector_sparsevec_to_pgcontext'
+                    AND procedure.proargtypes[0] = pg_catalog.to_regtype('public.sparsevec')
+                    AND procedure.prorettype = pg_catalog.to_regtype('pgcontext.sparsevec')
+                    AND procedure.prosrc = 'pgcontext_pgvector_sparsevec_to_pgcontext'
+                    OR procedure.proname = '_pgcontext_sparsevec_to_pgvector'
+                    AND procedure.proargtypes[0] = pg_catalog.to_regtype('pgcontext.sparsevec')
+                    AND procedure.prorettype = pg_catalog.to_regtype('public.sparsevec')
+                    AND procedure.prosrc = 'pgcontext_pgcontext_sparsevec_to_pgvector'
+               )
+               AND procedure.pronargs = 1
+               AND procedure.prolang = (SELECT oid FROM pg_catalog.pg_language WHERE lanname = 'c'))
+         AND
+           (SELECT count(*) = 4
+              FROM pg_catalog.pg_cast AS cast_entry
+             WHERE (cast_entry.castsource, cast_entry.casttarget, cast_entry.castmethod, cast_entry.castcontext, cast_entry.castfunc) IN (
+                 (pg_catalog.to_regtype('public.vector'), pg_catalog.to_regtype('pgcontext.vector'), 'b', 'a', 0::pg_catalog.oid),
+                 (pg_catalog.to_regtype('public.halfvec'), pg_catalog.to_regtype('pgcontext.halfvec'), 'b', 'a', 0::pg_catalog.oid),
+                 (pg_catalog.to_regtype('public.sparsevec'), pg_catalog.to_regtype('pgcontext.sparsevec'), 'f', 'a', pg_catalog.to_regprocedure('pgcontext._pgvector_sparsevec_to_pgcontext(public.sparsevec)')),
+                 (pg_catalog.to_regtype('pgcontext.sparsevec'), pg_catalog.to_regtype('public.sparsevec'), 'f', 'a', pg_catalog.to_regprocedure('pgcontext._pgcontext_sparsevec_to_pgvector(pgcontext.sparsevec)'))
+             ))",
     )
     .unwrap_or(Some(false))
     .unwrap_or(false)
@@ -247,6 +470,15 @@ SELECT vc.schema_name::text,
            AND i.indkey[0] = vc.attnum
          ORDER BY ci.relname
          LIMIT 1) AS first_pgvector_opclass,
+       (SELECT am.amname::text
+          FROM pg_index i
+          JOIN pg_class ci ON ci.oid = i.indexrelid
+          JOIN pg_am am ON am.oid = ci.relam
+         WHERE i.indrelid = vc.table_oid
+           AND am.amname IN ('hnsw', 'ivfflat')
+           AND i.indkey[0] = vc.attnum
+         ORDER BY ci.relname
+         LIMIT 1) AS first_pgvector_access_method,
        cardinality(vc.blockers) = 0 AS conversion_supported,
        vc.blockers
   FROM inventoried vc
@@ -294,13 +526,15 @@ fn migration_report() -> TableIterator<
             let pgvector_indexes: Vec<String> = row.get(6).unwrap_or(None).unwrap_or_default();
             let pgcontext_indexes: Vec<String> = row.get(7).unwrap_or(None).unwrap_or_default();
             let first_opclass: Option<String> = row.get(8).unwrap_or(None);
-            let conversion_supported: bool = spi_required(row.get(9), "conversion_supported");
-            let blockers: Vec<String> = row.get(10).unwrap_or(None).unwrap_or_default();
+            let first_access_method: Option<String> = row.get(9).unwrap_or(None);
+            let conversion_supported: bool = spi_required(row.get(10), "conversion_supported");
+            let blockers: Vec<String> = row.get(11).unwrap_or(None).unwrap_or_default();
             let suggested = suggest_command(
                 &schema,
                 &table_name,
                 &column,
                 &type_name,
+                first_access_method.as_deref(),
                 first_opclass.as_deref(),
                 !pgcontext_indexes.is_empty(),
             );
@@ -345,11 +579,24 @@ fn suggest_command(
     table: &str,
     column: &str,
     type_name: &str,
+    first_access_method: Option<&str>,
     first_opclass: Option<&str>,
     has_pgcontext_index: bool,
 ) -> String {
     if has_pgcontext_index {
         return "already indexed by pgcontext_hnsw".to_owned();
+    }
+    if first_access_method == Some("ivfflat") {
+        return format!(
+            "SELECT * FROM pgcontext.start_pgvector_ownership_conversion(\
+             '{}.{}'::regclass, '{}', 'restricted_online', '<metric>', \
+             application_uses_column_lists => true, \
+             application_dependencies_reviewed => true); \
+             pgvector IVFFlat is rebuilt as pgcontext_ivfflat after validated ownership conversion",
+            quote_ident(schema),
+            quote_ident(table),
+            column.replace('\'', "''"),
+        );
     }
     let opclass = match first_opclass {
         Some(name) => match map_pgvector_opclass(name) {
@@ -385,6 +632,7 @@ const ADOPT_INDEXES_SQL: &str = r"
 SELECT n.nspname::text AS schema_name,
        ct.relname::text AS table_name,
        ci.relname::text AS index_name,
+       ci.oid::bigint AS index_oid,
        a.attname::text AS column_name,
        o.opcname::text AS opclass_name,
        am.amname::text AS am_name,
@@ -411,6 +659,41 @@ SELECT n.nspname::text AS schema_name,
    AND ($1::oid IS NULL OR i.indrelid = $1::oid)
  ORDER BY 1, 2, 3";
 
+fn truncate_identifier_prefix(value: &str, max_bytes: usize) -> &str {
+    let mut end = value.len().min(max_bytes);
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn replacement_index_name(schema: &str, source_name: &str, source_oid: i64) -> String {
+    for attempt in 0_u16..=1000 {
+        let suffix = if attempt == 0 {
+            format!("_pgc_{source_oid:x}")
+        } else {
+            format!("_pgc_{source_oid:x}_{attempt}")
+        };
+        let prefix = truncate_identifier_prefix(source_name, 63_usize.saturating_sub(suffix.len()));
+        let candidate = format!("{prefix}{suffix}");
+        let available = Spi::get_one_with_args::<bool>(
+            "SELECT pg_catalog.to_regclass(
+                        pg_catalog.format('%I.%I', $1, $2)
+                    ) IS NULL",
+            &[schema.into(), candidate.clone().into()],
+        )
+        .unwrap_or(Some(false))
+        .unwrap_or(false);
+        if available {
+            return candidate;
+        }
+    }
+    raise_sql_error(
+        PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
+        "could not allocate a collision-free pgContext replacement index name",
+    )
+}
+
 /// Migrates pgvector `hnsw`/`ivfflat` indexes to `pgcontext_hnsw`
 /// equivalents. `dry_run` (the default) only reports the commands;
 /// `drop_old` additionally drops each pgvector index after its
@@ -432,12 +715,12 @@ fn adopt_pgvector(
         name!(executed, bool),
     ),
 > {
-    if !dry_run && !pgvector_bridge_installed() {
+    if !dry_run && !pgvector_binding_installed() {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-            "executing a pgvector index-adoption plan requires the certified \
-             pgcontext_pgvector companion extension; install it after both \
-             pgcontext and vector, or keep dry_run => true",
+            "executing a pgvector index-adoption plan requires main-extension \
+             pgvector bindings; run pgcontext.enable_pgvector_binding() as the \
+             pgcontext extension owner, or keep dry_run => true",
         );
     }
     let target_oid: Option<pg_sys::Oid> = target.as_ref().map(|relation| relation.oid());
@@ -460,21 +743,23 @@ fn adopt_pgvector(
             let schema: String = spi_required(row.get(1), "schema_name");
             let table_name: String = spi_required(row.get(2), "table_name");
             let index: String = spi_required(row.get(3), "index_name");
-            let column: Option<String> = row.get(4).unwrap_or(None);
-            let opclass: String = spi_required(row.get(5), "opclass_name");
-            let access_method: String = spi_required(row.get(6), "am_name");
-            let key_columns: i32 = spi_required(row.get(7), "indnkeyatts");
-            let total_columns: i32 = spi_required(row.get(8), "indnatts");
-            let expression_index: bool = spi_required(row.get(9), "expression_index");
-            let partial_index: bool = spi_required(row.get(10), "partial_index");
-            let usable: bool = spi_required(row.get(11), "usable");
-            let partitioned_index: bool = spi_required(row.get(12), "partitioned_index");
-            let reloptions: Vec<String> = row.get(13).unwrap_or(None).unwrap_or_default();
-            let tablespace: Option<String> = row.get(14).unwrap_or(None);
+            let index_oid: i64 = spi_required(row.get(4), "index_oid");
+            let column: Option<String> = row.get(5).unwrap_or(None);
+            let opclass: String = spi_required(row.get(6), "opclass_name");
+            let access_method: String = spi_required(row.get(7), "am_name");
+            let key_columns: i32 = spi_required(row.get(8), "indnkeyatts");
+            let total_columns: i32 = spi_required(row.get(9), "indnatts");
+            let expression_index: bool = spi_required(row.get(10), "expression_index");
+            let partial_index: bool = spi_required(row.get(11), "partial_index");
+            let usable: bool = spi_required(row.get(12), "usable");
+            let partitioned_index: bool = spi_required(row.get(13), "partitioned_index");
+            let reloptions: Vec<String> = row.get(14).unwrap_or(None).unwrap_or_default();
+            let tablespace: Option<String> = row.get(15).unwrap_or(None);
             plans.push((
                 schema,
                 table_name,
                 index,
+                index_oid,
                 column,
                 opclass,
                 access_method,
@@ -496,6 +781,7 @@ fn adopt_pgvector(
         schema,
         table_name,
         index,
+        index_oid,
         column,
         opclass,
         access_method,
@@ -528,8 +814,10 @@ fn adopt_pgvector(
             Some("invalid, unready, or non-live index")
         } else if partitioned_index {
             Some("partitioned parent index")
-        } else if access_method == "ivfflat" && !reloptions.is_empty() {
-            Some("IVFFlat options cannot be translated losslessly to HNSW")
+        } else if access_method == "ivfflat" {
+            Some(
+                "IVFFlat requires validated ownership conversion to pgcontext_ivfflat; it is never remapped to HNSW",
+            )
         } else if reloptions
             .iter()
             .any(|option| !option.starts_with("m=") && !option.starts_with("ef_construction="))
@@ -551,7 +839,7 @@ fn adopt_pgvector(
             ));
             continue;
         };
-        let new_index = format!("{}_pgc", index.chars().take(55).collect::<String>());
+        let new_index = replacement_index_name(&schema, &index, index_oid);
         let options = if reloptions.is_empty() {
             String::new()
         } else {
@@ -644,17 +932,614 @@ fn adopt_pgvector(
     TableIterator::new(rows)
 }
 
-/// Explains how to enable direct service over pgvector-owned columns.
+fn require_pgvector_binding_owner() {
+    let allowed = Spi::get_one::<bool>(
+        "SELECT extension.extowner = role.oid
+           FROM pg_catalog.pg_extension AS extension
+           JOIN pg_catalog.pg_roles AS role
+             ON role.rolname = CURRENT_USER
+          WHERE extension.extname = 'pgcontext'",
+    )
+    .unwrap_or(Some(false))
+    .unwrap_or(false);
+    if !allowed {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            "must SET ROLE to the pgcontext extension owner to change pgvector compatibility objects",
+        );
+    }
+}
+
+fn require_pgvector_facade_owner() {
+    require_pgvector_binding_owner();
+    let is_superuser = Spi::get_one::<bool>(
+        "SELECT usesuper FROM pg_catalog.pg_user WHERE usename = CURRENT_USER",
+    )
+    .unwrap_or(Some(false))
+    .unwrap_or(false);
+    if !is_superuser {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            "pgvector access-method facade changes require the superuser pgcontext extension owner",
+        );
+    }
+}
+
+fn require_pgvector_binding_profile() {
+    let profile = Spi::get_one::<bool>(
+        "SELECT extension.extversion ~ '^0[.]8[.][0-9]+$'
+                AND namespace.nspname = 'public'
+           FROM pg_catalog.pg_extension AS extension
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = extension.extnamespace
+          WHERE extension.extname = 'vector'",
+    )
+    .unwrap_or(None);
+    match profile {
+        Some(true) => {}
+        Some(false) => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+            "pgvector bindings certify pgvector 0.8.x installed in public",
+        ),
+        None => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
+            "pgvector extension 'vector' is not installed",
+        ),
+    }
+    let retired_companion = Spi::get_one::<bool>(
+        "SELECT EXISTS (
+             SELECT 1 FROM pg_catalog.pg_extension
+              WHERE extname = 'pgcontext_pgvector'
+         )",
+    )
+    .unwrap_or(Some(false))
+    .unwrap_or(false);
+    if retired_companion {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_IN_USE,
+            "drop the retired pgcontext_pgvector companion extension before enabling main-extension bindings",
+        );
+    }
+}
+
+fn run_binding_sql(sql: &str, description: &str) {
+    PgTryBuilder::new(|| Spi::run(sql))
+        .catch_others(|cause| cause.rethrow())
+        .execute()
+        .unwrap_or_else(|error| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                format!("failed to {description}: {error}"),
+            )
+        });
+}
+
+fn create_binding_cast(source: &str, target: &str, clause: &str) {
+    run_binding_sql(
+        &format!("CREATE CAST ({source} AS {target}) {clause}"),
+        "create pgvector compatibility cast",
+    );
+}
+
+fn create_binding_function(_name: &str, _arguments: &str, definition: &str) {
+    run_binding_sql(definition, "create pgvector compatibility function");
+}
+
+fn create_pgvector_metric_binding(type_name: &str, metric: &str, operator: &str, expression: &str) {
+    let function_name = format!("_pgvector_{type_name}_{metric}_support");
+    let arguments = format!("public.{type_name}, public.{type_name}");
+    create_binding_function(
+        &function_name,
+        &arguments,
+        &format!(
+            "CREATE FUNCTION pgcontext.{function_name}(public.{type_name}, public.{type_name}) \
+             RETURNS double precision LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE \
+             SET search_path = pg_catalog, pg_temp RETURN {expression}"
+        ),
+    );
+    let opclass_name = format!("{type_name}_hnsw_pgvector_{metric}_ops");
+    run_binding_sql(
+        &format!(
+            "CREATE OPERATOR CLASS pgcontext.{opclass_name} \
+             FOR TYPE public.{type_name} USING pgcontext_hnsw AS \
+             OPERATOR 1 public.{operator} (public.{type_name}, public.{type_name}) \
+                 FOR ORDER BY pg_catalog.float_ops, \
+             FUNCTION 1 pgcontext.{function_name}(public.{type_name}, public.{type_name}), \
+             STORAGE pgcontext.vector"
+        ),
+        "create pgvector compatibility opclass",
+    );
+}
+
+fn remove_binding_object(drop_sql: &str, description: &str) {
+    run_binding_sql(drop_sql, &format!("drop {description}"));
+}
+
+fn install_pgvector_binding_objects() {
+    create_binding_cast(
+        "public.vector",
+        "pgcontext.vector",
+        "WITHOUT FUNCTION AS ASSIGNMENT",
+    );
+    create_binding_cast(
+        "public.halfvec",
+        "pgcontext.halfvec",
+        "WITHOUT FUNCTION AS ASSIGNMENT",
+    );
+    create_binding_function(
+        "_pgvector_sparsevec_to_pgcontext",
+        "public.sparsevec",
+        "CREATE FUNCTION pgcontext._pgvector_sparsevec_to_pgcontext(public.sparsevec) \
+         RETURNS pgcontext.sparsevec AS '$libdir/pgcontext', \
+         'pgcontext_pgvector_sparsevec_to_pgcontext' \
+         LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE",
+    );
+    create_binding_function(
+        "_pgcontext_sparsevec_to_pgvector",
+        "pgcontext.sparsevec",
+        "CREATE FUNCTION pgcontext._pgcontext_sparsevec_to_pgvector(pgcontext.sparsevec) \
+         RETURNS public.sparsevec AS '$libdir/pgcontext', \
+         'pgcontext_pgcontext_sparsevec_to_pgvector' \
+         LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE",
+    );
+    create_binding_cast(
+        "public.sparsevec",
+        "pgcontext.sparsevec",
+        "WITH FUNCTION pgcontext._pgvector_sparsevec_to_pgcontext(public.sparsevec) AS ASSIGNMENT",
+    );
+    create_binding_cast(
+        "pgcontext.sparsevec",
+        "public.sparsevec",
+        "WITH FUNCTION pgcontext._pgcontext_sparsevec_to_pgvector(pgcontext.sparsevec) AS ASSIGNMENT",
+    );
+
+    let metric_bindings = [
+        ("l2", "<->"),
+        ("ip", "<#>"),
+        ("cosine", "<=>"),
+        ("l1", "<+>"),
+    ];
+    for (metric, operator) in metric_bindings {
+        let vector_expression = match metric {
+            "l2" => "pgcontext.hnsw_l2_distance($1::pgcontext.vector, $2::pgcontext.vector)",
+            "ip" => {
+                "pgcontext.negative_inner_product($1::pgcontext.vector, $2::pgcontext.vector)::double precision"
+            }
+            "cosine" => {
+                "pgcontext.cosine_distance($1::pgcontext.vector, $2::pgcontext.vector)::double precision"
+            }
+            "l1" => {
+                "pgcontext.l1_distance($1::pgcontext.vector, $2::pgcontext.vector)::double precision"
+            }
+            _ => unreachable!("static pgvector metric table is exhaustive"),
+        };
+        create_pgvector_metric_binding("vector", metric, operator, vector_expression);
+
+        let halfvec_expression = match metric {
+            "l2" => {
+                "pgcontext.halfvec_l2_distance($1::pgcontext.halfvec, $2::pgcontext.halfvec)::double precision"
+            }
+            "ip" => {
+                "pgcontext.halfvec_negative_inner_product($1::pgcontext.halfvec, $2::pgcontext.halfvec)::double precision"
+            }
+            "cosine" => {
+                "pgcontext.halfvec_cosine_distance($1::pgcontext.halfvec, $2::pgcontext.halfvec)::double precision"
+            }
+            "l1" => {
+                "pgcontext.halfvec_l1_distance($1::pgcontext.halfvec, $2::pgcontext.halfvec)::double precision"
+            }
+            _ => unreachable!("static pgvector metric table is exhaustive"),
+        };
+        create_pgvector_metric_binding("halfvec", metric, operator, halfvec_expression);
+
+        let sparsevec_expression = match metric {
+            "l2" => "public.l2_distance($1, $2)",
+            "ip" => "-public.inner_product($1, $2)",
+            "cosine" => "public.cosine_distance($1, $2)",
+            "l1" => "public.l1_distance($1, $2)",
+            _ => unreachable!("static pgvector metric table is exhaustive"),
+        };
+        create_pgvector_metric_binding("sparsevec", metric, operator, sparsevec_expression);
+    }
+}
+
+/// Installs dump-visible pgvector coexistence bindings owned by the exact main
+/// extension owner. Repeating a completed installation is a no-op.
 #[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 fn enable_pgvector_binding() {
-    raise_sql_error(
-        PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-        "pgContext and pgvector can be installed in either order because their \
-         vector types have distinct schemas. Direct pgContext indexing of a \
-         pgvector-owned column requires the certified pgcontext_pgvector \
-         companion extension; install it after both pgcontext and vector.",
+    require_pgvector_binding_owner();
+    require_pgvector_binding_profile();
+    if pgvector_binding_installed() {
+        return;
+    }
+    let conflicting_objects = Spi::get_one::<i64>(
+        "SELECT count(*)::bigint
+           FROM pg_catalog.pg_opclass AS opclass
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = opclass.opcnamespace
+          WHERE namespace.nspname = 'pgcontext'
+            AND opclass.opcname LIKE '%_hnsw_pgvector_%_ops'",
     )
+    .unwrap_or(Some(0))
+    .unwrap_or(0);
+    if pgvector_binding_object_count() != 0 || conflicting_objects != 0 {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
+            "partial or foreign pgvector compatibility objects already exist; remove them before enabling the pgcontext-owned binding",
+        );
+    }
+    install_pgvector_binding_objects();
+}
+
+/// Removes the optional pgvector-owned-type bindings.
+/// PostgreSQL refuses the operation while a live index still uses an opclass.
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext, public)]
+fn disable_pgvector_binding() {
+    require_pgvector_binding_owner();
+    let object_count = pgvector_binding_object_count();
+    if object_count == 0 {
+        return;
+    }
+    if object_count != 30 {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            "pgvector compatibility binding is only partially owned by pgcontext",
+        );
+    }
+    for type_name in ["vector", "halfvec", "sparsevec"] {
+        for metric in ["l2", "ip", "cosine", "l1"] {
+            let opclass_name = format!("{type_name}_hnsw_pgvector_{metric}_ops");
+            remove_binding_object(
+                &format!(
+                    "DROP OPERATOR CLASS pgcontext.{opclass_name} USING pgcontext_hnsw RESTRICT"
+                ),
+                "pgvector compatibility opclass",
+            );
+        }
+    }
+    for (source, target) in [
+        ("public.vector", "pgcontext.vector"),
+        ("public.halfvec", "pgcontext.halfvec"),
+        ("public.sparsevec", "pgcontext.sparsevec"),
+        ("pgcontext.sparsevec", "public.sparsevec"),
+    ] {
+        remove_binding_object(
+            &format!("DROP CAST ({source} AS {target})"),
+            "pgvector compatibility cast",
+        );
+    }
+    for (name, arguments) in [
+        ("_pgvector_sparsevec_to_pgcontext", "public.sparsevec"),
+        ("_pgcontext_sparsevec_to_pgvector", "pgcontext.sparsevec"),
+    ] {
+        remove_binding_object(
+            &format!("DROP FUNCTION pgcontext.{name}({arguments}) RESTRICT"),
+            "pgvector compatibility function",
+        );
+    }
+    for type_name in ["vector", "halfvec", "sparsevec"] {
+        for metric in ["l2", "ip", "cosine", "l1"] {
+            let name = format!("_pgvector_{type_name}_{metric}_support");
+            let arguments = format!("public.{type_name}, public.{type_name}");
+            remove_binding_object(
+                &format!("DROP FUNCTION pgcontext.{name}({arguments}) RESTRICT"),
+                "pgvector compatibility function",
+            );
+        }
+    }
+}
+
+fn facade_access_methods_owned_by_pgcontext() -> i64 {
+    Spi::get_one::<i64>(
+        "SELECT count(*)::bigint
+           FROM pg_catalog.pg_am AS access_method
+           JOIN pg_catalog.pg_proc AS handler
+             ON handler.oid = access_method.amhandler
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = handler.pronamespace
+          WHERE namespace.nspname = 'pgcontext'
+            AND (
+                 access_method.amname = 'hnsw' AND handler.proname = 'hnsw_handler'
+                 OR access_method.amname = 'ivfflat' AND handler.proname = 'ivfflat_handler'
+            )",
+    )
+    .unwrap_or(Some(0))
+    .unwrap_or(0)
+}
+
+fn facade_opclasses_owned_by_pgcontext() -> i64 {
+    Spi::get_one::<i64>(
+        "SELECT count(*)::bigint
+           FROM pg_catalog.pg_opclass AS opclass
+           JOIN pg_catalog.pg_am AS access_method
+             ON access_method.oid = opclass.opcmethod
+           JOIN pg_catalog.pg_namespace AS namespace
+             ON namespace.oid = opclass.opcnamespace
+           JOIN pg_catalog.pg_extension AS extension
+             ON extension.extname = 'pgcontext'
+          WHERE access_method.amname IN ('hnsw', 'ivfflat')
+            AND namespace.nspname = 'pgcontext'
+            AND opclass.opcowner = extension.extowner",
+    )
+    .unwrap_or(Some(0))
+    .unwrap_or(0)
+}
+
+fn facade_opclasses_are_exact() -> bool {
+    Spi::get_one::<bool>(
+        "WITH expected(method_name, type_name, opclass_name) AS (
+             VALUES
+               ('hnsw', 'vector', 'vector_l2_ops'),
+               ('hnsw', 'vector', 'vector_ip_ops'),
+               ('hnsw', 'vector', 'vector_cosine_ops'),
+               ('hnsw', 'vector', 'vector_l1_ops'),
+               ('hnsw', 'halfvec', 'halfvec_l2_ops'),
+               ('hnsw', 'halfvec', 'halfvec_ip_ops'),
+               ('hnsw', 'halfvec', 'halfvec_cosine_ops'),
+               ('hnsw', 'halfvec', 'halfvec_l1_ops'),
+               ('hnsw', 'sparsevec', 'sparsevec_l2_ops'),
+               ('hnsw', 'sparsevec', 'sparsevec_ip_ops'),
+               ('hnsw', 'sparsevec', 'sparsevec_cosine_ops'),
+               ('hnsw', 'sparsevec', 'sparsevec_l1_ops'),
+               ('hnsw', 'bitvec', 'bit_hamming_ops'),
+               ('hnsw', 'bitvec', 'bit_jaccard_ops'),
+               ('ivfflat', 'vector', 'vector_l2_ops'),
+               ('ivfflat', 'vector', 'vector_ip_ops'),
+               ('ivfflat', 'vector', 'vector_cosine_ops'),
+               ('ivfflat', 'vector', 'vector_l1_ops'),
+               ('ivfflat', 'halfvec', 'halfvec_l2_ops'),
+               ('ivfflat', 'halfvec', 'halfvec_ip_ops'),
+               ('ivfflat', 'halfvec', 'halfvec_cosine_ops'),
+               ('ivfflat', 'halfvec', 'halfvec_l1_ops'),
+               ('ivfflat', 'bitvec', 'bit_hamming_ops'),
+               ('ivfflat', 'bitvec', 'bit_jaccard_ops')
+         ), actual AS (
+             SELECT method.amname::text AS method_name,
+                    type.typname::text AS type_name,
+                    opclass.opcname::text AS opclass_name,
+                    opclass.oid
+               FROM pg_catalog.pg_opclass AS opclass
+               JOIN pg_catalog.pg_am AS method ON method.oid = opclass.opcmethod
+               JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = opclass.opcnamespace
+               JOIN pg_catalog.pg_type AS type ON type.oid = opclass.opcintype
+               JOIN pg_catalog.pg_namespace AS type_namespace ON type_namespace.oid = type.typnamespace
+               JOIN pg_catalog.pg_extension AS extension ON extension.extname = 'pgcontext'
+              WHERE method.amname IN ('hnsw', 'ivfflat')
+                AND namespace.nspname = 'pgcontext'
+                AND type_namespace.nspname = 'pgcontext'
+                AND opclass.opcowner = extension.extowner
+         )
+         SELECT (SELECT count(*) = 24 AND bool_and(pg_catalog.amvalidate(oid)) FROM actual)
+            AND NOT EXISTS (
+                SELECT method_name, type_name, opclass_name FROM expected
+                EXCEPT
+                SELECT method_name, type_name, opclass_name FROM actual
+            )
+            AND NOT EXISTS (
+                SELECT method_name, type_name, opclass_name FROM actual
+                EXCEPT
+                SELECT method_name, type_name, opclass_name FROM expected
+            )",
+    )
+    .unwrap_or(Some(false))
+    .unwrap_or(false)
+}
+
+fn create_name_facade_opclass(
+    access_method: &str,
+    type_name: &str,
+    opclass_name: &str,
+    operator: &str,
+    support_function: &str,
+    order_family: &str,
+    storage: bool,
+) {
+    let storage_clause = if storage {
+        ", STORAGE pgcontext.vector"
+    } else {
+        ""
+    };
+    run_binding_sql(
+        &format!(
+            "CREATE OPERATOR CLASS pgcontext.{opclass_name} \
+             FOR TYPE pgcontext.{type_name} USING {access_method} AS \
+             OPERATOR 1 pgcontext.{operator} (pgcontext.{type_name}, pgcontext.{type_name}) \
+                 FOR ORDER BY pg_catalog.{order_family}, \
+             FUNCTION 1 pgcontext.{support_function}(pgcontext.{type_name}, pgcontext.{type_name})\
+             {storage_clause}"
+        ),
+        "create pgvector name-facade opclass",
+    );
+}
+
+fn install_name_facade_opclasses() {
+    let dense_metrics = [
+        ("vector_l2_ops", "<->", "hnsw_l2_distance"),
+        ("vector_ip_ops", "<#>", "negative_inner_product"),
+        ("vector_cosine_ops", "<=>", "cosine_distance"),
+        ("vector_l1_ops", "<+>", "l1_distance"),
+    ];
+    let half_metrics = [
+        ("halfvec_l2_ops", "<->", "halfvec_l2_distance"),
+        ("halfvec_ip_ops", "<#>", "halfvec_negative_inner_product"),
+        ("halfvec_cosine_ops", "<=>", "halfvec_cosine_distance"),
+        ("halfvec_l1_ops", "<+>", "halfvec_l1_distance"),
+    ];
+    for access_method in ["hnsw", "ivfflat"] {
+        for (name, operator, function) in dense_metrics {
+            create_name_facade_opclass(
+                access_method,
+                "vector",
+                name,
+                operator,
+                function,
+                "float_ops",
+                false,
+            );
+        }
+        for (name, operator, function) in half_metrics {
+            create_name_facade_opclass(
+                access_method,
+                "halfvec",
+                name,
+                operator,
+                function,
+                "float_ops",
+                true,
+            );
+        }
+    }
+    for (name, operator, function) in [
+        ("sparsevec_l2_ops", "<->", "sparsevec_l2_distance"),
+        (
+            "sparsevec_ip_ops",
+            "<#>",
+            "sparsevec_negative_inner_product",
+        ),
+        ("sparsevec_cosine_ops", "<=>", "sparsevec_cosine_distance"),
+        ("sparsevec_l1_ops", "<+>", "sparsevec_l1_distance"),
+    ] {
+        create_name_facade_opclass(
+            "hnsw",
+            "sparsevec",
+            name,
+            operator,
+            function,
+            "float_ops",
+            true,
+        );
+    }
+    for access_method in ["hnsw", "ivfflat"] {
+        create_name_facade_opclass(
+            access_method,
+            "bitvec",
+            "bit_hamming_ops",
+            "<~>",
+            "bitvec_hamming_distance",
+            "integer_ops",
+            true,
+        );
+        create_name_facade_opclass(
+            access_method,
+            "bitvec",
+            "bit_jaccard_ops",
+            "<%>",
+            "bitvec_jaccard_distance",
+            "float_ops",
+            true,
+        );
+    }
+}
+
+/// Installs unqualified `hnsw` and `ivfflat` access-method aliases only when
+/// neither name is owned by another extension. Put `pgcontext` on search_path
+/// to use the pgvector-spelled opclass aliases with canonical pgContext types.
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext)]
+fn enable_pgvector_name_facade() {
+    require_pgvector_facade_owner();
+    let owned_access_methods = facade_access_methods_owned_by_pgcontext();
+    let owned_opclasses = facade_opclasses_owned_by_pgcontext();
+    if owned_access_methods == 2 && owned_opclasses == 24 && facade_opclasses_are_exact() {
+        return;
+    }
+    if owned_access_methods != 0 || owned_opclasses != 0 {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            "pgvector name facade is only partially owned by pgcontext",
+        );
+    }
+    let conflicting_names = Spi::get_one::<i64>(
+        "SELECT count(*)::bigint
+           FROM pg_catalog.pg_am
+          WHERE amname IN ('hnsw', 'ivfflat')",
+    )
+    .unwrap_or(Some(0))
+    .unwrap_or(0);
+    if conflicting_names != 0 {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
+            "cannot install pgvector name facade because hnsw or ivfflat is already owned; use pgcontext_hnsw and pgcontext_ivfflat explicitly",
+        );
+    }
+    for (name, handler) in [
+        ("hnsw", "pgcontext.hnsw_handler"),
+        ("ivfflat", "pgcontext.ivfflat_handler"),
+    ] {
+        run_binding_sql(
+            &format!("CREATE ACCESS METHOD {name} TYPE INDEX HANDLER {handler}"),
+            "create pgvector access-method facade",
+        );
+    }
+    install_name_facade_opclasses();
+}
+
+/// Removes the optional unqualified access-method aliases. Existing facade
+/// indexes make PostgreSQL fail with dependent-objects SQLSTATE `2BP01`.
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext)]
+fn disable_pgvector_name_facade() {
+    require_pgvector_facade_owner();
+    let owned_access_methods = facade_access_methods_owned_by_pgcontext();
+    let owned_opclasses = facade_opclasses_owned_by_pgcontext();
+    if owned_access_methods == 0 && owned_opclasses == 0 {
+        return;
+    }
+    if owned_access_methods != 2 || owned_opclasses != 24 || !facade_opclasses_are_exact() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            "pgvector name facade is only partially owned by pgcontext",
+        );
+    }
+    for access_method in ["hnsw", "ivfflat"] {
+        let opclasses = Spi::connect(|client| {
+            client
+                .select(
+                    "SELECT namespace.nspname::text, opclass.opcname::text
+                       FROM pg_catalog.pg_opclass AS opclass
+                       JOIN pg_catalog.pg_namespace AS namespace
+                         ON namespace.oid = opclass.opcnamespace
+                       JOIN pg_catalog.pg_am AS method
+                         ON method.oid = opclass.opcmethod
+                      WHERE method.amname = $1
+                        AND namespace.nspname = 'pgcontext'
+                      ORDER BY namespace.nspname, opclass.opcname",
+                    None,
+                    &[access_method.into()],
+                )?
+                .map(|row| {
+                    Ok::<_, spi::Error>((
+                        row.get::<String>(1)?.unwrap_or_default(),
+                        row.get::<String>(2)?.unwrap_or_default(),
+                    ))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .unwrap_or_else(|error| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                format!("failed to inventory pgvector facade opclasses: {error}"),
+            )
+        });
+        for (namespace, name) in opclasses {
+            remove_binding_object(
+                &format!(
+                    "DROP OPERATOR CLASS {}.{} USING {access_method} RESTRICT",
+                    quote_ident(&namespace),
+                    quote_ident(&name),
+                ),
+                "pgvector name-facade opclass",
+            );
+        }
+    }
+    for name in ["hnsw", "ivfflat"] {
+        remove_binding_object(
+            &format!("DROP ACCESS METHOD {name} RESTRICT"),
+            "pgvector access-method facade",
+        );
+    }
 }
 
 /// One ANN operator family reachable on a column: the operator spelling
@@ -702,19 +1587,20 @@ fn compare_percentile(sorted_ms: &[f64], fraction: f64) -> f64 {
     sorted_ms[position.min(sorted_ms.len() - 1)]
 }
 
-/// Extracts `"Index Name": "..."` from an `EXPLAIN (FORMAT JSON)` payload
-/// without a JSON dependency; index names produced by this comparison flow
-/// are ordinary identifiers with no embedded quotes.
 fn compare_explain_index_name(explain_json: &str) -> Option<String> {
-    let key = "\"Index Name\"";
-    let after_key = explain_json.find(key)? + key.len();
-    let rest = &explain_json[after_key..];
-    let colon = rest.find(':')?;
-    let rest = &rest[colon + 1..];
-    let open_quote = rest.find('"')?;
-    let rest = &rest[open_quote + 1..];
-    let close_quote = rest.find('"')?;
-    Some(rest[..close_quote].to_owned())
+    fn find_index_name(value: &serde_json::Value) -> Option<&str> {
+        match value {
+            serde_json::Value::Object(object) => object
+                .get("Index Name")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| object.values().find_map(find_index_name)),
+            serde_json::Value::Array(values) => values.iter().find_map(find_index_name),
+            _ => None,
+        }
+    }
+
+    let document: serde_json::Value = serde_json::from_str(explain_json).ok()?;
+    find_index_name(&document).map(str::to_owned)
 }
 
 /// Measures every ANN index on one column side by side: for each operator
@@ -781,7 +1667,9 @@ fn compare_indexes(
                                       AND a.attnum = i.indkey[0]
                   WHERE ct.oid = $1::regclass
                     AND a.attname = $2
-                    AND am.amname IN ('hnsw', 'ivfflat', 'pgcontext_hnsw')
+                    AND am.amname IN (
+                        'hnsw', 'ivfflat', 'pgcontext_hnsw', 'pgcontext_ivfflat'
+                    )
                   ORDER BY ci.relname",
                 None,
                 &[table_name.clone().into(), column_name.clone().into()],

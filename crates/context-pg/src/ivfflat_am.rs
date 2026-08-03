@@ -3001,6 +3001,57 @@ CREATE OPERATOR CLASS pgcontext.bitvec_ivfflat_jaccard_ops
     OPERATOR 1 pgcontext.<%> (pgcontext.bitvec, pgcontext.bitvec) FOR ORDER BY pg_catalog.float_ops,
     FUNCTION 1 pgcontext.bitvec_jaccard_distance(pgcontext.bitvec, pgcontext.bitvec),
     STORAGE pgcontext.vector;
+
+-- Pgvector-spelled aliases are scoped by access method and schema, so the
+-- same names coexist with the HNSW aliases without changing native ownership.
+CREATE OPERATOR CLASS pgcontext.vector_l2_ops
+    FOR TYPE pgcontext.vector USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<-> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.hnsw_l2_distance(pgcontext.vector, pgcontext.vector);
+CREATE OPERATOR CLASS pgcontext.vector_ip_ops
+    FOR TYPE pgcontext.vector USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<#> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.negative_inner_product(pgcontext.vector, pgcontext.vector);
+CREATE OPERATOR CLASS pgcontext.vector_cosine_ops
+    FOR TYPE pgcontext.vector USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<=> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.cosine_distance(pgcontext.vector, pgcontext.vector);
+CREATE OPERATOR CLASS pgcontext.vector_l1_ops
+    FOR TYPE pgcontext.vector USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<+> (pgcontext.vector, pgcontext.vector) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.l1_distance(pgcontext.vector, pgcontext.vector);
+
+CREATE OPERATOR CLASS pgcontext.halfvec_l2_ops
+    FOR TYPE pgcontext.halfvec USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<-> (pgcontext.halfvec, pgcontext.halfvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.halfvec_l2_distance(pgcontext.halfvec, pgcontext.halfvec),
+    STORAGE pgcontext.vector;
+CREATE OPERATOR CLASS pgcontext.halfvec_ip_ops
+    FOR TYPE pgcontext.halfvec USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<#> (pgcontext.halfvec, pgcontext.halfvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.halfvec_negative_inner_product(pgcontext.halfvec, pgcontext.halfvec),
+    STORAGE pgcontext.vector;
+CREATE OPERATOR CLASS pgcontext.halfvec_cosine_ops
+    FOR TYPE pgcontext.halfvec USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<=> (pgcontext.halfvec, pgcontext.halfvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.halfvec_cosine_distance(pgcontext.halfvec, pgcontext.halfvec),
+    STORAGE pgcontext.vector;
+CREATE OPERATOR CLASS pgcontext.halfvec_l1_ops
+    FOR TYPE pgcontext.halfvec USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<+> (pgcontext.halfvec, pgcontext.halfvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.halfvec_l1_distance(pgcontext.halfvec, pgcontext.halfvec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.bit_hamming_ops
+    FOR TYPE pgcontext.bitvec USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<~> (pgcontext.bitvec, pgcontext.bitvec) FOR ORDER BY pg_catalog.integer_ops,
+    FUNCTION 1 pgcontext.bitvec_hamming_distance(pgcontext.bitvec, pgcontext.bitvec),
+    STORAGE pgcontext.vector;
+CREATE OPERATOR CLASS pgcontext.bit_jaccard_ops
+    FOR TYPE pgcontext.bitvec USING pgcontext_ivfflat AS
+    OPERATOR 1 pgcontext.<%> (pgcontext.bitvec, pgcontext.bitvec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.bitvec_jaccard_distance(pgcontext.bitvec, pgcontext.bitvec),
+    STORAGE pgcontext.vector;
 "#,
     name = "create_ivfflat_access_method",
     requires = ["pgcontext_bootstrap", "create_hnsw_access_method"]

@@ -1,142 +1,125 @@
 # Using pgContext Alongside pgvector
 
-pgContext and pgvector can be installed in either order. Their SQL types are
-separate extension-owned objects:
+pgContext and pgvector can be installed in either order on PostgreSQL 17 or
+18. Their types have distinct extension ownership and OIDs:
 
 - pgvector owns `public.vector`, `public.halfvec`, and `public.sparsevec`;
 - pgContext owns `pgcontext.vector`, `pgcontext.halfvec`,
   `pgcontext.sparsevec`, and `pgcontext.bitvec`.
 
-The type OIDs are intentionally distinct. The main `pgcontext` extension has no
-catalog dependency on the `vector` extension, so installing or dropping
-pgvector does not remove or disable canonical pgContext objects.
+The exact `pgcontext` extension-owner role owns all optional interoperability
+objects. They intentionally remain outside extension membership so `pg_dump`
+includes their DDL and live dependent indexes restore correctly. The former
+`pgcontext_pgvector` companion extension is retired and is not packaged.
 
-The optional `pgcontext_pgvector` companion is shipped as a separate extension
-artifact. Its certified profile is PostgreSQL 17, pgContext 0.2.0, and pgvector
-0.8.x installed in `public`; installation fails closed outside that profile.
+## Existing pgvector columns
+
+Install both extensions, then let the `pgcontext` extension owner enable the
+certified binding explicitly:
 
 ```sql
 CREATE EXTENSION vector;
 CREATE EXTENSION pgcontext;
-CREATE EXTENSION pgcontext_pgvector; -- only for existing pgvector columns
+SELECT pgcontext.enable_pgvector_binding();
 ```
 
-The reverse order is valid as well.
+The binding requires pgvector 0.8.x in `public`. It adds extension-owner-owned
+dense binary casts, validated sparse conversion casts, and HNSW opclasses over
+pgvector-owned types. Repeating the call is a no-op; a partial or foreign
+installation fails closed.
 
-## Existing pgvector columns
-
-The main extension does not pretend that a pgvector-owned column has a
-pgContext-owned type. Direct HNSW service over an existing `public.vector`,
-`public.halfvec`, or `public.sparsevec` column requires the separately installed
-`pgcontext_pgvector` companion extension. That privileged bridge owns only the
-certified dense binary casts, validated sparse conversion casts, and
-pgvector-operator-bound opclasses; it keeps the main extension's dependency
-boundary clean.
-
-`make install` installs both control/SQL artifacts. If the main extension was
-installed directly with `cargo pgrx install`, install the SQL-only companion
-and upgrade artifacts with
-`scripts/install-pgcontext-upgrades.sh /path/to/pg_config` and
-`scripts/install-pgvector-bridge.sh /path/to/pg_config` before
-running `CREATE EXTENSION pgcontext_pgvector`. The companion does not activate
-automatically and does not create pgvector itself.
-
-Build a pgContext index over the existing column without changing its type:
+Call the lifecycle functions as the exact extension owner, using `SET ROLE` if
+the session role is only a member of that role. `DROP EXTENSION pgcontext`
+remains restricted while optional objects exist; disable the binding or facade
+first. Facade lifecycle additionally requires that extension owner to be a
+superuser because PostgreSQL access-method DDL is superuser-only.
 
 ```sql
 CREATE INDEX items_embedding_pgc
     ON items USING pgcontext_hnsw
        (embedding pgcontext.vector_hnsw_pgvector_cosine_ops);
 
--- Existing pgvector-spelled SQL is unchanged and selects the index above.
 SELECT id
 FROM items
 ORDER BY embedding <=> $1::public.vector
 LIMIT 10;
 ```
 
-The bridge exact-rechecks and reranks its bounded ANN candidate set with the
-pgvector heap operator. This preserves pgvector's `double precision` distance
-semantics; the conservative initial lower bound favors correctness over scan
-work until a tighter certified bound is available.
+The scan exact-rechecks candidates with pgvector's source operator. Sparse
+values are decoded and validated at the binding boundary; values outside
+pgContext's documented sparse coordinate limit fail explicitly.
 
-An existing pgvector sparse column is indexed without retyping it:
+`pgcontext.disable_pgvector_binding()` removes the optional objects. PostgreSQL
+blocks it with dependent-object SQLSTATE `2BP01` while an index still uses a
+binding opclass. Disable the binding before dropping pgvector after completing
+an ownership conversion.
+
+## Conflict-safe pgvector names
+
+A database without pgvector can opt into unqualified `hnsw` and `ivfflat`
+access-method names:
 
 ```sql
-CREATE INDEX items_sparse_pgc
-    ON items USING pgcontext_hnsw
-       (lexical pgcontext.sparsevec_hnsw_pgvector_cosine_ops);
+CREATE EXTENSION pgcontext;
+SELECT pgcontext.enable_pgvector_name_facade();
 
-SELECT id
-FROM items
-ORDER BY lexical <=> $1::public.sparsevec
-LIMIT 10;
+SET search_path = pgcontext, public;
+CREATE INDEX items_embedding_hnsw
+    ON items USING hnsw (embedding vector_cosine_ops);
 ```
 
-pgContext currently accepts at most 16,000 sparse dimensions. Bridge index
-builds and conversion casts validate each packed pgvector datum and fail closed
-when a value exceeds that limit or is malformed. The current dense graph-record
-format also imposes a lower index-specific single-page envelope; index builds
-report that bound explicitly. The roadmap's sparse-native graph format removes
-both constraints for pgvector's full coordinate range.
+The facade uses canonical pgContext types and native pgContext storage. It does
+not claim pgvector's type OIDs or index-page format. Installation fails with
+duplicate-object SQLSTATE `42710` if either name is already owned, including
+when pgvector is installed. Existing facade indexes block
+`pgcontext.disable_pgvector_name_facade()` until they are dropped or rebuilt on
+`pgcontext_hnsw` or `pgcontext_ivfflat`.
 
-Without the bridge, `pgcontext.migration_report()` remains available
-as a read-only inventory. It discovers pgvector columns and indexes by extension
-ownership, reports arrays and dependency blockers, and detects both HNSW and
-IVFFlat. `pgcontext.adopt_pgvector(..., dry_run => true)` may be used to inspect
-the proposed bridge opclasses and preserved HNSW options. Executing the plan
-fails closed unless `pgcontext_pgvector` is installed.
-
-## Canonical pgContext columns
-
-New pgContext-owned columns should name the type explicitly:
+Use the always-available native names in shared databases:
 
 ```sql
-CREATE TABLE items (
-    id bigint PRIMARY KEY,
-    embedding pgcontext.vector(768) NOT NULL
-);
-
 CREATE INDEX items_embedding_hnsw
     ON items USING pgcontext_hnsw
        (embedding pgcontext.vector_hnsw_cosine_ops);
+
+CREATE INDEX items_embedding_ivf
+    ON items USING pgcontext_ivfflat
+       (embedding pgcontext.vector_ivfflat_cosine_ops)
+    WITH (lists = 100);
 ```
 
-These columns remain usable after `DROP EXTENSION vector`. Do not use
-`DROP EXTENSION vector CASCADE` as a migration mechanism for pgvector-owned
-application columns; use the inventory and ownership-conversion workflow.
+## Published compatibility inventory
 
-## Conversion boundary
+Query the executable matrix instead of assuming that a pgvector spelling is an
+alias:
 
-Dense `vector` and `halfvec` layouts are byte-certified and support the
-metadata-only `fast` conversion. `sparsevec` has a different physical layout,
-so fast conversion rejects it; use `restricted_online` to rewrite values
-through the validated packed codec in bounded batches. PostgreSQL exposes
-prepared statements only for the current backend, so drain or recycle
-application sessions at a type-ownership cutover.
+```sql
+SELECT * FROM pgcontext.pgvector_compatibility_inventory();
+```
 
-Use `pgcontext.start_pgvector_ownership_conversion` plus
-`run_pgvector_ownership_conversion` for an atomic metadata-only conversion, or
-select `restricted_online` for bounded shadow backfill and a caller-executed
-`CREATE INDEX CONCURRENTLY`. The online profile requires explicit INSERT column
-lists; both modes require explicit review of application and string-bodied
-stored-function dependencies that PostgreSQL cannot inventory. The online
-profile supports at most one source ANN index with the requested metric and
-requires the caller to have schema/index-build privileges. It refuses
-catalog-discoverable unsupported dependencies. After its drained cutover,
-`rollback_pgvector_ownership_conversion` restores the synchronized pgvector
-column and original index; `finalize_pgvector_ownership_conversion` instead
-removes that rollback boundary. See
-[Migrating from pgvector](pgvector_migration.md#converting-column-ownership) for
-the complete sequence and operational restrictions.
+The matrix classifies types, operators, helper families, HNSW, IVFFlat, and
+settings as `compatible`, `translated`, or `unsupported`. In particular,
+`ivfflat.probes`, `hnsw.ef_search`, and `ivfflat.iterative_scan` translate to
+documented pgContext settings. pgvector's HNSW iterative modes and expression
+indexes using `subvector`, `binary_quantize`, or vector arithmetic are rejected
+rather than silently accepted.
 
-Dropping either prerequisite is blocked while the bridge is installed. Bridge
-indexes in turn block `DROP EXTENSION pgcontext_pgvector` under `RESTRICT`.
-Remove or convert those indexes first; dropping the bridge then removes its
-casts, support functions, and opclasses without removing either parent
-extension.
+## Converting ownership
 
-Existing pgvector IVFFlat objects remain inventory-and-plan inputs. pgContext's
-native access method is named `pgcontext_ivfflat`; coexistence tooling does not
-reinterpret an existing pgvector index in place. Build and validate a new
-pgContext HNSW or IVFFlat index, then cut application plans over explicitly.
+`pgcontext.migration_report()` inventories pgvector columns and both ANN access
+methods without enabling the binding. The resumable conversion APIs support
+certified dense `vector` and `halfvec` metadata swaps and validated sparse
+rewrites. HNSW sources rebuild on `pgcontext_hnsw`; IVFFlat sources rebuild on
+`pgcontext_ivfflat` and preserve `lists`. Source pages are never reinterpreted.
+
+Fast conversion is atomic. Restricted-online conversion maintains a shadow
+column in the source DML transaction, checkpoints bounded backfill, emits the
+top-level concurrent-index command, and requires a session-drain attestation at
+cutover. Rollback restores untouched pgvector ownership and indexes;
+finalization removes the rollback boundary. See
+[Migrating from pgvector](pgvector_migration.md#converting-column-ownership).
+
+Prepared statements must be drained across a type-OID cutover. The preflight
+also rejects unsupported views, stored functions, expression indexes, arrays,
+domains, partitions, RLS, triggers, publications, comments, and custom storage
+or statistics rather than guessing how to rewrite application dependencies.

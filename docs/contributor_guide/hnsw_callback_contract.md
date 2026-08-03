@@ -27,11 +27,10 @@ implemented those later behaviors.
 | `pgcontext_hnsw_begin_scan` | `ambeginscan` | `hnsw_begin_scan_safe` | Index relation is live and counts are nonnegative and within the one-key/one-order-by AM limit | One Rust scan state until `amendscan` or scan-context reset |
 | `pgcontext_hnsw_rescan` | `amrescan` | `hnsw_rescan_safe` | Scan descriptor and optional arrays match bounded descriptor capacities | None |
 | `pgcontext_hnsw_get_tuple` | `amgettuple` | `hnsw_get_tuple_safe` | Scan descriptor and its opaque state remain live | None |
-| `pgcontext_hnsw_get_bitmap` | `amgetbitmap` | `hnsw_get_bitmap_safe` | Scan descriptor and TID bitmap are live for the call | None |
 | `pgcontext_hnsw_end_scan` | `amendscan` | `hnsw_end_scan_safe` | Descriptor owns zero or one Rust opaque state | None; opaque state is consumed once |
 | `pgcontext_hnsw_build_callback` | heap-build visitor | `hnsw_build_callback_safe` | Relation, tuple arrays, TID, and exclusive build state are live for the visitor call | None |
 
-All 16 entrypoints use pgrx `#[pg_guard]`. The 14 `IndexAmRoutine` callbacks
+All 16 entrypoints use pgrx `#[pg_guard]`. The 13 `IndexAmRoutine` callbacks
 are installed explicitly; the handler creates that routine and the heap-build
 visitor is passed synchronously to PostgreSQL's table index build scan.
 
@@ -76,12 +75,12 @@ callbacks only after releasing graph locks, as specified by the
 ## Review And Verification
 
 The executable inventory in `hnsw_am/callback_contract.rs` must remain in sync
-with this table. Focused unit tests prove inventory uniqueness, the 14-AM
+with this table. Focused unit tests prove inventory uniqueness, the 13-AM
 callback count, nonempty borrow contracts, safe-function pairing, callback
 allocation overflow rejection, rescan capacity rejection, and bounded pointer
 access. `scripts/check-hnsw-callback-guards.sh` invokes a dependency-free,
 token-aware Rust source scanner and mechanically reconciles that inventory with
-every unsafe `C-unwind` definition, the 14 direct callbacks installed in
+every unsafe `C-unwind` definition, the 13 direct callbacks installed in
 `IndexAmRoutine`, each `#[pg_guard]`, its local line-comment `SAFETY:` contract,
 its safe-function definition, and the wrapper's unique final-statement
 `self::` delegation. Direct module qualification prevents a block-local import

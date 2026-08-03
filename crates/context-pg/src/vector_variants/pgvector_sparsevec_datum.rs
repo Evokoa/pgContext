@@ -269,7 +269,7 @@ pub extern "C-unwind" fn pg_finfo_pgcontext_pgcontext_sparsevec_to_pgvector(
 /// # Safety
 ///
 /// PostgreSQL must call this through the matching strict one-argument SQL
-/// declaration in the `pgcontext_pgvector` bridge.
+/// declaration installed by the main extension's pgvector binding.
 #[pg_guard]
 #[unsafe(no_mangle)]
 pub unsafe extern "C-unwind" fn pgcontext_pgvector_sparsevec_to_pgcontext(
@@ -294,7 +294,7 @@ pub unsafe extern "C-unwind" fn pgcontext_pgvector_sparsevec_to_pgcontext(
 /// # Safety
 ///
 /// PostgreSQL must call this through the matching strict one-argument SQL
-/// declaration in the `pgcontext_pgvector` bridge.
+/// declaration installed by the main extension's pgvector binding.
 #[pg_guard]
 #[unsafe(no_mangle)]
 pub unsafe extern "C-unwind" fn pgcontext_pgcontext_sparsevec_to_pgvector(

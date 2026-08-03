@@ -8,17 +8,17 @@ license in `LICENSE.pgvector`.
 
 The only semantic adaptation is index DDL: source columns and query operators
 remain pgvector-owned, while `USING hnsw` and pgvector's HNSW opclasses are
-replaced with `USING pgcontext_hnsw` and the companion bridge opclasses. This
+replaced with `USING pgcontext_hnsw` and main-extension binding opclasses. This
 matches pgContext's migration contract: applications keep their existing
 pgvector columns and SQL but explicitly build a pgContext index.
 
-Run the profile against a PostgreSQL 17 server with `vector`, `pgcontext`, and
-`pgcontext_pgvector` installed:
+Run the profile against PostgreSQL 17 or 18 with `vector` and `pgcontext`
+installed. The runner enables the binding before executing the fixtures:
 
 ```sh
 scripts/check-pgvector-regression-compat.sh
 ```
 
-This is intentionally a bounded HNSW compatibility profile, not a claim that
-pgContext implements pgvector's IVFFlat access method or pgvector-specific
-HNSW GUCs.
+This is a bounded direct-serving profile. Native IVFFlat migration and setting
+translations are certified by the ownership-conversion and compatibility
+inventory gates rather than these HNSW-derived fixtures.

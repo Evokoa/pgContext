@@ -1,15 +1,14 @@
 # Migrating from pgvector
 
 pgContext supports an incremental coexistence workflow for existing pgvector
-databases. The two main extensions can be installed in either order because
-pgvector owns `public.*` types while pgContext owns canonical `pgcontext.*`
-types. Keep an existing pgvector column in place and install the certified
-`pgcontext_pgvector` companion bridge before building a `pgcontext_hnsw` index
-over it. The bridge profile is PostgreSQL 17 with pgContext 0.2.0 and pgvector
-0.8.x installed in `public`. Dense `vector` and `halfvec` layouts are
-byte-certified. Existing `public.sparsevec` columns can be indexed directly,
-and ownership conversion is available through a validated restricted-online
-rewrite because the sparse physical layouts differ. See
+databases on PostgreSQL 17 and 18. The extensions can be installed in either
+order because pgvector owns `public.*` types while pgContext owns canonical
+`pgcontext.*` types. The `pgcontext` extension owner may explicitly call
+`pgcontext.enable_pgvector_binding()` to add certified opclasses and casts for
+pgvector 0.8.x in `public`; there is no companion extension. Dense `vector` and
+`halfvec` layouts are byte-certified. Existing `public.sparsevec` columns can
+be indexed directly, and ownership conversion is available through a validated
+restricted-online rewrite because the sparse physical layouts differ. See
 [Trying pgContext on an Existing pgvector Database](pgvector_coexist.md) for
 the live workflow and inventory tools.
 
@@ -19,10 +18,11 @@ The 0.1→0.2 extension update deliberately refuses this legacy layout before
 mutation because `public.vector` belongs to pgvector. Export pgContext
 collection/vector/filter registrations and inventory every object depending on
 the old pgContext extension before any `DROP EXTENSION ... CASCADE`; CASCADE can
-remove application views/functions as well as indexes. Then install pgContext
-0.2 and `pgcontext_pgvector`, recreate the registrations and dependent objects,
-and rebuild `pgcontext_hnsw` indexes over the original unchanged pgvector
-columns. The upgrade preflight never rewrites or retypes those columns.
+remove application views/functions as well as indexes. Then install the current
+pgContext extension, enable its pgvector binding, recreate the registrations
+and dependent objects, and rebuild `pgcontext_hnsw` indexes over the original
+unchanged pgvector columns. The upgrade preflight never rewrites or retypes
+those columns.
 
 Explicit pgContext HNSW opclasses cover half and sparse L2, inner product,
 cosine, and L1, plus bit Hamming and Jaccard. The names and metric bindings are
@@ -47,15 +47,16 @@ columns reject mismatches with SQLSTATE `22023`. Intentional differences are
 documented with tests.
 
 An existing column owned by the pgvector extension can be indexed and
-registered through the companion bridge. Run `pgcontext.migration_report()` first:
+registered through the main-extension binding. Run
+`pgcontext.migration_report()` first:
 it verifies the type owner and reports defaults, arrays, generated columns,
 partitions, dependent views, and complex indexes that must be handled before an
 ownership cutover. Index adoption never changes the column type.
 
 ## Converting Column Ownership
 
-Install the certified bridge, inventory the target, and choose one of two
-fail-closed modes:
+Enable the certified binding when direct pgContext HNSW service over the source
+type is needed, inventory the target, and choose one of two fail-closed modes:
 
 ```sql
 SELECT *
@@ -77,13 +78,15 @@ FROM pgcontext.run_pgvector_ownership_conversion(
 Fast mode takes `ACCESS EXCLUSIVE`, refuses named prepared statements in the
 calling backend, changes a certified `public.vector`/`public.halfvec` column to
 the corresponding pgContext-owned type without rewriting the heap, and rebuilds
-certified pgvector HNSW or IVFFlat indexes as `pgcontext_hnsw`. Dimensioned
+certified pgvector HNSW indexes as `pgcontext_hnsw` and IVFFlat indexes as
+`pgcontext_ivfflat`. Dimensioned
 sources become an unmodified canonical base type plus a validated dimension
 CHECK constraint; `NOT NULL`, values, and index options/tablespace are
 preserved when the target AM can represent them. Because `pgcontext_hnsw` does
 not currently expose pgvector's per-index HNSW reloptions, a source HNSW index
-with nondefault options is refused rather than silently changed. IVFFlat `lists`
-is intentionally not translated when that access method is rebuilt as HNSW.
+with nondefault options is refused rather than silently changed. IVFFlat
+`lists` is preserved on the native IVFFlat rebuild; session-level
+`ivfflat.probes` translates to `pgcontext.ivfflat_probes`.
 Invalid source indexes and indexes with comments are also refused. The caller
 must retain `CREATE` on the table schema and on any preserved nondefault
 tablespace needed to rebuild an index.
@@ -91,7 +94,7 @@ The operation is one transaction.
 
 Fast mode deliberately rejects `public.sparsevec`: its packed pgvector layout
 is not binary-compatible with `pgcontext.sparsevec`, so a metadata-only type
-swap would corrupt values. Use restricted-online mode for sparsevec. The bridge
+swap would corrupt values. Use restricted-online mode for sparsevec. The binding
 decodes and validates pgvector's packed indices and values during backfill and
 same-transaction dual writes; conversion fails closed for malformed data or
 dimensions above pgContext's 16,000-dimension limit.
@@ -148,7 +151,8 @@ product, cosine, and L1, plus sparsevec restricted-online conversion and
 same-transaction writes on both sides of cutover. It compares exact distances
 before and after each conversion, terminates a backend between bounded online
 batches and resumes from the persisted cursor, validates rollback to untouched
-pgvector objects, drops both the bridge and pgvector after finalization, and
+pgvector objects, disables the main-extension binding and drops pgvector after
+finalization, and
 restores a custom format dump into a clean database. A pgvector-derived
 `pg_regress` profile also
 keeps the pgvector-owned columns and query operators unchanged while replacing
@@ -159,9 +163,9 @@ scripts/check-pgvector-ownership-conversion.sh
 scripts/check-pgvector-regression-compat.sh
 ```
 
-The regression profile is deliberately bounded to the supported PostgreSQL 17
-HNSW migration contract; it does not claim IVFFlat implementation or pgvector's
-HNSW-specific GUC surface.
+The regression and ownership gates run on PostgreSQL 17 and 18. They cover
+native HNSW and IVFFlat rebuilds, but do not claim binary compatibility with
+pgvector index pages or silently alias pgvector's HNSW iterative-scan modes.
 
 Online mode adds a physical column, so applications must use explicit INSERT
 column lists throughout the migration. PostgreSQL cannot inventory prepared SQL

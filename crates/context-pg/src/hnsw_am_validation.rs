@@ -447,9 +447,10 @@ unsafe fn hnsw_score_metric_from_bridge_candidates(
     candidates: &[(HnswScoreMetric, &'static str, pg_sys::Oid, &'static str)],
     type_name: &str,
 ) -> HnswMetricContract {
-    // SAFETY: Bridge input types may only be used through an opclass that is a
-    // member of the separately removable companion extension.
-    unsafe { ensure_hnsw_opclass_owner(index_relation, "pgcontext_pgvector") };
+    // SAFETY: Bridge input types may only use an opclass owned by the exact
+    // role that owns the main extension. The object remains outside extension
+    // membership so pg_dump emits its runtime-installed DDL.
+    unsafe { ensure_hnsw_opclass_owner(index_relation, "pgcontext") };
     for &(metric, support_name, return_type, operator_name) in candidates {
         // SAFETY: The caller provides a live initialized index relation and a
         // type OID already certified as an extension-owned pgvector type.
@@ -459,7 +460,7 @@ unsafe fn hnsw_score_metric_from_bridge_candidates(
                 support_name,
                 return_type,
                 type_oid,
-                "pgcontext_pgvector",
+                "pgcontext",
             )
         } {
             // SAFETY: Strategy 1 is required to be the matching operator owned
@@ -482,7 +483,7 @@ unsafe fn hnsw_score_metric_from_bridge_candidates(
     raise_sql_error(
         PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
         format!(
-            "HNSW pgvector {type_name} opclass must use a certified pgcontext_pgvector metric function"
+            "HNSW pgvector {type_name} opclass must use a certified pgcontext-owned metric function"
         ),
     )
 }
@@ -503,7 +504,7 @@ unsafe fn ensure_hnsw_opclass_owner(
     if opclass_oid == pg_sys::InvalidOid
         // SAFETY: The catalog lookup returned an opclass OID or InvalidOid.
         || !unsafe {
-            hnsw_object_owned_by_extension(
+            hnsw_object_owned_by_extension_role(
                 pg_sys::OperatorClassRelationId,
                 opclass_oid,
                 expected_extension,
@@ -512,7 +513,7 @@ unsafe fn ensure_hnsw_opclass_owner(
     {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
-            format!("HNSW opclass must be owned by extension {expected_extension}"),
+            format!("HNSW opclass must be owned by the {expected_extension} extension owner"),
         );
     }
 }
@@ -587,14 +588,26 @@ unsafe fn hnsw_support_proc_oid_matches(
         // SAFETY: `get_func_name` allocated this string with palloc.
         unsafe { pg_sys::pfree(support_name.cast()) };
     }
-    // SAFETY: Extension membership is checked against a catalog OID read from
-    // the live relation cache.
-    let valid_owner = unsafe {
-        hnsw_object_owned_by_extension(
-            pg_sys::ProcedureRelationId,
-            support_proc,
-            expected_extension,
-        )
+    // Dynamic pgvector bindings are dump-visible standalone objects owned by
+    // the main extension's owner. Canonical functions remain extension members.
+    let valid_owner = if expected_name.starts_with("_pgvector_") {
+        // SAFETY: The support OID came from live relcache metadata.
+        unsafe {
+            hnsw_object_owned_by_extension_role(
+                pg_sys::ProcedureRelationId,
+                support_proc,
+                expected_extension,
+            )
+        }
+    } else {
+        // SAFETY: The support OID came from live relcache metadata.
+        unsafe {
+            hnsw_object_owned_by_extension(
+                pg_sys::ProcedureRelationId,
+                support_proc,
+                expected_extension,
+            )
+        }
     };
     support_namespace == pgcontext_namespace
         && valid_name
@@ -727,6 +740,25 @@ unsafe fn hnsw_operator_oid_matches(
         }
 }
 
+unsafe fn hnsw_am_handler_oid(method_oid: pg_sys::Oid) -> pg_sys::Oid {
+    // SAFETY: AMOID is keyed by an arbitrary access-method OID and returns null
+    // for a missing object.
+    let tuple = unsafe {
+        pg_sys::SearchSysCache1(
+            pg_sys::SysCacheIdentifier::AMOID.cast_signed(),
+            pg_sys::ObjectIdGetDatum(method_oid),
+        )
+    };
+    if tuple.is_null() {
+        return pg_sys::InvalidOid;
+    }
+    // SAFETY: Copy the handler OID while the syscache tuple remains pinned.
+    let handler = unsafe { (*(pg_sys::GETSTRUCT(tuple) as pg_sys::Form_pg_am)).amhandler };
+    // SAFETY: The copied scalar no longer borrows the tuple.
+    unsafe { pg_sys::ReleaseSysCache(tuple) };
+    handler
+}
+
 pub(crate) unsafe fn validate_vector_opclass_for_method(
     opclass_oid: pg_sys::Oid,
     method_name: &'static CStr,
@@ -757,9 +789,29 @@ pub(crate) unsafe fn validate_vector_opclass_for_method(
     // opclasses may live in any caller-owned schema; bridge opclasses are
     // separately constrained by extension ownership below.
     let expected_method = unsafe { pg_sys::get_am_oid(method_name.as_ptr(), true) };
-    if method == pg_sys::InvalidOid || method != expected_method {
+    let facade_name = if method_name.to_bytes() == b"pgcontext_hnsw" {
+        Some(c"hnsw")
+    } else if method_name.to_bytes() == b"pgcontext_ivfflat" {
+        Some(c"ivfflat")
+    } else {
+        None
+    };
+    let facade_method = facade_name
+        // SAFETY: Every facade name above is a static catalog identifier.
+        .map(|name| unsafe { pg_sys::get_am_oid(name.as_ptr(), true) })
+        .unwrap_or(pg_sys::InvalidOid);
+    if method == pg_sys::InvalidOid
+        || expected_method == pg_sys::InvalidOid
+        || (method != expected_method
+            && (method != facade_method
+                // SAFETY: Both AM OIDs came from pg_am. A facade is valid only
+                // when it points to the exact canonical handler.
+                || unsafe { hnsw_am_handler_oid(method) }
+                    != unsafe { hnsw_am_handler_oid(expected_method) }))
+    {
         return false;
     }
+    let standalone_facade = method == facade_method && method != expected_method;
 
     // SAFETY: Static type lookups resolve the canonical and optionally
     // installed pgvector input types for exact OID comparison.
@@ -804,6 +856,7 @@ pub(crate) unsafe fn validate_vector_opclass_for_method(
                 family,
                 input_type,
                 &candidates,
+                standalone_facade,
                 "pgcontext",
                 "pgcontext",
                 "pgcontext",
@@ -823,6 +876,7 @@ pub(crate) unsafe fn validate_vector_opclass_for_method(
                 family,
                 input_type,
                 &candidates,
+                standalone_facade,
                 "pgcontext",
                 "pgcontext",
                 "pgcontext",
@@ -842,6 +896,7 @@ pub(crate) unsafe fn validate_vector_opclass_for_method(
                 family,
                 input_type,
                 &candidates,
+                standalone_facade,
                 "pgcontext",
                 "pgcontext",
                 "pgcontext",
@@ -859,6 +914,7 @@ pub(crate) unsafe fn validate_vector_opclass_for_method(
                 family,
                 input_type,
                 &candidates,
+                standalone_facade,
                 "pgcontext",
                 "pgcontext",
                 "pgcontext",
@@ -887,6 +943,7 @@ pub(crate) unsafe fn validate_vector_opclass_for_method(
                 family,
                 input_type,
                 &candidates,
+                standalone_facade,
                 "pgcontext",
                 "pgcontext",
                 "pgcontext",
@@ -907,7 +964,8 @@ pub(crate) unsafe fn validate_vector_opclass_for_method(
                 family,
                 input_type,
                 &candidates,
-                "pgcontext_pgvector",
+                standalone_facade,
+                "pgcontext",
                 "public",
                 "vector",
             )
@@ -926,7 +984,8 @@ pub(crate) unsafe fn validate_vector_opclass_for_method(
                 family,
                 input_type,
                 &candidates,
-                "pgcontext_pgvector",
+                standalone_facade,
+                "pgcontext",
                 "public",
                 "vector",
             )
@@ -949,7 +1008,8 @@ pub(crate) unsafe fn validate_vector_opclass_for_method(
                 family,
                 input_type,
                 &candidates,
-                "pgcontext_pgvector",
+                standalone_facade,
+                "pgcontext",
                 "public",
                 "vector",
             )
@@ -964,21 +1024,37 @@ unsafe fn hnsw_validate_opclass_candidates(
     family: pg_sys::Oid,
     input_type: pg_sys::Oid,
     candidates: &[(&'static str, pg_sys::Oid, &'static str)],
+    standalone_facade: bool,
     opclass_and_support_extension: &'static str,
     operator_namespace: &'static str,
     operator_extension: &'static str,
 ) -> bool {
-    // SAFETY: Extension ownership accepts the catalog OID supplied by
-    // amvalidate. Bridge opclasses, unlike canonical custom opclasses, must be
-    // members of the separately removable companion extension.
-    if opclass_and_support_extension == "pgcontext_pgvector"
-        && !unsafe {
-            hnsw_object_owned_by_extension(
-                pg_sys::OperatorClassRelationId,
-                opclass_oid,
-                opclass_and_support_extension,
-            )
-        }
+    let dynamic_pgvector_binding = candidates
+        .iter()
+        .all(|(support_name, _, _)| support_name.starts_with("_pgvector_"));
+    // Dynamic bindings stay outside extension membership so pg_dump includes
+    // them, but they must be owned by the exact main-extension owner. Canonical
+    // opclasses remain extension members.
+    if opclass_and_support_extension == "pgcontext"
+        && !(if dynamic_pgvector_binding || standalone_facade {
+            // SAFETY: amvalidate supplied the live opclass OID.
+            unsafe {
+                hnsw_object_owned_by_extension_role(
+                    pg_sys::OperatorClassRelationId,
+                    opclass_oid,
+                    opclass_and_support_extension,
+                )
+            }
+        } else {
+            // SAFETY: amvalidate supplied the live opclass OID.
+            unsafe {
+                hnsw_object_owned_by_extension(
+                    pg_sys::OperatorClassRelationId,
+                    opclass_oid,
+                    opclass_and_support_extension,
+                )
+            }
+        })
     {
         return false;
     }
@@ -1096,6 +1172,80 @@ unsafe fn hnsw_object_owned_by_extension(
     // SAFETY: `get_extension_name` allocated this string with palloc.
     unsafe { pg_sys::pfree(extension_name.cast()) };
     matches
+}
+
+unsafe fn hnsw_object_owned_by_extension_role(
+    class_id: pg_sys::Oid,
+    object_id: pg_sys::Oid,
+    expected_extension: &str,
+) -> bool {
+    if expected_extension != "pgcontext" {
+        return false;
+    }
+    // SAFETY: The static extension name is nul-terminated; missing extensions
+    // return InvalidOid without raising.
+    let extension_oid = unsafe { pg_sys::get_extension_oid(c"pgcontext".as_ptr(), true) };
+    if extension_oid == pg_sys::InvalidOid {
+        return false;
+    }
+    #[cfg(feature = "pg17")]
+    let extension_cache = pg_sys::SysCacheIdentifier::ZEXTENSIONOID;
+    #[cfg(feature = "pg18")]
+    let extension_cache = pg_sys::SysCacheIdentifier::EXTENSIONOID;
+    // SAFETY: The version-specific extension-OID cache is keyed by the live
+    // extension OID.
+    let extension_tuple = unsafe {
+        pg_sys::SearchSysCache1(
+            extension_cache.cast_signed(),
+            pg_sys::ObjectIdGetDatum(extension_oid),
+        )
+    };
+    if extension_tuple.is_null() {
+        return false;
+    }
+    // SAFETY: Copy the scalar owner OID while the syscache tuple is pinned.
+    let extension_owner = unsafe {
+        (*(pg_sys::GETSTRUCT(extension_tuple) as pg_sys::Form_pg_extension)).extowner
+    };
+    // SAFETY: The copied value no longer borrows the tuple.
+    unsafe { pg_sys::ReleaseSysCache(extension_tuple) };
+
+    let (cache, owner) = if class_id == pg_sys::ProcedureRelationId {
+        // SAFETY: PROCOID is keyed by an arbitrary procedure OID and returns
+        // null for a missing object.
+        let tuple = unsafe {
+            pg_sys::SearchSysCache1(
+                pg_sys::SysCacheIdentifier::PROCOID.cast_signed(),
+                pg_sys::ObjectIdGetDatum(object_id),
+            )
+        };
+        if tuple.is_null() {
+            return false;
+        }
+        // SAFETY: Copy the owner OID before releasing the tuple below.
+        let owner = unsafe { (*(pg_sys::GETSTRUCT(tuple) as pg_sys::Form_pg_proc)).proowner };
+        (tuple, owner)
+    } else if class_id == pg_sys::OperatorClassRelationId {
+        // SAFETY: CLAOID is keyed by an arbitrary opclass OID and returns null
+        // for a missing object.
+        let tuple = unsafe {
+            pg_sys::SearchSysCache1(
+                pg_sys::SysCacheIdentifier::CLAOID.cast_signed(),
+                pg_sys::ObjectIdGetDatum(object_id),
+            )
+        };
+        if tuple.is_null() {
+            return false;
+        }
+        // SAFETY: Copy the owner OID before releasing the tuple below.
+        let owner = unsafe { (*(pg_sys::GETSTRUCT(tuple) as pg_sys::Form_pg_opclass)).opcowner };
+        (tuple, owner)
+    } else {
+        return false;
+    };
+    // SAFETY: The owner OID was copied from the pinned tuple.
+    unsafe { pg_sys::ReleaseSysCache(cache) };
+    owner == extension_owner
 }
 
 unsafe fn hnsw_certified_pgvector_type_oid(type_name: &'static CStr) -> pg_sys::Oid {

@@ -74,12 +74,54 @@ ${PSQL} -d postgres -v ON_ERROR_STOP=1 \
 
 q "CREATE EXTENSION vector;
    CREATE EXTENSION pgcontext;
-   CREATE EXTENSION pgcontext_pgvector;
+   SELECT pgcontext.enable_pgvector_binding();
    DROP ROLE IF EXISTS conversion_owner;
    DROP ROLE IF EXISTS conversion_intruder;
    CREATE ROLE conversion_owner;
    GRANT USAGE ON SCHEMA public, pgcontext TO conversion_owner;
    GRANT CREATE ON SCHEMA public TO conversion_owner" >/dev/null
+
+# A same-signature sparse cast wired to the wrong function must fail the shared
+# exact binding predicate before a conversion job or catalog mutation exists.
+q "CREATE TABLE conversion_tampered_binding (
+     id bigint PRIMARY KEY,
+     embedding public.sparsevec(3) NOT NULL
+   );
+   INSERT INTO conversion_tampered_binding VALUES (1, '{1:1}/3');
+   DROP CAST (public.sparsevec AS pgcontext.sparsevec);
+   CREATE FUNCTION pgcontext._wrong_sparsevec_to_pgcontext(public.sparsevec)
+   RETURNS pgcontext.sparsevec
+   LANGUAGE SQL IMMUTABLE STRICT PARALLEL SAFE
+   RETURN NULL::pgcontext.sparsevec;
+   CREATE CAST (public.sparsevec AS pgcontext.sparsevec)
+   WITH FUNCTION pgcontext._wrong_sparsevec_to_pgcontext(public.sparsevec)
+   AS ASSIGNMENT" >/dev/null
+tamper_jobs_before=$(q "SELECT count(*) FROM pgcontext._pgvector_ownership_conversions")
+expect_failure_matching \
+  "ownership conversion with rewired sparse cast" \
+  "SELECT pgcontext.start_pgvector_ownership_conversion(
+     'conversion_tampered_binding'::pg_catalog.regclass,
+     'embedding',
+     'fast',
+     'cosine',
+     application_dependencies_reviewed => true
+   )" \
+  "requires the exact binding installed by pgcontext.enable_pgvector_binding()"
+tamper_jobs_after=$(q "SELECT count(*) FROM pgcontext._pgvector_ownership_conversions")
+[[ "${tamper_jobs_after}" == "${tamper_jobs_before}" ]] \
+  || fail "tampered binding created an ownership-conversion job"
+tamper_type=$(q "SELECT pg_catalog.format_type(atttypid, atttypmod)
+                   FROM pg_catalog.pg_attribute
+                  WHERE attrelid = 'conversion_tampered_binding'::pg_catalog.regclass
+                    AND attname = 'embedding'")
+[[ "${tamper_type}" == "sparsevec(3)" ]] \
+  || fail "tampered binding changed the source column type to ${tamper_type}"
+q "DROP CAST (public.sparsevec AS pgcontext.sparsevec);
+   DROP FUNCTION pgcontext._wrong_sparsevec_to_pgcontext(public.sparsevec);
+   CREATE CAST (public.sparsevec AS pgcontext.sparsevec)
+   WITH FUNCTION pgcontext._pgvector_sparsevec_to_pgcontext(public.sparsevec)
+   AS ASSIGNMENT;
+   DROP TABLE conversion_tampered_binding" >/dev/null
 
 # Fast mode must be metadata-only, preserve values/NOT NULL, and rebuild every
 # supported source ANN index under a canonical pgContext opclass.
@@ -196,8 +238,13 @@ ivfflat_replacement=$(q "SELECT access_method.amname || ':' || opclass.opcname
                            JOIN pg_catalog.pg_am AS access_method ON access_method.oid = relation.relam
                            JOIN pg_catalog.pg_opclass AS opclass ON opclass.oid = index.indclass[0]
                           WHERE relation.relname = 'conversion_ivfflat_ann'")
-[[ "${ivfflat_replacement}" == "pgcontext_hnsw:vector_hnsw_ops" ]] \
-  || fail "IVFFlat was not rebuilt as canonical HNSW: ${ivfflat_replacement}"
+[[ "${ivfflat_replacement}" == "pgcontext_ivfflat:vector_ivfflat_ops" ]] \
+  || fail "IVFFlat was not rebuilt as canonical IVFFlat: ${ivfflat_replacement}"
+ivfflat_lists=$(q "SELECT reloptions::text
+                      FROM pg_catalog.pg_class
+                     WHERE relname = 'conversion_ivfflat_ann'")
+[[ "${ivfflat_lists}" == "{lists=1}" ]] \
+  || fail "IVFFlat list count was not preserved: ${ivfflat_lists}"
 
 # The supported online profile backfills in bounded calls, exposes the
 # concurrent command rather than nesting it in SPI, preserves writes in both
@@ -347,12 +394,10 @@ q "UPDATE conversion_online SET embedding = '[0.25,0.75,0]' WHERE id = 1" >/dev/
 reverse_guard=$(q "SELECT embedding::text = \"${backup_column}\"::text
                      FROM conversion_online WHERE id = 1")
 [[ "${reverse_guard}" == "t" ]] || fail "cutover trigger did not maintain the rollback column"
-q "DROP TRIGGER \"${trigger_name}\" ON conversion_online;
-   DROP EXTENSION pgcontext_pgvector" >/dev/null
+q "DROP TRIGGER \"${trigger_name}\" ON conversion_online" >/dev/null
 online_status=$(q_owner "SELECT status FROM pgcontext.rollback_pgvector_ownership_conversion(${online_id})")
 [[ "${online_status}" == "rolled_back" ]] \
   || fail "online rollback after trigger loss ended in ${online_status}"
-q "CREATE EXTENSION pgcontext_pgvector" >/dev/null
 rollback_binding=$(q "SELECT namespace.nspname || '.' || type.typname || ':' || attribute.attnotnull
                         FROM pg_catalog.pg_attribute AS attribute
                         JOIN pg_catalog.pg_type AS type ON type.oid = attribute.atttypid
@@ -568,7 +613,7 @@ expect_failure_matching "unrepresentable source index options" \
      'conversion_index_options'::pg_catalog.regclass, 'embedding', 'fast', 'l2',
      application_dependencies_reviewed => true
    )" \
-  "per-index options that pgcontext_hnsw cannot preserve"
+  "reloptions that pgcontext_hnsw cannot preserve"
 expect_failure_matching "source index comment preservation" \
   "SET SESSION AUTHORIZATION conversion_owner;
    SELECT * FROM pgcontext.start_pgvector_ownership_conversion(
@@ -638,7 +683,7 @@ expect_failure_matching "relocated pgvector extension" \
    SELECT * FROM pgcontext.start_pgvector_ownership_conversion(
      'conversion_online'::pg_catalog.regclass, 'embedding', 'fast', 'cosine'
    )" \
-  "requires the certified"
+  "requires pgvector 0.8.x in public"
 q "ALTER EXTENSION vector SET SCHEMA public;
    DROP SCHEMA vector_moved" >/dev/null
 
@@ -736,7 +781,7 @@ q "DROP TABLE conversion_online, conversion_prepared, conversion_blocked,
    DROP SCHEMA conversion_intruder_schema CASCADE;
    DROP OWNED BY conversion_intruder;
    DROP ROLE conversion_intruder;
-   DROP EXTENSION pgcontext_pgvector;
+   SELECT pgcontext.disable_pgvector_binding();
    DROP EXTENSION vector" >/dev/null
 canonical_rows=$(q "SELECT count(*) FROM conversion_fast")
 [[ "${canonical_rows}" == "3" ]] || fail "canonical fast data failed after pgvector removal"
@@ -761,7 +806,7 @@ ${PG_RESTORE} --exit-on-error --no-owner --dbname="${RESTORE_DB}" "${DUMP_FILE}"
 restored_extensions=$(${PSQL} -d "${RESTORE_DB}" -v ON_ERROR_STOP=1 -Atq \
   -c "SELECT pg_catalog.string_agg(extname, ',' ORDER BY extname)
         FROM pg_catalog.pg_extension
-       WHERE extname IN ('pgcontext', 'pgcontext_pgvector', 'vector')")
+       WHERE extname IN ('pgcontext', 'vector')")
 [[ "${restored_extensions}" == "pgcontext" ]] \
   || fail "restored database has unexpected vector extensions: ${restored_extensions}"
 restored_exact=$(${PSQL} -d "${RESTORE_DB}" -v ON_ERROR_STOP=1 -Atq \

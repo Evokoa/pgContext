@@ -17,9 +17,9 @@ import sys
 from collections.abc import Iterable, Sequence
 
 
-EXPECTED_CALLBACKS = 17
-EXPECTED_AM_CALLBACKS = 14
-EXPECTED_UNSAFE_ITEMS = 136
+EXPECTED_CALLBACKS = 16
+EXPECTED_AM_CALLBACKS = 13
+EXPECTED_UNSAFE_ITEMS = 137
 EXPECTED_INCLUDES = {
     ("hnsw_am.rs", "hnsw_am_callbacks.rs"),
     ("hnsw_am.rs", "hnsw_am_scan_callbacks.rs"),

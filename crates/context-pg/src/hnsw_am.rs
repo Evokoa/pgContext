@@ -59,7 +59,6 @@ use crate::vector_variants::{
     uint8vec_l2_distance, uint8vec_negative_inner_product,
 };
 
-mod bitmap;
 #[allow(
     dead_code,
     reason = "the executable callback inventory is consumed by tests and the source guard"
@@ -305,7 +304,10 @@ fn hnsw_index_am_routine() -> pg_sys::IndexAmRoutine {
         ambeginscan: Some(pgcontext_hnsw_begin_scan),
         amrescan: Some(pgcontext_hnsw_rescan),
         amgettuple: Some(pgcontext_hnsw_get_tuple),
-        amgetbitmap: Some(pgcontext_hnsw_get_bitmap),
+        // ANN order-by paths use amgettuple. Advertising a bitmap path lets
+        // PostgreSQL plan unordered scans, but an ANN candidate set cannot
+        // represent every heap row (including NULLs), so that path is invalid.
+        amgetbitmap: None,
         amendscan: Some(pgcontext_hnsw_end_scan),
         ..pg_sys::IndexAmRoutine::default()
     }

@@ -1,6 +1,6 @@
 // Scan-path AM callback fragment split from hnsw_am_callbacks.rs (source-hygiene
 // size target): amcostestimate, amvalidate, ambeginscan, amrescan,
-// amgettuple, amgetbitmap, amendscan, and their guarded delegates.
+// amgettuple, amendscan, and their guarded delegates.
 
 #[pg_guard]
 #[allow(unused_qualifications)]
@@ -571,45 +571,6 @@ pub(crate) unsafe fn hnsw_visible_heap_tid(
         )
     };
     visible.then_some((block_number, offset_number))
-}
-
-#[pg_guard]
-#[allow(unused_qualifications)]
-// SAFETY: PostgreSQL supplies a live scan descriptor and writable TIDBitmap.
-// TIDs are copied into PostgreSQL storage and temporary Rust vectors are not
-// retained after the guarded call.
-unsafe extern "C-unwind" fn pgcontext_hnsw_get_bitmap(
-    scan: pg_sys::IndexScanDesc,
-    bitmap: *mut pg_sys::TIDBitmap,
-) -> i64 {
-    // SAFETY: This anchor is created and dropped within the guarded callback.
-    let scope = unsafe { PgCallbackScope::new() };
-    // SAFETY: Guaranteed by the amgetbitmap callback contract above.
-    let scan = unsafe { scope.borrow(scan, "IndexScanDesc") };
-    // SAFETY: Guaranteed by the amgetbitmap callback contract above.
-    let bitmap = unsafe { scope.borrow_mut(bitmap, "TIDBitmap") };
-    self::hnsw_get_bitmap_safe(scan, bitmap)
-}
-
-fn hnsw_get_bitmap_safe(
-    scan: PgCallbackRef<'_, pg_sys::IndexScanDescData>,
-    bitmap: PgCallbackMut<'_, pg_sys::TIDBitmap>,
-) -> i64 {
-    // SAFETY: PostgreSQL passes a live scan descriptor and bitmap. The AM owns
-    // only copied TID values, and asks the bitmap heap scan to recheck rows
-    // because visibility and final predicates remain heap responsibilities.
-    unsafe {
-        let query = hnsw_orderby_query(scan.as_ptr());
-        let outcome =
-            hnsw_scan_candidates((*scan.as_ptr()).indexRelation, query.as_ref(), None);
-        let mut tids = bitmap::hnsw_bitmap_tids(&outcome.candidates);
-        let ntids = bitmap::hnsw_bitmap_tid_count(tids.len());
-        if ntids == 0 {
-            return 0;
-        }
-        pg_sys::tbm_add_tuples(bitmap.as_ptr(), tids.as_mut_ptr(), ntids, true);
-        i64::from(ntids)
-    }
 }
 
 #[pg_guard]

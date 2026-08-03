@@ -294,10 +294,11 @@ for semantics and caveats):
 - `pgcontext.adopt_pgvector(target regclass DEFAULT NULL, dry_run bool
   DEFAULT true, drop_old bool DEFAULT false)` returns
   `(index_name text, action text, command text, executed bool)` rows;
-  migrates pgvector `hnsw`/`ivfflat` indexes to `pgcontext_hnsw`
-  equivalents through the `pgcontext_pgvector` companion bridge. Dry-run by
-  default; execution fails closed when the bridge is absent. Only
-  extension-owned, usable, plain
+  migrates supported pgvector HNSW indexes to `pgcontext_hnsw` through the
+  main-extension binding. IVFFlat adoption is intentionally directed to the
+  ownership-conversion workflow so it is rebuilt as `pgcontext_ivfflat`, never
+  silently remapped to HNSW. Dry-run is the default. Only extension-owned,
+  usable, plain
   single-column indexes are accepted. HNSW build options and tablespace are
   preserved. If `drop_old` is requested, the replacement must first pass an
   exact-oracle recall gate; a failure aborts the transaction without dropping
@@ -308,9 +309,18 @@ for semantics and caveats):
   p95_ms float8, recall_at_10 float8)`, measured with sampled stored
   vectors against an exact same-operator oracle; indexes the planner
   never chose report NULL measurements. Read-only.
-- `pgcontext.enable_pgvector_binding()` always raises
-  `feature_not_supported` with companion-bridge guidance. pgContext and
-  pgvector themselves can be installed in either order.
+- `pgcontext.pgvector_compatibility_inventory()` publishes the executable
+  type, operator, function, access-method, and setting translation matrix.
+- `pgcontext.enable_pgvector_binding()` installs owner-only, idempotent casts,
+  support functions, and HNSW opclasses for pgvector 0.8.x in `public`. They
+  are standalone objects owned by the exact `pgcontext` extension-owner role,
+  so `pg_dump` emits them and their dependencies. `disable_pgvector_binding()`
+  removes them; live dependent indexes block removal with SQLSTATE `2BP01`.
+- `pgcontext.enable_pgvector_name_facade()` installs unqualified `hnsw` and
+  `ivfflat` access-method names plus pgvector-spelled opclasses for canonical
+  pgContext types only when neither name is owned. These are also standalone,
+  dump-visible objects owned by the exact superuser extension-owner role. The
+  inverse function fails closed with SQLSTATE `2BP01` while facade indexes exist.
 - `pgcontext.start_pgvector_ownership_conversion(target regclass,
   column_name text, mode text DEFAULT 'fast', metric text DEFAULT 'cosine',
   application_uses_column_lists bool DEFAULT false,
@@ -343,17 +353,19 @@ for semantics and caveats):
   in-flight relation/type OIDs are intentionally never resumed after restore.
 
 Ownership conversion is deliberately restricted to permanent ordinary heap
-tables and directly pgvector-owned `vector`/`halfvec` columns. It refuses
+tables and directly pgvector-owned `vector`, `halfvec`, or supported
+`sparsevec` columns. It refuses
 unsupported defaults, generated/dependent expressions, column ACLs, views,
 catalog-discoverable function dependencies, constraints, RLS policies, user triggers, publications, extended
 statistics, partitions/inheritance, replica identity, composite dependencies,
 column comments/nondefault storage/statistics, and complex or counterfeit
 indexes. Source HNSW indexes with per-index options are refused because the
-current `pgcontext_hnsw` AM cannot represent them; IVFFlat list options are
-intentionally discarded during the documented rebuild-as-HNSW conversion.
+current `pgcontext_hnsw` AM cannot represent them; IVFFlat `lists` is preserved
+when rebuilding on `pgcontext_ivfflat`.
 Invalid indexes and indexes with comments are refused rather than silently
 normalizing or losing metadata. Fast conversion uses a binary metadata type
-change and rebuilds certified source ANN indexes as HNSW; for a dimensioned
+change and rebuilds certified source ANN indexes on the matching native access
+method; for a dimensioned
 source it preserves the dimension invariant with a validated CHECK constraint
 so the heap is not rewritten. Restricted-online conversion supports at most one
 source ANN index and requires its metric to match the requested replacement.

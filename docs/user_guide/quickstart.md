@@ -15,9 +15,9 @@ PostgreSQL 17 instance selected by `pg_config`:
 make install PG_CONFIG=/path/to/postgresql-17/bin/pg_config
 ```
 
-The command writes the generated extension, its versioned upgrade SQL, and the
-optional pgvector bridge artifacts into that PostgreSQL installation and
-may require filesystem privileges appropriate to it. Connect as a role allowed
+The command writes the generated extension and its versioned upgrade SQL into
+that PostgreSQL installation and may require filesystem privileges appropriate
+to it. Connect as a role allowed
 to install extensions, then run the SQL below. The packaged HNSW/filter demo is
 documented separately in [Playground](playground.md).
 

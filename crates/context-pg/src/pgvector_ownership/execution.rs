@@ -226,8 +226,9 @@ pub(super) fn run_fast_conversion(state: &ConversionState) {
             .map(|name| format!(" TABLESPACE {}", quote_ident(name)))
             .unwrap_or_default();
         Spi::run(&format!(
-            "CREATE INDEX {} ON {relation} USING pgcontext_hnsw ({} {}){options}{tablespace}",
+            "CREATE INDEX {} ON {relation} USING {} ({} {}){options}{tablespace}",
             quote_ident(&plan.index_name),
+            plan.target_access_method.sql_name(),
             quote_ident(&state.source_column_name),
             plan.canonical_opclass,
         ))

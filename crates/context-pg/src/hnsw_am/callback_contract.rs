@@ -24,7 +24,7 @@ pub(super) struct HnswCallbackContract {
     pub(super) retention: HnswCallbackRetention,
 }
 
-pub(super) const HNSW_CALLBACK_CONTRACTS: [HnswCallbackContract; 17] = [
+pub(super) const HNSW_CALLBACK_CONTRACTS: [HnswCallbackContract; 16] = [
     HnswCallbackContract {
         callback: "pgcontext_hnsw_mapped_sql_drop",
         safe_inner: "mapped_hnsw_sql_drop_safe",
@@ -124,13 +124,6 @@ pub(super) const HNSW_CALLBACK_CONTRACTS: [HnswCallbackContract; 17] = [
         retention: HnswCallbackRetention::None,
     },
     HnswCallbackContract {
-        callback: "pgcontext_hnsw_get_bitmap",
-        safe_inner: "hnsw_get_bitmap_safe",
-        class: HnswCallbackClass::AccessMethod,
-        borrowed_inputs: "scan descriptor and TIDBitmap are live for the call",
-        retention: HnswCallbackRetention::None,
-    },
-    HnswCallbackContract {
         callback: "pgcontext_hnsw_end_scan",
         safe_inner: "hnsw_end_scan_safe",
         class: HnswCallbackClass::AccessMethod,
@@ -173,7 +166,7 @@ mod tests {
                 .iter()
                 .filter(|contract| contract.class == HnswCallbackClass::AccessMethod)
                 .count(),
-            14
+            13
         );
     }
 }

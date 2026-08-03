@@ -38,7 +38,7 @@ ${PSQL} -d postgres -v ON_ERROR_STOP=1 \
 ${PSQL} -d "${DB}" -v ON_ERROR_STOP=1 \
   -c "CREATE EXTENSION vector" \
   -c "CREATE EXTENSION pgcontext" \
-  -c "CREATE EXTENSION pgcontext_pgvector" >/dev/null
+  -c "SELECT pgcontext.enable_pgvector_binding()" >/dev/null
 
 connection_args=(--use-existing --dbname="${DB}")
 [[ -z "${PGHOST:-}" ]] || connection_args+=(--host="${PGHOST}")

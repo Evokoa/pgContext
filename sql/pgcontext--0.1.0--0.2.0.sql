@@ -40,10 +40,10 @@ BEGIN
            AND type.typname = 'vector'
            AND extension.extname = 'vector'
     ) THEN
-        RAISE EXCEPTION 'pgContext 0.1 pgvector-first coexistence requires a bridge reinstall for 0.2'
+        RAISE EXCEPTION 'pgContext 0.1 pgvector-first coexistence requires a clean reinstall'
             USING ERRCODE = '0A000',
                   DETAIL = 'No pgvector-owned type or user column was changed.',
-                  HINT = 'Export pgContext registrations and inventory every dependent object first; DROP EXTENSION pgcontext CASCADE can remove more than indexes. Install 0.2 plus pgcontext_pgvector, recreate registrations/dependents, and rebuild pgcontext_hnsw indexes over the unchanged pgvector columns.';
+                  HINT = 'Export pgContext registrations and inventory every dependent object first; DROP EXTENSION pgcontext CASCADE can remove more than indexes. Install the current pgcontext extension, call pgcontext.enable_pgvector_binding(), recreate registrations/dependents, and rebuild pgcontext_hnsw indexes over the unchanged pgvector columns.';
     END IF;
 END
 $pgcontext_upgrade_preflight$;

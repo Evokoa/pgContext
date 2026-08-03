@@ -2,9 +2,6 @@
 //! `tests.rs` to keep both under the source-hygiene size target.
 
 use super::*;
-use crate::hnsw_am::bitmap::{
-    checked_hnsw_bitmap_tid_count, hnsw_bitmap_tid_count, hnsw_bitmap_tids,
-};
 
 #[test]
 #[allow(clippy::panic)]
@@ -324,44 +321,6 @@ fn test_hnsw_config() -> context_index::Result<HnswConfig> {
         context_core::policy::DEFAULT_HNSW_EF_CONSTRUCTION,
         context_core::policy::DEFAULT_HNSW_EF_SEARCH,
     )
-}
-
-#[test]
-fn hnsw_bitmap_tids_preserve_candidate_heap_tids() {
-    let candidates = vec![
-        HnswScanCandidate {
-            heap_tid: 1,
-            score: 0.0,
-        },
-        HnswScanCandidate {
-            heap_tid: 42,
-            score: 1.0,
-        },
-    ];
-
-    let tids = hnsw_bitmap_tids(&candidates);
-    let round_tripped = tids
-        .iter()
-        .copied()
-        .map(item_pointer_to_u64)
-        .collect::<Vec<_>>();
-
-    assert_eq!(round_tripped, vec![1, 42]);
-}
-
-#[test]
-fn hnsw_bitmap_tids_return_empty_vector_for_empty_candidates() {
-    let tids = hnsw_bitmap_tids(&[]);
-
-    assert!(tids.is_empty());
-    assert_eq!(hnsw_bitmap_tid_count(tids.len()), 0);
-}
-
-#[test]
-fn checked_hnsw_bitmap_tid_count_rejects_overflow() {
-    let overflow = usize::try_from(i64::from(std::ffi::c_int::MAX) + 1).unwrap_or(usize::MAX);
-
-    assert_eq!(checked_hnsw_bitmap_tid_count(overflow), Err(overflow));
 }
 
 #[test]

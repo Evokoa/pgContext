@@ -6,7 +6,6 @@ hnsw_am.rs|extern|pgcontext_hnsw_build_empty|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_bulk_delete|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_cost_estimate|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_end_scan|guarded PostgreSQL AM callback
-hnsw_am.rs|extern|pgcontext_hnsw_get_bitmap|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_get_tuple|guarded PostgreSQL AM callback
 hnsw_am.rs|extern|pgcontext_hnsw_handler|guarded PostgreSQL AM handler
 hnsw_am.rs|extern|pgcontext_hnsw_insert|guarded PostgreSQL AM callback
@@ -25,6 +24,7 @@ hnsw_am.rs|fn|expand_hnsw_scan|continues a validated live PostgreSQL index scan 
 hnsw_am.rs|fn|hnsw_dense_from_datum|decodes a datum using its validated PostgreSQL type OID
 hnsw_am.rs|fn|hnsw_dense_score_metric_contract|reads live dense operator-class and certified result-type metadata
 hnsw_am.rs|fn|hnsw_certified_pgvector_type_oid|resolves an exact public type OID and certifies pgvector extension ownership
+hnsw_am.rs|fn|hnsw_am_handler_oid|reads the exact handler OID from a live PostgreSQL access-method catalog tuple
 hnsw_am.rs|fn|hnsw_index_opcintype|reads a live relation-cache OID array
 hnsw_am.rs|fn|hnsw_index_uses_certified_pgvector_type|classifies a live opclass input through certified catalog OIDs
 hnsw_am.rs|fn|hnsw_index_uses_integer_source_type|classifies a live opclass input through pgContext integer type OIDs
@@ -38,6 +38,7 @@ hnsw_am.rs|fn|hnsw_compact_smallest_pair|compacts one locked adjacent immutable 
 hnsw_am.rs|fn|hnsw_rotate_delta_relation|publishes one locked active delta as an immutable segment
 hnsw_am.rs|fn|hnsw_named_type_oid|resolves a schema-qualified type through PostgreSQL syscache metadata
 hnsw_am.rs|fn|hnsw_object_owned_by_extension|checks exact extension membership for a PostgreSQL catalog object
+hnsw_am.rs|fn|hnsw_object_owned_by_extension_role|compares a standalone catalog object's exact owner with the pgcontext extension owner
 hnsw_am.rs|fn|hnsw_operator_oid_matches|certifies an operator owner namespace name and signature from syscache metadata
 hnsw_am.rs|fn|hnsw_orderby_contract|certifies and caches a live index metric and pgvector binding
 hnsw_am.rs|fn|hnsw_orderby_query|reads a live PostgreSQL scan descriptor and key
@@ -53,7 +54,7 @@ hnsw_am.rs|fn|hnsw_score_metric_from_candidates|reads live relation and operator
 hnsw_am.rs|fn|hnsw_sort_family_matches|certifies the btree sort family referenced by a strategy operator
 hnsw_am.rs|fn|hnsw_support_proc_oid_matches|certifies support-procedure ownership name and signature
 hnsw_am.rs|fn|hnsw_support_proc_matches|reads PostgreSQL support-procedure metadata
-hnsw_am.rs|fn|hnsw_validate_opclass|validates a catalog opclass OID against the HNSW contract
+hnsw_am.rs|fn|validate_vector_opclass_for_method|validates a catalog opclass OID against the selected HNSW or IVFFlat contract
 hnsw_am.rs|fn|hnsw_validate_opclass_candidates|certifies opfamily strategy support and sort metadata
 hnsw_am.rs|fn|hnsw_vector_from_index_values|reads callback-bounded datum and null arrays
 hnsw_am.rs|fn|hnsw_visible_heap_tid|reads a live scan descriptor and heap snapshot

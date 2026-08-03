@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle};
 
-pub(super) const PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN: usize = 13;
+pub(super) const PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN: usize = 17;
 
 #[rustfmt::skip]
 pub(super) const PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS:
@@ -68,8 +68,28 @@ pub(super) const PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS:
             SqlLifecycle::Experimental,
         ),
         SqlContractObject::function(
+            "disable_pgvector_binding",
+            "",
+            SqlLifecycle::Experimental,
+        ),
+        SqlContractObject::function(
+            "enable_pgvector_name_facade",
+            "",
+            SqlLifecycle::Stable,
+        ),
+        SqlContractObject::function(
+            "disable_pgvector_name_facade",
+            "",
+            SqlLifecycle::Stable,
+        ),
+        SqlContractObject::function(
             "migration_report",
             "",
             SqlLifecycle::Experimental,
+        ),
+        SqlContractObject::function(
+            "pgvector_compatibility_inventory",
+            "",
+            SqlLifecycle::Stable,
         ),
     ];

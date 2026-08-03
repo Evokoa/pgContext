@@ -3,8 +3,8 @@ use pgrx::prelude::*;
 use super::execution::{required_shadow_attnum, validate_pre_cutover_state};
 use super::persistence::ConversionState;
 use super::validation::{
-    IndexPlan, canonical_opclass, collect_fast_index_plans, ensure_index_build_privileges,
-    resolve_conversion_target,
+    IndexPlan, TargetAccessMethod, canonical_opclass_for_access_method, collect_fast_index_plans,
+    ensure_index_build_privileges, resolve_conversion_target,
 };
 use super::{qualified_relation, quote_ident};
 use crate::error::raise_sql_error;
@@ -20,13 +20,21 @@ pub(super) fn create_index_command(state: &ConversionState) -> String {
     let target = validate_pre_cutover_state(state, false);
     let current_plans = collect_fast_index_plans(&target);
     ensure_index_build_privileges(&target, &current_plans);
-    let opclass = canonical_opclass(&state.source_type_name, &state.metric).unwrap_or_else(|| {
+    let source_plan = online_source_index_plan(state);
+    let target_access_method = source_plan
+        .as_ref()
+        .map_or(TargetAccessMethod::Hnsw, |plan| plan.target_access_method);
+    let opclass = canonical_opclass_for_access_method(
+        &state.source_type_name,
+        &state.metric,
+        target_access_method,
+    )
+    .unwrap_or_else(|| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             "persisted conversion metric has no canonical opclass",
         )
     });
-    let source_plan = online_source_index_plan(state);
     let options = source_plan
         .as_ref()
         .filter(|plan| !plan.options.is_empty())
@@ -38,9 +46,10 @@ pub(super) fn create_index_command(state: &ConversionState) -> String {
         .map(|name| format!(" TABLESPACE {}", quote_ident(name)))
         .unwrap_or_default();
     format!(
-        "CREATE INDEX CONCURRENTLY {} ON {} USING pgcontext_hnsw ({} {}){options}{tablespace}",
+        "CREATE INDEX CONCURRENTLY {} ON {} USING {} ({} {}){options}{tablespace}",
         quote_ident(&state.index_name),
         qualified_relation(&state.source_schema_name, &state.source_table_name),
+        target_access_method.sql_name(),
         quote_ident(&state.shadow_column_name),
         opclass,
     )
@@ -56,13 +65,21 @@ pub(super) fn drop_invalid_index_command(state: &ConversionState) -> String {
 
 pub(super) fn target_index_state(state: &ConversionState) -> TargetIndexState {
     let shadow_attnum = required_shadow_attnum(state);
-    let expected_opclass = canonical_opclass(&state.source_type_name, &state.metric)
-        .unwrap_or_else(|| {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                "persisted conversion metric has no canonical opclass",
-            )
-        });
+    let source_plan = online_source_index_plan(state);
+    let target_access_method = source_plan
+        .as_ref()
+        .map_or(TargetAccessMethod::Hnsw, |plan| plan.target_access_method);
+    let expected_opclass = canonical_opclass_for_access_method(
+        &state.source_type_name,
+        &state.metric,
+        target_access_method,
+    )
+    .unwrap_or_else(|| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "persisted conversion metric has no canonical opclass",
+        )
+    });
     let row = Spi::connect(|client| {
         let row = client
             .select(
@@ -153,7 +170,6 @@ pub(super) fn target_index_state(state: &ConversionState) -> TargetIndexState {
     else {
         return TargetIndexState::Missing;
     };
-    let source_plan = online_source_index_plan(state);
     let expected_options = source_plan
         .as_ref()
         .map(|plan| plan.options.as_slice())
@@ -163,7 +179,7 @@ pub(super) fn target_index_state(state: &ConversionState) -> TargetIndexState {
         .and_then(|plan| plan.tablespace.as_deref());
     if table_oid != state.source_table_oid
         || attnum != i32::from(shadow_attnum)
-        || access_method != "pgcontext_hnsw"
+        || access_method != target_access_method.sql_name()
         || namespace != "pgcontext"
         || format!("pgcontext.{opclass}") != expected_opclass
         || !simple_index

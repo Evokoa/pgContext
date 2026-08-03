@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `445e105bfa6e07ed3bc51d8a629c0854584044119b85b86a8e79db2a5900065f`
+Full SQL artifact SHA-256: `3b77677dad6c3ee1b9b0211adb3e05c7515b0070a0793ea8f46f36edcee689a9`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,13 +16,13 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 352 |
+| Functions | 356 |
 | Tables | 23 |
 | Views | 12 |
 | Triggers | 6 |
 | Casts | 35 |
 | Operators | 62 |
-| Operator classes | 46 |
+| Operator classes | 70 |
 | Aggregates | 12 |
 | Access methods | 2 |
 
@@ -162,6 +162,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"cutover_pgvector_ownership_conversion"`
 - `"delete_payload"`
 - `"delete_points"`
+- `"disable_pgvector_binding"`
+- `"disable_pgvector_name_facade"`
 - `"discover"`
 - `"drop_collection"`
 - `"drop_collection_alias"`
@@ -169,6 +171,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"embedding_profile_explain"`
 - `"embedding_profiles"`
 - `"enable_pgvector_binding"`
+- `"enable_pgvector_name_facade"`
 - `"encode_artifact_segment"`
 - `"enqueue_build_job"`
 - `"enqueue_hnsw_compaction"`
@@ -253,6 +256,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"model_versions"`
 - `"negative_inner_product"`
 - `"optimization_status"`
+- `"pgvector_compatibility_inventory"`
 - `"pgvector_ownership_conversions"`
 - `"product_quantize"`
 - `"product_reconstruct"`
@@ -516,6 +520,30 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 | `uint8vec_ivfflat_l1_ops` | operator class | pgcontext_ivfflat, uint8vec | Experimental |
 | `bitvec_ivfflat_hamming_ops` | operator class | pgcontext_ivfflat, bitvec | Experimental |
 | `bitvec_ivfflat_jaccard_ops` | operator class | pgcontext_ivfflat, bitvec | Experimental |
+| `vector_l2_ops` | operator class | pgcontext_hnsw, vector | Stable |
+| `vector_ip_ops` | operator class | pgcontext_hnsw, vector | Stable |
+| `vector_cosine_ops` | operator class | pgcontext_hnsw, vector | Stable |
+| `vector_l1_ops` | operator class | pgcontext_hnsw, vector | Stable |
+| `halfvec_l2_ops` | operator class | pgcontext_hnsw, halfvec | Stable |
+| `halfvec_ip_ops` | operator class | pgcontext_hnsw, halfvec | Stable |
+| `halfvec_cosine_ops` | operator class | pgcontext_hnsw, halfvec | Stable |
+| `halfvec_l1_ops` | operator class | pgcontext_hnsw, halfvec | Stable |
+| `sparsevec_l2_ops` | operator class | pgcontext_hnsw, sparsevec | Stable |
+| `sparsevec_ip_ops` | operator class | pgcontext_hnsw, sparsevec | Stable |
+| `sparsevec_cosine_ops` | operator class | pgcontext_hnsw, sparsevec | Stable |
+| `sparsevec_l1_ops` | operator class | pgcontext_hnsw, sparsevec | Stable |
+| `bit_hamming_ops` | operator class | pgcontext_hnsw, bitvec | Stable |
+| `bit_jaccard_ops` | operator class | pgcontext_hnsw, bitvec | Stable |
+| `vector_l2_ops` | operator class | pgcontext_ivfflat, vector | Stable |
+| `vector_ip_ops` | operator class | pgcontext_ivfflat, vector | Stable |
+| `vector_cosine_ops` | operator class | pgcontext_ivfflat, vector | Stable |
+| `vector_l1_ops` | operator class | pgcontext_ivfflat, vector | Stable |
+| `halfvec_l2_ops` | operator class | pgcontext_ivfflat, halfvec | Stable |
+| `halfvec_ip_ops` | operator class | pgcontext_ivfflat, halfvec | Stable |
+| `halfvec_cosine_ops` | operator class | pgcontext_ivfflat, halfvec | Stable |
+| `halfvec_l1_ops` | operator class | pgcontext_ivfflat, halfvec | Stable |
+| `bit_hamming_ops` | operator class | pgcontext_ivfflat, bitvec | Stable |
+| `bit_jaccard_ops` | operator class | pgcontext_ivfflat, bitvec | Stable |
 | `<->` | operator | vector, vector | Stable |
 | `<#>` | operator | vector, vector | Stable |
 | `<=>` | operator | vector, vector | Stable |
@@ -598,19 +626,25 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 
 - access method `pgcontext_hnsw`
 - access method `pgcontext_ivfflat`
+- operator class `pgcontext.bit_hamming_ops`
+- operator class `pgcontext.bit_jaccard_ops`
 - operator class `pgcontext.bitvec_hnsw_hamming_ops`
 - operator class `pgcontext.bitvec_hnsw_jaccard_ops`
 - operator class `pgcontext.bitvec_ivfflat_hamming_ops`
 - operator class `pgcontext.bitvec_ivfflat_jaccard_ops`
 - operator class `pgcontext.bitvec_ops`
+- operator class `pgcontext.halfvec_cosine_ops`
 - operator class `pgcontext.halfvec_hnsw_cosine_ops`
 - operator class `pgcontext.halfvec_hnsw_ip_ops`
 - operator class `pgcontext.halfvec_hnsw_l1_ops`
 - operator class `pgcontext.halfvec_hnsw_ops`
+- operator class `pgcontext.halfvec_ip_ops`
 - operator class `pgcontext.halfvec_ivfflat_cosine_ops`
 - operator class `pgcontext.halfvec_ivfflat_ip_ops`
 - operator class `pgcontext.halfvec_ivfflat_l1_ops`
 - operator class `pgcontext.halfvec_ivfflat_ops`
+- operator class `pgcontext.halfvec_l1_ops`
+- operator class `pgcontext.halfvec_l2_ops`
 - operator class `pgcontext.halfvec_ops`
 - operator class `pgcontext.int8vec_hnsw_cosine_ops`
 - operator class `pgcontext.int8vec_hnsw_ip_ops`
@@ -621,10 +655,14 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - operator class `pgcontext.int8vec_ivfflat_l1_ops`
 - operator class `pgcontext.int8vec_ivfflat_ops`
 - operator class `pgcontext.int8vec_ops`
+- operator class `pgcontext.sparsevec_cosine_ops`
 - operator class `pgcontext.sparsevec_hnsw_cosine_ops`
 - operator class `pgcontext.sparsevec_hnsw_ip_ops`
 - operator class `pgcontext.sparsevec_hnsw_l1_ops`
 - operator class `pgcontext.sparsevec_hnsw_ops`
+- operator class `pgcontext.sparsevec_ip_ops`
+- operator class `pgcontext.sparsevec_l1_ops`
+- operator class `pgcontext.sparsevec_l2_ops`
 - operator class `pgcontext.sparsevec_ops`
 - operator class `pgcontext.uint8vec_hnsw_cosine_ops`
 - operator class `pgcontext.uint8vec_hnsw_ip_ops`
@@ -635,14 +673,18 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - operator class `pgcontext.uint8vec_ivfflat_l1_ops`
 - operator class `pgcontext.uint8vec_ivfflat_ops`
 - operator class `pgcontext.uint8vec_ops`
+- operator class `pgcontext.vector_cosine_ops`
 - operator class `pgcontext.vector_hnsw_cosine_ops`
 - operator class `pgcontext.vector_hnsw_ip_ops`
 - operator class `pgcontext.vector_hnsw_l1_ops`
 - operator class `pgcontext.vector_hnsw_ops`
+- operator class `pgcontext.vector_ip_ops`
 - operator class `pgcontext.vector_ivfflat_cosine_ops`
 - operator class `pgcontext.vector_ivfflat_ip_ops`
 - operator class `pgcontext.vector_ivfflat_l1_ops`
 - operator class `pgcontext.vector_ivfflat_ops`
+- operator class `pgcontext.vector_l1_ops`
+- operator class `pgcontext.vector_l2_ops`
 - operator class `pgcontext.vector_ops`
 
 ## `pgcontext_hnsw` Index Reloptions

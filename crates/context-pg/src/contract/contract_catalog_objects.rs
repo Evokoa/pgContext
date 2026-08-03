@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 219;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 243;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -95,6 +95,30 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::pgcontext_operator_class("uint8vec_ivfflat_l1_ops", "pgcontext_ivfflat, uint8vec", SqlLifecycle::Experimental),
     SqlContractObject::pgcontext_operator_class("bitvec_ivfflat_hamming_ops", "pgcontext_ivfflat, bitvec", SqlLifecycle::Experimental),
     SqlContractObject::pgcontext_operator_class("bitvec_ivfflat_jaccard_ops", "pgcontext_ivfflat, bitvec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("vector_l2_ops", "pgcontext_hnsw, vector", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("vector_ip_ops", "pgcontext_hnsw, vector", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("vector_cosine_ops", "pgcontext_hnsw, vector", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("vector_l1_ops", "pgcontext_hnsw, vector", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_l2_ops", "pgcontext_hnsw, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_ip_ops", "pgcontext_hnsw, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_cosine_ops", "pgcontext_hnsw, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_l1_ops", "pgcontext_hnsw, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("sparsevec_l2_ops", "pgcontext_hnsw, sparsevec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("sparsevec_ip_ops", "pgcontext_hnsw, sparsevec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("sparsevec_cosine_ops", "pgcontext_hnsw, sparsevec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("sparsevec_l1_ops", "pgcontext_hnsw, sparsevec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("bit_hamming_ops", "pgcontext_hnsw, bitvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("bit_jaccard_ops", "pgcontext_hnsw, bitvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("vector_l2_ops", "pgcontext_ivfflat, vector", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("vector_ip_ops", "pgcontext_ivfflat, vector", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("vector_cosine_ops", "pgcontext_ivfflat, vector", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("vector_l1_ops", "pgcontext_ivfflat, vector", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_l2_ops", "pgcontext_ivfflat, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_ip_ops", "pgcontext_ivfflat, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_cosine_ops", "pgcontext_ivfflat, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("halfvec_l1_ops", "pgcontext_ivfflat, halfvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("bit_hamming_ops", "pgcontext_ivfflat, bitvec", SqlLifecycle::Stable),
+    SqlContractObject::pgcontext_operator_class("bit_jaccard_ops", "pgcontext_ivfflat, bitvec", SqlLifecycle::Stable),
     SqlContractObject::pgcontext_operator("<->", "vector, vector", SqlLifecycle::Stable),
     SqlContractObject::pgcontext_operator("<#>", "vector, vector", SqlLifecycle::Stable),
     SqlContractObject::pgcontext_operator("<=>", "vector, vector", SqlLifecycle::Stable),
