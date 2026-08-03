@@ -1,7 +1,7 @@
 use context_core::{BitVector, DistanceMetric, SparseVector};
 use pgrx::prelude::PgSqlErrorCode;
 
-use super::{BitVec, HalfVec, SparseVec};
+use super::{BitVec, HalfVec, Int8Vec, SparseVec, UInt8Vec};
 use crate::error::{raise_core_error, raise_sql_error};
 
 pub(super) fn halfvec_distance(left: HalfVec, right: HalfVec, metric: DistanceMetric) -> f32 {
@@ -59,6 +59,22 @@ pub(super) fn bitvec_to_core(vector: BitVec) -> BitVector {
         Ok(vector) => vector,
         Err(error) => raise_core_error(error),
     }
+}
+
+pub(super) fn int8vec_distance(left: Int8Vec, right: Int8Vec, metric: DistanceMetric) -> f64 {
+    let left = left.to_int8().unwrap_or_else(|error| raise_core_error(error));
+    let right = right.to_int8().unwrap_or_else(|error| raise_core_error(error));
+    metric
+        .distance_int8(&left, &right)
+        .unwrap_or_else(|error| raise_core_error(error))
+}
+
+pub(super) fn uint8vec_distance(left: UInt8Vec, right: UInt8Vec, metric: DistanceMetric) -> f64 {
+    let left = left.to_uint8().unwrap_or_else(|error| raise_core_error(error));
+    let right = right.to_uint8().unwrap_or_else(|error| raise_core_error(error));
+    metric
+        .distance_uint8(&left, &right)
+        .unwrap_or_else(|error| raise_core_error(error))
 }
 
 pub(super) fn dimension_to_i32(value: usize, label: &str) -> i32 {

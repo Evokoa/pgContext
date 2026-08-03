@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 282;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 351;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -53,14 +53,263 @@ const fn build_sql_contract_objects() -> [SqlContractObject; SQL_CONTRACT_OBJECT
 
 #[rustfmt::skip]
 const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_OBJECTS_LEN] = &[
-    SqlContractObject::function("bitvec_in", "input cstring", SqlLifecycle::Internal),
     SqlContractObject::function("bitvec_out", "input bitvec", SqlLifecycle::Internal),
+    SqlContractObject::function("bitvec_send", "input bitvec", SqlLifecycle::Internal),
     SqlContractObject::function("halfvec_in", "input cstring", SqlLifecycle::Internal),
     SqlContractObject::function("halfvec_out", "input halfvec", SqlLifecycle::Internal),
     SqlContractObject::function("sparsevec_in", "input cstring", SqlLifecycle::Internal),
     SqlContractObject::function("sparsevec_out", "input sparsevec", SqlLifecycle::Internal),
     SqlContractObject::function("vector_in", "input cstring", SqlLifecycle::Internal),
     SqlContractObject::function("vector_out", "input vector", SqlLifecycle::Internal),
+    SqlContractObject::function("int8vec_out", "input int8vec", SqlLifecycle::Internal),
+    SqlContractObject::function("int8vec_send", "input int8vec", SqlLifecycle::Internal),
+    SqlContractObject::function("uint8vec_out", "input uint8vec", SqlLifecycle::Internal),
+    SqlContractObject::function("uint8vec_send", "input uint8vec", SqlLifecycle::Internal),
+    SqlContractObject::function("_reject_embedding_profile_mutation", "", SqlLifecycle::Internal),
+    SqlContractObject::function(
+        "bitvec_from_provider_bytes",
+        "collection text, profile_name text, payload bytea",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "bitvec_typmod_input",
+        "input cstring, _type_oid oid, typmod integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "bitvec_typmod_receive",
+        "internal internal, _type_oid oid, typmod integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "embedding_profile_explain",
+        "collection text, profile_name text",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function("embedding_profiles", "", SqlLifecycle::Experimental),
+    SqlContractObject::function(
+        "register_embedding_profile",
+        "collection text, profile_name text, source_column text, hnsw_index text, profile jsonb",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function("int8vec", "input text", SqlLifecycle::Experimental),
+    SqlContractObject::function(
+        "int8vec_cmp",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_cosine_distance",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function("int8vec_dims", "vector int8vec", SqlLifecycle::Experimental),
+    SqlContractObject::function(
+        "int8vec_enforce_typmod",
+        "vector int8vec, typmod integer, _explicit boolean",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_eq",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_from_integer_array",
+        "\"values\" integer[]",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_from_smallint_array",
+        "\"values\" smallint[]",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_from_profile",
+        "collection text, profile_name text, \"values\" smallint[]",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function("int8vec_from_vector", "vector vector", SqlLifecycle::Internal),
+    SqlContractObject::function(
+        "int8vec_ge",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_gt",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_l1_distance",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "int8vec_l2_distance",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "int8vec_le",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_lt",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_ne",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_negative_inner_product",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "int8vec_inner_product",
+        "\"left\" int8vec, \"right\" int8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "int8vec_sum_transition",
+        "state bigint[], value int8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "int8vec_to_smallint_array",
+        "vector int8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function("int8vec_to_vector", "vector int8vec", SqlLifecycle::Internal),
+    SqlContractObject::function("int8vec_typmod_in", "modifiers cstring[]", SqlLifecycle::Internal),
+    SqlContractObject::function(
+        "int8vec_typmod_input",
+        "input cstring, _type_oid oid, typmod integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function("int8vec_typmod_out", "typmod integer", SqlLifecycle::Internal),
+    SqlContractObject::function(
+        "int8vec_typmod_receive",
+        "internal internal, _type_oid oid, typmod integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function("integer_vector_avg_final", "state bigint[]", SqlLifecycle::Internal),
+    SqlContractObject::function("integer_vector_sum_final", "state bigint[]", SqlLifecycle::Internal),
+    SqlContractObject::function("uint8vec", "input text", SqlLifecycle::Experimental),
+    SqlContractObject::function(
+        "uint8vec_cmp",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_cosine_distance",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function("uint8vec_dims", "vector uint8vec", SqlLifecycle::Experimental),
+    SqlContractObject::function(
+        "uint8vec_enforce_typmod",
+        "vector uint8vec, typmod integer, _explicit boolean",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_eq",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_from_integer_array",
+        "\"values\" integer[]",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_from_smallint_array",
+        "\"values\" smallint[]",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_from_profile",
+        "collection text, profile_name text, \"values\" smallint[]",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function("uint8vec_from_vector", "vector vector", SqlLifecycle::Internal),
+    SqlContractObject::function(
+        "uint8vec_ge",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_gt",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_l1_distance",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "uint8vec_l2_distance",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "uint8vec_le",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_lt",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_ne",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_negative_inner_product",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "uint8vec_inner_product",
+        "\"left\" uint8vec, \"right\" uint8vec",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "uint8vec_sum_transition",
+        "state bigint[], value uint8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "uint8vec_to_smallint_array",
+        "vector uint8vec",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function("uint8vec_to_vector", "vector uint8vec", SqlLifecycle::Internal),
+    SqlContractObject::function("uint8vec_typmod_in", "modifiers cstring[]", SqlLifecycle::Internal),
+    SqlContractObject::function(
+        "uint8vec_typmod_input",
+        "input cstring, _type_oid oid, typmod integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function("uint8vec_typmod_out", "typmod integer", SqlLifecycle::Internal),
+    SqlContractObject::function(
+        "uint8vec_typmod_receive",
+        "internal internal, _type_oid oid, typmod integer",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function("avg", "int8vec", SqlLifecycle::Experimental),
+    SqlContractObject::function("avg", "uint8vec", SqlLifecycle::Experimental),
+    SqlContractObject::function("sum", "int8vec", SqlLifecycle::Experimental),
+    SqlContractObject::function("sum", "uint8vec", SqlLifecycle::Experimental),
     SqlContractObject::function(
         "_mmap_hnsw_artifact_candidates",
         "collection text, artifact_name text, vector vector, max_mapped_bytes bigint, candidate_limit integer, \"limit\" integer",
@@ -1024,7 +1273,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function("compact", "index regclass", SqlLifecycle::Experimental),
     SqlContractObject::function(
         "_compact_hnsw_segment_pair",
-        "regclass, bigint",
+        "index regclass, expected_directory_epoch bigint",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
@@ -1035,7 +1284,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function("hnsw_build_stats", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_last_scan_work", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_serving_stats", "", SqlLifecycle::Experimental),
-    SqlContractObject::function("hnsw_segment_stats", "regclass", SqlLifecycle::Experimental),
+    SqlContractObject::function(
+        "hnsw_segment_stats",
+        "index regclass",
+        SqlLifecycle::Experimental,
+    ),
     // Failpoint setters exist only in pg_test builds; the classification test
     // that reads this registry runs only in those builds, so listing them
     // unconditionally keeps the const array length fixed without ever

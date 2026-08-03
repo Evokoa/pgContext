@@ -25,6 +25,14 @@ validate_hnsw_order() {
         "sparse_l1|sparse_value|<+>|pgcontext.sparsevec('{1:1,2:1}/2')|restart_hnsw_docs_sparse_l1_idx"
         "bit_hamming|bit_value|<~>|pgcontext.bitvec('10')|restart_hnsw_docs_bit_hamming_idx"
         "bit_jaccard|bit_value|<%>|pgcontext.bitvec('10')|restart_hnsw_docs_bit_jaccard_idx"
+        "int8_l2|int8_value|<->|pgcontext.int8vec('[1,1]')|restart_hnsw_docs_int8_l2_idx"
+        "int8_ip|int8_value|<#>|pgcontext.int8vec('[1,1]')|restart_hnsw_docs_int8_ip_idx"
+        "int8_cosine|int8_value|<=>|pgcontext.int8vec('[1,1]')|restart_hnsw_docs_int8_cosine_idx"
+        "int8_l1|int8_value|<+>|pgcontext.int8vec('[1,1]')|restart_hnsw_docs_int8_l1_idx"
+        "uint8_l2|uint8_value|<->|pgcontext.uint8vec('[1,1]')|restart_hnsw_docs_uint8_l2_idx"
+        "uint8_ip|uint8_value|<#>|pgcontext.uint8vec('[1,1]')|restart_hnsw_docs_uint8_ip_idx"
+        "uint8_cosine|uint8_value|<=>|pgcontext.uint8vec('[1,1]')|restart_hnsw_docs_uint8_cosine_idx"
+        "uint8_l1|uint8_value|<+>|pgcontext.uint8vec('[1,1]')|restart_hnsw_docs_uint8_l1_idx"
     )
 
     for row in "${cases[@]}"; do
@@ -108,15 +116,17 @@ CREATE TABLE public.restart_hnsw_docs (
     half_value halfvec NOT NULL,
     sparse_value sparsevec NOT NULL,
     bit_value bitvec NOT NULL,
+    int8_value int8vec(2) NOT NULL,
+    uint8_value uint8vec(2) NOT NULL,
     body text NOT NULL
 );
 
 INSERT INTO public.restart_hnsw_docs
 VALUES
-    (1, '[1,0]'::vector, '[1,0]'::halfvec, '{1:1}/2'::sparsevec, '10'::bitvec, 'before restart one'),
-    (2, '[0,1]'::vector, '[0,1]'::halfvec, '{2:1}/2'::sparsevec, '01'::bitvec, 'before restart two'),
-    (9, '[3,3]'::vector, '[3,3]'::halfvec, '{1:3,2:3}/2'::sparsevec, '11'::bitvec, 'before restart nine'),
-    (10, '[3,3]'::vector, '[3,3]'::halfvec, '{1:3,2:3}/2'::sparsevec, '11'::bitvec, 'tie ten');
+    (1, '[1,0]'::vector, '[1,0]'::halfvec, '{1:1}/2'::sparsevec, '10'::bitvec, '[1,0]'::int8vec, '[1,0]'::uint8vec, 'before restart one'),
+    (2, '[0,1]'::vector, '[0,1]'::halfvec, '{2:1}/2'::sparsevec, '01'::bitvec, '[0,1]'::int8vec, '[0,1]'::uint8vec, 'before restart two'),
+    (9, '[3,3]'::vector, '[3,3]'::halfvec, '{1:3,2:3}/2'::sparsevec, '11'::bitvec, '[3,3]'::int8vec, '[3,3]'::uint8vec, 'before restart nine'),
+    (10, '[3,3]'::vector, '[3,3]'::halfvec, '{1:3,2:3}/2'::sparsevec, '11'::bitvec, '[3,3]'::int8vec, '[3,3]'::uint8vec, 'tie ten');
 
 CREATE INDEX restart_hnsw_docs_l2_idx
     ON public.restart_hnsw_docs USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_ops);
@@ -147,14 +157,32 @@ CREATE INDEX restart_hnsw_docs_bit_hamming_idx
     ON public.restart_hnsw_docs USING pgcontext_hnsw (bit_value pgcontext.bitvec_hnsw_hamming_ops);
 CREATE INDEX restart_hnsw_docs_bit_jaccard_idx
     ON public.restart_hnsw_docs USING pgcontext_hnsw (bit_value pgcontext.bitvec_hnsw_jaccard_ops);
+CREATE INDEX restart_hnsw_docs_int8_l2_idx
+    ON public.restart_hnsw_docs USING pgcontext_hnsw (int8_value pgcontext.int8vec_hnsw_ops);
+CREATE INDEX restart_hnsw_docs_int8_ip_idx
+    ON public.restart_hnsw_docs USING pgcontext_hnsw (int8_value pgcontext.int8vec_hnsw_ip_ops);
+CREATE INDEX restart_hnsw_docs_int8_cosine_idx
+    ON public.restart_hnsw_docs USING pgcontext_hnsw (int8_value pgcontext.int8vec_hnsw_cosine_ops);
+CREATE INDEX restart_hnsw_docs_int8_l1_idx
+    ON public.restart_hnsw_docs USING pgcontext_hnsw (int8_value pgcontext.int8vec_hnsw_l1_ops);
+CREATE INDEX restart_hnsw_docs_uint8_l2_idx
+    ON public.restart_hnsw_docs USING pgcontext_hnsw (uint8_value pgcontext.uint8vec_hnsw_ops);
+CREATE INDEX restart_hnsw_docs_uint8_ip_idx
+    ON public.restart_hnsw_docs USING pgcontext_hnsw (uint8_value pgcontext.uint8vec_hnsw_ip_ops);
+CREATE INDEX restart_hnsw_docs_uint8_cosine_idx
+    ON public.restart_hnsw_docs USING pgcontext_hnsw (uint8_value pgcontext.uint8vec_hnsw_cosine_ops);
+CREATE INDEX restart_hnsw_docs_uint8_l1_idx
+    ON public.restart_hnsw_docs USING pgcontext_hnsw (uint8_value pgcontext.uint8vec_hnsw_l1_ops);
 
 INSERT INTO public.restart_hnsw_docs VALUES
-    (11, '[4,4]'::vector, '[4,4]'::halfvec, '{1:4,2:4}/2'::sparsevec, '00'::bitvec, 'inserted');
+    (11, '[4,4]'::vector, '[4,4]'::halfvec, '{1:4,2:4}/2'::sparsevec, '00'::bitvec, '[4,4]'::int8vec, '[4,4]'::uint8vec, 'inserted');
 UPDATE public.restart_hnsw_docs
    SET embedding = '[5,5]'::vector,
        half_value = '[5,5]'::halfvec,
        sparse_value = '{1:5,2:5}/2'::sparsevec,
-       bit_value = '10'::bitvec
+       bit_value = '10'::bitvec,
+       int8_value = '[5,5]'::int8vec,
+       uint8_value = '[5,5]'::uint8vec
  WHERE id = 2;
 DELETE FROM public.restart_hnsw_docs WHERE id = 1;
 VACUUM (ANALYZE) public.restart_hnsw_docs;

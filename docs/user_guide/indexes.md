@@ -171,6 +171,8 @@ experimental:
 | `halfvec` | L2 `halfvec_hnsw_ops`; inner product `halfvec_hnsw_ip_ops`; cosine `halfvec_hnsw_cosine_ops`; L1 `halfvec_hnsw_l1_ops` |
 | `sparsevec` | L2 `sparsevec_hnsw_ops`; inner product `sparsevec_hnsw_ip_ops`; cosine `sparsevec_hnsw_cosine_ops`; L1 `sparsevec_hnsw_l1_ops` |
 | `bitvec` | Hamming `bitvec_hnsw_hamming_ops`; Jaccard `bitvec_hnsw_jaccard_ops` |
+| `int8vec` | L2 `int8vec_hnsw_ops`; inner product `int8vec_hnsw_ip_ops`; cosine `int8vec_hnsw_cosine_ops`; L1 `int8vec_hnsw_l1_ops` |
+| `uint8vec` | L2 `uint8vec_hnsw_ops`; inner product `uint8vec_hnsw_ip_ops`; cosine `uint8vec_hnsw_cosine_ops`; L1 `uint8vec_hnsw_l1_ops` |
 
 The bit opclasses use bit-aware graph metrics. In particular, Jaccard never
 substitutes L2 over densified coordinates because that does not preserve result
@@ -180,6 +182,17 @@ heap value with the exact `double precision` operator before final ordering.
 End-to-end tests compare every pair with a forced exact oracle, assert the
 metric-specific index plan, and require candidate work below collection
 cardinality.
+
+Integer opclasses densify coordinates losslessly only for graph navigation.
+That floating-point navigation score is never final authority: ordered scans
+request PostgreSQL heap recheck for every candidate and compute the exact
+`int8vec` or `uint8vec` operator score from the live source value. Immutable
+embedding profiles bind the provider revision to one fixed-typmod source column
+and its live metric-matched HNSW index. Registration rejects a mismatched type,
+dimension, column, access method, opclass, expression/partial index, or stale
+index state. `pgcontext.embedding_profile_explain` reports the binding and
+revalidates it against PostgreSQL catalogs; profile-aware query/import
+constructors reject stale bindings before accepting provider values.
 
 The SQL vector types accept up to 16,000 dimensions, but this experimental
 HNSW format stores each densified node and its graph links in a single page.

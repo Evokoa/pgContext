@@ -69,12 +69,14 @@ unsafe fn hnsw_dense_from_datum(
 ) -> Option<DenseVector> {
     // SAFETY: These are static, nul-terminated type names resolved in the
     // active PostgreSQL backend catalog.
-    let (vector_oid, halfvec_oid, sparsevec_oid, bitvec_oid) = unsafe {
+    let (vector_oid, halfvec_oid, sparsevec_oid, bitvec_oid, int8vec_oid, uint8vec_oid) = unsafe {
         (
             hnsw_pgcontext_type_oid(c"vector"),
             hnsw_pgcontext_type_oid(c"halfvec"),
             hnsw_pgcontext_type_oid(c"sparsevec"),
             hnsw_pgcontext_type_oid(c"bitvec"),
+            hnsw_pgcontext_type_oid(c"int8vec"),
+            hnsw_pgcontext_type_oid(c"uint8vec"),
         )
     };
 
@@ -126,6 +128,14 @@ unsafe fn hnsw_dense_from_datum(
         // SAFETY: The scan key subtype says this argument is a SQL `bitvec`.
         let bitvec = unsafe { BitVec::from_datum(datum, false) }?;
         Some(bitvec_to_dense(bitvec))
+    } else if type_oid == int8vec_oid {
+        // SAFETY: The scan key subtype says this argument is a SQL `int8vec`.
+        let vector = unsafe { Int8Vec::from_datum(datum, false) }?;
+        Some(integer_source_to_dense(vector.as_slice().iter().copied().map(f32::from)))
+    } else if type_oid == uint8vec_oid {
+        // SAFETY: The scan key subtype says this argument is a SQL `uint8vec`.
+        let vector = unsafe { UInt8Vec::from_datum(datum, false) }?;
+        Some(integer_source_to_dense(vector.as_slice().iter().copied().map(f32::from)))
     } else {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
@@ -140,12 +150,14 @@ unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric
     let type_oid = unsafe { hnsw_index_opcintype(index_relation) };
     // SAFETY: These are static, nul-terminated type names resolved in the
     // active PostgreSQL backend catalog.
-    let (vector_oid, halfvec_oid, sparsevec_oid, bitvec_oid) = unsafe {
+    let (vector_oid, halfvec_oid, sparsevec_oid, bitvec_oid, int8vec_oid, uint8vec_oid) = unsafe {
         (
             hnsw_pgcontext_type_oid(c"vector"),
             hnsw_pgcontext_type_oid(c"halfvec"),
             hnsw_pgcontext_type_oid(c"sparsevec"),
             hnsw_pgcontext_type_oid(c"bitvec"),
+            hnsw_pgcontext_type_oid(c"int8vec"),
+            hnsw_pgcontext_type_oid(c"uint8vec"),
         )
     };
     // SAFETY: Both static names are resolved only when owned by pgvector.
@@ -215,6 +227,16 @@ unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric
         ];
         // SAFETY: The caller provides a live initialized index relation.
         unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, "bitvec") }
+    } else if type_oid == int8vec_oid || type_oid == uint8vec_oid {
+        let prefix = if type_oid == int8vec_oid { "int8vec" } else { "uint8vec" };
+        let candidates = [
+            (HnswScoreMetric::L2, if type_oid == int8vec_oid { "int8vec_l2_distance" } else { "uint8vec_l2_distance" }, pg_sys::FLOAT8OID, "<->"),
+            (HnswScoreMetric::NegativeInnerProduct, if type_oid == int8vec_oid { "int8vec_negative_inner_product" } else { "uint8vec_negative_inner_product" }, pg_sys::FLOAT8OID, "<#>"),
+            (HnswScoreMetric::Cosine, if type_oid == int8vec_oid { "int8vec_cosine_distance" } else { "uint8vec_cosine_distance" }, pg_sys::FLOAT8OID, "<=>"),
+            (HnswScoreMetric::L1, if type_oid == int8vec_oid { "int8vec_l1_distance" } else { "uint8vec_l1_distance" }, pg_sys::FLOAT8OID, "<+>"),
+        ];
+        // SAFETY: The caller provides a live initialized index relation.
+        unsafe { hnsw_score_metric_from_candidates(index_relation, &candidates, prefix) }
     } else if type_oid == pgvector_vector {
         let candidates = [
             (HnswScoreMetric::L2, "_pgvector_vector_l2_support", pg_sys::FLOAT8OID, "<->"),
@@ -318,8 +340,19 @@ unsafe fn hnsw_orderby_contract(index_relation: pg_sys::Relation) -> HnswOrderBy
     // score-metric validation also certifies the operator/support pairing.
     HnswOrderByContract {
         metric: unsafe { hnsw_score_metric(index_relation) },
-        pgvector_binding: unsafe { hnsw_index_uses_certified_pgvector_type(index_relation) },
+        exact_float8_recheck: unsafe {
+            hnsw_index_uses_certified_pgvector_type(index_relation)
+                || hnsw_index_uses_integer_source_type(index_relation)
+        },
     }
+}
+
+unsafe fn hnsw_index_uses_integer_source_type(index_relation: pg_sys::Relation) -> bool {
+    // SAFETY: The caller provides a live single-column index relation.
+    let type_oid = unsafe { hnsw_index_opcintype(index_relation) };
+    // SAFETY: Both names are static extension-owned catalog identifiers.
+    type_oid == unsafe { hnsw_pgcontext_type_oid(c"int8vec") }
+        || type_oid == unsafe { hnsw_pgcontext_type_oid(c"uint8vec") }
 }
 
 unsafe fn hnsw_dense_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric {
@@ -716,6 +749,8 @@ unsafe fn hnsw_validate_opclass(opclass_oid: pg_sys::Oid) -> bool {
         canonical_halfvec,
         canonical_sparsevec,
         canonical_bitvec,
+        canonical_int8vec,
+        canonical_uint8vec,
         pgvector_vector,
         pgvector_halfvec,
         pgvector_sparsevec,
@@ -727,6 +762,8 @@ unsafe fn hnsw_validate_opclass(opclass_oid: pg_sys::Oid) -> bool {
             hnsw_pgcontext_type_oid(c"halfvec"),
             hnsw_pgcontext_type_oid(c"sparsevec"),
             hnsw_pgcontext_type_oid(c"bitvec"),
+            hnsw_pgcontext_type_oid(c"int8vec"),
+            hnsw_pgcontext_type_oid(c"uint8vec"),
             hnsw_certified_pgvector_type_oid(c"vector"),
             hnsw_certified_pgvector_type_oid(c"halfvec"),
             hnsw_certified_pgvector_type_oid(c"sparsevec"),
@@ -796,6 +833,34 @@ unsafe fn hnsw_validate_opclass(opclass_oid: pg_sys::Oid) -> bool {
             ("bitvec_hamming_distance", pg_sys::INT4OID, "<~>"),
             ("bitvec_jaccard_distance", pg_sys::FLOAT8OID, "<%>"),
         ];
+        // SAFETY: Same copied catalog-OID and static-contract boundary above.
+        unsafe {
+            hnsw_validate_opclass_candidates(
+                opclass_oid,
+                family,
+                input_type,
+                &candidates,
+                "pgcontext",
+                "pgcontext",
+                "pgcontext",
+            )
+        }
+    } else if input_type == canonical_int8vec || input_type == canonical_uint8vec {
+        let candidates = if input_type == canonical_int8vec {
+            [
+                ("int8vec_l2_distance", pg_sys::FLOAT8OID, "<->"),
+                ("int8vec_negative_inner_product", pg_sys::FLOAT8OID, "<#>"),
+                ("int8vec_cosine_distance", pg_sys::FLOAT8OID, "<=>"),
+                ("int8vec_l1_distance", pg_sys::FLOAT8OID, "<+>"),
+            ]
+        } else {
+            [
+                ("uint8vec_l2_distance", pg_sys::FLOAT8OID, "<->"),
+                ("uint8vec_negative_inner_product", pg_sys::FLOAT8OID, "<#>"),
+                ("uint8vec_cosine_distance", pg_sys::FLOAT8OID, "<=>"),
+                ("uint8vec_l1_distance", pg_sys::FLOAT8OID, "<+>"),
+            ]
+        };
         // SAFETY: Same copied catalog-OID and static-contract boundary above.
         unsafe {
             hnsw_validate_opclass_candidates(
@@ -1139,6 +1204,10 @@ fn bitvec_to_dense(vector: BitVec) -> DenseVector {
         .map(|bit| if *bit { 1.0 } else { 0.0 })
         .collect::<Vec<_>>();
     DenseVector::new(values).unwrap_or_else(|error| raise_core_error(error))
+}
+
+fn integer_source_to_dense(values: impl Iterator<Item = f32>) -> DenseVector {
+    DenseVector::new(values.collect()).unwrap_or_else(|error| raise_core_error(error))
 }
 
 unsafe fn hnsw_vector_from_index_values(

@@ -125,6 +125,60 @@ Dense vector compatibility:
   `integer[]` and `double precision[]` reject elements that are not exactly
   representable as `real`; and an assignment cast from `vector` to `real[]`
 
+Provider-native integer and packed-binary source contracts are experimental:
+
+- SQL types `int8vec(n)` and `uint8vec(n)` accept `1..=16000` signed or
+  unsigned 8-bit coordinates, expose PostgreSQL binary send/receive hooks, and
+  enforce typmods on assignment. `bitvec` exposes the same binary-protocol
+  contract for packed provider-native profiles.
+- Constructors `pgcontext.int8vec(text)` and `pgcontext.uint8vec(text)` and
+  dimension helpers `pgcontext.int8vec_dims(int8vec)` and
+  `pgcontext.uint8vec_dims(uint8vec)`.
+- Exact L2, raw inner-product, negative-inner-product, cosine, and L1
+  functions and the `<->`, `<#>`, `<=>`, and `<+>` operators. Raw inner
+  product is exposed as `int8vec_inner_product` and
+  `uint8vec_inner_product`; negative inner product remains the KNN ordering
+  support function. Integer accumulation remains exact in `bigint` before the
+  final `double precision` result conversion.
+- Deterministic comparison operators and default B-tree opclasses
+  `pgcontext.int8vec_ops` and `pgcontext.uint8vec_ops`.
+- `pgcontext.sum(int8vec|uint8vec)` returns `bigint[]` and
+  `pgcontext.avg(int8vec|uint8vec)` returns `double precision[]`; both use a
+  checked `bigint[]` transition state.
+- Explicit checked casts from `smallint[]` and `integer[]`, casts back to
+  `smallint[]`, lossless assignment casts to dense `vector`, and explicit
+  dense-to-integer casts that reject fractional or out-of-range coordinates.
+  There is no implicit signed/unsigned semantic cast.
+- `pgcontext.int8vec_from_profile(collection, profile_name, values smallint[])`
+  and `pgcontext.uint8vec_from_profile(...)` resolve the authoritative
+  representation and dimension from a registered profile before constructing
+  a value.
+- `pgcontext.bitvec_from_provider_bytes(collection text, profile_name text,
+  payload bytea)` resolves logical dimensions and both byte/bit orders from the
+  registered profile, requires the exact byte length, and rejects nonzero
+  padding bits. Callers cannot override the stored layout.
+- `pgcontext.register_embedding_profile(collection text, profile_name text,
+  source_column text, hnsw_index text, profile jsonb)` stores an immutable
+  provider contract. `hnsw_index` must be schema-qualified and must be a live,
+  simple `pgcontext_hnsw` index over `source_column` with the exact
+  representation, typmod, metric, and pgContext opclass declared by the
+  profile. The JSON object must
+  contain exactly `representation`, `dimensions`, `normalization`, `metric`,
+  `provider`, `model`, `revision`, `input_template`, `output_template`,
+  `bit_order`, `byte_order`, `scale`, `zero_point`, and
+  `configuration_hash`. Binary profiles require Hamming or Jaccard plus both
+  orders; integer profiles may declare a positive scale and in-range zero
+  point. The configuration hash is 16 lowercase hexadecimal digits and cannot
+  be zero.
+- `pgcontext.embedding_profiles()` lists source-column and HNSW bindings for
+  collections owned by the session role.
+  `pgcontext.embedding_profile_explain(collection text, profile_name text)`
+  reports the normalized profile, durable source/index names, live binding
+  validity, source authority, exact score representation, compatible HNSW
+  opclass, and authoritative final-score rule. Both functions are
+  security-definer functions with a pinned search path and `SESSION_USER`
+  ownership filtering.
+
 Operations, diagnostics, and telemetry:
 
 - `pgcontext.index_status(index_name text)`
@@ -454,7 +508,7 @@ an experimental publication primitive; it does not make artifacts query-safe.
 Experimental vector variants are SQL-visible so users can test parsing,
 validation, and exact scoring outside the stable compatibility promise:
 
-- SQL types `halfvec`, `sparsevec`, and `bitvec`
+- SQL types `halfvec`, `sparsevec`, `bitvec`, `int8vec`, and `uint8vec`
 - Pgvector-style `halfvec(n)`, `sparsevec(n)`, and `bitvec(n)` typmods with dimension
   enforcement on assignment
 - Text constructors `pgcontext.halfvec(text)`, `pgcontext.sparsevec(text)`,
@@ -498,6 +552,10 @@ The non-dense HNSW operator classes are first-class SQL contracts:
 - `sparsevec_hnsw_ops`, `sparsevec_hnsw_ip_ops`,
   `sparsevec_hnsw_cosine_ops`, and `sparsevec_hnsw_l1_ops`
 - `bitvec_hnsw_hamming_ops` and `bitvec_hnsw_jaccard_ops`
+- `int8vec_hnsw_ops`, `int8vec_hnsw_ip_ops`,
+  `int8vec_hnsw_cosine_ops`, and `int8vec_hnsw_l1_ops`
+- `uint8vec_hnsw_ops`, `uint8vec_hnsw_ip_ops`,
+  `uint8vec_hnsw_cosine_ops`, and `uint8vec_hnsw_l1_ops`
 
 Each class stores a dense graph payload, traverses with the matching metric,
 and returns the exact operator distance type. The variant types and their

@@ -43,12 +43,15 @@ use std::time::Duration;
 use crate::Vector;
 use crate::error::{raise_core_error, raise_sql_error, raise_sql_error_with_hint};
 use crate::settings::hnsw_config_from_gucs;
-use crate::vector_variants::{BitVec, HalfVec, SparseVec};
+use crate::vector_variants::{BitVec, HalfVec, Int8Vec, SparseVec, UInt8Vec};
 #[allow(unused_imports)]
 use crate::vector_variants::{
     bitvec_hamming_distance, bitvec_jaccard_distance, halfvec_cosine_distance, halfvec_l1_distance,
-    halfvec_l2_distance, halfvec_negative_inner_product, sparsevec_cosine_distance,
-    sparsevec_l1_distance, sparsevec_l2_distance, sparsevec_negative_inner_product,
+    halfvec_l2_distance, halfvec_negative_inner_product, int8vec_cosine_distance,
+    int8vec_l1_distance, int8vec_l2_distance, int8vec_negative_inner_product,
+    sparsevec_cosine_distance, sparsevec_l1_distance, sparsevec_l2_distance,
+    sparsevec_negative_inner_product, uint8vec_cosine_distance, uint8vec_l1_distance,
+    uint8vec_l2_distance, uint8vec_negative_inner_product,
 };
 
 mod bitmap;
@@ -987,7 +990,7 @@ enum HnswScoreMetric {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HnswOrderByContract {
     metric: HnswScoreMetric,
-    pgvector_binding: bool,
+    exact_float8_recheck: bool,
 }
 
 include!("hnsw_am_metric.rs");

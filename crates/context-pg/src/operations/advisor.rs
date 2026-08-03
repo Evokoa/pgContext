@@ -13,6 +13,9 @@ struct AdvisorCollection {
     source_table_oid: Option<pg_sys::Oid>,
     estimated_rows: Option<i64>,
     hnsw_indexes: i64,
+    embedding_profile_count: i64,
+    stale_embedding_profile_bindings: i64,
+    embedding_profile_representations: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,7 +124,23 @@ fn advisor_rows(collection: &AdvisorCollection) -> Vec<AdvisorRow> {
         ));
     }
 
-    if collection.hnsw_indexes == 0 {
+    if collection.stale_embedding_profile_bindings > 0 {
+        rows.push(AdvisorRow {
+            filter_key: None,
+            column_name: None,
+            recommendation: IndexAdvisorRecommendation::TuneHnswSettings,
+            detail: format!(
+                "collection has {} stale embedding-profile HNSW binding(s) across {} profile(s) ({}); inspect embedding_profile_explain and recreate each missing or invalid metric-matched index",
+                collection.stale_embedding_profile_bindings,
+                collection.embedding_profile_count,
+                collection
+                    .embedding_profile_representations
+                    .as_deref()
+                    .unwrap_or("unknown representation")
+            ),
+            suggested_sql: None,
+        });
+    } else if collection.hnsw_indexes == 0 {
         rows.push(AdvisorRow {
             filter_key: None,
             column_name: None,
@@ -201,15 +220,79 @@ fn resolve_advisor_collection(collection: &str) -> AdvisorCollection {
                     END,
                     (
                         SELECT count(DISTINCT index_class.oid)::bigint
-                          FROM pgcontext._collection_vectors AS vectors
-                          JOIN pg_catalog.pg_index AS index_catalog
-                            ON index_catalog.indrelid = vectors.source_table_oid
+                          FROM pg_catalog.pg_index AS index_catalog
                           JOIN pg_catalog.pg_class AS index_class
                             ON index_class.oid = index_catalog.indexrelid
                           JOIN pg_catalog.pg_am AS access_method
                             ON access_method.oid = index_class.relam
-                         WHERE vectors.collection_id = collections.collection_id
+                         WHERE index_catalog.indrelid = collections.source_table_oid
                            AND access_method.amname = 'pgcontext_hnsw'
+                           AND index_catalog.indisvalid
+                           AND index_catalog.indisready
+                           AND index_catalog.indislive
+                    ),
+                    (
+                        SELECT count(*)::bigint
+                          FROM pgcontext._embedding_profiles AS profiles
+                         WHERE profiles.collection_id = collections.collection_id
+                    ),
+                    (
+                        SELECT count(*)::bigint
+                          FROM pgcontext._embedding_profiles AS profiles
+                         WHERE profiles.collection_id = collections.collection_id
+                           AND NOT EXISTS (
+                               SELECT 1
+                                 FROM pg_catalog.pg_class AS source_table
+                                 JOIN pg_catalog.pg_namespace AS source_namespace
+                                   ON source_namespace.oid = source_table.relnamespace
+                                 JOIN pg_catalog.pg_attribute AS source_attribute
+                                   ON source_attribute.attrelid = source_table.oid
+                                  AND source_attribute.attnum = profiles.source_attnum
+                                  AND source_attribute.attname = profiles.source_column_name
+                                  AND source_attribute.atttypmod = profiles.source_typmod
+                                 JOIN pg_catalog.pg_type AS source_type
+                                   ON source_type.oid = source_attribute.atttypid
+                                  AND source_type.typname = profiles.source_type_name
+                                 JOIN pg_catalog.pg_namespace AS source_type_namespace
+                                   ON source_type_namespace.oid = source_type.typnamespace
+                                  AND source_type_namespace.nspname = 'pgcontext'
+                                 JOIN pg_catalog.pg_class AS index_class
+                                   ON index_class.relname = profiles.hnsw_index_name
+                                 JOIN pg_catalog.pg_namespace AS index_namespace
+                                   ON index_namespace.oid = index_class.relnamespace
+                                  AND index_namespace.nspname = profiles.hnsw_schema_name
+                                 JOIN pg_catalog.pg_index AS index_catalog
+                                   ON index_catalog.indexrelid = index_class.oid
+                                  AND index_catalog.indrelid = source_table.oid
+                                  AND index_catalog.indkey[0] = profiles.source_attnum
+                                  AND index_catalog.indnkeyatts = 1
+                                  AND index_catalog.indnatts = 1
+                                  AND index_catalog.indexprs IS NULL
+                                  AND index_catalog.indpred IS NULL
+                                  AND index_catalog.indisvalid
+                                  AND index_catalog.indisready
+                                  AND index_catalog.indislive
+                                 JOIN pg_catalog.pg_am AS access_method
+                                   ON access_method.oid = index_class.relam
+                                  AND access_method.amname = 'pgcontext_hnsw'
+                                 JOIN pg_catalog.pg_opclass AS opclass
+                                   ON opclass.oid = index_catalog.indclass[0]
+                                  AND opclass.opcname = profiles.hnsw_opclass
+                                 JOIN pg_catalog.pg_namespace AS opclass_namespace
+                                   ON opclass_namespace.oid = opclass.opcnamespace
+                                  AND opclass_namespace.nspname = 'pgcontext'
+                                WHERE source_namespace.nspname = profiles.source_schema_name
+                                  AND source_table.relname = profiles.source_table_name
+                                  AND source_table.oid = collections.source_table_oid
+                           )
+                    ),
+                    (
+                        SELECT pg_catalog.string_agg(
+                                   DISTINCT profiles.representation,
+                                   ',' ORDER BY profiles.representation
+                               )
+                          FROM pgcontext._embedding_profiles AS profiles
+                         WHERE profiles.collection_id = collections.collection_id
                     )
                FROM pgcontext._collections AS collections
           LEFT JOIN pg_catalog.pg_class AS source_class
@@ -234,6 +317,12 @@ fn resolve_advisor_collection(collection: &str) -> AdvisorCollection {
             source_table_oid: row.get::<pg_sys::Oid>(4)?,
             estimated_rows: row.get::<i64>(5)?,
             hnsw_indexes: required_column(row.get::<i64>(6)?, "hnsw_indexes"),
+            embedding_profile_count: required_column(row.get::<i64>(7)?, "embedding_profile_count"),
+            stale_embedding_profile_bindings: required_column(
+                row.get::<i64>(8)?,
+                "stale_embedding_profile_bindings",
+            ),
+            embedding_profile_representations: row.get::<String>(9)?,
         })
     })
     .unwrap_or_else(|error| {

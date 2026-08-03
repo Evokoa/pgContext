@@ -70,6 +70,109 @@ pub struct DenseVector {
     values: Vec<f32>,
 }
 
+/// Dense signed 8-bit source vector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Int8Vector {
+    values: Vec<i8>,
+}
+
+/// Dense unsigned 8-bit source vector.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UInt8Vector {
+    values: Vec<u8>,
+}
+
+macro_rules! impl_integer_vector {
+    ($type:ident, $element:ty, $label:literal) => {
+        impl $type {
+            /// Creates a vector after validating its dimension.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`Error::InvalidVector`] when the vector is empty or
+            /// exceeds the vector dimension policy.
+            pub fn new(values: Vec<$element>) -> Result<Self> {
+                if values.is_empty() {
+                    return Err(Error::InvalidVector(
+                        concat!($label, " vectors must contain at least one value").to_owned(),
+                    ));
+                }
+                ensure_vector_length(concat!($label, " vector dimensions"), values.len())?;
+                Ok(Self { values })
+            }
+
+            /// Returns the vector dimension.
+            #[must_use]
+            pub fn dimension(&self) -> usize {
+                self.values.len()
+            }
+
+            /// Returns the integer coordinates.
+            #[must_use]
+            pub fn as_slice(&self) -> &[$element] {
+                &self.values
+            }
+
+            /// Consumes the vector and returns its validated coordinates.
+            #[must_use]
+            pub fn into_values(self) -> Vec<$element> {
+                self.values
+            }
+        }
+
+        impl fmt::Display for $type {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("[")?;
+                for (index, value) in self.values.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(",")?;
+                    }
+                    write!(f, "{value}")?;
+                }
+                f.write_str("]")
+            }
+        }
+
+        impl FromStr for $type {
+            type Err = Error;
+
+            fn from_str(input: &str) -> Result<Self> {
+                let trimmed = input.trim();
+                let Some(inner) = trimmed
+                    .strip_prefix('[')
+                    .and_then(|value| value.strip_suffix(']'))
+                else {
+                    return Err(Error::InvalidVector(
+                        concat!($label, " vector text must be enclosed in square brackets")
+                            .to_owned(),
+                    ));
+                };
+                let mut values = Vec::new();
+                if !inner.trim().is_empty() {
+                    for (index, value) in inner.split(',').map(str::trim).enumerate() {
+                        if index >= MAX_VECTOR_DIMENSIONS {
+                            return Err(Error::InvalidVector(format!(
+                                "{} vector dimensions exceed maximum {MAX_VECTOR_DIMENSIONS}",
+                                $label
+                            )));
+                        }
+                        values.push(value.parse::<$element>().map_err(|_| {
+                            Error::InvalidVector(format!(
+                                "invalid {} value at dimension {index}: {value}",
+                                $label
+                            ))
+                        })?);
+                    }
+                }
+                Self::new(values)
+            }
+        }
+    };
+}
+
+impl_integer_vector!(Int8Vector, i8, "int8");
+impl_integer_vector!(UInt8Vector, u8, "uint8");
+
 impl DenseVector {
     /// Creates a dense vector after validating its values.
     ///
@@ -398,6 +501,132 @@ pub struct BitVector {
     bits: Vec<bool>,
 }
 
+/// Bit significance within each provider byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderBitOrder {
+    /// Bit 7 is the first logical bit in a byte.
+    MostSignificantFirst,
+    /// Bit 0 is the first logical bit in a byte.
+    LeastSignificantFirst,
+}
+
+/// Byte significance within one provider payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderByteOrder {
+    /// The first payload byte contains the first logical bits.
+    MostSignificantFirst,
+    /// The last payload byte contains the first logical bits.
+    LeastSignificantFirst,
+}
+
+/// Checked provider-native packed binary source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderBinaryVector {
+    bytes: Vec<u8>,
+    logical_bits: usize,
+    bit_order: ProviderBitOrder,
+    byte_order: ProviderByteOrder,
+}
+
+impl ProviderBinaryVector {
+    /// Validates an exact provider payload, including zero padding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidVector`] when the logical length is zero or
+    /// exceeds policy, the payload length is not exact, or any padding bit is
+    /// nonzero under the declared byte/bit order.
+    pub fn new(
+        bytes: Vec<u8>,
+        logical_bits: usize,
+        bit_order: ProviderBitOrder,
+        byte_order: ProviderByteOrder,
+    ) -> Result<Self> {
+        if logical_bits == 0 {
+            return Err(Error::InvalidVector(
+                "provider binary vectors must contain at least one bit".to_owned(),
+            ));
+        }
+        ensure_vector_length("provider binary logical bits", logical_bits)?;
+        let expected_bytes = logical_bits
+            .checked_add(7)
+            .ok_or_else(|| Error::InvalidVector("provider binary length overflow".to_owned()))?
+            / 8;
+        if bytes.len() != expected_bytes {
+            return Err(Error::InvalidVector(format!(
+                "provider binary payload length mismatch: expected {expected_bytes} bytes for {logical_bits} bits, got {}",
+                bytes.len()
+            )));
+        }
+        let vector = Self {
+            bytes,
+            logical_bits,
+            bit_order,
+            byte_order,
+        };
+        for bit in logical_bits..expected_bytes * 8 {
+            if vector.bit_at_padded_position(bit) {
+                return Err(Error::InvalidVector(format!(
+                    "provider binary padding bit {bit} must be zero"
+                )));
+            }
+        }
+        Ok(vector)
+    }
+
+    /// Returns the raw provider bytes.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Returns the authoritative logical bit length.
+    #[must_use]
+    pub const fn logical_bits(&self) -> usize {
+        self.logical_bits
+    }
+
+    /// Returns the declared bit order.
+    #[must_use]
+    pub const fn bit_order(&self) -> ProviderBitOrder {
+        self.bit_order
+    }
+
+    /// Returns the declared byte order.
+    #[must_use]
+    pub const fn byte_order(&self) -> ProviderByteOrder {
+        self.byte_order
+    }
+
+    /// Decodes the provider payload into the authoritative bit vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidVector`] only if the stored logical length no
+    /// longer satisfies core vector policy.
+    pub fn to_bit_vector(&self) -> Result<BitVector> {
+        BitVector::new(
+            (0..self.logical_bits)
+                .map(|position| self.bit_at_padded_position(position))
+                .collect(),
+        )
+    }
+
+    fn bit_at_padded_position(&self, position: usize) -> bool {
+        let logical_byte = position / 8;
+        let byte_index = match self.byte_order {
+            ProviderByteOrder::MostSignificantFirst => logical_byte,
+            ProviderByteOrder::LeastSignificantFirst => self.bytes.len() - 1 - logical_byte,
+        };
+        let in_byte = position % 8;
+        let shift = match self.bit_order {
+            ProviderBitOrder::MostSignificantFirst => 7 - in_byte,
+            ProviderBitOrder::LeastSignificantFirst => in_byte,
+        };
+        self.bytes[byte_index] & (1 << shift) != 0
+    }
+}
+
 impl BitVector {
     /// Creates a bit vector from boolean values.
     ///
@@ -498,6 +727,7 @@ impl FromStr for BitVector {
 
     fn from_str(input: &str) -> Result<Self> {
         let trimmed = input.trim();
+        ensure_vector_length("bit vector dimensions", trimmed.len())?;
         let mut bits = Vec::with_capacity(trimmed.len());
         for (index, byte) in trimmed.bytes().enumerate() {
             match byte {

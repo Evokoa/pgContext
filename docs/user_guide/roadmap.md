@@ -722,10 +722,11 @@ exact-oracle and bounded-work assertions.
 
 ## Model-Native Integer and Binary Source Vectors
 
-Status: planned first-class source-type track, separate from derived
-quantization. The current Rust/SQL representation set is dense `f32`,
-half-precision, sparse, and bit vectors; there is no signed or unsigned 8-bit
-dense source type today.
+Status: implemented experimentally as a first-class source-type track,
+separate from derived quantization. The Rust/SQL representation set now
+includes dense `f32`, half-precision, sparse, bit, signed 8-bit, and unsigned
+8-bit vectors. Promotion remains per representation/metric tuple and does not
+promote the HNSW storage lifecycle.
 
 Depends on: shared metric semantics, typed model/profile metadata, the vector
 type and operator-family compatibility policy, architecture-dispatched exact

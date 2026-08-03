@@ -221,7 +221,7 @@ fn hnsw_scan_state_rescan_discards_position_and_candidates() {
         prepared: true,
         orderby_contract: Some(HnswOrderByContract {
             metric: HnswScoreMetric::Cosine,
-            pgvector_binding: true,
+            exact_float8_recheck: true,
         }),
         position: 1,
         candidate_limit: 2,

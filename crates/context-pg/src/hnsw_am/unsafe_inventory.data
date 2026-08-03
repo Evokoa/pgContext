@@ -27,6 +27,7 @@ hnsw_am.rs|fn|hnsw_dense_score_metric|reads live dense operator-class metadata
 hnsw_am.rs|fn|hnsw_certified_pgvector_type_oid|resolves an exact public type OID and certifies pgvector extension ownership
 hnsw_am.rs|fn|hnsw_index_opcintype|reads a live relation-cache OID array
 hnsw_am.rs|fn|hnsw_index_uses_certified_pgvector_type|classifies a live opclass input through certified catalog OIDs
+hnsw_am.rs|fn|hnsw_index_uses_integer_source_type|classifies a live opclass input through pgContext integer type OIDs
 hnsw_am.rs|fn|hnsw_index_opfamily|reads a live relation-cache OID array
 hnsw_am.rs|fn|hnsw_insert_via_delta_safe|appends a bounded delta record to a live PostgreSQL index relation and updates its metapage
 hnsw_am.rs|fn|hnsw_compact_relation|rebuilds a live PostgreSQL index relation's graph onto fresh pages and republishes its metapage

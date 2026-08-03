@@ -120,6 +120,54 @@ CREATE OPERATOR CLASS pgcontext.bitvec_hnsw_jaccard_ops
     FUNCTION 1 pgcontext.bitvec_jaccard_distance(pgcontext.bitvec, pgcontext.bitvec),
     STORAGE pgcontext.vector;
 
+CREATE OPERATOR CLASS pgcontext.int8vec_hnsw_ops
+    DEFAULT FOR TYPE pgcontext.int8vec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<-> (pgcontext.int8vec, pgcontext.int8vec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.int8vec_l2_distance(pgcontext.int8vec, pgcontext.int8vec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.int8vec_hnsw_ip_ops
+    FOR TYPE pgcontext.int8vec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<#> (pgcontext.int8vec, pgcontext.int8vec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.int8vec_negative_inner_product(pgcontext.int8vec, pgcontext.int8vec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.int8vec_hnsw_cosine_ops
+    FOR TYPE pgcontext.int8vec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<=> (pgcontext.int8vec, pgcontext.int8vec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.int8vec_cosine_distance(pgcontext.int8vec, pgcontext.int8vec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.int8vec_hnsw_l1_ops
+    FOR TYPE pgcontext.int8vec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<+> (pgcontext.int8vec, pgcontext.int8vec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.int8vec_l1_distance(pgcontext.int8vec, pgcontext.int8vec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.uint8vec_hnsw_ops
+    DEFAULT FOR TYPE pgcontext.uint8vec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<-> (pgcontext.uint8vec, pgcontext.uint8vec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.uint8vec_l2_distance(pgcontext.uint8vec, pgcontext.uint8vec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.uint8vec_hnsw_ip_ops
+    FOR TYPE pgcontext.uint8vec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<#> (pgcontext.uint8vec, pgcontext.uint8vec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.uint8vec_negative_inner_product(pgcontext.uint8vec, pgcontext.uint8vec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.uint8vec_hnsw_cosine_ops
+    FOR TYPE pgcontext.uint8vec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<=> (pgcontext.uint8vec, pgcontext.uint8vec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.uint8vec_cosine_distance(pgcontext.uint8vec, pgcontext.uint8vec),
+    STORAGE pgcontext.vector;
+
+CREATE OPERATOR CLASS pgcontext.uint8vec_hnsw_l1_ops
+    FOR TYPE pgcontext.uint8vec USING pgcontext_hnsw AS
+    OPERATOR 1 pgcontext.<+> (pgcontext.uint8vec, pgcontext.uint8vec) FOR ORDER BY pg_catalog.float_ops,
+    FUNCTION 1 pgcontext.uint8vec_l1_distance(pgcontext.uint8vec, pgcontext.uint8vec),
+    STORAGE pgcontext.vector;
+
 "#,
     name = "create_hnsw_access_method",
     requires = [
@@ -128,6 +176,8 @@ CREATE OPERATOR CLASS pgcontext.bitvec_hnsw_jaccard_ops
         HalfVec,
         SparseVec,
         BitVec,
+        Int8Vec,
+        UInt8Vec,
         "create_vector_distance_operators",
         "create_vector_variant_distance_operators",
         "create_vector_fast_distance_functions",
@@ -145,5 +195,13 @@ CREATE OPERATOR CLASS pgcontext.bitvec_hnsw_jaccard_ops
         sparsevec_l1_distance,
         bitvec_hamming_distance,
         bitvec_jaccard_distance
+        ,int8vec_l2_distance
+        ,int8vec_negative_inner_product
+        ,int8vec_cosine_distance
+        ,int8vec_l1_distance
+        ,uint8vec_l2_distance
+        ,uint8vec_negative_inner_product
+        ,uint8vec_cosine_distance
+        ,uint8vec_l1_distance
     ]
 );

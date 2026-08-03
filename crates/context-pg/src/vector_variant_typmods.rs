@@ -9,7 +9,7 @@ use pgrx::{Array, PgSqlErrorCode};
 
 use crate::error::{raise_core_error, raise_sql_error};
 use crate::vector::Vector;
-use crate::vector_variants::{BitVec, HalfVec, SparseVec};
+use crate::vector_variants::{BitVec, HalfVec, Int8Vec, SparseVec, UInt8Vec};
 
 pgrx::extension_sql!(
     r#"
@@ -33,6 +33,16 @@ ALTER TYPE bitvec SET (
     TYPMOD_OUT = pgcontext.bitvec_typmod_out
 );
 
+ALTER TYPE int8vec SET (
+    TYPMOD_IN = pgcontext.int8vec_typmod_in,
+    TYPMOD_OUT = pgcontext.int8vec_typmod_out
+);
+
+ALTER TYPE uint8vec SET (
+    TYPMOD_IN = pgcontext.uint8vec_typmod_in,
+    TYPMOD_OUT = pgcontext.uint8vec_typmod_out
+);
+
 CREATE CAST (halfvec AS halfvec)
     WITH FUNCTION pgcontext.halfvec_enforce_typmod(halfvec, integer, boolean)
     AS IMPLICIT;
@@ -45,6 +55,14 @@ CREATE CAST (bitvec AS bitvec)
     WITH FUNCTION pgcontext.bitvec_enforce_typmod(bitvec, integer, boolean)
     AS IMPLICIT;
 
+CREATE CAST (int8vec AS int8vec)
+    WITH FUNCTION pgcontext.int8vec_enforce_typmod(int8vec, integer, boolean)
+    AS IMPLICIT;
+
+CREATE CAST (uint8vec AS uint8vec)
+    WITH FUNCTION pgcontext.uint8vec_enforce_typmod(uint8vec, integer, boolean)
+    AS IMPLICIT;
+
 CREATE CAST (vector AS vector)
     WITH FUNCTION pgcontext.vector_enforce_typmod(vector, integer, boolean)
     AS IMPLICIT;
@@ -55,6 +73,8 @@ CREATE CAST (vector AS vector)
         HalfVec,
         SparseVec,
         BitVec,
+        Int8Vec,
+        UInt8Vec,
         vector_typmod_in,
         vector_typmod_out,
         vector_enforce_typmod,
@@ -64,9 +84,15 @@ CREATE CAST (vector AS vector)
         sparsevec_typmod_out,
         bitvec_typmod_in,
         bitvec_typmod_out,
+        int8vec_typmod_in,
+        int8vec_typmod_out,
+        uint8vec_typmod_in,
+        uint8vec_typmod_out,
         halfvec_enforce_typmod,
         sparsevec_enforce_typmod,
-        bitvec_enforce_typmod
+        bitvec_enforce_typmod,
+        int8vec_enforce_typmod,
+        uint8vec_enforce_typmod
     ]
 );
 
@@ -137,6 +163,34 @@ pub fn bitvec_typmod_out(typmod: i32) -> CString {
     format_vector_typmod(typmod)
 }
 
+/// Parses an `int8vec(n)` type modifier.
+#[pg_extern(immutable, parallel_safe, strict)]
+#[must_use]
+pub fn int8vec_typmod_in(modifiers: Array<'_, &CStr>) -> i32 {
+    parse_vector_typmod(modifiers, "int8vec")
+}
+
+/// Formats an `int8vec(n)` type modifier.
+#[pg_extern(immutable, parallel_safe, strict)]
+#[must_use]
+pub fn int8vec_typmod_out(typmod: i32) -> CString {
+    format_vector_typmod(typmod)
+}
+
+/// Parses a `uint8vec(n)` type modifier.
+#[pg_extern(immutable, parallel_safe, strict)]
+#[must_use]
+pub fn uint8vec_typmod_in(modifiers: Array<'_, &CStr>) -> i32 {
+    parse_vector_typmod(modifiers, "uint8vec")
+}
+
+/// Formats a `uint8vec(n)` type modifier.
+#[pg_extern(immutable, parallel_safe, strict)]
+#[must_use]
+pub fn uint8vec_typmod_out(typmod: i32) -> CString {
+    format_vector_typmod(typmod)
+}
+
 /// Enforces a declared `halfvec(n)` typmod during assignment.
 #[pg_extern(immutable, parallel_safe, strict)]
 #[must_use]
@@ -178,6 +232,28 @@ pub fn bitvec_enforce_typmod(vector: BitVec, typmod: i32, _explicit: bool) -> Bi
             Err(error) => raise_core_error(error),
         };
         ensure_typmod_dimension("bitvec", required, actual);
+    }
+    vector
+}
+
+/// Enforces a declared `int8vec(n)` typmod during assignment.
+#[pg_extern(immutable, parallel_safe, strict)]
+#[must_use]
+pub fn int8vec_enforce_typmod(vector: Int8Vec, typmod: i32, _explicit: bool) -> Int8Vec {
+    if typmod >= 0 {
+        let required = typmod_to_dimension(typmod, "int8vec");
+        ensure_typmod_dimension("int8vec", required, vector.as_slice().len());
+    }
+    vector
+}
+
+/// Enforces a declared `uint8vec(n)` typmod during assignment.
+#[pg_extern(immutable, parallel_safe, strict)]
+#[must_use]
+pub fn uint8vec_enforce_typmod(vector: UInt8Vec, typmod: i32, _explicit: bool) -> UInt8Vec {
+    if typmod >= 0 {
+        let required = typmod_to_dimension(typmod, "uint8vec");
+        ensure_typmod_dimension("uint8vec", required, vector.as_slice().len());
     }
     vector
 }

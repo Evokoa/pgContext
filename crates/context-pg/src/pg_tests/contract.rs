@@ -223,13 +223,17 @@ fn installed_casts() -> std::collections::BTreeSet<(String, String)> {
                     'vector'::regtype,
                     'halfvec'::regtype,
                     'sparsevec'::regtype,
-                    'bitvec'::regtype
+                    'bitvec'::regtype,
+                    'int8vec'::regtype,
+                    'uint8vec'::regtype
                 )
              OR casttarget IN (
                     'vector'::regtype,
                     'halfvec'::regtype,
                     'sparsevec'::regtype,
-                    'bitvec'::regtype
+                    'bitvec'::regtype,
+                    'int8vec'::regtype,
+                    'uint8vec'::regtype
                 )
           ORDER BY 1",
         "installed cast query should succeed",
@@ -246,6 +250,7 @@ fn installed_contract_types() -> std::collections::BTreeSet<(String, String)> {
             AND (
                     typname IN (
                         'vector', 'halfvec', 'sparsevec', 'bitvec',
+                        'int8vec', 'uint8vec',
                         'buildjobstatus', 'embeddingmigrationstatus',
                         'indexadvisorrecommendation', 'indexdiagnosticstatus',
                         'indexlifecyclestatus', 'indexmemoryestimatestatus',

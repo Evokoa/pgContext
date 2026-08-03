@@ -1,6 +1,9 @@
 //! Exact distance metrics for framework-free vector representations.
 
-use crate::{DenseVector, Error, HalfVector, Result, ScoreOrder, SparseVector, metric_kernels};
+use crate::{
+    DenseVector, Error, HalfVector, Int8Vector, Result, ScoreOrder, SparseVector, UInt8Vector,
+    metric_kernels,
+};
 
 /// Distance or similarity family used for vector comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +135,69 @@ impl DistanceMetric {
             Self::Hamming => sparse_binary_distance(left, right, BinaryMetric::Hamming),
             Self::Jaccard => sparse_binary_distance(left, right, BinaryMetric::Jaccard),
         }
+    }
+
+    /// Computes this metric over authoritative signed 8-bit coordinates.
+    ///
+    /// Integer products and squared differences accumulate exactly in `i64`;
+    /// conversion to `f64` happens only for the returned score.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::DimensionMismatch`] for unequal dimensions,
+    /// [`Error::InvalidVector`] for cosine with a zero vector, or for binary
+    /// metrics, which are not numeric integer-vector metrics.
+    pub fn distance_int8(self, left: &Int8Vector, right: &Int8Vector) -> Result<f64> {
+        ensure_same_dimension(left.dimension(), right.dimension())?;
+        integer_distance(
+            self,
+            crate::integer_metric_kernels::signed(left.as_slice(), right.as_slice()),
+        )
+    }
+
+    /// Computes this metric over authoritative unsigned 8-bit coordinates.
+    ///
+    /// Integer products and squared differences accumulate exactly in `i64`;
+    /// conversion to `f64` happens only for the returned score.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::distance_int8`].
+    pub fn distance_uint8(self, left: &UInt8Vector, right: &UInt8Vector) -> Result<f64> {
+        ensure_same_dimension(left.dimension(), right.dimension())?;
+        integer_distance(
+            self,
+            crate::integer_metric_kernels::unsigned(left.as_slice(), right.as_slice()),
+        )
+    }
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "8-bit coordinates at the 16,000-dimension policy bound keep every accumulator below 2^53, so i64-to-f64 conversion is exact"
+)]
+fn integer_distance(
+    metric: DistanceMetric,
+    sums: crate::integer_metric_kernels::IntegerAccumulators,
+) -> Result<f64> {
+    match metric {
+        DistanceMetric::L2 => Ok((sums.squared_difference as f64).sqrt()),
+        DistanceMetric::InnerProduct => Ok(sums.dot as f64),
+        DistanceMetric::NegativeInnerProduct => Ok(-(sums.dot as f64)),
+        DistanceMetric::L1 => Ok(sums.l1 as f64),
+        DistanceMetric::Cosine => {
+            if sums.left_norm == 0 || sums.right_norm == 0 {
+                return Err(Error::InvalidVector(
+                    "integer cosine distance is undefined for zero vectors".to_owned(),
+                ));
+            }
+            Ok(1.0
+                - (sums.dot as f64
+                    / ((sums.left_norm as f64).sqrt() * (sums.right_norm as f64).sqrt())))
+        }
+        DistanceMetric::Hamming | DistanceMetric::Jaccard => Err(Error::InvalidVector(
+            "binary metrics require a bit-vector source representation".to_owned(),
+        )),
     }
 }
 

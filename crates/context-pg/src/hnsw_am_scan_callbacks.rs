@@ -350,12 +350,12 @@ fn hnsw_get_tuple_safe(
                     // and exactly reranks every bounded ANN candidate.
                     (*scan.as_ptr()).xs_recheckorderby =
                         contract.metric == HnswScoreMetric::BitJaccard
-                            || contract.pgvector_binding;
+                            || contract.exact_float8_recheck;
                     store_hnsw_orderby_distance(
                         scan.as_ptr(),
                         contract.metric,
                         candidate.score,
-                        contract.pgvector_binding,
+                        contract.exact_float8_recheck,
                     );
                 } else {
                     (*scan.as_ptr()).xs_recheckorderby = false;
@@ -418,13 +418,13 @@ unsafe fn store_hnsw_orderby_distance(
     scan: pg_sys::IndexScanDesc,
     metric: HnswScoreMetric,
     score: f32,
-    pgvector_binding: bool,
+    exact_float8_recheck: bool,
 ) {
     // SAFETY: PostgreSQL allocates these arrays in `pgcontext_hnsw_begin_scan`
     // when order-by keys are present, and this function is only called after
     // `numberOfOrderBys > 0`.
     let orderby_count = unsafe { c_int_to_usize((*scan).numberOfOrderBys, "scan order-bys") };
-    if pgvector_binding {
+    if exact_float8_recheck {
         let mut order_by_types = vec![pg_sys::FLOAT8OID; orderby_count];
         let mut distances = vec![
             pg_sys::IndexOrderByDistance {

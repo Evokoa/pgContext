@@ -6,7 +6,7 @@ use context_core::{BitVector, HalfVector, SparseVector};
 use pgrx::prelude::*;
 
 use crate::error::{raise_core_error, raise_sql_error};
-use crate::vector_variants::{BitVec, HalfVec, SparseVec};
+use crate::vector_variants::{BitVec, HalfVec, Int8Vec, SparseVec, UInt8Vec};
 
 pgrx::extension_sql!(
     r#"
@@ -192,6 +192,51 @@ CREATE OPERATOR CLASS pgcontext.bitvec_ops
     ]
 );
 
+pgrx::extension_sql!(
+    r#"
+CREATE OPERATOR pgcontext.< (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_lt, COMMUTATOR = OPERATOR(pgcontext.>), NEGATOR = OPERATOR(pgcontext.>=));
+CREATE OPERATOR pgcontext.<= (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_le, COMMUTATOR = OPERATOR(pgcontext.>=), NEGATOR = OPERATOR(pgcontext.>));
+CREATE OPERATOR pgcontext.= (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_eq, COMMUTATOR = OPERATOR(pgcontext.=), NEGATOR = OPERATOR(pgcontext.<>));
+CREATE OPERATOR pgcontext.<> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_ne, COMMUTATOR = OPERATOR(pgcontext.<>), NEGATOR = OPERATOR(pgcontext.=));
+CREATE OPERATOR pgcontext.>= (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_ge, COMMUTATOR = OPERATOR(pgcontext.<=), NEGATOR = OPERATOR(pgcontext.<));
+CREATE OPERATOR pgcontext.> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_gt, COMMUTATOR = OPERATOR(pgcontext.<), NEGATOR = OPERATOR(pgcontext.<=));
+CREATE OPERATOR CLASS pgcontext.int8vec_ops DEFAULT FOR TYPE int8vec USING btree AS
+    OPERATOR 1 pgcontext.< (int8vec, int8vec), OPERATOR 2 pgcontext.<= (int8vec, int8vec),
+    OPERATOR 3 pgcontext.= (int8vec, int8vec), OPERATOR 4 pgcontext.>= (int8vec, int8vec),
+    OPERATOR 5 pgcontext.> (int8vec, int8vec), FUNCTION 1 pgcontext.int8vec_cmp(int8vec, int8vec);
+
+CREATE OPERATOR pgcontext.< (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_lt, COMMUTATOR = OPERATOR(pgcontext.>), NEGATOR = OPERATOR(pgcontext.>=));
+CREATE OPERATOR pgcontext.<= (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_le, COMMUTATOR = OPERATOR(pgcontext.>=), NEGATOR = OPERATOR(pgcontext.>));
+CREATE OPERATOR pgcontext.= (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_eq, COMMUTATOR = OPERATOR(pgcontext.=), NEGATOR = OPERATOR(pgcontext.<>));
+CREATE OPERATOR pgcontext.<> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_ne, COMMUTATOR = OPERATOR(pgcontext.<>), NEGATOR = OPERATOR(pgcontext.=));
+CREATE OPERATOR pgcontext.>= (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_ge, COMMUTATOR = OPERATOR(pgcontext.<=), NEGATOR = OPERATOR(pgcontext.<));
+CREATE OPERATOR pgcontext.> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_gt, COMMUTATOR = OPERATOR(pgcontext.<), NEGATOR = OPERATOR(pgcontext.<=));
+CREATE OPERATOR CLASS pgcontext.uint8vec_ops DEFAULT FOR TYPE uint8vec USING btree AS
+    OPERATOR 1 pgcontext.< (uint8vec, uint8vec), OPERATOR 2 pgcontext.<= (uint8vec, uint8vec),
+    OPERATOR 3 pgcontext.= (uint8vec, uint8vec), OPERATOR 4 pgcontext.>= (uint8vec, uint8vec),
+    OPERATOR 5 pgcontext.> (uint8vec, uint8vec), FUNCTION 1 pgcontext.uint8vec_cmp(uint8vec, uint8vec);
+"#,
+    name = "create_integer_vector_comparison_operators",
+    requires = [
+        Int8Vec,
+        UInt8Vec,
+        int8vec_lt,
+        int8vec_le,
+        int8vec_eq,
+        int8vec_ne,
+        int8vec_ge,
+        int8vec_gt,
+        int8vec_cmp,
+        uint8vec_lt,
+        uint8vec_le,
+        uint8vec_eq,
+        uint8vec_ne,
+        uint8vec_ge,
+        uint8vec_gt,
+        uint8vec_cmp
+    ]
+);
+
 /// Compares half vectors for btree ordering.
 #[pg_extern(immutable, parallel_safe)]
 pub fn halfvec_cmp(left: HalfVec, right: HalfVec) -> i32 {
@@ -300,6 +345,78 @@ pub fn bitvec_gt(left: BitVec, right: BitVec) -> bool {
     compare_bitvecs(left, right).is_gt()
 }
 
+/// Compares signed integer vectors for btree ordering.
+#[pg_extern(immutable, parallel_safe)]
+pub fn int8vec_cmp(left: Int8Vec, right: Int8Vec) -> i32 {
+    ordering_to_i32(compare_int8vecs(&left, &right))
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn int8vec_lt(left: Int8Vec, right: Int8Vec) -> bool {
+    compare_int8vecs(&left, &right).is_lt()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn int8vec_le(left: Int8Vec, right: Int8Vec) -> bool {
+    compare_int8vecs(&left, &right).is_le()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn int8vec_eq(left: Int8Vec, right: Int8Vec) -> bool {
+    compare_int8vecs(&left, &right).is_eq()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn int8vec_ne(left: Int8Vec, right: Int8Vec) -> bool {
+    !compare_int8vecs(&left, &right).is_eq()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn int8vec_ge(left: Int8Vec, right: Int8Vec) -> bool {
+    compare_int8vecs(&left, &right).is_ge()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn int8vec_gt(left: Int8Vec, right: Int8Vec) -> bool {
+    compare_int8vecs(&left, &right).is_gt()
+}
+
+/// Compares unsigned integer vectors for btree ordering.
+#[pg_extern(immutable, parallel_safe)]
+pub fn uint8vec_cmp(left: UInt8Vec, right: UInt8Vec) -> i32 {
+    ordering_to_i32(compare_uint8vecs(&left, &right))
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn uint8vec_lt(left: UInt8Vec, right: UInt8Vec) -> bool {
+    compare_uint8vecs(&left, &right).is_lt()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn uint8vec_le(left: UInt8Vec, right: UInt8Vec) -> bool {
+    compare_uint8vecs(&left, &right).is_le()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn uint8vec_eq(left: UInt8Vec, right: UInt8Vec) -> bool {
+    compare_uint8vecs(&left, &right).is_eq()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn uint8vec_ne(left: UInt8Vec, right: UInt8Vec) -> bool {
+    !compare_uint8vecs(&left, &right).is_eq()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn uint8vec_ge(left: UInt8Vec, right: UInt8Vec) -> bool {
+    compare_uint8vecs(&left, &right).is_ge()
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn uint8vec_gt(left: UInt8Vec, right: UInt8Vec) -> bool {
+    compare_uint8vecs(&left, &right).is_gt()
+}
+
 fn ordering_to_i32(ordering: Ordering) -> i32 {
     match ordering {
         Ordering::Less => -1,
@@ -360,6 +477,14 @@ fn compare_bitvecs(left: BitVec, right: BitVec) -> Ordering {
         }
     }
     left.len().cmp(&right.len())
+}
+
+fn compare_int8vecs(left: &Int8Vec, right: &Int8Vec) -> Ordering {
+    left.as_slice().cmp(right.as_slice())
+}
+
+fn compare_uint8vecs(left: &UInt8Vec, right: &UInt8Vec) -> Ordering {
+    left.as_slice().cmp(right.as_slice())
 }
 
 fn halfvec_to_core(vector: HalfVec) -> HalfVector {

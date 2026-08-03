@@ -2,7 +2,7 @@ Floor ID|Category|Representation|Semantics|Public maturity|V1 decision|Installed
 PGV-TYPE-VECTOR|type|vector|text I/O and vector(n) typmod|stable|installed|sql/pgcontext--0.2.0.sql#CREATE TYPE Vector|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
 PGV-TYPE-HALFVEC|type|halfvec|text I/O and halfvec(n) typmod|experimental|installed|sql/pgcontext--0.2.0.sql#CREATE TYPE HalfVec|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
 PGV-TYPE-SPARSEVEC|type|sparsevec|canonical text I/O and sparsevec(n) typmod|experimental|installed|sql/pgcontext--0.2.0.sql#CREATE TYPE SparseVec|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
-PGV-TYPE-BITVEC|type|bitvec|text I/O and bitvec(n) typmod|experimental|installed|sql/pgcontext--0.2.0.sql#CREATE TYPE BitVec|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
+PGV-TYPE-BITVEC|type|bitvec|text I/O and bitvec(n) typmod|experimental|installed|sql/pgcontext--0.2.0.sql#CREATE TYPE pgcontext.bitvec|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
 PGV-CAST-VECTOR|cast|vector|numeric arrays to vector and vector to real array|stable|installed|sql/pgcontext--0.2.0.sql#CREATE CAST (real[] AS vector)|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
 PGV-CAST-HALFVEC|cast|halfvec|numeric arrays to halfvec and halfvec to real array or vector|experimental|installed|sql/pgcontext--0.2.0.sql#CREATE CAST (real[] AS halfvec)|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix
 PGV-CAST-SPARSEVEC|cast|sparsevec|real array and dense vector interchange|experimental|installed|sql/pgcontext--0.2.0.sql#CREATE CAST (real[] AS sparsevec)|docs/user_guide/parity_matrix.md#pgvector and Qdrant Parity Matrix

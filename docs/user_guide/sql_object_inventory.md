@@ -8,27 +8,26 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `9ebc6765dbe87fbbcd6d20640c30062a532ac29476ffb873849bd3512e9250d5`
+Full SQL artifact SHA-256: `82e247fcae0df6e3372c2fd7218b61fe36c62f3571166800456d6c3d477ee36a`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
 | Object kind | Installed count |
 |---|---:|
-| Types | 18 |
+| Types | 20 |
 | Schemas | 0 |
-| Functions | 281 |
-| Tables | 22 |
+| Functions | 346 |
+| Tables | 23 |
 | Views | 12 |
-| Triggers | 5 |
-| Casts | 23 |
-| Operators | 42 |
-| Operator classes | 18 |
-| Aggregates | 8 |
+| Triggers | 6 |
+| Casts | 35 |
+| Operators | 62 |
+| Operator classes | 28 |
+| Aggregates | 12 |
 | Access methods | 1 |
 
 ## Types
 
-- `BitVec`
 - `BuildJobStatus`
 - `EmbeddingMigrationStatus`
 - `HalfVec`
@@ -46,6 +45,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 - `TelemetryStatus`
 - `VacuumAdviceStatus`
 - `Vector`
+- `pgcontext.bitvec`
+- `pgcontext.int8vec`
+- `pgcontext.uint8vec`
 
 ## Schemas, Tables, Views, And Triggers
 
@@ -63,6 +65,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._collection_vectors`
 - table `pgcontext._collections`
 - table `pgcontext._embedding_migrations`
+- table `pgcontext._embedding_profiles`
 - table `pgcontext._generation_aliases`
 - table `pgcontext._generation_artifacts`
 - table `pgcontext._generation_build_rows`
@@ -71,6 +74,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._model_versions`
 - table `pgcontext._pgvector_ownership_conversions`
 - table `pgcontext._query_stats`
+- trigger `embedding_profiles_immutable`
 - trigger `pgcontext_build_jobs_no_progress_regression`
 - trigger `pgcontext_build_jobs_terminal_state`
 - trigger `pgcontext_capture_build_point_delta`
@@ -120,16 +124,15 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"bitvec_enforce_typmod"`
 - `"bitvec_eq"`
 - `"bitvec_from_bool_array"`
+- `"bitvec_from_provider_bytes"`
 - `"bitvec_ge"`
 - `"bitvec_gt"`
 - `"bitvec_hamming_distance"`
-- `"bitvec_in"`
 - `"bitvec_jaccard_distance"`
 - `"bitvec_le"`
 - `"bitvec_lt"`
 - `"bitvec_ne"`
 - `"bitvec_or_transition"`
-- `"bitvec_out"`
 - `"bitvec_to_bool_array"`
 - `"bitvec_typmod_in"`
 - `"bitvec_typmod_out"`
@@ -161,6 +164,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"drop_collection"`
 - `"drop_collection_alias"`
 - `"embedding_migrations"`
+- `"embedding_profile_explain"`
+- `"embedding_profiles"`
 - `"enable_pgvector_binding"`
 - `"encode_artifact_segment"`
 - `"enqueue_build_job"`
@@ -211,6 +216,32 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"index_diagnostics"`
 - `"index_status"`
 - `"inner_product"`
+- `"int8vec"`
+- `"int8vec_cmp"`
+- `"int8vec_cosine_distance"`
+- `"int8vec_dims"`
+- `"int8vec_enforce_typmod"`
+- `"int8vec_eq"`
+- `"int8vec_from_integer_array"`
+- `"int8vec_from_profile"`
+- `"int8vec_from_smallint_array"`
+- `"int8vec_from_vector"`
+- `"int8vec_ge"`
+- `"int8vec_gt"`
+- `"int8vec_inner_product"`
+- `"int8vec_l1_distance"`
+- `"int8vec_l2_distance"`
+- `"int8vec_le"`
+- `"int8vec_lt"`
+- `"int8vec_ne"`
+- `"int8vec_negative_inner_product"`
+- `"int8vec_sum_transition"`
+- `"int8vec_to_smallint_array"`
+- `"int8vec_to_vector"`
+- `"int8vec_typmod_in"`
+- `"int8vec_typmod_out"`
+- `"integer_vector_avg_final"`
+- `"integer_vector_sum_final"`
 - `"l1_distance"`
 - `"l2_distance"`
 - `"migration_report"`
@@ -241,6 +272,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"recall_check"`
 - `"recommend"`
 - `"record_query_stat"`
+- `"register_embedding_profile"`
 - `"register_filter_column"`
 - `"register_jsonb_path"`
 - `"register_late_interaction"`
@@ -297,6 +329,30 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"start_build_job"`
 - `"start_pgvector_ownership_conversion"`
 - `"telemetry"`
+- `"uint8vec"`
+- `"uint8vec_cmp"`
+- `"uint8vec_cosine_distance"`
+- `"uint8vec_dims"`
+- `"uint8vec_enforce_typmod"`
+- `"uint8vec_eq"`
+- `"uint8vec_from_integer_array"`
+- `"uint8vec_from_profile"`
+- `"uint8vec_from_smallint_array"`
+- `"uint8vec_from_vector"`
+- `"uint8vec_ge"`
+- `"uint8vec_gt"`
+- `"uint8vec_inner_product"`
+- `"uint8vec_l1_distance"`
+- `"uint8vec_l2_distance"`
+- `"uint8vec_le"`
+- `"uint8vec_lt"`
+- `"uint8vec_ne"`
+- `"uint8vec_negative_inner_product"`
+- `"uint8vec_sum_transition"`
+- `"uint8vec_to_smallint_array"`
+- `"uint8vec_to_vector"`
+- `"uint8vec_typmod_in"`
+- `"uint8vec_typmod_out"`
 - `"update_build_job"`
 - `"update_embedding_migration"`
 - `"upsert_points"`
@@ -346,12 +402,25 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext._refresh_sparse_vector_source_binding`
 - `pgcontext._refresh_vector_source_binding`
 - `pgcontext._reject_build_job_progress_regression`
+- `pgcontext._reject_embedding_profile_mutation`
 - `pgcontext._store_late_interaction_tokens`
 - `pgcontext._unpin_generation`
+- `pgcontext.bitvec_out`
+- `pgcontext.bitvec_send`
+- `pgcontext.bitvec_typmod_input`
+- `pgcontext.bitvec_typmod_receive`
 - `pgcontext.current_vector_config_revision`
 - `pgcontext.hamming_distance`
 - `pgcontext.hnsw_handler`
+- `pgcontext.int8vec_out`
+- `pgcontext.int8vec_send`
+- `pgcontext.int8vec_typmod_input`
+- `pgcontext.int8vec_typmod_receive`
 - `pgcontext.jaccard_distance`
+- `pgcontext.uint8vec_out`
+- `pgcontext.uint8vec_send`
+- `pgcontext.uint8vec_typmod_input`
+- `pgcontext.uint8vec_typmod_receive`
 
 ## Cast Identities
 
@@ -367,16 +436,28 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `(halfvec AS halfvec)`
 - `(halfvec AS real[])`
 - `(halfvec AS vector)`
+- `(int8vec AS int8vec)`
+- `(int8vec AS smallint[])`
+- `(int8vec AS vector)`
 - `(integer[] AS halfvec)`
+- `(integer[] AS int8vec)`
+- `(integer[] AS uint8vec)`
 - `(integer[] AS vector)`
 - `(real[] AS halfvec)`
 - `(real[] AS sparsevec)`
 - `(real[] AS vector)`
+- `(smallint[] AS int8vec)`
+- `(smallint[] AS uint8vec)`
 - `(sparsevec AS real[])`
 - `(sparsevec AS sparsevec)`
 - `(sparsevec AS vector)`
+- `(uint8vec AS smallint[])`
+- `(uint8vec AS uint8vec)`
+- `(uint8vec AS vector)`
+- `(vector AS int8vec)`
 - `(vector AS real[])`
 - `(vector AS sparsevec)`
+- `(vector AS uint8vec)`
 - `(vector AS vector)`
 
 ## Typed Operator Registry Entries
@@ -387,6 +468,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 | `halfvec_ops` | operator class | btree, halfvec | Experimental |
 | `sparsevec_ops` | operator class | btree, sparsevec | Experimental |
 | `bitvec_ops` | operator class | btree, bitvec | Experimental |
+| `int8vec_ops` | operator class | btree, int8vec | Experimental |
+| `uint8vec_ops` | operator class | btree, uint8vec | Experimental |
 | `vector_hnsw_ops` | operator class | pgcontext_hnsw, vector | Experimental |
 | `vector_hnsw_ip_ops` | operator class | pgcontext_hnsw, vector | Experimental |
 | `vector_hnsw_cosine_ops` | operator class | pgcontext_hnsw, vector | Experimental |
@@ -401,6 +484,14 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 | `sparsevec_hnsw_l1_ops` | operator class | pgcontext_hnsw, sparsevec | Stable |
 | `bitvec_hnsw_hamming_ops` | operator class | pgcontext_hnsw, bitvec | Stable |
 | `bitvec_hnsw_jaccard_ops` | operator class | pgcontext_hnsw, bitvec | Stable |
+| `int8vec_hnsw_ops` | operator class | pgcontext_hnsw, int8vec | Experimental |
+| `int8vec_hnsw_ip_ops` | operator class | pgcontext_hnsw, int8vec | Experimental |
+| `int8vec_hnsw_cosine_ops` | operator class | pgcontext_hnsw, int8vec | Experimental |
+| `int8vec_hnsw_l1_ops` | operator class | pgcontext_hnsw, int8vec | Experimental |
+| `uint8vec_hnsw_ops` | operator class | pgcontext_hnsw, uint8vec | Experimental |
+| `uint8vec_hnsw_ip_ops` | operator class | pgcontext_hnsw, uint8vec | Experimental |
+| `uint8vec_hnsw_cosine_ops` | operator class | pgcontext_hnsw, uint8vec | Experimental |
+| `uint8vec_hnsw_l1_ops` | operator class | pgcontext_hnsw, uint8vec | Experimental |
 | `<->` | operator | vector, vector | Stable |
 | `<#>` | operator | vector, vector | Stable |
 | `<=>` | operator | vector, vector | Stable |
@@ -443,16 +534,40 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 | `<%>` | operator | bit, bit | Experimental |
 | `<~>` | operator | bit varying, bit varying | Experimental |
 | `<%>` | operator | bit varying, bit varying | Experimental |
+| `<->` | operator | int8vec, int8vec | Experimental |
+| `<#>` | operator | int8vec, int8vec | Experimental |
+| `<=>` | operator | int8vec, int8vec | Experimental |
+| `<+>` | operator | int8vec, int8vec | Experimental |
+| `<` | operator | int8vec, int8vec | Experimental |
+| `<=` | operator | int8vec, int8vec | Experimental |
+| `=` | operator | int8vec, int8vec | Experimental |
+| `<>` | operator | int8vec, int8vec | Experimental |
+| `>=` | operator | int8vec, int8vec | Experimental |
+| `>` | operator | int8vec, int8vec | Experimental |
+| `<->` | operator | uint8vec, uint8vec | Experimental |
+| `<#>` | operator | uint8vec, uint8vec | Experimental |
+| `<=>` | operator | uint8vec, uint8vec | Experimental |
+| `<+>` | operator | uint8vec, uint8vec | Experimental |
+| `<` | operator | uint8vec, uint8vec | Experimental |
+| `<=` | operator | uint8vec, uint8vec | Experimental |
+| `=` | operator | uint8vec, uint8vec | Experimental |
+| `<>` | operator | uint8vec, uint8vec | Experimental |
+| `>=` | operator | uint8vec, uint8vec | Experimental |
+| `>` | operator | uint8vec, uint8vec | Experimental |
 
 ## Aggregate Identities
 
 - `pgcontext.avg(halfvec) (`
+- `pgcontext.avg(int8vec) (`
 - `pgcontext.avg(sparsevec) (`
+- `pgcontext.avg(uint8vec) (`
 - `pgcontext.avg(vector) (`
 - `pgcontext.bit_and(bitvec) (`
 - `pgcontext.bit_or(bitvec) (`
 - `pgcontext.sum(halfvec) (`
+- `pgcontext.sum(int8vec) (`
 - `pgcontext.sum(sparsevec) (`
+- `pgcontext.sum(uint8vec) (`
 - `pgcontext.sum(vector) (`
 
 ## Access Methods And Operator Classes
@@ -466,11 +581,21 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - operator class `pgcontext.halfvec_hnsw_l1_ops`
 - operator class `pgcontext.halfvec_hnsw_ops`
 - operator class `pgcontext.halfvec_ops`
+- operator class `pgcontext.int8vec_hnsw_cosine_ops`
+- operator class `pgcontext.int8vec_hnsw_ip_ops`
+- operator class `pgcontext.int8vec_hnsw_l1_ops`
+- operator class `pgcontext.int8vec_hnsw_ops`
+- operator class `pgcontext.int8vec_ops`
 - operator class `pgcontext.sparsevec_hnsw_cosine_ops`
 - operator class `pgcontext.sparsevec_hnsw_ip_ops`
 - operator class `pgcontext.sparsevec_hnsw_l1_ops`
 - operator class `pgcontext.sparsevec_hnsw_ops`
 - operator class `pgcontext.sparsevec_ops`
+- operator class `pgcontext.uint8vec_hnsw_cosine_ops`
+- operator class `pgcontext.uint8vec_hnsw_ip_ops`
+- operator class `pgcontext.uint8vec_hnsw_l1_ops`
+- operator class `pgcontext.uint8vec_hnsw_ops`
+- operator class `pgcontext.uint8vec_ops`
 - operator class `pgcontext.vector_hnsw_cosine_ops`
 - operator class `pgcontext.vector_hnsw_ip_ops`
 - operator class `pgcontext.vector_hnsw_l1_ops`

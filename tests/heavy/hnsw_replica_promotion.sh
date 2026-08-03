@@ -54,14 +54,26 @@ validate_promoted_oracle() {
     local indexed exact
     exact="$(psql_replica -At <<'SQL' | tail -n 1
 SET enable_indexscan = off;
-SELECT string_agg(id::text, ',' ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector)
-  FROM (SELECT id, embedding FROM public.hnsw_replica_docs ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector LIMIT 3) AS ranked;
+SELECT pg_catalog.jsonb_build_object(
+    'dense', (SELECT pg_catalog.array_agg(id ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector)
+                FROM (SELECT id, embedding FROM public.hnsw_replica_docs ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector LIMIT 3) AS ranked),
+    'int8', (SELECT pg_catalog.array_agg(id ORDER BY int8_value OPERATOR(pgcontext.<->) pgcontext.int8vec('[9,0]'))
+               FROM (SELECT id, int8_value FROM public.hnsw_replica_docs ORDER BY int8_value OPERATOR(pgcontext.<->) pgcontext.int8vec('[9,0]') LIMIT 3) AS ranked),
+    'uint8', (SELECT pg_catalog.array_agg(id ORDER BY uint8_value OPERATOR(pgcontext.<->) pgcontext.uint8vec('[9,0]'))
+                FROM (SELECT id, uint8_value FROM public.hnsw_replica_docs ORDER BY uint8_value OPERATOR(pgcontext.<->) pgcontext.uint8vec('[9,0]') LIMIT 3) AS ranked)
+);
 SQL
 )"
     indexed="$(psql_replica -At <<'SQL' | tail -n 1
 SET enable_seqscan = off;
-SELECT string_agg(id::text, ',' ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector)
-  FROM (SELECT id, embedding FROM public.hnsw_replica_docs ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector LIMIT 3) AS ranked;
+SELECT pg_catalog.jsonb_build_object(
+    'dense', (SELECT pg_catalog.array_agg(id ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector)
+                FROM (SELECT id, embedding FROM public.hnsw_replica_docs ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector LIMIT 3) AS ranked),
+    'int8', (SELECT pg_catalog.array_agg(id ORDER BY int8_value OPERATOR(pgcontext.<->) pgcontext.int8vec('[9,0]'))
+               FROM (SELECT id, int8_value FROM public.hnsw_replica_docs ORDER BY int8_value OPERATOR(pgcontext.<->) pgcontext.int8vec('[9,0]') LIMIT 3) AS ranked),
+    'uint8', (SELECT pg_catalog.array_agg(id ORDER BY uint8_value OPERATOR(pgcontext.<->) pgcontext.uint8vec('[9,0]'))
+                FROM (SELECT id, uint8_value FROM public.hnsw_replica_docs ORDER BY uint8_value OPERATOR(pgcontext.<->) pgcontext.uint8vec('[9,0]') LIMIT 3) AS ranked)
+);
 SQL
 )"
     if [[ "${indexed}" != "${exact}" ]]; then
@@ -80,10 +92,21 @@ psql_postgres -c "CREATE ROLE ${REPLICA_USER} REPLICATION LOGIN"
 
 psql_db <<'SQL'
 CREATE EXTENSION pgcontext;
-CREATE TABLE public.hnsw_replica_docs (id bigint PRIMARY KEY, embedding vector NOT NULL);
+CREATE TABLE public.hnsw_replica_docs (
+    id bigint PRIMARY KEY,
+    embedding vector NOT NULL,
+    int8_value int8vec(2) NOT NULL,
+    uint8_value uint8vec(2) NOT NULL
+);
 INSERT INTO public.hnsw_replica_docs VALUES
-  (1, '[1,0]'::vector), (2, '[2,0]'::vector), (9, '[9,0]'::vector);
+  (1, '[1,0]'::vector, '[1,0]'::int8vec, '[1,0]'::uint8vec),
+  (2, '[2,0]'::vector, '[2,0]'::int8vec, '[2,0]'::uint8vec),
+  (9, '[9,0]'::vector, '[9,0]'::int8vec, '[9,0]'::uint8vec);
 CREATE INDEX hnsw_replica_docs_embedding_idx ON public.hnsw_replica_docs USING pgcontext_hnsw (embedding);
+CREATE INDEX hnsw_replica_docs_int8_idx ON public.hnsw_replica_docs USING pgcontext_hnsw
+    (int8_value pgcontext.int8vec_hnsw_ops);
+CREATE INDEX hnsw_replica_docs_uint8_idx ON public.hnsw_replica_docs USING pgcontext_hnsw
+    (uint8_value pgcontext.uint8vec_hnsw_ops);
 CHECKPOINT;
 SQL
 
@@ -92,7 +115,7 @@ rm -rf "${REPLICA_DIR}"
     -D "${REPLICA_DIR}" -R -X stream -C -S "${REPLICA_SLOT}"
 start_replica
 
-psql_db -c "INSERT INTO public.hnsw_replica_docs VALUES (10, '[10,0]'::vector)"
+psql_db -c "INSERT INTO public.hnsw_replica_docs VALUES (10, '[10,0]'::vector, '[10,0]'::int8vec, '[10,0]'::uint8vec)"
 for _ in {1..30}; do
     if psql_replica -Atc "SELECT count(*) FROM public.hnsw_replica_docs" | grep -qx '4'; then break; fi
     sleep 1

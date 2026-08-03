@@ -7,9 +7,11 @@
 pub mod policy;
 
 mod catalog;
+mod embedding_profile;
 mod error;
 mod exact;
 mod identity;
+mod integer_metric_kernels;
 mod metric;
 mod metric_kernels;
 mod retrieval;
@@ -18,6 +20,9 @@ mod vector;
 
 pub use catalog::{
     CollectionName, QualifiedTableName, SourceKey, SqlIdentifier, VectorDimensions, VectorName,
+};
+pub use embedding_profile::{
+    EmbeddingProfile, IntegerScale, ProviderBinaryLayout, VectorNormalization,
 };
 pub use error::{ContextError, Error, Result};
 pub use exact::{ExactSearchItem, ScoredPoint, SearchLimit, exact_top_k};
@@ -29,7 +34,8 @@ pub use retrieval::{
 };
 pub use scroll::{ScrollCursor, ScrollCursorError};
 pub use vector::{
-    BitVector, DenseVector, HalfVector, SparseEntry, SparseVector, VectorConversionPolicy,
+    BitVector, DenseVector, HalfVector, Int8Vector, ProviderBinaryVector, ProviderBitOrder,
+    ProviderByteOrder, SparseEntry, SparseVector, UInt8Vector, VectorConversionPolicy,
     VectorRepresentation, f32_to_half_bits, half_bits_to_f32,
 };
 
