@@ -1,15 +1,50 @@
 //! Validated query intermediate representation.
 
+use std::collections::BTreeSet;
+
 use context_core::policy::{MAX_FILTER_DEPTH, MAX_FILTER_NODES, MAX_RECALL_CHECK_POINT_IDS};
 use context_core::{DenseVector, PointId, SearchLimit, SparseVector, VectorName};
 use context_filter::{Filter, parse_filter_json};
 use serde_json::Value as JsonValue;
 
-use crate::{Formula, QueryError, Result, ScoreOrder};
+use crate::{
+    Formula, LateInteractionWork, MAX_LATE_INTERACTION_COMPARISONS,
+    MAX_LATE_INTERACTION_SCALAR_CELLS, QueryError, Result, ScoreOrder,
+};
 
-const MAX_QUERY_DEPTH: usize = 32;
-const MAX_QUERY_NODES: usize = 256;
+/// Maximum nesting depth accepted by a typed query plan.
+pub const MAX_QUERY_DEPTH: usize = 32;
+/// Maximum total nodes accepted by a typed query plan.
+pub const MAX_QUERY_NODES: usize = 256;
 const MAX_FILTER_SCALAR_BYTES: usize = 64 * 1024;
+
+/// Rank-only fusion policy for a prefetch node.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Fusion {
+    /// Reciprocal-rank fusion with equal branch weight.
+    Rrf {
+        /// Positive denominator constant.
+        rank_constant: u32,
+    },
+    /// Reciprocal-rank fusion with explicit branch weights.
+    WeightedRrf {
+        /// Positive denominator constant.
+        rank_constant: u32,
+    },
+}
+
+impl Fusion {
+    /// Conventional reciprocal-rank fusion policy (`k = 60`).
+    pub const STANDARD_RRF: Self = Self::Rrf { rank_constant: 60 };
+
+    /// Returns the positive denominator constant.
+    #[must_use]
+    pub const fn rank_constant(self) -> u32 {
+        match self {
+            Self::Rrf { rank_constant } | Self::WeightedRrf { rank_constant } => rank_constant,
+        }
+    }
+}
 
 /// Application-level query shape independent of PostgreSQL JSONB conversion.
 #[derive(Clone, Debug, PartialEq)]
@@ -63,6 +98,8 @@ pub enum QueryKind {
     Prefetch {
         /// Owned child queries.
         branches: Vec<QueryIr>,
+        /// Explicit rank-only fusion policy.
+        fusion: Fusion,
     },
     /// Weighted child query.
     Weighted {
@@ -91,6 +128,20 @@ pub enum QueryKind {
     Rerank {
         /// Owned child query.
         query: Box<QueryIr>,
+    },
+    /// Model-backed reranking through a query-owned port.
+    ExternalRerank {
+        /// Owned child query.
+        query: Box<QueryIr>,
+        /// Immutable adapter/model revision required by the plan.
+        model_revision: u64,
+    },
+    /// Bounded graph or topology expansion through a query-owned port.
+    TopologyExpand {
+        /// Owned seed query.
+        query: Box<QueryIr>,
+        /// Maximum expansion depth.
+        max_depth: usize,
     },
 }
 
@@ -192,6 +243,7 @@ impl QueryIr {
         if vectors.is_empty() {
             return Err(invalid("query_vectors", "must contain at least one vector"));
         }
+        validate_late_interaction_raw_shape(&vectors, candidates_per_query)?;
         let vectors = vectors
             .into_iter()
             .map(DenseVector::new)
@@ -270,13 +322,15 @@ impl QueryIr {
     pub fn has_filter_in_subtree(&self) -> bool {
         self.filter.is_some()
             || match &self.kind {
-                QueryKind::Prefetch { branches } => {
+                QueryKind::Prefetch { branches, .. } => {
                     branches.iter().any(Self::has_filter_in_subtree)
                 }
                 QueryKind::Weighted { query, .. }
                 | QueryKind::ScoreThreshold { query, .. }
                 | QueryKind::Formula { query, .. }
-                | QueryKind::Rerank { query } => query.has_filter_in_subtree(),
+                | QueryKind::Rerank { query }
+                | QueryKind::ExternalRerank { query, .. }
+                | QueryKind::TopologyExpand { query, .. } => query.has_filter_in_subtree(),
                 QueryKind::Nearest { .. }
                 | QueryKind::SparseNearest { .. }
                 | QueryKind::FullText { .. }
@@ -291,7 +345,7 @@ impl QueryIr {
     #[must_use]
     pub fn max_node_limit(&self) -> usize {
         let child_maximum = match &self.kind {
-            QueryKind::Prefetch { branches } => branches
+            QueryKind::Prefetch { branches, .. } => branches
                 .iter()
                 .map(Self::max_node_limit)
                 .max()
@@ -299,7 +353,9 @@ impl QueryIr {
             QueryKind::Weighted { query, .. }
             | QueryKind::ScoreThreshold { query, .. }
             | QueryKind::Formula { query, .. }
-            | QueryKind::Rerank { query } => query.max_node_limit(),
+            | QueryKind::Rerank { query }
+            | QueryKind::ExternalRerank { query, .. }
+            | QueryKind::TopologyExpand { query, .. } => query.max_node_limit(),
             QueryKind::Nearest { .. }
             | QueryKind::SparseNearest { .. }
             | QueryKind::FullText { .. }
@@ -333,6 +389,8 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
                 | QueryKind::ScoreThreshold { .. }
                 | QueryKind::Formula { .. }
                 | QueryKind::Rerank { .. }
+                | QueryKind::ExternalRerank { .. }
+                | QueryKind::TopologyExpand { .. }
         )
     {
         return Err(invalid(
@@ -340,12 +398,25 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
             "must be attached to executable leaf branches",
         ));
     }
-    if matches!(query.kind, QueryKind::Prefetch { .. })
-        && query.score_order != ScoreOrder::HigherIsBetter
-    {
+    let expected_order = match &query.kind {
+        QueryKind::FullText { .. }
+        | QueryKind::LateInteraction { .. }
+        | QueryKind::Discover { .. }
+        | QueryKind::Lookup { .. }
+        | QueryKind::Prefetch { .. }
+        | QueryKind::Formula { .. }
+        | QueryKind::ExternalRerank { .. }
+        | QueryKind::TopologyExpand { .. } => Some(ScoreOrder::HigherIsBetter),
+        QueryKind::Recommend { .. } => Some(ScoreOrder::LowerIsBetter),
+        QueryKind::Weighted { query: child, .. }
+        | QueryKind::ScoreThreshold { query: child, .. }
+        | QueryKind::Rerank { query: child } => Some(child.score_order()),
+        QueryKind::Nearest { .. } | QueryKind::SparseNearest { .. } => None,
+    };
+    if expected_order.is_some_and(|expected| query.score_order != expected) {
         return Err(invalid(
             "score_order",
-            "prefetch fusion scores must use higher-is-better ordering",
+            "does not match the query kind's canonical score ordering",
         ));
     }
     validate_kind(&query.kind, depth, nodes)
@@ -355,8 +426,11 @@ fn validate_kind(kind: &QueryKind, depth: usize, nodes: &mut usize) -> Result<()
     match kind {
         QueryKind::Nearest { .. }
         | QueryKind::SparseNearest { .. }
-        | QueryKind::FullText { .. }
-        | QueryKind::LateInteraction { .. } => {}
+        | QueryKind::FullText { .. } => {}
+        QueryKind::LateInteraction {
+            vectors,
+            candidates_per_query,
+        } => validate_late_interaction_vectors(vectors, candidates_per_query.get())?,
         QueryKind::Recommend { positive, negative } => {
             if positive.is_empty() {
                 return Err(invalid("positive", "must contain at least one point"));
@@ -380,10 +454,50 @@ fn validate_kind(kind: &QueryKind, depth: usize, nodes: &mut usize) -> Result<()
             if point_ids.len() > MAX_RECALL_CHECK_POINT_IDS {
                 return Err(invalid("point_ids", "point list exceeds policy maximum"));
             }
+            if point_ids.iter().copied().collect::<BTreeSet<_>>().len() != point_ids.len() {
+                return Err(invalid("point_ids", "must not contain duplicate points"));
+            }
         }
-        QueryKind::Prefetch { branches } => {
+        QueryKind::Prefetch { branches, fusion } => {
             if branches.is_empty() {
                 return Err(invalid("branches", "must contain at least one query"));
+            }
+            if fusion.rank_constant() == 0 {
+                return Err(invalid("rank_constant", "must be positive"));
+            }
+            if matches!(fusion, Fusion::WeightedRrf { .. })
+                && branches
+                    .iter()
+                    .any(|branch| !matches!(branch.kind(), QueryKind::Weighted { .. }))
+            {
+                return Err(invalid(
+                    "branches",
+                    "weighted RRF requires every branch to carry an explicit weight",
+                ));
+            }
+            if matches!(fusion, Fusion::WeightedRrf { .. }) {
+                let total_weight = branches.iter().fold(0.0, |total, branch| {
+                    let QueryKind::Weighted { weight, .. } = branch.kind() else {
+                        return total;
+                    };
+                    total + weight
+                });
+                if !total_weight.is_finite() || total_weight <= 0.0 {
+                    return Err(invalid(
+                        "branches",
+                        "weighted RRF branch weights must have a finite positive sum",
+                    ));
+                }
+            }
+            if matches!(fusion, Fusion::Rrf { .. })
+                && branches
+                    .iter()
+                    .any(|branch| matches!(branch.kind(), QueryKind::Weighted { .. }))
+            {
+                return Err(invalid(
+                    "branches",
+                    "weighted branches require the weighted RRF fusion policy",
+                ));
             }
             for branch in branches {
                 validate_query(branch, depth.saturating_add(1), nodes)?;
@@ -418,7 +532,100 @@ fn validate_kind(kind: &QueryKind, depth: usize, nodes: &mut usize) -> Result<()
         QueryKind::Rerank { query } => {
             validate_query(query, depth.saturating_add(1), nodes)?;
         }
+        QueryKind::ExternalRerank {
+            query,
+            model_revision,
+        } => {
+            validate_query(query, depth.saturating_add(1), nodes)?;
+            if *model_revision == 0 {
+                return Err(invalid("model_revision", "must be positive"));
+            }
+        }
+        QueryKind::TopologyExpand { query, max_depth } => {
+            validate_query(query, depth.saturating_add(1), nodes)?;
+            if *max_depth == 0 || *max_depth > MAX_QUERY_DEPTH {
+                return Err(invalid(
+                    "max_depth",
+                    "must be within the global query-depth bound",
+                ));
+            }
+        }
     }
+    Ok(())
+}
+
+fn validate_late_interaction_raw_shape(
+    vectors: &[Vec<f32>],
+    candidates_per_query: usize,
+) -> Result<()> {
+    if vectors.len() > MAX_RECALL_CHECK_POINT_IDS {
+        return Err(invalid(
+            "query_vectors",
+            "vector list exceeds policy maximum",
+        ));
+    }
+    let scalar_cells = vectors.iter().try_fold(0_usize, |total, vector| {
+        total
+            .checked_add(vector.len())
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "late_interaction_scalar_cell_projection",
+            })
+    })?;
+    if scalar_cells > MAX_LATE_INTERACTION_SCALAR_CELLS {
+        return Err(invalid(
+            "query_vectors",
+            "total scalar cells exceed policy maximum",
+        ));
+    }
+    LateInteractionWork::new(
+        vectors.len(),
+        candidates_per_query,
+        MAX_LATE_INTERACTION_COMPARISONS,
+    )?;
+    Ok(())
+}
+
+fn validate_late_interaction_vectors(
+    vectors: &[DenseVector],
+    candidates_per_query: usize,
+) -> Result<()> {
+    if vectors.is_empty() {
+        return Err(invalid("query_vectors", "must contain at least one vector"));
+    }
+    if vectors.len() > MAX_RECALL_CHECK_POINT_IDS {
+        return Err(invalid(
+            "query_vectors",
+            "vector list exceeds policy maximum",
+        ));
+    }
+    let dimensions = vectors[0].dimension();
+    let scalar_cells =
+        vectors
+            .len()
+            .checked_mul(dimensions)
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "late_interaction_scalar_cell_projection",
+            })?;
+    if scalar_cells > MAX_LATE_INTERACTION_SCALAR_CELLS {
+        return Err(invalid(
+            "query_vectors",
+            "total scalar cells exceed policy maximum",
+        ));
+    }
+    if vectors
+        .iter()
+        .any(|vector| vector.dimension() != dimensions)
+    {
+        return Err(invalid(
+            "query_vectors",
+            "all vectors must have the same dimensions",
+        ));
+    }
+    LateInteractionWork::new(
+        vectors.len(),
+        candidates_per_query,
+        MAX_LATE_INTERACTION_COMPARISONS,
+    )?;
     Ok(())
 }
 

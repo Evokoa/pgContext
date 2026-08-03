@@ -4,8 +4,8 @@
 
 use context_core::ScoreOrder;
 use context_hybrid::{
-    BranchCandidate, RankedPoint, RrfK, WeightedBranch, WeightedFusionError,
-    reciprocal_rank_fusion, weighted_fusion,
+    BranchCandidate, RankedPoint, RrfK, WeightedBranch, WeightedFusionError, WeightedRankedBranch,
+    reciprocal_rank_fusion, weighted_fusion, weighted_reciprocal_rank_fusion,
 };
 use proptest::prelude::*;
 
@@ -81,6 +81,52 @@ fn weighted_fusion_normalizes_extreme_finite_scores_without_nan() {
         vec![3, 2, 1]
     );
     assert!(fused.iter().all(|point| point.score().is_finite()));
+}
+
+#[test]
+fn weighted_rrf_uses_rank_and_weight() {
+    let first = [RankedPoint::new(1), RankedPoint::new(2)];
+    let second = [RankedPoint::new(2), RankedPoint::new(3)];
+    let fused = weighted_reciprocal_rank_fusion(
+        &[
+            WeightedRankedBranch::new(&first, 4.0),
+            WeightedRankedBranch::new(&second, 1.0),
+        ],
+        RrfK::new(1).expect("positive k"),
+        3,
+    )
+    .expect("valid weighted RRF");
+
+    assert_eq!(
+        fused
+            .iter()
+            .map(|point| point.point_id())
+            .collect::<Vec<_>>(),
+        vec![1, 2, 3]
+    );
+    assert!(fused[0].score() > fused[1].score());
+    assert!(fused[1].score() > fused[2].score());
+}
+
+#[test]
+fn weighted_rrf_rejects_invalid_or_zero_total_weights() {
+    let points = [RankedPoint::new(1)];
+    assert_eq!(
+        weighted_reciprocal_rank_fusion(
+            &[WeightedRankedBranch::new(&points, f64::NAN)],
+            RrfK::STANDARD,
+            1,
+        ),
+        Err(WeightedFusionError::InvalidWeight)
+    );
+    assert_eq!(
+        weighted_reciprocal_rank_fusion(
+            &[WeightedRankedBranch::new(&points, 0.0)],
+            RrfK::STANDARD,
+            1,
+        ),
+        Err(WeightedFusionError::ZeroTotalWeight)
+    );
 }
 
 proptest! {

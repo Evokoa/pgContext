@@ -6,12 +6,13 @@ use context_core::{
     ConfigurationRevision, GenerationId, OccurrenceId, ProfileId, SourceAuthority, SourceVersion,
 };
 use context_core::{
-    PointId, SparseEntry, SparseVector,
-    policy::{MAX_HNSW_CANDIDATE_MASK_POINTS, MAX_RECALL_CHECK_POINT_IDS},
+    DenseVector, PointId, SparseEntry, SparseVector,
+    policy::{MAX_HNSW_CANDIDATE_MASK_POINTS, MAX_RECALL_CHECK_POINT_IDS, MAX_VECTOR_DIMENSIONS},
 };
 use context_query::{
     Candidate, CandidateBranch, CandidateDiagnostics, CandidateProvenance, CandidateSourceKind,
-    ExecutionBudget, Formula, QueryError, QueryIr, QueryKind, ScoreOrder,
+    ExecutionBudget, Formula, Fusion, MAX_LATE_INTERACTION_SCALAR_CELLS, QueryError, QueryIr,
+    QueryKind, ScoreOrder,
 };
 
 #[test]
@@ -30,6 +31,87 @@ fn execution_budget_rejects_every_zero_dimension() {
             Err(QueryError::InvalidInput { .. })
         ));
     }
+}
+
+#[test]
+fn direct_late_interaction_ir_rejects_oversized_scalar_cells() {
+    let vector = DenseVector::new(vec![1.0; MAX_VECTOR_DIMENSIONS]).expect("bounded vector");
+    let vector_count = MAX_LATE_INTERACTION_SCALAR_CELLS
+        .checked_div(MAX_VECTOR_DIMENSIONS)
+        .unwrap_or_default()
+        .saturating_add(1);
+    assert!(matches!(
+        QueryIr::new(
+            QueryKind::LateInteraction {
+                vectors: vec![vector; vector_count],
+                candidates_per_query: context_core::SearchLimit::new(1).expect("one"),
+            },
+            ScoreOrder::HigherIsBetter,
+            None,
+            1,
+        ),
+        Err(QueryError::InvalidInput {
+            field: "query_vectors",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn direct_ir_rejects_contradictory_fixed_score_orders() {
+    let full_text = QueryIr::new(
+        QueryKind::FullText {
+            text_column: "body".to_owned(),
+            query: "rust".to_owned(),
+        },
+        ScoreOrder::LowerIsBetter,
+        None,
+        1,
+    );
+    assert!(matches!(
+        full_text,
+        Err(QueryError::InvalidInput {
+            field: "score_order",
+            ..
+        })
+    ));
+
+    let child = QueryIr::nearest(None, vec![1.0, 0.0], ScoreOrder::LowerIsBetter, None, 1)
+        .expect("nearest child");
+    let wrapper = QueryIr::new(
+        QueryKind::Rerank {
+            query: Box::new(child),
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        1,
+    );
+    assert!(matches!(
+        wrapper,
+        Err(QueryError::InvalidInput {
+            field: "score_order",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn direct_ir_rejects_duplicate_lookup_points() {
+    let lookup = QueryIr::new(
+        QueryKind::Lookup {
+            point_ids: vec![PointId::new(7), PointId::new(7)],
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        2,
+    );
+    assert!(matches!(
+        lookup,
+        Err(QueryError::InvalidInput {
+            field: "point_ids",
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -99,6 +181,7 @@ fn prefetch_requires_higher_is_better_fusion_order() {
         QueryIr::new(
             QueryKind::Prefetch {
                 branches: vec![branch],
+                fusion: Fusion::STANDARD_RRF,
             },
             ScoreOrder::LowerIsBetter,
             None,
@@ -170,6 +253,11 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
         CandidateBranch::FullText,
         CandidateBranch::Sparse,
         CandidateBranch::MultiVector,
+        CandidateBranch::Quantized,
+        CandidateBranch::Recommend,
+        CandidateBranch::Discover,
+        CandidateBranch::Lookup,
+        CandidateBranch::Topology,
         CandidateBranch::UserProvided,
     ];
     let sources = [
@@ -179,6 +267,10 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
         CandidateSourceKind::FullText,
         CandidateSourceKind::Sparse,
         CandidateSourceKind::MultiVector,
+        CandidateSourceKind::Quantized,
+        CandidateSourceKind::Recommendation,
+        CandidateSourceKind::Discovery,
+        CandidateSourceKind::Lookup,
         CandidateSourceKind::UserProvided,
         CandidateSourceKind::Topology,
     ];
@@ -191,12 +283,17 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
             "full_text",
             "sparse",
             "multi_vector",
+            "quantized",
+            "recommend",
+            "discover",
+            "lookup",
+            "topology",
             "user_provided",
         ]
     );
     assert_eq!(
         branches.map(CandidateBranch::stable_code),
-        [0, 1, 2, 3, 4, 5]
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     );
     assert_eq!(
         sources.map(CandidateSourceKind::stable_name),
@@ -207,13 +304,17 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
             "full_text",
             "sparse",
             "multi_vector",
+            "quantized",
+            "recommendation",
+            "discovery",
+            "lookup",
             "user_provided",
             "topology",
         ]
     );
     assert_eq!(
         sources.map(CandidateSourceKind::stable_code),
-        [0, 1, 2, 3, 4, 5, 6, 7]
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
 }
 
@@ -375,7 +476,7 @@ fn query_ir_rejects_oversized_point_lists_and_filters_before_encoding() {
                 positive: points,
                 negative: Vec::new(),
             },
-            ScoreOrder::HigherIsBetter,
+            ScoreOrder::LowerIsBetter,
             None,
             2,
         ),
@@ -462,4 +563,44 @@ fn query_ir_owns_ordered_lookup_and_formula_shapes() {
         2,
     )
     .expect("formula query should be valid");
+}
+
+#[test]
+fn weighted_rrf_requires_a_finite_positive_total_weight() {
+    let weighted = |weight| {
+        QueryIr::new(
+            QueryKind::Weighted {
+                query: Box::new(
+                    QueryIr::nearest(None, vec![1.0, 0.0], ScoreOrder::HigherIsBetter, None, 2)
+                        .expect("leaf query"),
+                ),
+                weight,
+            },
+            ScoreOrder::HigherIsBetter,
+            None,
+            2,
+        )
+        .expect("individual weight")
+    };
+
+    for branches in [
+        vec![weighted(0.0), weighted(0.0)],
+        vec![weighted(f64::MAX), weighted(f64::MAX)],
+    ] {
+        assert!(matches!(
+            QueryIr::new(
+                QueryKind::Prefetch {
+                    branches,
+                    fusion: Fusion::WeightedRrf { rank_constant: 60 },
+                },
+                ScoreOrder::HigherIsBetter,
+                None,
+                2,
+            ),
+            Err(QueryError::InvalidInput {
+                field: "branches",
+                ..
+            })
+        ));
+    }
 }

@@ -576,6 +576,15 @@ pub(super) fn late_interaction_rows_from_spi(
     rows: spi::SpiTupleTable<'_>,
     query_vectors: &[DenseVector],
 ) -> Vec<(i64, String, f64)> {
+    late_interaction_rows_from_spi_with_limit(rows, query_vectors, MAX_LATE_INTERACTION_COMPARISONS)
+        .0
+}
+
+pub(super) fn late_interaction_rows_from_spi_with_limit(
+    rows: spi::SpiTupleTable<'_>,
+    query_vectors: &[DenseVector],
+    max_comparisons: usize,
+) -> (Vec<(i64, String, f64)>, usize) {
     let mut output = Vec::new();
     let mut candidate_vector_count = 0usize;
     for row in rows {
@@ -598,10 +607,22 @@ pub(super) fn late_interaction_rows_from_spi(
         let candidate_vectors = late_interaction_candidate_vectors_from_sql(candidate_vectors);
         candidate_vector_count = candidate_vector_count.saturating_add(candidate_vectors.len());
         enforce_late_interaction_budget(query_vectors.len(), candidate_vector_count);
+        let comparisons = query_vectors.len().saturating_mul(candidate_vector_count);
+        if comparisons > max_comparisons {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+                format!(
+                    "late-interaction recheck comparisons {comparisons} exceed remaining query budget {max_comparisons}"
+                ),
+            );
+        }
         let score = f64::from(late_interaction_score(query_vectors, &candidate_vectors));
         output.push((point_id, source_key, score));
     }
-    output
+    (
+        output,
+        query_vectors.len().saturating_mul(candidate_vector_count),
+    )
 }
 
 pub(super) fn require_late_interaction_collection_owner(

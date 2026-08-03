@@ -85,10 +85,13 @@ Search and query:
 - `pgcontext.query_discover(context_point_ids bigint[], limit integer)`
 - `pgcontext.query_lookup(point_ids bigint[])`
 - `pgcontext.query_prefetch(branches jsonb[])`
+- `pgcontext.query_prefetch(branches jsonb[], fusion text, rank_constant integer)`
 - `pgcontext.query_weight(branch jsonb, weight double precision)`
 - `pgcontext.query_score_threshold(branch jsonb, min_score double precision, max_score double precision)`
 - `pgcontext.query_formula(branch jsonb, formula text)`
 - `pgcontext.query_rerank(branch jsonb, limit integer)`
+- `pgcontext.query_external_rerank(branch jsonb, model_revision bigint, limit integer)`
+- `pgcontext.query_topology_expand(branch jsonb, max_depth integer, limit integer)`
 - `pgcontext.execute_query(collection text, plan jsonb)`
 - `pgcontext.explain(collection text, text_column text)`
 - `pgcontext.scroll(collection text, cursor text, limit integer)`
@@ -98,13 +101,18 @@ Search and query:
 - `pgcontext.grouped_search(collection text, vector vector, group_by text, group_limit integer, limit integer)`
 - `pgcontext.grouped_search(collection text, vector_name text, vector vector, group_by text, group_limit integer, limit integer)`
 
+Every composite constructor parses and validates the complete child plan before
+returning JSON. Formula constructors also compile the bounded expression, so an
+unknown child kind or non-executable formula fails at construction instead of
+surviving until `execute_query`.
+
 `pgcontext.search` is the stable single-vector retrieval surface. Use it for
 exact or ANN-style nearest-neighbor retrieval over one dense vector branch,
 including filter-first search, candidate recheck, and grouped exact search by a
 registered payload field. `pgcontext.query` is the multi-stage retrieval
-pipeline: in the first production surface it fuses one registered dense vector
-branch with one PostgreSQL full-text branch. Experimental overloads also expose
-exact dense+sparse RRF fusion. Additional ANN sparse branch planners and broader
+pipeline: its convenience overloads build the same typed executor plan used by
+`execute_query`, including registered dense + full-text and dense + sparse RRF
+fusion. Additional ANN sparse branch planners and broader
 multi-branch planning remain deferred instead of being hidden behind `search`.
 
 Dense vector compatibility:

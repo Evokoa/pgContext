@@ -452,6 +452,14 @@ fn load_collection_limits(collection_id: i64) -> CollectionLimits {
     })
 }
 
+pub(crate) fn query_timeout_micros(collection_id: i64, default_micros: u64) -> u64 {
+    load_collection_limits(collection_id)
+        .query_timeout_ms
+        .and_then(|milliseconds| u64::try_from(milliseconds).ok())
+        .and_then(|milliseconds| milliseconds.checked_mul(1_000))
+        .map_or(default_micros, |configured| configured.min(default_micros))
+}
+
 fn collection_vector_count(collection_id: i64) -> i64 {
     Spi::get_one_with_args::<i64>(
         "SELECT count(*) FROM pgcontext._collection_vectors WHERE collection_id = $1",

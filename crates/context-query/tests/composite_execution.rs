@@ -5,10 +5,11 @@
 use context_core::{OccurrenceId, PointId, SourceAuthority, SourceKey};
 use context_query::{
     Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateProvenance, CandidateSource,
-    CandidateSourceKind, Completion, ExecutionBudget, ExecutionState, FilterCandidateBatch,
-    FilterCandidateSource, Formula, HydratedCandidate, QueryError, QueryExecutor, QueryIr,
-    QueryKind, ScoreOrder, SourceReadiness, SourceRechecker, StageDiagnostic, StageKind,
-    TelemetrySink,
+    CandidateSourceKind, Completion, ExecutionBudget, ExecutionState, ExternalRerankPage,
+    ExternalReranker, FilterCandidateBatch, FilterCandidateSource, Formula, Fusion,
+    HydratedCandidate, PortBudget, QueryClock, QueryError, QueryExecutor, QueryIr, QueryKind,
+    RecheckPage, ScoreOrder, SourceReadiness, SourceRechecker, StageDiagnostic, StageKind,
+    TelemetrySink, TopologyExpander,
 };
 use std::cell::Cell;
 
@@ -21,7 +22,11 @@ struct RoutingSource {
 }
 
 impl CandidateSource for RoutingSource {
-    fn readiness(&mut self, query: &QueryIr) -> Result<SourceReadiness, QueryError> {
+    fn readiness(
+        &mut self,
+        query: &QueryIr,
+        _budget: PortBudget,
+    ) -> Result<SourceReadiness, QueryError> {
         self.readiness_calls += 1;
         if self.unavailable_second_branch && is_second_branch(query) {
             Ok(SourceReadiness::NotReady {
@@ -37,6 +42,7 @@ impl CandidateSource for RoutingSource {
         query: &QueryIr,
         _filter: Option<&FilterCandidateBatch>,
         limit: usize,
+        _budget: PortBudget,
     ) -> Result<CandidatePage, QueryError> {
         self.calls += 1;
         let rows = if is_second_branch(query) {
@@ -60,8 +66,9 @@ impl SourceRechecker for ExactRechecker {
         _query: &QueryIr,
         candidates: &[Candidate],
         limit: usize,
-    ) -> Result<Vec<HydratedCandidate>, QueryError> {
-        candidates
+        _budget: PortBudget,
+    ) -> Result<RecheckPage, QueryError> {
+        let rows = candidates
             .iter()
             .take(limit)
             .map(|candidate| {
@@ -71,7 +78,8 @@ impl SourceRechecker for ExactRechecker {
                     candidate.approximate_score(),
                 )
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(RecheckPage::new(rows, candidates.len()))
     }
 }
 
@@ -103,10 +111,12 @@ impl FilterCandidateSource for CountingFilter {
         &mut self,
         _query: &QueryIr,
         limit: usize,
+        _budget: PortBudget,
     ) -> Result<FilterCandidateBatch, QueryError> {
         self.calls += 1;
         Ok(FilterCandidateBatch::new(
             (1..=limit as u64).map(PointId::new).collect(),
+            limit,
             true,
         ))
     }
@@ -197,6 +207,7 @@ fn prefetch_uses_rrf_with_deduplication_and_deterministic_ties() {
     let query = QueryIr::new(
         QueryKind::Prefetch {
             branches: vec![branch(1.0), branch(-1.0)],
+            fusion: Fusion::STANDARD_RRF,
         },
         ScoreOrder::HigherIsBetter,
         None,
@@ -226,7 +237,7 @@ fn prefetch_uses_rrf_with_deduplication_and_deterministic_ties() {
 }
 
 #[test]
-fn weighted_prefetch_normalizes_branch_scores_and_weights() {
+fn weighted_prefetch_uses_rank_only_weighted_rrf() {
     let weighted = |query, weight| {
         QueryIr::new(
             QueryKind::Weighted {
@@ -242,6 +253,7 @@ fn weighted_prefetch_normalizes_branch_scores_and_weights() {
     let query = QueryIr::new(
         QueryKind::Prefetch {
             branches: vec![weighted(branch(1.0), 3.0), weighted(branch(-1.0), 1.0)],
+            fusion: Fusion::WeightedRrf { rank_constant: 60 },
         },
         ScoreOrder::HigherIsBetter,
         None,
@@ -254,17 +266,17 @@ fn weighted_prefetch_normalizes_branch_scores_and_weights() {
         outcome
             .points()
             .iter()
-            .map(|point| (point.point_id().get(), point.score()))
+            .map(|point| point.point_id().get())
             .collect::<Vec<_>>(),
-        vec![(1, 0.75), (2, 0.25), (3, 0.0)]
+        vec![2, 1, 3]
     );
     assert_eq!(
         outcome
             .diagnostics()
             .iter()
-            .filter(|diagnostic| diagnostic.strategy() == "weighted_score")
+            .filter(|diagnostic| diagnostic.strategy() == "weighted_reciprocal_rank_fusion")
             .count(),
-        2
+        1
     );
 }
 
@@ -283,6 +295,7 @@ fn prefetch_executes_direct_weighted_branch_limits() {
     let query = QueryIr::new(
         QueryKind::Prefetch {
             branches: vec![weighted],
+            fusion: Fusion::WeightedRrf { rank_constant: 60 },
         },
         ScoreOrder::HigherIsBetter,
         None,
@@ -297,8 +310,203 @@ fn prefetch_executes_direct_weighted_branch_limits() {
         outcome
             .diagnostics()
             .iter()
-            .any(|diagnostic| diagnostic.strategy() == "weighted_score")
+            .all(|diagnostic| diagnostic.strategy() != "weighted_score")
     );
+}
+
+#[derive(Default)]
+struct ExtremeScoreSource;
+
+impl CandidateSource for ExtremeScoreSource {
+    fn readiness(
+        &mut self,
+        _query: &QueryIr,
+        _budget: PortBudget,
+    ) -> Result<SourceReadiness, QueryError> {
+        Ok(SourceReadiness::Ready)
+    }
+
+    fn candidates(
+        &mut self,
+        _query: &QueryIr,
+        _filter: Option<&FilterCandidateBatch>,
+        _limit: usize,
+        _budget: PortBudget,
+    ) -> Result<CandidatePage, QueryError> {
+        Ok(CandidatePage::new(
+            vec![candidate(1, f64::MAX), candidate(2, f64::MAX / 2.0)],
+            true,
+        ))
+    }
+}
+
+#[test]
+fn weighted_rrf_treats_extreme_weights_as_rank_metadata() {
+    let weighted = QueryIr::new(
+        QueryKind::Weighted {
+            query: Box::new(branch(1.0)),
+            weight: 2.0,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        2,
+    )
+    .expect("weighted branch");
+    let query = QueryIr::new(
+        QueryKind::Prefetch {
+            branches: vec![weighted],
+            fusion: Fusion::WeightedRrf { rank_constant: 60 },
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        2,
+    )
+    .expect("weighted prefetch");
+    let outcome = QueryExecutor::new(
+        &mut ExtremeScoreSource,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&query, budget(8))
+    .expect("rank-only weighted RRF must not multiply source scores");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.points()[0].point_id(), PointId::new(1));
+    assert!(
+        outcome
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.strategy() != "weighted_score")
+    );
+}
+
+#[test]
+fn fusion_handles_maximal_cross_branch_overlap_with_linear_metadata_work() {
+    let branches = vec![branch(1.0); 32];
+    let query = QueryIr::new(
+        QueryKind::Prefetch {
+            branches,
+            fusion: Fusion::STANDARD_RRF,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("maximal-overlap prefetch");
+    let budget =
+        ExecutionBudget::new(128, 128, 128, 128, 8, 3).expect("overlap budget should be valid");
+    let outcome = QueryExecutor::new(
+        &mut RoutingSource::default(),
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&query, budget)
+    .expect("maximal overlap should remain bounded");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.points().len(), 2);
+    assert!(
+        outcome
+            .points()
+            .iter()
+            .all(|point| point.contributions().len() == 32)
+    );
+    assert!(outcome.usage().comparisons() < 1_000);
+
+    let exact_memory = outcome.usage().memory_bytes();
+    let exact_budget = ExecutionBudget::new(128, 128, 128, 128, 8, 3)
+        .expect("overlap budget")
+        .with_resource_limits(1_000, exact_memory, 1024 * 1024, 10_000)
+        .expect("exact fusion memory budget");
+    let exact = QueryExecutor::new(
+        &mut RoutingSource::default(),
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&query, exact_budget)
+    .expect("exact projected fusion memory should be accepted");
+    assert_eq!(exact.completion(), Completion::Complete);
+
+    let below_budget = ExecutionBudget::new(128, 128, 128, 128, 8, 3)
+        .expect("overlap budget")
+        .with_resource_limits(1_000, exact_memory.saturating_sub(1), 1024 * 1024, 10_000)
+        .expect("one-byte-short fusion memory budget");
+    let below = QueryExecutor::new(
+        &mut RoutingSource::default(),
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&query, below_budget)
+    .expect("one-byte-short fusion memory is a typed outcome");
+    assert_eq!(below.completion(), Completion::BudgetExhausted);
+    assert!(below.points().is_empty());
+}
+
+#[test]
+fn fusion_many_unique_single_contributions_obey_the_exact_memory_boundary() {
+    let query = QueryIr::new(
+        QueryKind::Prefetch {
+            branches: vec![branch(1.0), branch(-1.0)],
+            fusion: Fusion::STANDARD_RRF,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("partially disjoint prefetch");
+    let base = budget(8);
+    let outcome = QueryExecutor::new(
+        &mut RoutingSource::default(),
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&query, base)
+    .expect("partially disjoint fusion");
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.points().len(), 3);
+    assert_eq!(outcome.points()[0].contributions().len(), 2);
+    assert_eq!(outcome.points()[1].contributions().len(), 1);
+    assert_eq!(outcome.points()[2].contributions().len(), 1);
+
+    let exact_memory = outcome.usage().memory_bytes();
+    let exact = budget(8)
+        .with_resource_limits(1_000, exact_memory, 1024 * 1024, 10_000)
+        .expect("exact unique-fusion memory budget");
+    let exact = QueryExecutor::new(
+        &mut RoutingSource::default(),
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&query, exact)
+    .expect("exact unique-fusion memory boundary");
+    assert_eq!(exact.completion(), Completion::Complete);
+
+    let below = budget(8)
+        .with_resource_limits(1_000, exact_memory.saturating_sub(1), 1024 * 1024, 10_000)
+        .expect("one-byte-short unique-fusion memory budget");
+    let below = QueryExecutor::new(
+        &mut RoutingSource::default(),
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&query, below)
+    .expect("one-byte-short unique-fusion memory outcome");
+    assert_eq!(below.completion(), Completion::BudgetExhausted);
+    assert!(below.points().is_empty());
 }
 
 #[test]
@@ -354,6 +562,7 @@ fn prefetch_propagates_unavailable_sources_and_global_budget_exhaustion() {
     let query = QueryIr::new(
         QueryKind::Prefetch {
             branches: vec![branch(1.0), branch(-1.0)],
+            fusion: Fusion::STANDARD_RRF,
         },
         ScoreOrder::HigherIsBetter,
         None,
@@ -396,6 +605,7 @@ fn wrapped_filtered_branches_cannot_exceed_the_global_filter_budget() {
     let query = QueryIr::new(
         QueryKind::Prefetch {
             branches: vec![filtered_branch(1.0), wrapped],
+            fusion: Fusion::STANDARD_RRF,
         },
         ScoreOrder::HigherIsBetter,
         None,
@@ -539,11 +749,20 @@ struct PerLeafBudgetSource {
 }
 
 impl CandidateSource for PerLeafBudgetSource {
-    fn readiness(&mut self, _query: &QueryIr) -> Result<SourceReadiness, QueryError> {
+    fn readiness(
+        &mut self,
+        _query: &QueryIr,
+        _budget: PortBudget,
+    ) -> Result<SourceReadiness, QueryError> {
         Ok(SourceReadiness::Ready)
     }
 
-    fn candidate_limit(&mut self, query: &QueryIr, remaining: usize) -> Result<usize, QueryError> {
+    fn candidate_limit(
+        &mut self,
+        query: &QueryIr,
+        remaining: usize,
+        _budget: PortBudget,
+    ) -> Result<usize, QueryError> {
         Ok(query.limit().min(remaining))
     }
 
@@ -552,6 +771,7 @@ impl CandidateSource for PerLeafBudgetSource {
         query: &QueryIr,
         _filter: Option<&FilterCandidateBatch>,
         limit: usize,
+        _budget: PortBudget,
     ) -> Result<CandidatePage, QueryError> {
         self.requested.push(limit);
         let offset = if is_second_branch(query) { 100 } else { 0 };
@@ -569,6 +789,7 @@ fn prefetch_reserves_candidate_work_per_leaf() {
     let query = QueryIr::new(
         QueryKind::Prefetch {
             branches: vec![branch(1.0), branch(-1.0)],
+            fusion: Fusion::STANDARD_RRF,
         },
         ScoreOrder::HigherIsBetter,
         None,
@@ -595,10 +816,621 @@ fn prefetch_reserves_candidate_work_per_leaf() {
 }
 
 #[test]
+fn fusion_retains_every_branch_occurrence_and_rank_contribution() {
+    let query = QueryIr::new(
+        QueryKind::Prefetch {
+            branches: vec![branch(1.0), branch(-1.0)],
+            fusion: Fusion::Rrf { rank_constant: 10 },
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("prefetch should be valid");
+    let outcome = execute(&query, &mut RoutingSource::default(), 8);
+    let shared = outcome
+        .points()
+        .iter()
+        .find(|point| point.point_id() == PointId::new(2))
+        .expect("shared point should survive fusion");
+
+    assert_eq!(shared.contributions().len(), 2);
+    assert!(shared.contributions().iter().all(|contribution| {
+        contribution.provenance().branch() == CandidateBranch::DenseAnn
+            && contribution.fusion_contribution().is_some()
+    }));
+    let contribution_sum = shared
+        .contributions()
+        .iter()
+        .filter_map(|contribution| contribution.fusion_contribution())
+        .sum::<f64>();
+    assert!((contribution_sum - shared.score()).abs() < f64::EPSILON);
+}
+
+struct FixedClock(Cell<u64>);
+
+impl QueryClock for FixedClock {
+    fn now_micros(&self) -> u64 {
+        let now = self.0.get();
+        self.0.set(now.saturating_add(100));
+        now
+    }
+}
+
+struct ManualClock<'a>(&'a Cell<u64>);
+
+impl QueryClock for ManualClock<'_> {
+    fn now_micros(&self) -> u64 {
+        self.0.get()
+    }
+}
+
+struct DeadlineSource<'a> {
+    clock: &'a Cell<u64>,
+    candidate_calls: &'a Cell<usize>,
+}
+
+impl CandidateSource for DeadlineSource<'_> {
+    fn readiness(
+        &mut self,
+        _query: &QueryIr,
+        _budget: PortBudget,
+    ) -> Result<SourceReadiness, QueryError> {
+        self.clock.set(100);
+        Ok(SourceReadiness::Ready)
+    }
+
+    fn candidates(
+        &mut self,
+        _query: &QueryIr,
+        _filter: Option<&FilterCandidateBatch>,
+        _limit: usize,
+        _budget: PortBudget,
+    ) -> Result<CandidatePage, QueryError> {
+        self.candidate_calls
+            .set(self.candidate_calls.get().saturating_add(1));
+        Ok(CandidatePage::new(vec![candidate(1, 0.0)], true))
+    }
+}
+
+struct CountingRechecker<'a>(&'a Cell<usize>);
+
+impl SourceRechecker for CountingRechecker<'_> {
+    fn recheck(
+        &mut self,
+        _query: &QueryIr,
+        _candidates: &[Candidate],
+        _limit: usize,
+        _budget: PortBudget,
+    ) -> Result<RecheckPage, QueryError> {
+        self.0.set(self.0.get().saturating_add(1));
+        Ok(RecheckPage::new(Vec::new(), 0))
+    }
+}
+
+#[test]
+fn elapsed_deadline_stops_later_ports_after_the_first_boundary_overrun() {
+    let clock = Cell::new(0);
+    let candidate_calls = Cell::new(0);
+    let recheck_calls = Cell::new(0);
+    let budget = ExecutionBudget::new(8, 8, 8, 8, 4, 4)
+        .expect("base budget")
+        .with_resource_limits(100, 1024 * 1024, 1024 * 1024, 50)
+        .expect("resource limits");
+    let outcome = QueryExecutor::new(
+        &mut DeadlineSource {
+            clock: &clock,
+            candidate_calls: &candidate_calls,
+        },
+        None,
+        &mut CountingRechecker(&recheck_calls),
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_clock(&ManualClock(&clock))
+    .execute(&branch(1.0), budget)
+    .expect("deadline exhaustion should be typed");
+
+    assert_eq!(outcome.completion(), Completion::BudgetExhausted);
+    assert!(outcome.points().is_empty());
+    assert_eq!(outcome.usage().elapsed_micros(), 100);
+    assert_eq!(candidate_calls.get(), 0);
+    assert_eq!(recheck_calls.get(), 0);
+}
+
+#[test]
+fn elapsed_and_comparison_budgets_fail_closed_without_partial_points() {
+    let query = branch(1.0);
+    let budget = ExecutionBudget::new(8, 8, 8, 8, 4, 4)
+        .expect("base budget")
+        .with_resource_limits(1, 1024 * 1024, 1024 * 1024, 50)
+        .expect("resource limits");
+    let mut source = RoutingSource::default();
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_clock(&FixedClock(Cell::new(0)))
+    .execute(&query, budget)
+    .expect("budget exhaustion is typed");
+
+    assert_eq!(outcome.completion(), Completion::BudgetExhausted);
+    assert!(outcome.points().is_empty());
+    assert!(outcome.usage().comparisons() > 1 || outcome.usage().elapsed_micros() > 50);
+}
+
+#[test]
+fn exact_comparison_boundary_completes() {
+    let query = branch(1.0);
+    let budget = ExecutionBudget::new(8, 8, 8, 8, 4, 4)
+        .expect("base budget")
+        .with_resource_limits(4, 1024 * 1024, 1024 * 1024, 10_000)
+        .expect("resource limits");
+    let mut source = RoutingSource::default();
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_clock(&FixedClock(Cell::new(0)))
+    .execute(&query, budget)
+    .expect("the inclusive comparison maximum should be valid");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.usage().comparisons(), 4);
+    assert_eq!(outcome.points().len(), 2);
+}
+
+struct FakeExternalReranker {
+    revision: u64,
+    exhausted: bool,
+    calls: usize,
+}
+
+impl ExternalReranker for FakeExternalReranker {
+    fn rerank(
+        &mut self,
+        _query: &QueryIr,
+        rows: &[HydratedCandidate],
+        limit: usize,
+        _budget: PortBudget,
+    ) -> Result<ExternalRerankPage, QueryError> {
+        self.calls = self.calls.saturating_add(1);
+        let reranked = rows
+            .iter()
+            .rev()
+            .take(limit)
+            .enumerate()
+            .map(|(rank, row)| {
+                let rank = u32::try_from(rank).expect("bounded test rank fits u32");
+                HydratedCandidate::new(
+                    row.point_id(),
+                    row.source_key().clone(),
+                    100.0 - f64::from(rank),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ExternalRerankPage::new(
+            reranked,
+            rows.len(),
+            self.exhausted,
+            self.revision,
+        ))
+    }
+}
+
+#[test]
+fn external_rerank_port_preserves_authoritative_provenance_and_revision() {
+    let query = QueryIr::new(
+        QueryKind::ExternalRerank {
+            query: Box::new(branch(1.0)),
+            model_revision: 7,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        2,
+    )
+    .expect("external rerank query");
+    let mut source = RoutingSource::default();
+    let mut reranker = FakeExternalReranker {
+        revision: 7,
+        exhausted: true,
+        calls: 0,
+    };
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_external_reranker(&mut reranker)
+    .execute(&query, budget(8))
+    .expect("external rerank should execute");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert!(
+        outcome
+            .points()
+            .iter()
+            .all(|row| !row.contributions().is_empty())
+    );
+    assert_eq!(
+        outcome.diagnostics().last().map(StageDiagnostic::stage),
+        Some(StageKind::ExternalRerank)
+    );
+}
+
+struct FakeTopology {
+    calls: usize,
+}
+
+struct EmptyTopology;
+
+impl TopologyExpander for EmptyTopology {
+    fn expand(
+        &mut self,
+        _query: &QueryIr,
+        _seeds: &[HydratedCandidate],
+        _max_depth: usize,
+        _limit: usize,
+        _budget: PortBudget,
+    ) -> Result<CandidatePage, QueryError> {
+        Ok(CandidatePage::with_scored_count(Vec::new(), 2, true).with_strategy("empty_topology"))
+    }
+}
+
+impl TopologyExpander for FakeTopology {
+    fn expand(
+        &mut self,
+        _query: &QueryIr,
+        _seeds: &[HydratedCandidate],
+        _max_depth: usize,
+        _limit: usize,
+        _budget: PortBudget,
+    ) -> Result<CandidatePage, QueryError> {
+        self.calls = self.calls.saturating_add(1);
+        let provenance = CandidateProvenance::new(
+            OccurrenceId::new(99).expect("nonzero occurrence"),
+            CandidateBranch::Topology,
+            CandidateSourceKind::Topology,
+            ScoreOrder::HigherIsBetter,
+            SourceAuthority::DerivedArtifact,
+        );
+        Ok(CandidatePage::with_scored_count(
+            vec![Candidate::new(PointId::new(3), 0.75, provenance)?],
+            2,
+            true,
+        )
+        .with_expansion_count(1)
+        .with_strategy("fake_topology"))
+    }
+}
+
+#[test]
+fn topology_port_rechecks_expanded_candidates_and_retains_provenance() {
+    let query = QueryIr::new(
+        QueryKind::TopologyExpand {
+            query: Box::new(branch(1.0)),
+            max_depth: 2,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("topology query");
+    let mut source = RoutingSource::default();
+    let mut topology = FakeTopology { calls: 0 };
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_topology_expander(&mut topology)
+    .execute(&query, budget(8))
+    .expect("topology expansion should execute");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.points()[0].point_id(), PointId::new(3));
+    assert_eq!(
+        outcome.points()[0].contributions()[0].provenance().source(),
+        CandidateSourceKind::Topology
+    );
+}
+
+#[test]
+fn topology_reserves_expansion_and_recheck_stages_before_calling_the_expander() {
+    let query = QueryIr::new(
+        QueryKind::TopologyExpand {
+            query: Box::new(branch(1.0)),
+            max_depth: 2,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("topology query");
+    let mut source = RoutingSource::default();
+    let mut topology = FakeTopology { calls: 0 };
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_topology_expander(&mut topology)
+    .execute(&query, budget(3))
+    .expect("stage exhaustion should be typed");
+
+    assert_eq!(topology.calls, 0);
+    assert_eq!(outcome.completion(), Completion::BudgetExhausted);
+    assert!(outcome.points().is_empty());
+    assert_eq!(outcome.usage().stages(), 2);
+}
+
+#[test]
+fn topology_accepts_the_exact_two_stage_boundary() {
+    let query = QueryIr::new(
+        QueryKind::TopologyExpand {
+            query: Box::new(branch(1.0)),
+            max_depth: 2,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("topology query");
+    let mut source = RoutingSource::default();
+    let mut topology = FakeTopology { calls: 0 };
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_topology_expander(&mut topology)
+    .execute(&query, budget(4))
+    .expect("exact stage boundary should execute");
+
+    assert_eq!(topology.calls, 1);
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.usage().stages(), 4);
+}
+
+#[test]
+fn empty_topology_completes_at_the_exact_comparison_boundary() {
+    let query = QueryIr::new(
+        QueryKind::TopologyExpand {
+            query: Box::new(branch(1.0)),
+            max_depth: 2,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("topology query");
+    let exact = budget(4)
+        .with_resource_limits(6, 1024 * 1024, 1024 * 1024, 10_000)
+        .expect("exact comparison budget");
+    let mut source = RoutingSource::default();
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_topology_expander(&mut EmptyTopology)
+    .execute(&query, exact)
+    .expect("empty exhausted topology page should complete");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.usage().comparisons(), 6);
+    assert_eq!(outcome.usage().stages(), 3);
+    assert!(outcome.points().is_empty());
+    assert_eq!(
+        outcome.diagnostics().last().map(StageDiagnostic::stage),
+        Some(StageKind::TopologyExpansion)
+    );
+}
+
+#[test]
+fn composite_allocations_exhaust_tiny_memory_and_hydration_budgets_without_points() {
+    let leaf = execute(&branch(1.0), &mut RoutingSource::default(), 8);
+
+    let prefetch = QueryIr::new(
+        QueryKind::Prefetch {
+            branches: vec![branch(1.0), branch(-1.0)],
+            fusion: Fusion::STANDARD_RRF,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("prefetch query");
+    let mut prefetch_source = RoutingSource::default();
+    let prefetch_budget = ExecutionBudget::new(8, 8, 8, 16, 4, 3)
+        .expect("prefetch budget")
+        .with_resource_limits(
+            1_000,
+            leaf.usage().memory_bytes().saturating_add(64),
+            1024 * 1024,
+            10_000,
+        )
+        .expect("tiny prefetch memory budget");
+    let prefetch_outcome = QueryExecutor::new(
+        &mut prefetch_source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&prefetch, prefetch_budget)
+    .expect("prefetch memory exhaustion should be typed");
+    assert_eq!(prefetch_outcome.completion(), Completion::BudgetExhausted);
+    assert!(prefetch_outcome.points().is_empty());
+
+    let external = QueryIr::new(
+        QueryKind::ExternalRerank {
+            query: Box::new(branch(1.0)),
+            model_revision: 7,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        2,
+    )
+    .expect("external rerank query");
+    let mut external_source = RoutingSource::default();
+    let mut reranker = FakeExternalReranker {
+        revision: 7,
+        exhausted: true,
+        calls: 0,
+    };
+    let external_budget = ExecutionBudget::new(8, 8, 8, 16, 4, 3)
+        .expect("external budget")
+        .with_resource_limits(
+            1_000,
+            1024 * 1024,
+            leaf.usage().hydration_bytes().saturating_add(1),
+            10_000,
+        )
+        .expect("tiny external hydration budget");
+    let external_outcome = QueryExecutor::new(
+        &mut external_source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_external_reranker(&mut reranker)
+    .execute(&external, external_budget)
+    .expect("external hydration exhaustion should be typed");
+    assert_eq!(reranker.calls, 0);
+    assert_eq!(external_outcome.completion(), Completion::BudgetExhausted);
+    assert!(external_outcome.points().is_empty());
+
+    let topology_query = QueryIr::new(
+        QueryKind::TopologyExpand {
+            query: Box::new(branch(1.0)),
+            max_depth: 1,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        2,
+    )
+    .expect("topology query");
+    let mut topology_source = RoutingSource::default();
+    let mut topology = FakeTopology { calls: 0 };
+    let topology_budget = ExecutionBudget::new(8, 8, 8, 16, 4, 3)
+        .expect("topology budget")
+        .with_resource_limits(
+            1_000,
+            leaf.usage().memory_bytes().saturating_add(1),
+            1024 * 1024,
+            10_000,
+        )
+        .expect("tiny topology memory budget");
+    let topology_outcome = QueryExecutor::new(
+        &mut topology_source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .with_topology_expander(&mut topology)
+    .execute(&topology_query, topology_budget)
+    .expect("topology memory exhaustion should be typed");
+    assert_eq!(topology.calls, 0);
+    assert_eq!(topology_outcome.completion(), Completion::BudgetExhausted);
+    assert!(topology_outcome.points().is_empty());
+}
+
+struct FixedWorkRechecker {
+    comparisons: usize,
+    calls: usize,
+}
+
+impl SourceRechecker for FixedWorkRechecker {
+    fn recheck(
+        &mut self,
+        _query: &QueryIr,
+        candidates: &[Candidate],
+        limit: usize,
+        _budget: PortBudget,
+    ) -> Result<RecheckPage, QueryError> {
+        self.calls = self.calls.saturating_add(1);
+        let rows = candidates
+            .iter()
+            .take(limit)
+            .map(|candidate| {
+                HydratedCandidate::new(
+                    candidate.point_id(),
+                    SourceKey::new(candidate.point_id().get().to_string())?,
+                    candidate.approximate_score(),
+                )
+            })
+            .collect::<Result<Vec<_>, QueryError>>()?;
+        Ok(RecheckPage::new(rows, self.comparisons))
+    }
+}
+
+#[test]
+fn two_branch_recheck_work_uses_one_global_comparison_budget() {
+    let query = QueryIr::new(
+        QueryKind::Prefetch {
+            branches: vec![branch(1.0), branch(-1.0)],
+            fusion: Fusion::STANDARD_RRF,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("prefetch query");
+    let mut source = RoutingSource::default();
+    let mut rechecker = FixedWorkRechecker {
+        comparisons: 3,
+        calls: 0,
+    };
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut rechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(
+        &query,
+        ExecutionBudget::new(8, 8, 8, 16, 4, 3)
+            .expect("base budget")
+            .with_resource_limits(10, 1024 * 1024, 1024 * 1024, 10_000)
+            .expect("comparison budget"),
+    )
+    .expect("global recheck budget exhaustion should be typed");
+
+    assert_eq!(rechecker.calls, 2);
+    assert_eq!(outcome.completion(), Completion::BudgetExhausted);
+    assert!(outcome.points().is_empty());
+    assert_eq!(outcome.usage().comparisons(), 10);
+}
+
+#[test]
 fn candidate_expansion_work_is_globally_enforced() {
     struct ExpandingSource;
     impl CandidateSource for ExpandingSource {
-        fn readiness(&mut self, _query: &QueryIr) -> Result<SourceReadiness, QueryError> {
+        fn readiness(
+            &mut self,
+            _query: &QueryIr,
+            _budget: PortBudget,
+        ) -> Result<SourceReadiness, QueryError> {
             Ok(SourceReadiness::Ready)
         }
 
@@ -607,6 +1439,7 @@ fn candidate_expansion_work_is_globally_enforced() {
             _query: &QueryIr,
             _filter: Option<&FilterCandidateBatch>,
             _limit: usize,
+            _budget: PortBudget,
         ) -> Result<CandidatePage, QueryError> {
             Ok(CandidatePage::new(vec![candidate(1, 1.0)], true).with_expansion_count(3))
         }

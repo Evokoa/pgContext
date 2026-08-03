@@ -22,6 +22,16 @@ pub enum CandidateBranch {
     Sparse,
     /// Multi-vector token candidate generation.
     MultiVector,
+    /// Quantized dense candidate generation.
+    Quantized,
+    /// Positive/negative-example recommendation.
+    Recommend,
+    /// Diversity-oriented discovery.
+    Discover,
+    /// Ordered point lookup.
+    Lookup,
+    /// Topology expansion.
+    Topology,
     /// Caller-provided candidate IDs.
     UserProvided,
 }
@@ -36,7 +46,12 @@ impl CandidateBranch {
             Self::FullText => 2,
             Self::Sparse => 3,
             Self::MultiVector => 4,
-            Self::UserProvided => 5,
+            Self::Quantized => 5,
+            Self::Recommend => 6,
+            Self::Discover => 7,
+            Self::Lookup => 8,
+            Self::Topology => 9,
+            Self::UserProvided => 10,
         }
     }
 
@@ -49,6 +64,11 @@ impl CandidateBranch {
             Self::FullText => "full_text",
             Self::Sparse => "sparse",
             Self::MultiVector => "multi_vector",
+            Self::Quantized => "quantized",
+            Self::Recommend => "recommend",
+            Self::Discover => "discover",
+            Self::Lookup => "lookup",
+            Self::Topology => "topology",
             Self::UserProvided => "user_provided",
         }
     }
@@ -69,6 +89,14 @@ pub enum CandidateSourceKind {
     Sparse,
     /// Multi-vector token candidate source.
     MultiVector,
+    /// Quantized dense artifact source.
+    Quantized,
+    /// Recommendation source.
+    Recommendation,
+    /// Discovery source.
+    Discovery,
+    /// Authoritative ordered lookup source.
+    Lookup,
     /// Caller-provided logical identifiers.
     UserProvided,
     /// Topology expansion candidate source.
@@ -86,8 +114,12 @@ impl CandidateSourceKind {
             Self::FullText => 3,
             Self::Sparse => 4,
             Self::MultiVector => 5,
-            Self::UserProvided => 6,
-            Self::Topology => 7,
+            Self::Quantized => 6,
+            Self::Recommendation => 7,
+            Self::Discovery => 8,
+            Self::Lookup => 9,
+            Self::UserProvided => 10,
+            Self::Topology => 11,
         }
     }
 
@@ -101,6 +133,10 @@ impl CandidateSourceKind {
             Self::FullText => "full_text",
             Self::Sparse => "sparse",
             Self::MultiVector => "multi_vector",
+            Self::Quantized => "quantized",
+            Self::Recommendation => "recommendation",
+            Self::Discovery => "discovery",
+            Self::Lookup => "lookup",
             Self::UserProvided => "user_provided",
             Self::Topology => "topology",
         }
@@ -445,15 +481,75 @@ impl CandidatePage {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FilterCandidateBatch {
     point_ids: Vec<PointId>,
+    evaluated_count: usize,
     exhausted: bool,
+}
+
+/// Authoritative source-recheck response with explicit scoring work.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecheckPage {
+    rows: Vec<HydratedCandidate>,
+    comparisons: usize,
+}
+
+/// Bounded response from an external reranking adapter.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternalRerankPage {
+    rows: Vec<HydratedCandidate>,
+    comparisons: usize,
+    exhausted: bool,
+    model_revision: u64,
+}
+
+impl ExternalRerankPage {
+    /// Creates a rerank response with explicit bounded work and revision.
+    #[must_use]
+    pub const fn new(
+        rows: Vec<HydratedCandidate>,
+        comparisons: usize,
+        exhausted: bool,
+        model_revision: u64,
+    ) -> Self {
+        Self {
+            rows,
+            comparisons,
+            exhausted,
+            model_revision,
+        }
+    }
+
+    /// Returns reranked rows.
+    #[must_use]
+    pub fn rows(&self) -> &[HydratedCandidate] {
+        &self.rows
+    }
+
+    /// Returns adapter-reported comparisons.
+    #[must_use]
+    pub const fn comparisons(&self) -> usize {
+        self.comparisons
+    }
+
+    /// Reports whether the adapter completed authoritative reranking.
+    #[must_use]
+    pub const fn exhausted(&self) -> bool {
+        self.exhausted
+    }
+
+    /// Returns the immutable model revision used for scoring.
+    #[must_use]
+    pub const fn model_revision(&self) -> u64 {
+        self.model_revision
+    }
 }
 
 impl FilterCandidateBatch {
     /// Creates a filter-candidate batch.
     #[must_use]
-    pub const fn new(point_ids: Vec<PointId>, exhausted: bool) -> Self {
+    pub const fn new(point_ids: Vec<PointId>, evaluated_count: usize, exhausted: bool) -> Self {
         Self {
             point_ids,
+            evaluated_count,
             exhausted,
         }
     }
@@ -464,10 +560,42 @@ impl FilterCandidateBatch {
         &self.point_ids
     }
 
+    /// Returns the number of source rows or predicates evaluated.
+    #[must_use]
+    pub const fn evaluated_count(&self) -> usize {
+        self.evaluated_count
+    }
+
     /// Reports whether no additional filter candidates exist.
     #[must_use]
     pub const fn exhausted(&self) -> bool {
         self.exhausted
+    }
+}
+
+impl RecheckPage {
+    /// Creates an authoritative response with explicit scoring work.
+    #[must_use]
+    pub const fn new(rows: Vec<HydratedCandidate>, comparisons: usize) -> Self {
+        Self { rows, comparisons }
+    }
+
+    /// Returns the visible, authoritatively scored rows.
+    #[must_use]
+    pub fn rows(&self) -> &[HydratedCandidate] {
+        &self.rows
+    }
+
+    /// Consumes this response and returns its rows.
+    #[must_use]
+    pub fn into_rows(self) -> Vec<HydratedCandidate> {
+        self.rows
+    }
+
+    /// Returns authoritative scoring comparisons performed.
+    #[must_use]
+    pub const fn comparisons(&self) -> usize {
+        self.comparisons
     }
 }
 
@@ -477,6 +605,60 @@ pub struct HydratedCandidate {
     point_id: PointId,
     source_key: SourceKey,
     score: f64,
+    contributions: Vec<BranchContribution>,
+}
+
+/// One retained branch occurrence and its contribution to a hydrated result.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BranchContribution {
+    provenance: CandidateProvenance,
+    source_score: f64,
+    source_rank: u32,
+    fusion_contribution: Option<f64>,
+}
+
+impl BranchContribution {
+    pub(crate) const fn source(
+        provenance: CandidateProvenance,
+        source_score: f64,
+        source_rank: u32,
+    ) -> Self {
+        Self {
+            provenance,
+            source_score,
+            source_rank,
+            fusion_contribution: None,
+        }
+    }
+
+    pub(crate) const fn with_fusion_contribution(mut self, contribution: f64) -> Self {
+        self.fusion_contribution = Some(contribution);
+        self
+    }
+
+    /// Returns the complete source provenance for this occurrence.
+    #[must_use]
+    pub const fn provenance(self) -> CandidateProvenance {
+        self.provenance
+    }
+
+    /// Returns the score supplied by the authoritative branch recheck.
+    #[must_use]
+    pub const fn source_score(self) -> f64 {
+        self.source_score
+    }
+
+    /// Returns the zero-based source rank.
+    #[must_use]
+    pub const fn source_rank(self) -> u32 {
+        self.source_rank
+    }
+
+    /// Returns this occurrence's rank-fusion contribution, when fused.
+    #[must_use]
+    pub const fn fusion_contribution(self) -> Option<f64> {
+        self.fusion_contribution
+    }
 }
 
 impl HydratedCandidate {
@@ -496,7 +678,13 @@ impl HydratedCandidate {
             point_id,
             source_key,
             score,
+            contributions: Vec::new(),
         })
+    }
+
+    pub(crate) fn with_contributions(mut self, contributions: Vec<BranchContribution>) -> Self {
+        self.contributions = contributions;
+        self
     }
 
     /// Returns the logical point identifier.
@@ -515,6 +703,12 @@ impl HydratedCandidate {
     #[must_use]
     pub const fn score(&self) -> f64 {
         self.score
+    }
+
+    /// Returns every source occurrence retained through execution and fusion.
+    #[must_use]
+    pub fn contributions(&self) -> &[BranchContribution] {
+        &self.contributions
     }
 }
 
@@ -579,6 +773,10 @@ pub enum StageKind {
     ScoreTransform,
     /// Final deterministic score ordering and result limiting.
     Rerank,
+    /// Query-owned external reranking port.
+    ExternalRerank,
+    /// Query-owned graph or topology expansion port.
+    TopologyExpansion,
 }
 
 /// Bounded diagnostic emitted after one stage.
@@ -694,6 +892,15 @@ impl ExecutionOutcome {
     #[must_use]
     pub const fn usage(&self) -> BudgetUsage {
         self.usage
+    }
+
+    pub(crate) fn set_elapsed_micros(&mut self, elapsed_micros: u64) {
+        self.usage.set_elapsed_micros(elapsed_micros);
+    }
+
+    pub(crate) fn exhaust_budget(&mut self) {
+        self.completion = Completion::BudgetExhausted;
+        self.points.clear();
     }
 }
 

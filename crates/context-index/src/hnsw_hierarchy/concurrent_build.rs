@@ -1,6 +1,5 @@
 // Thread-safe HNSW bulk-build support, included by `hnsw_hierarchy.rs`.
 
-use std::sync::atomic::AtomicUsize;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// A poisoned lock means a worker thread panicked mid-wiring: the build's

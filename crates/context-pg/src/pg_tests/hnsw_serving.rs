@@ -593,6 +593,128 @@ fn hnsw_mask_candidate_limit_guc_raises_the_masked_scan_budget_above_the_default
 }
 
 #[pg_test]
+fn hnsw_candidate_helper_enforces_comparison_budget_during_traversal() {
+    Spi::run(
+        "CREATE TABLE comparison_budget_probe (
+             id bigint PRIMARY KEY,
+             embedding vector(2) NOT NULL
+         );
+         INSERT INTO comparison_budget_probe VALUES
+             (1, '[0,0]'), (2, '[1,0]'), (3, '[2,0]');
+         CREATE INDEX comparison_budget_probe_hnsw
+             ON comparison_budget_probe USING pgcontext_hnsw
+             (embedding pgcontext.vector_hnsw_l2_ops);",
+    )
+    .expect("comparison-budget probe should build");
+    let index_oid = Spi::get_one::<pg_sys::Oid>(
+        "SELECT 'comparison_budget_probe_hnsw'::regclass::oid",
+    )
+    .expect("comparison-budget index OID should load")
+    .expect("comparison-budget index should exist");
+
+    let rejected = crate::hnsw_am::with_hnsw_candidate_helper_budget(
+        index_oid,
+        1,
+        usize::MAX,
+        || {
+            PgTryBuilder::new(|| {
+                Spi::run(
+                    "SELECT * FROM pgcontext._hnsw_candidates(
+                         'comparison_budget_probe_hnsw'::regclass,
+                         '[0,0]'::vector,
+                         2
+                     )",
+                )
+                .expect("a one-comparison HNSW traversal should fail closed");
+                false
+            })
+            .catch_when(PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED, |_| true)
+            .execute()
+        },
+    );
+    assert!(
+        rejected,
+        "HNSW traversal must reject the next node read with SQLSTATE 54000"
+    );
+}
+
+#[pg_test]
+fn hnsw_candidate_helper_enforces_memory_budget_before_serial_traversal() {
+    Spi::run(
+        "CREATE TABLE helper_memory_budget_probe (
+             id bigint PRIMARY KEY,
+             embedding vector(2) NOT NULL
+         );
+         INSERT INTO helper_memory_budget_probe VALUES
+             (1, '[0,0]'), (2, '[1,0]'), (3, '[2,0]');
+         CREATE INDEX helper_memory_budget_probe_hnsw
+             ON helper_memory_budget_probe USING pgcontext_hnsw
+             (embedding pgcontext.vector_hnsw_l2_ops);",
+    )
+    .expect("helper-memory-budget probe should build");
+    let index_oid = Spi::get_one::<pg_sys::Oid>(
+        "SELECT 'helper_memory_budget_probe_hnsw'::regclass::oid",
+    )
+    .expect("helper-memory-budget index OID should load")
+    .expect("helper-memory-budget index should exist");
+
+    let rejected = crate::hnsw_am::with_hnsw_candidate_helper_budget(
+        index_oid,
+        usize::MAX,
+        1,
+        || {
+            PgTryBuilder::new(|| {
+                Spi::run(
+                    "SELECT * FROM pgcontext._hnsw_candidates(
+                         'helper_memory_budget_probe_hnsw'::regclass,
+                         '[0,0]'::vector,
+                         2
+                     )",
+                )
+                .expect("a one-byte HNSW traversal should fail closed");
+                false
+            })
+            .catch_when(PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED, |_| true)
+            .execute()
+        },
+    );
+    assert!(rejected, "the single-use helper memory cap must reach page traversal");
+}
+
+#[pg_test]
+fn nested_hnsw_query_budget_enforces_memory_for_late_style_am_scans() {
+    Spi::run(
+        "CREATE TABLE nested_memory_budget_probe (
+             id bigint PRIMARY KEY,
+             embedding vector(2) NOT NULL
+         );
+         INSERT INTO nested_memory_budget_probe VALUES
+             (1, '[0,0]'), (2, '[1,0]'), (3, '[2,0]');
+         CREATE INDEX nested_memory_budget_probe_hnsw
+             ON nested_memory_budget_probe USING pgcontext_hnsw
+             (embedding pgcontext.vector_hnsw_l2_ops);
+         SET LOCAL enable_seqscan = off;",
+    )
+    .expect("nested-memory-budget probe should build");
+
+    let rejected = crate::hnsw_am::with_hnsw_query_budget(usize::MAX, 1, || {
+        PgTryBuilder::new(|| {
+            Spi::run(
+                "SELECT id
+                   FROM nested_memory_budget_probe
+                  ORDER BY embedding OPERATOR(pgcontext.<->) '[0,0]'::vector
+                  LIMIT 2",
+            )
+            .expect("a one-byte nested HNSW traversal should fail closed");
+            false
+        })
+        .catch_when(PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED, |_| true)
+        .execute()
+    });
+    assert!(rejected, "nested token scans must inherit the query memory cap");
+}
+
+#[pg_test]
 fn hnsw_build_parallel_workers_produces_a_correct_and_usable_index() {
     Spi::run(
         "CREATE TABLE parallel_build_probe (id bigint PRIMARY KEY, \

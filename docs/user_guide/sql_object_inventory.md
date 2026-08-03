@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `3b77677dad6c3ee1b9b0211adb3e05c7515b0070a0793ea8f46f36edcee689a9`
+Full SQL artifact SHA-256: `7dc77c5b1ed17cf98e30d24db6e0f671bf7620e29cc1a57e33a1055b1ce8bbe1`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,7 +16,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 356 |
+| Functions | 359 |
 | Tables | 23 |
 | Views | 12 |
 | Triggers | 6 |
@@ -266,6 +266,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"query_cohort_stats"`
 - `"query_discover"`
 - `"query_execution_stats"`
+- `"query_external_rerank"`
 - `"query_formula"`
 - `"query_full_text"`
 - `"query_late_interaction"`
@@ -277,6 +278,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"query_score_threshold"`
 - `"query_sparse_nearest"`
 - `"query_telemetry_queue_stats"`
+- `"query_topology_expand"`
 - `"query_weight"`
 - `"recall_check"`
 - `"recommend"`

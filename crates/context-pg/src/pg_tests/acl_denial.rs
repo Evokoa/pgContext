@@ -948,6 +948,18 @@ fn composite_execute_query_preserves_non_superuser_acl_rls_and_mvcc() {
     )
     .expect("non-superuser composite fixture should be created");
 
+    acl_reset_session_user();
+    let lookup_ids = Spi::get_one::<String>(
+        "SELECT string_agg(point_id::text, ',' ORDER BY point_id)
+           FROM pgcontext._collection_points AS points
+           JOIN pgcontext._collections AS collections USING (collection_id)
+          WHERE collections.collection_name = 'stage_g_composite_rls_docs'
+            AND points.deleted_at IS NULL",
+    )
+    .expect("lookup point IDs should be readable by the test administrator")
+    .expect("lookup point IDs should exist");
+    acl_set_session_user("stage_g_composite_rls_owner");
+
     assert!(
         !acl_has_table_privilege("pgcontext._collection_points", "SELECT"),
         "composite callers must not need private point-catalog SELECT"
@@ -962,6 +974,17 @@ fn composite_execute_query_preserves_non_superuser_acl_rls_and_mvcc() {
     .expect("non-superuser composite query should execute")
     .expect("visible aggregate should not be null");
     assert_eq!(visible, "1");
+
+    let visible_lookup = Spi::get_one::<String>(&format!(
+        "SELECT coalesce(string_agg(source_key, ',' ORDER BY source_key), '')
+           FROM pgcontext.execute_query(
+               'stage_g_composite_rls_docs',
+               pgcontext.query_lookup(ARRAY[{lookup_ids}]::bigint[])
+           )"
+    ))
+    .expect("RLS-scoped lookup should execute")
+    .expect("RLS-scoped lookup aggregate should not be null");
+    assert_eq!(visible_lookup, "1");
 
     Spi::run(
         "UPDATE public.stage_g_composite_rls_docs

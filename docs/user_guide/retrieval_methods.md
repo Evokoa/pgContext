@@ -163,13 +163,28 @@ deterministically.
   `k = 60`. RRF uses rank only, so dense, full-text, and sparse scores never
   need cross-branch normalization. Ties break by ascending point ID. **Stable**
   for dense + full-text; **Experimental** for dense + sparse.
-- **Weighted and formula fusion.** Composite queries can weight branches
-  (`pgcontext.query_weight`) or combine them with a scoring formula
+- **Weighted RRF and formulas.** Composite queries can weight branches
+  (`pgcontext.query_weight`) and fuse them by rank with the configured
+  `query_prefetch` overload, or transform scores within one compatible profile
+  with a scoring formula
   (`pgcontext.query_formula`) and apply a floor with
   `pgcontext.query_score_threshold`. **Experimental**.
 - **Prefetch then rerank.** `pgcontext.query_prefetch` gathers a candidate set
   that a later stage (`pgcontext.query_rerank`, including late-interaction)
   reorders. **Experimental**.
+- **Port-backed stages.** `query_external_rerank` binds a plan to an immutable
+  model revision, while `query_topology_expand` bounds graph expansion depth.
+  Each adapter receives the remaining comparisons, memory, hydration, and
+  elapsed allowance. Execution fails closed when the adapter is unavailable,
+  exceeds that envelope, duplicates output IDs, or reports partial work. These
+  transport-neutral IR and port contracts are stable, but the bundled SQL
+  executor does not yet attach external-rerank or topology providers; executing
+  either constructor through `pgcontext.execute_query` therefore fails closed
+  until the later provider phases.
+  The memory allowance covers extension-owned transient and returned data;
+  PostgreSQL executor-internal SPI/sort memory is governed by PostgreSQL, while
+  pgContext bounds its admitted row set and applies the elapsed-time guard
+  before materializing Rust-owned results.
 
 ## Composite Query Execution
 
@@ -179,8 +194,14 @@ with `pgcontext.execute_query`. The IR builders (`pgcontext.query_nearest`,
 `pgcontext.query_prefetch`, `pgcontext.query_rerank`,
 `pgcontext.query_score_threshold`, `pgcontext.query_weight`,
 `pgcontext.query_formula`, `pgcontext.query_recommend`,
-`pgcontext.query_discover`, `pgcontext.query_lookup`) compose into one plan
-whose stages you can inspect with `pgcontext.explain`. **Experimental**.
+`pgcontext.query_discover`, `pgcontext.query_lookup`,
+`pgcontext.query_external_rerank`, `pgcontext.query_topology_expand`) compose into one plan
+whose stages you can inspect with `pgcontext.explain`. Constructors validate
+the entire child tree immediately. Bundled dense, sparse, full-text,
+quantized, late-interaction, recommendation, discovery, lookup, fusion, and
+score-transform execution is **Stable**. External-rerank and topology
+constructors currently provide stable transport-neutral contracts only; their
+bundled SQL providers remain unavailable.
 
 The simpler `pgcontext.query` entry point covers the common dense + full-text
 case without assembling an IR; reach for `execute_query` when you need explicit

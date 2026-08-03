@@ -575,10 +575,11 @@ fn parallel_segment_projection_accounts_for_every_extent_before_loading() {
     }
     meta.segment_count = 3;
 
-    assert_eq!(
-        projected_parallel_segment_bytes(meta),
-        Some(3 * 2 * pg_sys::BLCKSZ as u64),
-        "the physical graph extents are a conservative floor for materializing every pack"
+    let projected =
+        projected_parallel_segment_bytes(meta).expect("the parallel projection should fit");
+    assert!(
+        projected >= 3 * 4 * pg_sys::BLCKSZ as u64,
+        "the projection must retain every pack while charging decoded extent overlap"
     );
 
     meta.segments[2].end_block = u64::MAX;
@@ -586,6 +587,98 @@ fn parallel_segment_projection_accounts_for_every_extent_before_loading() {
         projected_parallel_segment_bytes(meta),
         None,
         "projection overflow must deny parallel admission"
+    );
+}
+
+#[test]
+fn typed_hnsw_tiny_port_memory_degrades_parallel_segments_to_serial() {
+    let mut meta = HnswMetaPage::empty();
+    meta.dimensions = 8;
+    meta.hnsw_m = 16;
+    for (index, start_block) in [1_u64, 4, 7].into_iter().enumerate() {
+        meta.segments[index] = HnswSegmentMeta {
+            segment_id: index as u64 + 1,
+            generation: 1,
+            start_block,
+            end_block: start_block + 2,
+            graph_nodes: 32,
+            entry_node_id: 0,
+            mutation_generation: u64::MAX,
+            mutation_start_block: u64::MAX,
+            mutation_end_block: u64::MAX,
+            mutation_record_count: 0,
+        };
+    }
+    meta.segment_count = 3;
+    let serial = projected_serial_segment_scan_bytes(meta, 10, 40, 0, false)
+        .expect("serial projection should fit");
+    let parallel = projected_parallel_segment_scan_bytes(meta, 10, 40, 0, false)
+        .expect("parallel projection should fit");
+    assert!(parallel > serial);
+
+    assert!(serial_segment_memory_admitted(serial, serial));
+    assert!(
+        !parallel_segment_projection_admitted(meta, parallel, u64::MAX, serial, 2),
+        "a typed query memory cap between the serial and parallel peaks must force serial serving"
+    );
+}
+
+#[test]
+fn serial_traversal_projection_charges_filter_and_retirement_masks() {
+    let mut meta = HnswMetaPage::empty();
+    meta.dimensions = 8;
+    meta.hnsw_m = 16;
+    meta.segments[0] = HnswSegmentMeta {
+        segment_id: 1,
+        generation: 1,
+        start_block: 1,
+        end_block: 3,
+        graph_nodes: 1_000,
+        entry_node_id: 0,
+        mutation_generation: 1,
+        mutation_start_block: 3,
+        mutation_end_block: 4,
+        mutation_record_count: 25,
+    };
+    meta.segment_count = 1;
+    meta.delta_generation = 2;
+    meta.delta_start_block = 4;
+    meta.delta_end_block = 5;
+    meta.delta_record_count = 25;
+
+    let unfiltered = projected_serial_segment_scan_bytes(meta, 20, 40, 0, false)
+        .expect("unfiltered serial projection should fit");
+    let filtered = projected_serial_segment_scan_bytes(meta, 20, 40, 100, true)
+        .expect("filtered serial projection should fit");
+    assert!(filtered > unfiltered);
+    assert!(!serial_segment_memory_admitted(filtered, filtered - 1));
+    assert!(serial_segment_memory_admitted(filtered, filtered));
+}
+
+#[test]
+fn large_single_segment_page_traversal_fits_sixteen_mebibytes() {
+    let mut meta = HnswMetaPage::empty();
+    meta.dimensions = 128;
+    meta.hnsw_m = 16;
+    meta.segments[0] = HnswSegmentMeta {
+        segment_id: 1,
+        generation: 1,
+        start_block: 1,
+        end_block: 4_096,
+        graph_nodes: 100_000,
+        entry_node_id: 0,
+        mutation_generation: u64::MAX,
+        mutation_start_block: u64::MAX,
+        mutation_end_block: u64::MAX,
+        mutation_record_count: 0,
+    };
+    meta.segment_count = 1;
+
+    let projected = projected_serial_segment_scan_bytes(meta, 10, 40, 0, false)
+        .expect("large serial projection should fit");
+    assert!(
+        projected <= 16 * 1024 * 1024,
+        "page-native traversal should charge its bounded search state, not the full persisted graph: {projected}"
     );
 }
 

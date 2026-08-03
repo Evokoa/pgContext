@@ -1,34 +1,40 @@
 //! Experimental ANN candidate generation for late-interaction SQL search.
 
 use core::cmp::Ordering;
+use core::mem::size_of;
 use std::collections::HashSet;
 
 use context_core::{
     CollectionName, DenseVector, Error as CoreError, QualifiedTableName, ScoreOrder, SearchLimit,
-    SourceAuthority, SqlIdentifier,
+    SourceAuthority, SqlIdentifier, policy::MAX_SOURCE_KEY_BYTES,
 };
 use context_query::MultiVectorAnnStrategyKind;
 use context_query::{
-    Candidate, CandidateBranch, CandidatePage, CandidateSourceKind, HydratedCandidate, QueryError,
-    QueryIr, QueryKind, ReadinessReason, Result, SourceReadiness,
+    Candidate, CandidateBranch, CandidatePage, CandidateSourceKind, HydratedCandidate, PortBudget,
+    QueryError, QueryIr, QueryKind, ReadinessReason, RecheckPage, Result, SourceReadiness,
 };
 use pgrx::{pg_sys, prelude::*};
 
 use crate::error::{raise_core_error, raise_sql_error};
+use crate::late_interaction::{enforce_late_interaction_budget, late_interaction_score};
 use crate::vector::Vector;
 
 use super::late_interaction::{
     LateInteractionCandidateStats, late_interaction_ann_candidate_strategy,
     late_interaction_ann_detail, late_interaction_ann_status, late_interaction_ann_strategy_name,
     late_interaction_candidate_stats, late_interaction_rows_from_spi,
-    require_late_interaction_collection_owner, require_late_interaction_table_select_privilege,
-    resolve_late_interaction_collection, validate_late_interaction_drift,
+    late_interaction_rows_from_spi_with_limit, require_late_interaction_collection_owner,
+    require_late_interaction_table_select_privilege, resolve_late_interaction_collection,
+    validate_late_interaction_drift,
 };
 use super::{
     QueryExplainStatus, collection_name_from_sql, policy_to_i64, quote_identifier,
     quote_qualified_identifier, search_limit_from_sql, session_user, spi_iter_required_column,
     spi_optional_column, spi_required_column,
 };
+
+type LateInteractionScoredRow = (i64, String, f64);
+type LateInteractionScoredWork = (Vec<LateInteractionScoredRow>, usize);
 
 #[derive(Debug, Clone)]
 pub(super) struct LateInteractionAnnSource {
@@ -57,10 +63,15 @@ pub(crate) struct CompositeLateInteractionSource {
     ann_source: OwnedLateInteractionAnnSource,
     query_vectors: Vec<DenseVector>,
     candidates_per_query: usize,
+    query_vector_bytes: usize,
 }
 
 impl CompositeLateInteractionSource {
-    pub(crate) fn prepare(collection_name: &CollectionName, query: &QueryIr) -> Result<Self> {
+    pub(crate) fn prepare(
+        collection_name: &CollectionName,
+        query: &QueryIr,
+        budget: PortBudget,
+    ) -> Result<Self> {
         let QueryKind::LateInteraction {
             vectors,
             candidates_per_query,
@@ -77,11 +88,18 @@ impl CompositeLateInteractionSource {
         validate_late_interaction_drift(&mut collection, &ann_source.token_column);
         require_late_interaction_table_select_privilege(&collection);
         validate_owned_late_interaction_dimensions(&ann_source, vectors);
+        let query_vector_bytes = late_interaction_query_vector_bytes(vectors, 1)?;
+        require_late_interaction_memory(
+            query_vector_bytes,
+            budget.max_memory_bytes(),
+            "late_interaction_readiness_memory",
+        )?;
         Ok(Self {
             collection,
             ann_source,
             query_vectors: vectors.clone(),
             candidates_per_query: candidates_per_query.get(),
+            query_vector_bytes,
         })
     }
 
@@ -109,13 +127,49 @@ impl CompositeLateInteractionSource {
         .min(remaining)
     }
 
-    pub(crate) fn candidates(&self, limit: usize) -> Result<CandidatePage> {
+    pub(crate) fn candidates(&self, limit: usize, budget: PortBudget) -> Result<CandidatePage> {
         if self.ann_source.point_count == 0 {
+            require_late_interaction_memory(
+                self.query_vector_bytes,
+                budget.max_memory_bytes(),
+                "candidate_memory",
+            )?;
             return Ok(
                 CandidatePage::new(Vec::new(), true).with_strategy("owned_late_interaction_empty")
             );
         }
+        let maximum_dimensions = self
+            .query_vectors
+            .iter()
+            .map(DenseVector::dimension)
+            .max()
+            .unwrap_or_default();
+        let temporary_query_bytes = maximum_dimensions
+            .checked_mul(size_of::<f32>())
+            .and_then(|bytes| bytes.checked_mul(4))
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "late_interaction_candidate_query_memory_projection",
+            })?;
+        let candidate_working_bytes = late_interaction_candidate_memory_bytes(
+            limit,
+            self.query_vector_bytes,
+            temporary_query_bytes,
+        )?;
+        let traversal_memory = budget
+            .max_memory_bytes()
+            .checked_sub(candidate_working_bytes)
+            .ok_or(QueryError::WorkBudgetExceeded {
+                budget: "candidate_memory",
+                actual: candidate_working_bytes,
+                maximum: budget.max_memory_bytes(),
+            })?;
         require_owned_late_interaction_ready(&self.ann_source);
+        crate::hnsw_am::with_hnsw_query_budget(budget.max_comparisons(), traversal_memory, || {
+            self.candidates_within_budget(limit)
+        })
+    }
+
+    fn candidates_within_budget(&self, limit: usize) -> Result<CandidatePage> {
         let per_query = limit
             .checked_div(self.query_vectors.len())
             .unwrap_or_default()
@@ -157,7 +211,22 @@ impl CompositeLateInteractionSource {
         &self,
         candidates: &[Candidate],
         limit: usize,
-    ) -> Result<Vec<HydratedCandidate>> {
+        budget: PortBudget,
+    ) -> Result<RecheckPage> {
+        let recheck_memory = budget
+            .max_memory_bytes()
+            .checked_sub(self.query_vector_bytes)
+            .ok_or(QueryError::WorkBudgetExceeded {
+                budget: "source_recheck_memory",
+                actual: self.query_vector_bytes,
+                maximum: budget.max_memory_bytes(),
+            })?;
+        let vector_memory_bytes = require_late_interaction_recheck_capacity(
+            candidates.len(),
+            limit,
+            recheck_memory,
+            budget.max_hydration_bytes(),
+        )?;
         let point_ids = candidates
             .iter()
             .map(|candidate| {
@@ -168,28 +237,109 @@ impl CompositeLateInteractionSource {
             })
             .collect::<Result<Vec<_>>>()?;
         let limit = SearchLimit::new(limit).map_err(QueryError::from)?;
-        search_late_interaction_candidate_points(
+        let expected_dimensions =
+            self.ann_source
+                .dimensions
+                .ok_or_else(|| QueryError::PortFailure {
+                    stage: "late_interaction_source_rechecker",
+                    message: "ready late-interaction source does not declare dimensions".to_owned(),
+                })?;
+        let (rows, comparisons) = search_late_interaction_candidate_points_with_port_budget(
             &self.collection,
             &self.query_vectors,
             &self.ann_source.token_column,
             &point_ids,
             limit,
-        )
-        .into_iter()
-        .map(|(point_id, source_key, score)| {
-            HydratedCandidate::new(
-                context_core::PointId::from_i64(point_id).ok_or_else(|| {
-                    QueryError::PortFailure {
-                        stage: "late_interaction_source_rechecker",
-                        message: format!("invalid PostgreSQL point ID {point_id}"),
-                    }
-                })?,
-                context_core::SourceKey::new(source_key)?,
-                score,
-            )
-        })
-        .collect()
+            LateInteractionRecheckBudget {
+                max_comparisons: budget.max_comparisons(),
+                max_vector_memory_bytes: vector_memory_bytes,
+                expected_dimensions,
+            },
+        )?;
+        let rows = rows
+            .into_iter()
+            .map(|(point_id, source_key, score)| {
+                HydratedCandidate::new(
+                    context_core::PointId::from_i64(point_id).ok_or_else(|| {
+                        QueryError::PortFailure {
+                            stage: "late_interaction_source_rechecker",
+                            message: format!("invalid PostgreSQL point ID {point_id}"),
+                        }
+                    })?,
+                    context_core::SourceKey::new(source_key)?,
+                    score,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(RecheckPage::new(rows, comparisons))
     }
+}
+
+fn late_interaction_query_vector_bytes(vectors: &[DenseVector], copies: usize) -> Result<usize> {
+    let scalar_cells = vectors.iter().try_fold(0_usize, |total, vector| {
+        total
+            .checked_add(vector.dimension())
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "late_interaction_query_vector_memory_projection",
+            })
+    })?;
+    late_interaction_shape_copy_bytes(vectors.len(), scalar_cells, copies)
+}
+
+fn late_interaction_shape_copy_bytes(
+    vector_count: usize,
+    scalar_cells: usize,
+    copies: usize,
+) -> Result<usize> {
+    let scalar_bytes = scalar_cells
+        .checked_mul(size_of::<f32>())
+        .and_then(|bytes| bytes.checked_mul(copies))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_query_vector_memory_projection",
+        })?;
+    let vector_headers = vector_count
+        .checked_mul(size_of::<DenseVector>())
+        .and_then(|bytes| bytes.checked_mul(copies))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_query_vector_header_memory_projection",
+        })?;
+    scalar_bytes
+        .checked_add(vector_headers)
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_query_vector_memory_projection",
+        })
+}
+
+fn late_interaction_candidate_memory_bytes(
+    limit: usize,
+    retained_query_bytes: usize,
+    temporary_query_bytes: usize,
+) -> Result<usize> {
+    // Candidate conversion retains the point-id Vec allocation. Charge that
+    // Vec at its possible 2x geometric capacity plus a conservative two-word
+    // HashSet bucket/control allowance for every unique ID.
+    limit
+        .checked_mul(size_of::<Candidate>() + size_of::<i64>() * 4)
+        .and_then(|bytes| bytes.checked_add(retained_query_bytes))
+        .and_then(|bytes| bytes.checked_add(temporary_query_bytes))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_candidate_memory_projection",
+        })
+}
+
+fn require_late_interaction_memory(
+    actual: usize,
+    maximum: usize,
+    budget: &'static str,
+) -> Result<()> {
+    if actual > maximum {
+        return Err(QueryError::WorkBudgetExceeded {
+            budget,
+            actual,
+            maximum,
+        });
+    }
+    Ok(())
 }
 
 /// Searches the collection through its pgContext-owned late-interaction index.
@@ -655,6 +805,71 @@ fn search_owned_late_interaction_adaptive(
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct LateInteractionRecheckBudget {
+    max_comparisons: usize,
+    max_vector_memory_bytes: usize,
+    expected_dimensions: usize,
+}
+
+fn require_late_interaction_recheck_capacity(
+    candidate_count: usize,
+    result_limit: usize,
+    max_memory_bytes: usize,
+    max_hydration_bytes: usize,
+) -> Result<usize> {
+    let hydrated_key_bytes = candidate_count.checked_mul(MAX_SOURCE_KEY_BYTES).ok_or(
+        QueryError::ArithmeticOverflow {
+            operation: "late_interaction_hydration_projection",
+        },
+    )?;
+    if hydrated_key_bytes > max_hydration_bytes {
+        return Err(QueryError::WorkBudgetExceeded {
+            budget: "source_recheck_hydration",
+            actual: hydrated_key_bytes,
+            maximum: max_hydration_bytes,
+        });
+    }
+
+    let point_id_bytes = candidate_count
+        .checked_mul(size_of::<i64>())
+        .and_then(|bytes| bytes.checked_mul(2))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_point_id_memory_projection",
+        })?;
+    let scored_row_bytes = candidate_count
+        .checked_mul(size_of::<LateInteractionScoredRow>())
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_scored_row_memory_projection",
+        })?;
+    let vector_list_bytes = candidate_count
+        .checked_mul(size_of::<Vec<Vector>>() + size_of::<Vec<DenseVector>>())
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_vector_list_memory_projection",
+        })?;
+    let result_bytes = result_limit
+        .checked_mul(size_of::<HydratedCandidate>())
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_result_memory_projection",
+        })?;
+    let fixed_bytes = point_id_bytes
+        .checked_add(scored_row_bytes)
+        .and_then(|bytes| bytes.checked_add(vector_list_bytes))
+        .and_then(|bytes| bytes.checked_add(result_bytes))
+        .and_then(|bytes| bytes.checked_add(hydrated_key_bytes))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_recheck_memory_projection",
+        })?;
+    if fixed_bytes > max_memory_bytes {
+        return Err(QueryError::WorkBudgetExceeded {
+            budget: "source_recheck_memory",
+            actual: fixed_bytes,
+            maximum: max_memory_bytes,
+        });
+    }
+    Ok(max_memory_bytes - fixed_bytes)
+}
+
 fn search_late_interaction_candidate_points(
     collection: &super::late_interaction::LateInteractionCollection,
     query_vectors: &[DenseVector],
@@ -662,8 +877,27 @@ fn search_late_interaction_candidate_points(
     point_ids: &[i64],
     limit: SearchLimit,
 ) -> Vec<(i64, String, f64)> {
+    search_late_interaction_candidate_points_with_work(
+        collection,
+        query_vectors,
+        vector_column,
+        point_ids,
+        limit,
+        crate::late_interaction::MAX_LATE_INTERACTION_COMPARISONS,
+    )
+    .0
+}
+
+fn search_late_interaction_candidate_points_with_work(
+    collection: &super::late_interaction::LateInteractionCollection,
+    query_vectors: &[DenseVector],
+    vector_column: &str,
+    point_ids: &[i64],
+    limit: SearchLimit,
+    max_comparisons: usize,
+) -> (Vec<(i64, String, f64)>, usize) {
     if point_ids.is_empty() {
-        return Vec::new();
+        return (Vec::new(), 0);
     }
 
     let table_name = quote_qualified_identifier(&collection.schema_name, &collection.table_name);
@@ -696,17 +930,291 @@ fn search_late_interaction_candidate_points(
                     format!("failed to load owned late-interaction ANN candidates: {error}"),
                 )
             });
-        late_interaction_rows_from_spi(rows, query_vectors)
+        late_interaction_rows_from_spi_with_limit(rows, query_vectors, max_comparisons)
     });
-    scored_rows.sort_by(|left, right| {
+    scored_rows.0.sort_by(|left, right| {
         right
             .2
             .partial_cmp(&left.2)
             .unwrap_or(Ordering::Equal)
             .then_with(|| left.0.cmp(&right.0))
     });
-    scored_rows.truncate(limit.get());
+    scored_rows.0.truncate(limit.get());
     scored_rows
+}
+
+fn search_late_interaction_candidate_points_with_port_budget(
+    collection: &super::late_interaction::LateInteractionCollection,
+    query_vectors: &[DenseVector],
+    vector_column: &str,
+    point_ids: &[i64],
+    limit: SearchLimit,
+    budget: LateInteractionRecheckBudget,
+) -> Result<LateInteractionScoredWork> {
+    if point_ids.is_empty() {
+        return Ok((Vec::new(), 0));
+    }
+    let query_vector_count = query_vectors.len();
+    let max_candidate_vectors = budget
+        .max_comparisons
+        .checked_div(query_vector_count)
+        .unwrap_or_default();
+    let expected_dimensions =
+        i64::try_from(budget.expected_dimensions).map_err(|_| QueryError::ArithmeticOverflow {
+            operation: "late_interaction_expected_dimensions_conversion",
+        })?;
+    let max_candidate_vectors =
+        i64::try_from(max_candidate_vectors).map_err(|_| QueryError::ArithmeticOverflow {
+            operation: "late_interaction_candidate_vector_limit_conversion",
+        })?;
+    let max_vector_memory_bytes = i64::try_from(budget.max_vector_memory_bytes).map_err(|_| {
+        QueryError::ArithmeticOverflow {
+            operation: "late_interaction_vector_memory_limit_conversion",
+        }
+    })?;
+
+    let table_name = quote_qualified_identifier(&collection.schema_name, &collection.table_name);
+    let vector_column = quote_identifier(vector_column);
+    let sql = bounded_late_interaction_recheck_sql(&table_name, &vector_column);
+    let mut scored_rows = Spi::connect(|client| {
+        let rows = client
+            .select(
+                &sql,
+                None,
+                &[
+                    collection.collection_id.into(),
+                    point_ids.to_vec().into(),
+                    expected_dimensions.into(),
+                    max_candidate_vectors.into(),
+                    max_vector_memory_bytes.into(),
+                ],
+            )
+            .map_err(|error| QueryError::PortFailure {
+                stage: "late_interaction_source_rechecker",
+                message: format!("failed to load bounded late-interaction candidates: {error}"),
+            })?;
+        bounded_late_interaction_rows_from_spi(rows, query_vectors, budget)
+    })?;
+    scored_rows.0.sort_by(|left, right| {
+        right
+            .2
+            .partial_cmp(&left.2)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    scored_rows.0.truncate(limit.get());
+    Ok(scored_rows)
+}
+
+fn bounded_late_interaction_recheck_sql(table_name: &str, vector_column: &str) -> String {
+    let vector_header_bytes = size_of::<Vector>() + size_of::<DenseVector>();
+    let scalar_cell_bytes = size_of::<f32>() * 2;
+    format!(
+        "WITH candidate_points AS MATERIALIZED (
+             SELECT DISTINCT candidate_point_id
+               FROM unnest($2::bigint[]) AS candidate(candidate_point_id)
+         ),
+         candidate_rows AS MATERIALIZED (
+             SELECT points.point_id,
+                    points.source_key,
+                    source.{vector_column} AS candidate_vectors,
+                    token_work.token_count,
+                    token_work.scalar_cells,
+                    token_work.dimensions_valid
+               FROM candidate_points AS candidates
+               JOIN pgcontext._visible_collection_points AS points
+                 ON points.point_id = candidates.candidate_point_id
+               JOIN {table_name} AS source ON source.id::text = points.source_key
+              CROSS JOIN LATERAL (
+                    SELECT pg_catalog.count(*)::bigint AS token_count,
+                           COALESCE(pg_catalog.sum(pgcontext.vector_dims(token)), 0)::bigint
+                               AS scalar_cells,
+                           COALESCE(
+                               pg_catalog.bool_and(
+                                   token IS NOT NULL
+                                   AND pgcontext.vector_dims(token) = $3
+                               ),
+                               false
+                           ) AS dimensions_valid
+                      FROM unnest(source.{vector_column}) AS expanded(token)
+              ) AS token_work
+              WHERE points.collection_id = $1
+                AND points.deleted_at IS NULL
+         ),
+         source_work AS MATERIALIZED (
+             SELECT COALESCE(pg_catalog.sum(token_count), 0)::bigint AS token_count,
+                    COALESCE(pg_catalog.sum(scalar_cells), 0)::bigint AS scalar_cells,
+                    COALESCE(pg_catalog.bool_and(dimensions_valid), true) AS dimensions_valid
+               FROM candidate_rows
+         ),
+         admission AS MATERIALIZED (
+             SELECT token_count,
+                    scalar_cells,
+                    dimensions_valid,
+                    dimensions_valid
+                        AND token_count <= $4
+                        AND token_count * {vector_header_bytes}::bigint
+                            + scalar_cells * {scalar_cell_bytes}::bigint <= $5
+                        AS admitted
+               FROM source_work
+         )
+         SELECT rows.point_id,
+                pg_catalog.octet_length(rows.source_key) <= {MAX_SOURCE_KEY_BYTES}
+                    AS source_key_valid,
+                CASE WHEN pg_catalog.octet_length(rows.source_key) <= {MAX_SOURCE_KEY_BYTES}
+                     THEN rows.source_key
+                END AS source_key,
+                admission.dimensions_valid,
+                admission.token_count,
+                admission.scalar_cells,
+                CASE WHEN admission.admitted THEN rows.candidate_vectors END AS candidate_vectors
+           FROM candidate_rows AS rows
+          CROSS JOIN admission"
+    )
+}
+
+fn bounded_late_interaction_rows_from_spi(
+    rows: spi::SpiTupleTable<'_>,
+    query_vectors: &[DenseVector],
+    budget: LateInteractionRecheckBudget,
+) -> Result<LateInteractionScoredWork> {
+    let mut output = Vec::with_capacity(rows.len());
+    let mut observed_candidate_vectors = 0_usize;
+    for row in rows {
+        let point_id = spi_iter_required_column::<i64>(&row, 1, "late_interaction_point_id");
+        if !spi_iter_required_column::<bool>(&row, 2, "late_interaction_source_key_valid") {
+            return Err(QueryError::PortFailure {
+                stage: "late_interaction_source_rechecker",
+                message: format!(
+                    "source key for point ID {point_id} exceeds {MAX_SOURCE_KEY_BYTES} bytes"
+                ),
+            });
+        }
+        if !spi_iter_required_column::<bool>(&row, 4, "late_interaction_dimensions_valid") {
+            return Err(QueryError::PortFailure {
+                stage: "late_interaction_source_rechecker",
+                message: format!(
+                    "candidate token vector dimensions do not match expected dimensions {}",
+                    budget.expected_dimensions
+                ),
+            });
+        }
+        let projected_candidate_vectors = bounded_count_from_sql(
+            spi_iter_required_column::<i64>(&row, 5, "late_interaction_candidate_vectors"),
+            "late_interaction_candidate_vectors",
+        )?;
+        let projected_scalar_cells = bounded_count_from_sql(
+            spi_iter_required_column::<i64>(&row, 6, "late_interaction_scalar_cells"),
+            "late_interaction_scalar_cells",
+        )?;
+        let projected_vector_memory = late_interaction_vector_memory_bytes(
+            projected_candidate_vectors,
+            projected_scalar_cells,
+        )?;
+        if projected_vector_memory > budget.max_vector_memory_bytes {
+            return Err(QueryError::WorkBudgetExceeded {
+                budget: "source_recheck_vector_memory",
+                actual: projected_vector_memory,
+                maximum: budget.max_vector_memory_bytes,
+            });
+        }
+        let projected_comparisons = query_vectors
+            .len()
+            .checked_mul(projected_candidate_vectors)
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "late_interaction_recheck_comparison_projection",
+            })?;
+        if projected_comparisons > budget.max_comparisons {
+            return Err(QueryError::WorkBudgetExceeded {
+                budget: "source_recheck_comparisons",
+                actual: projected_comparisons,
+                maximum: budget.max_comparisons,
+            });
+        }
+
+        let source_key = spi_iter_required_column::<String>(&row, 3, "late_interaction_source_key");
+        let candidate_vectors = row
+            .get::<Vec<Vector>>(7)
+            .map_err(|error| QueryError::PortFailure {
+                stage: "late_interaction_source_rechecker",
+                message: format!("failed to read bounded late-interaction vector array: {error}"),
+            })?
+            .ok_or_else(|| QueryError::PortFailure {
+                stage: "late_interaction_source_rechecker",
+                message: "late-interaction vector array was rejected by resource admission"
+                    .to_owned(),
+            })?;
+        if candidate_vectors.is_empty()
+            || candidate_vectors
+                .iter()
+                .any(|vector| vector.dimension() != budget.expected_dimensions)
+        {
+            return Err(QueryError::PortFailure {
+                stage: "late_interaction_source_rechecker",
+                message: format!(
+                    "candidate token vectors must be non-empty and have {} dimensions",
+                    budget.expected_dimensions
+                ),
+            });
+        }
+        observed_candidate_vectors = observed_candidate_vectors
+            .checked_add(candidate_vectors.len())
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "late_interaction_candidate_vector_count",
+            })?;
+        enforce_late_interaction_budget(query_vectors.len(), observed_candidate_vectors);
+        let observed_comparisons = query_vectors
+            .len()
+            .checked_mul(observed_candidate_vectors)
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "late_interaction_recheck_comparison_count",
+            })?;
+        if observed_comparisons > budget.max_comparisons {
+            return Err(QueryError::WorkBudgetExceeded {
+                budget: "source_recheck_comparisons",
+                actual: observed_comparisons,
+                maximum: budget.max_comparisons,
+            });
+        }
+        let candidate_vectors = candidate_vectors
+            .into_iter()
+            .map(|vector| vector.to_dense().map_err(QueryError::from))
+            .collect::<Result<Vec<_>>>()?;
+        let score = f64::from(late_interaction_score(query_vectors, &candidate_vectors));
+        output.push((point_id, source_key, score));
+    }
+    let comparisons = query_vectors
+        .len()
+        .checked_mul(observed_candidate_vectors)
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_recheck_comparison_count",
+        })?;
+    Ok((output, comparisons))
+}
+
+fn bounded_count_from_sql(value: i64, label: &'static str) -> Result<usize> {
+    usize::try_from(value).map_err(|_| QueryError::PortFailure {
+        stage: "late_interaction_source_rechecker",
+        message: format!("{label} is negative or exceeds usize range: {value}"),
+    })
+}
+
+fn late_interaction_vector_memory_bytes(
+    candidate_vector_count: usize,
+    scalar_cell_count: usize,
+) -> Result<usize> {
+    let vector_header_bytes = size_of::<Vector>() + size_of::<DenseVector>();
+    let scalar_cell_bytes = size_of::<f32>() * 2;
+    candidate_vector_count
+        .checked_mul(vector_header_bytes)
+        .and_then(|bytes| {
+            scalar_cell_count
+                .checked_mul(scalar_cell_bytes)
+                .and_then(|cells| bytes.checked_add(cells))
+        })
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "late_interaction_vector_memory_projection",
+        })
 }
 
 /// Experimental ANN candidate generation for table-backed late interaction.
@@ -1229,5 +1737,111 @@ fn sql_identifier_from_sql(identifier: &str) -> SqlIdentifier {
     match SqlIdentifier::new(identifier) {
         Ok(identifier) => identifier,
         Err(error) => raise_core_error(error),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composite_recheck_rejects_tiny_memory_before_source_loading() {
+        let result = require_late_interaction_recheck_capacity(1, 1, 1, MAX_SOURCE_KEY_BYTES);
+
+        assert!(matches!(
+            result,
+            Err(QueryError::WorkBudgetExceeded {
+                budget: "source_recheck_memory",
+                maximum: 1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn composite_recheck_rejects_tiny_hydration_before_source_loading() {
+        let result = require_late_interaction_recheck_capacity(2, 1, usize::MAX, 1);
+
+        assert_eq!(
+            result,
+            Err(QueryError::WorkBudgetExceeded {
+                budget: "source_recheck_hydration",
+                actual: MAX_SOURCE_KEY_BYTES * 2,
+                maximum: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn composite_recheck_sql_gates_keys_and_vectors_before_materialization() {
+        let sql = bounded_late_interaction_recheck_sql("public.items", "token_vectors");
+
+        assert!(sql.contains("octet_length(rows.source_key) <= 1024"));
+        assert!(sql.contains("CASE WHEN admission.admitted THEN rows.candidate_vectors END"));
+        assert!(sql.contains("AND pgcontext.vector_dims(token) = $3"));
+        assert!(sql.contains("token_count <= $4"));
+        assert!(sql.contains("scalar_cells"));
+    }
+
+    #[test]
+    fn composite_recheck_vector_memory_projection_is_checked() {
+        assert!(matches!(
+            late_interaction_vector_memory_bytes(usize::MAX, 1),
+            Err(QueryError::ArithmeticOverflow {
+                operation: "late_interaction_vector_memory_projection"
+            })
+        ));
+    }
+
+    #[test]
+    fn maximum_query_scalar_cache_is_admitted_only_at_exact_boundary() {
+        let bytes = late_interaction_shape_copy_bytes(
+            1,
+            context_query::MAX_LATE_INTERACTION_SCALAR_CELLS,
+            1,
+        )
+        .unwrap_or_else(|error| unreachable!("policy scalar cells must fit usize: {error}"));
+
+        assert!(
+            require_late_interaction_memory(bytes, bytes, "late_interaction_readiness_memory")
+                .is_ok()
+        );
+        assert!(
+            require_late_interaction_memory(bytes, bytes - 1, "late_interaction_readiness_memory")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn many_short_query_vectors_include_every_cached_vector_header() {
+        let vector_count = context_query::MAX_LATE_INTERACTION_SCALAR_CELLS;
+        let bytes = late_interaction_shape_copy_bytes(vector_count, vector_count, 1)
+            .unwrap_or_else(|error| unreachable!("policy query shape must fit usize: {error}"));
+        let scalar_only = vector_count * size_of::<f32>();
+
+        assert_eq!(bytes, scalar_only + vector_count * size_of::<DenseVector>());
+        assert!(
+            require_late_interaction_memory(
+                bytes,
+                scalar_only,
+                "late_interaction_readiness_memory"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn unique_candidate_ids_include_vec_growth_and_hash_bucket_storage() {
+        let limit = 1_024;
+        let projected = late_interaction_candidate_memory_bytes(limit, 0, 0)
+            .unwrap_or_else(|error| unreachable!("candidate projection must fit: {error}"));
+        let flat_candidates = limit * size_of::<Candidate>();
+        let container_bytes = limit * size_of::<i64>() * 4;
+
+        assert_eq!(projected, flat_candidates + container_bytes);
+        assert!(require_late_interaction_memory(projected, projected, "candidate_memory").is_ok());
+        assert!(
+            require_late_interaction_memory(projected, projected - 1, "candidate_memory").is_err()
+        );
     }
 }

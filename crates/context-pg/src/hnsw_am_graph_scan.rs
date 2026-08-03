@@ -367,6 +367,158 @@ struct SegmentDeltaHit {
     hit: DeltaHit,
 }
 
+const HNSW_TREE_ENTRY_PEAK_BYTES: u64 = 128;
+
+fn checked_projection_sum(values: impl IntoIterator<Item = u64>) -> Option<u64> {
+    values
+        .into_iter()
+        .try_fold(0_u64, u64::checked_add)
+}
+
+fn projected_mask_bytes(point_count: usize) -> Option<u64> {
+    u64::try_from(point_count)
+        .ok()?
+        .checked_mul(HNSW_TREE_ENTRY_PEAK_BYTES)
+}
+
+fn projected_mutation_overlay_bytes(meta: HnswMetaPage) -> Option<u64> {
+    let record_count = projected_mutation_record_count(meta)?;
+    let vector_bytes = u64::from(meta.dimensions).checked_mul(size_of::<f32>() as u64)?;
+    let per_record = (size_of::<context_storage::DeltaRecord>() as u64)
+        .checked_add(vector_bytes)?
+        .checked_mul(2)?;
+    let outer_vectors = u64::try_from(meta.segments().len())
+        .ok()?
+        .checked_mul(size_of::<Vec<context_storage::DeltaRecord>>() as u64)?;
+    record_count
+        .checked_mul(per_record)?
+        .checked_add(outer_vectors)
+}
+
+fn projected_mutation_record_count(meta: HnswMetaPage) -> Option<u64> {
+    meta.segments().iter().try_fold(
+        meta.delta_record_count,
+        |total, segment| total.checked_add(segment.mutation_record_count),
+    )
+}
+
+fn projected_graph_traversal_bytes(
+    node_count: u64,
+    search_width: usize,
+    filtered: bool,
+) -> Option<u64> {
+    let search_width = u64::try_from(search_width).ok()?.min(node_count);
+    let candidate_slot = (size_of::<(HnswNodeId, f32)>() as u64).checked_mul(2)?;
+    let visited = node_count;
+    let pending = node_count.checked_mul(candidate_slot)?.checked_mul(2)?;
+    let nearest = search_width
+        .checked_mul(candidate_slot)?
+        .checked_mul(2)?;
+    let results = search_width
+        .checked_mul(size_of::<context_index::HnswSearchResult>() as u64)?
+        .checked_mul(2)?;
+    let scratch_count = if filtered { 2_u64 } else { 1_u64 };
+    let scratch = u64::try_from(context_index::MAX_GRAPH_NEIGHBORS_PER_LAYER)
+        .ok()?
+        .checked_mul(size_of::<HnswNodeId>() as u64)?
+        .checked_mul(2)?
+        .checked_mul(scratch_count)?;
+    checked_projection_sum([visited, pending, nearest, results, scratch])
+}
+
+fn projected_retained_hit_bytes(meta: HnswMetaPage, requested_limit: usize) -> Option<u64> {
+    u64::try_from(meta.segments().len())
+        .ok()?
+        .checked_mul(u64::try_from(requested_limit).ok()?)?
+        .checked_mul(size_of::<SegmentDeltaHit>() as u64)?
+        .checked_mul(4)
+}
+
+fn projected_serial_segment_scan_bytes(
+    meta: HnswMetaPage,
+    requested_limit: usize,
+    ef_search: usize,
+    mask_point_count: usize,
+    filtered: bool,
+) -> Option<u64> {
+    let search_width = ef_search.max(requested_limit);
+    let overlay = projected_mutation_overlay_bytes(meta)?;
+    let mask = projected_mask_bytes(mask_point_count)?
+        .checked_mul(if filtered { 2 } else { 1 })?;
+    let retained_hits = projected_retained_hit_bytes(meta, requested_limit)?;
+    let mutation_count = projected_mutation_record_count(meta)?;
+    let retirement = mutation_count.checked_mul(HNSW_TREE_ENTRY_PEAK_BYTES)?;
+    let traversal = meta
+        .segments()
+        .iter()
+        .map(|segment| projected_graph_traversal_bytes(segment.graph_nodes, search_width, filtered))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .max()
+        .unwrap_or_default();
+    let traversal_peak = checked_projection_sum([
+        overlay,
+        mask,
+        retained_hits,
+        retirement,
+        traversal,
+    ])?;
+    let retained_point_count = u64::try_from(meta.segments().len())
+        .ok()?
+        .checked_mul(u64::try_from(requested_limit).ok()?)?;
+    let merge_entries = retained_point_count
+        .checked_add(mutation_count)?
+        .checked_mul(HNSW_TREE_ENTRY_PEAK_BYTES)?;
+    let merge_peak = checked_projection_sum([overlay, mask, retained_hits, merge_entries])?;
+    Some(traversal_peak.max(merge_peak))
+}
+
+fn projected_parallel_segment_scan_bytes(
+    meta: HnswMetaPage,
+    requested_limit: usize,
+    ef_search: usize,
+    mask_point_count: usize,
+    filtered: bool,
+) -> Option<u64> {
+    let search_width = ef_search.max(requested_limit);
+    let graph_copies = projected_parallel_segment_bytes(meta)?;
+    let traversals = meta.segments().iter().try_fold(0_u64, |total, segment| {
+        total.checked_add(projected_graph_traversal_bytes(
+            segment.graph_nodes,
+            search_width,
+            filtered,
+        )?)
+    })?;
+    checked_projection_sum([
+        graph_copies,
+        traversals,
+        projected_mask_bytes(mask_point_count)?.checked_mul(if filtered { 2 } else { 1 })?,
+        projected_retained_hit_bytes(meta, requested_limit)?,
+    ])
+}
+
+#[cfg(test)]
+fn serial_segment_memory_admitted(projected_bytes: u64, max_memory_bytes: u64) -> bool {
+    projected_bytes <= max_memory_bytes
+}
+
+fn require_hnsw_scan_memory(
+    projected_bytes: Option<u64>,
+    max_memory_bytes: usize,
+    operation: &'static str,
+) {
+    let maximum = u64::try_from(max_memory_bytes).unwrap_or(u64::MAX);
+    let actual = projected_bytes.unwrap_or(u64::MAX);
+    if actual > maximum {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            format!(
+                "HNSW {operation} requires {actual} extension-owned bytes, exceeding query memory budget {maximum}"
+            ),
+        );
+    }
+}
+
 struct PublishedMutationOverlay {
     frozen: Vec<Vec<context_storage::DeltaRecord>>,
     active: Vec<context_storage::DeltaRecord>,
@@ -420,9 +572,17 @@ unsafe fn read_published_mutation_overlay(
 
 unsafe fn read_consistent_hnsw_publication(
     index_relation: pg_sys::Relation,
+    max_memory_bytes: usize,
+    retained_bytes: u64,
 ) -> (HnswMetaPage, PublishedMutationOverlay) {
     for _ in 0..16 {
         let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+        require_hnsw_scan_memory(
+            projected_mutation_overlay_bytes(meta)
+                .and_then(|overlay| overlay.checked_add(retained_bytes)),
+            max_memory_bytes,
+            "mutation-overlay decode",
+        );
         if let Some(overlay) = unsafe { read_published_mutation_overlay(index_relation, meta) } {
             return (meta, overlay);
         }
@@ -549,7 +709,9 @@ fn projected_packed_segment_bytes(
     let extent_blocks = segment.end_block.checked_sub(segment.start_block)?;
     let extent_bytes = extent_blocks.checked_mul(pg_sys::BLCKSZ as u64)?;
     if meta.quantization_mode == options::HNSW_QUANTIZATION_NONE_U16 {
-        return Some(packed_floor.max(extent_bytes));
+        return extent_bytes
+            .checked_mul(2)?
+            .checked_add(packed_floor.checked_mul(2)?);
     }
     let codec = projected_hnsw_codec_bytes(meta, segment.graph_nodes)?;
     let training_sample_rows = segment
@@ -612,15 +774,39 @@ fn projected_hnsw_codec_bytes(meta: HnswMetaPage, node_count: u64) -> Option<u64
     codes.checked_add(codebook)?.checked_add(scorer)
 }
 
-fn parallel_segment_memory_admitted(meta: HnswMetaPage) -> bool {
-    if meta.segments().len() < 3
-        || crate::settings::hnsw_segment_parallel_workers_from_guc() < 2
-    {
+fn parallel_segment_projection_admitted(
+    meta: HnswMetaPage,
+    projected_bytes: u64,
+    shared_serving_bytes: u64,
+    remaining_query_bytes: u64,
+    worker_limit: usize,
+) -> bool {
+    if meta.segments().len() < 3 || worker_limit < 2 {
+        return true;
+    }
+    projected_bytes <= shared_serving_bytes.min(remaining_query_bytes)
+}
+
+fn parallel_segment_memory_admitted(
+    meta: HnswMetaPage,
+    projected_bytes: Option<u64>,
+    max_memory_bytes: usize,
+) -> bool {
+    let worker_limit = crate::settings::hnsw_segment_parallel_workers_from_guc();
+    if meta.segments().len() < 3 || worker_limit < 2 {
         return true;
     }
     let serving_budget = crate::settings::hnsw_shared_serving_budget_bytes_from_guc();
-    let admitted = projected_parallel_segment_bytes(meta)
-        .is_some_and(|projected_bytes| projected_bytes <= serving_budget);
+    let query_budget = u64::try_from(max_memory_bytes).unwrap_or(u64::MAX);
+    let admitted = projected_bytes.is_some_and(|projected_bytes| {
+        parallel_segment_projection_admitted(
+            meta,
+            projected_bytes,
+            serving_budget,
+            query_budget,
+            worker_limit,
+        )
+    });
     if !admitted {
         record_hnsw_parallel_admission_denial();
     }
@@ -636,12 +822,15 @@ unsafe fn try_parallel_segment_search(
     limit: SearchLimit,
     mask: Option<&CandidateMask>,
     mask_budget: usize,
+    comparison_budget: &HnswComparisonBudget,
+    max_memory_bytes: usize,
 ) -> context_index::Result<Option<ParallelSegmentOutcome>> {
     let worker_limit = crate::settings::hnsw_segment_parallel_workers_from_guc();
     if meta.segments().len() < 3 || worker_limit < 2 {
         return Ok(None);
     }
-    let serving_budget = crate::settings::hnsw_shared_serving_budget_bytes_from_guc();
+    let serving_budget = crate::settings::hnsw_shared_serving_budget_bytes_from_guc()
+        .min(u64::try_from(max_memory_bytes).unwrap_or(u64::MAX));
     let mut graphs = Vec::with_capacity(meta.segments().len());
     let mut packed_bytes = 0_u64;
     for segment in meta.segments() {
@@ -683,11 +872,13 @@ unsafe fn try_parallel_segment_search(
     let query = Arc::new(query.clone());
     let mask = mask.cloned().map(Arc::new);
     let cancelled = Arc::new(AtomicBool::new(false));
+    let comparison_budget = comparison_budget.clone();
     let (result_sender, result_receiver) = mpsc::channel();
     for task in tasks {
         let query = Arc::clone(&query);
         let mask = mask.as_ref().map(Arc::clone);
         let task_cancelled = Arc::clone(&cancelled);
+        let comparison_budget = comparison_budget.clone();
         let result_sender = result_sender.clone();
         let submitted = pool.try_submit(Box::new(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -697,7 +888,7 @@ unsafe fn try_parallel_segment_search(
                             cancelled: Arc::clone(&task_cancelled),
                         };
                         let outcome = if let Some(mask) = mask.as_deref() {
-                            search_graph_read_with_mask_budgeted(
+                            search_graph_read_with_mask_and_comparison_budget(
                                 &mut graph,
                                 metric.navigation_metric(),
                                 &query,
@@ -705,15 +896,17 @@ unsafe fn try_parallel_segment_search(
                                 limit,
                                 mask,
                                 mask_budget,
+                                &comparison_budget,
                                 &mut cancellation,
                             )
                         } else {
-                            search_graph_read(
+                            search_graph_read_with_comparison_budget(
                                 &mut graph,
                                 metric.navigation_metric(),
                                 &query,
                                 config,
                                 limit,
+                                &comparison_budget,
                                 &mut cancellation,
                             )
                         };
@@ -821,11 +1014,15 @@ unsafe fn hnsw_page_graph_scan_candidates(
     query: &DenseVector,
     config: HnswConfig,
     requested_limit: usize,
+    comparison_budget: &HnswComparisonBudget,
+    max_memory_bytes: usize,
 ) -> HnswScanCandidates {
     // Read the retirement overlay before ANN traversal. Each mutation may
     // invalidate one returned base hit, so this conservative expansion keeps
     // enough successors for the final chronological replay.
-    let (meta, overlay) = unsafe { read_consistent_hnsw_publication(index_relation) };
+    let (meta, overlay) = unsafe {
+        read_consistent_hnsw_publication(index_relation, max_memory_bytes, 0)
+    };
     let limit = SearchLimit::new(requested_limit).unwrap_or_else(|error| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
@@ -834,27 +1031,15 @@ unsafe fn hnsw_page_graph_scan_candidates(
     });
     let normalized_query;
     let query = if metric == HnswScoreMetric::Cosine {
-        let Some(prepared) = metric
+        let prepared = metric
             .prepare_vector(query.clone())
             .unwrap_or_else(|error| raise_core_error(error))
-        else {
-            // pgvector treats a zero cosine query as an unordered walk over
-            // the entries the cosine opclass could index. Preserve that
-            // compatibility behavior (including post-build delta entries)
-            // rather than manufacturing distances for an undefined metric.
-            // SAFETY: The active AM scan owns this live relation.
-            let mut candidates =
-                unsafe { hnsw_unordered_scan_candidates_with_delta(index_relation) };
-            candidates.truncate(requested_limit);
-            return HnswScanCandidates {
-                work: HnswScanWork {
-                    candidates: candidates.len(),
-                    ..HnswScanWork::default()
-                },
-                candidates,
-                requested_limit,
-            };
-        };
+            .unwrap_or_else(|| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+                    "cosine HNSW query vectors must have a finite nonzero norm",
+                )
+            });
         normalized_query = prepared;
         &normalized_query
     } else {
@@ -867,7 +1052,15 @@ unsafe fn hnsw_page_graph_scan_candidates(
     let mut node_reads = 0_usize;
     // SAFETY: parallel admission copies every segment into an owned pure
     // adapter before any worker starts and returns None without publication.
-    let parallel_memory_admitted = parallel_segment_memory_admitted(meta);
+    let parallel_projection = projected_parallel_segment_scan_bytes(
+        meta,
+        limit.get(),
+        config.ef_search(),
+        0,
+        false,
+    );
+    let parallel_memory_admitted =
+        parallel_segment_memory_admitted(meta, parallel_projection, max_memory_bytes);
     let parallel = if overlay.record_count() == 0 && parallel_memory_admitted {
         unsafe {
             try_parallel_segment_search(
@@ -879,6 +1072,8 @@ unsafe fn hnsw_page_graph_scan_candidates(
                 limit,
                 None,
                 0,
+                comparison_budget,
+                max_memory_bytes,
             )
         }
         .unwrap_or_else(|error| raise_hnsw_scan_error(error))
@@ -889,6 +1084,17 @@ unsafe fn hnsw_page_graph_scan_candidates(
         base_hits = parallel.hits;
         node_reads = parallel.node_reads;
     } else {
+        require_hnsw_scan_memory(
+            projected_serial_segment_scan_bytes(
+                meta,
+                limit.get(),
+                config.ef_search(),
+                0,
+                false,
+            ),
+            max_memory_bytes,
+            "serial traversal",
+        );
         if meta.segments().len() > 1 {
             record_hnsw_serial_segment_degradation();
         }
@@ -897,7 +1103,7 @@ unsafe fn hnsw_page_graph_scan_candidates(
             let mut graph = PgHnswGraphRead::for_segment(index_relation, *segment);
             let retirement = CandidateMask::all()
                 .excluding(overlay.retirement_points_after_segment(segment_index));
-            let outcome = search_graph_read_with_mask_budgeted(
+            let outcome = search_graph_read_with_mask_and_comparison_budget(
                 &mut graph,
                 metric.navigation_metric(),
                 query,
@@ -905,6 +1111,7 @@ unsafe fn hnsw_page_graph_scan_candidates(
                 limit,
                 &retirement,
                 usize::MAX,
+                comparison_budget,
                 &mut cancellation,
             )
             .unwrap_or_else(|error| raise_hnsw_scan_error(error));
@@ -938,6 +1145,7 @@ unsafe fn hnsw_page_graph_scan_candidates(
             limit.get(),
             None,
             overlay,
+            comparison_budget,
         )
     }
 }
@@ -955,7 +1163,9 @@ unsafe fn hnsw_unordered_scan_candidates_with_delta(
 ) -> Vec<HnswScanCandidate> {
     // SAFETY: The metapage and its published delta boundary belong to the
     // same live relation held by the caller.
-    let (meta, overlay) = unsafe { read_consistent_hnsw_publication(index_relation) };
+    let (meta, overlay) = unsafe {
+        read_consistent_hnsw_publication(index_relation, usize::MAX, 0)
+    };
     record_hnsw_multi_segment_scan(meta.segments().len());
     if meta.segments().len() > 1 {
         record_hnsw_serial_segment_degradation();
@@ -1013,34 +1223,35 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
     config: HnswConfig,
     limit: SearchLimit,
     mask: &CandidateMask,
+    comparison_budget: &HnswComparisonBudget,
+    max_memory_bytes: usize,
+    mask_point_count: usize,
 ) -> HnswScanCandidates {
     let normalized_query;
     let query = if metric == HnswScoreMetric::Cosine {
-        let Some(prepared) = metric
+        let prepared = metric
             .prepare_vector(query.clone())
             .unwrap_or_else(|error| raise_core_error(error))
-        else {
-            // SAFETY: The active AM scan owns this live relation.
-            let mut candidates =
-                unsafe { hnsw_unordered_scan_candidates_with_delta(index_relation) };
-            candidates.retain(|candidate| mask.allows(HnswPointId::new(candidate.heap_tid)));
-            candidates.truncate(limit.get());
-            return HnswScanCandidates {
-                work: HnswScanWork {
-                    candidates: candidates.len(),
-                    ..HnswScanWork::default()
-                },
-                candidates,
-                requested_limit: limit.get(),
-            };
-        };
+            .unwrap_or_else(|| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+                    "cosine HNSW query vectors must have a finite nonzero norm",
+                )
+            });
         normalized_query = prepared;
         &normalized_query
     } else {
         query
     };
     // SAFETY: the metapage snapshot owns the immutable segment descriptors.
-    let (meta, overlay) = unsafe { read_consistent_hnsw_publication(index_relation) };
+    let retained_mask_bytes = projected_mask_bytes(mask_point_count).unwrap_or(u64::MAX);
+    let (meta, overlay) = unsafe {
+        read_consistent_hnsw_publication(
+            index_relation,
+            max_memory_bytes,
+            retained_mask_bytes,
+        )
+    };
     let mask_budget = crate::settings::hnsw_mask_candidate_limit_from_guc();
     mask.validate_budget_with_limit(mask_budget)
         .unwrap_or_else(|error| raise_hnsw_scan_error(error));
@@ -1050,7 +1261,15 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
     let mut node_reads = 0_usize;
     // SAFETY: as the unmasked path; the mask is cloned into immutable owned
     // state before the scoped workers start.
-    let parallel_memory_admitted = parallel_segment_memory_admitted(meta);
+    let parallel_projection = projected_parallel_segment_scan_bytes(
+        meta,
+        limit.get(),
+        config.ef_search(),
+        mask_point_count,
+        true,
+    );
+    let parallel_memory_admitted =
+        parallel_segment_memory_admitted(meta, parallel_projection, max_memory_bytes);
     let parallel = if overlay.record_count() == 0 && parallel_memory_admitted {
         unsafe {
             try_parallel_segment_search(
@@ -1062,6 +1281,8 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
                 limit,
                 Some(mask),
                 mask_budget,
+                comparison_budget,
+                max_memory_bytes,
             )
         }
         .unwrap_or_else(|error| raise_hnsw_scan_error(error))
@@ -1072,6 +1293,17 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
         base_hits = parallel.hits;
         node_reads = parallel.node_reads;
     } else {
+        require_hnsw_scan_memory(
+            projected_serial_segment_scan_bytes(
+                meta,
+                limit.get(),
+                config.ef_search(),
+                mask_point_count,
+                true,
+            ),
+            max_memory_bytes,
+            "filtered serial traversal",
+        );
         if meta.segments().len() > 1 {
             record_hnsw_serial_segment_degradation();
         }
@@ -1081,7 +1313,7 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
             let retirement = mask
                 .clone()
                 .excluding(overlay.retirement_points_after_segment(segment_index));
-            let outcome = search_graph_read_with_mask_budgeted(
+            let outcome = search_graph_read_with_mask_and_comparison_budget(
                 &mut graph,
                 metric.navigation_metric(),
                 query,
@@ -1089,6 +1321,7 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
                 limit,
                 &retirement,
                 usize::MAX,
+                comparison_budget,
                 &mut cancellation,
             )
             .unwrap_or_else(|error| raise_hnsw_scan_error(error));
@@ -1122,6 +1355,7 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
             limit.get(),
             Some(mask),
             overlay,
+            comparison_budget,
         )
     }
 }
@@ -1140,6 +1374,7 @@ unsafe fn hnsw_segment_candidates_with_delta_merge(
     requested_limit: usize,
     delta_mask: Option<&CandidateMask>,
     overlay: PublishedMutationOverlay,
+    comparison_budget: &HnswComparisonBudget,
 ) -> HnswScanCandidates {
     // SAFETY: this adapter exists only for the active AM callback.
     let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
@@ -1176,6 +1411,7 @@ unsafe fn hnsw_segment_candidates_with_delta_merge(
                 metric,
                 query,
                 delta_mask,
+                comparison_budget,
             );
         }
     }
@@ -1187,6 +1423,7 @@ unsafe fn hnsw_segment_candidates_with_delta_merge(
             metric,
             query,
             delta_mask,
+            comparison_budget,
         );
     }
     let mut merged = live.into_iter().map(|(heap_tid, score)| DeltaHit { heap_tid, score }).collect::<Vec<_>>();
@@ -1219,12 +1456,16 @@ fn apply_hnsw_overlay_record(
     metric: HnswScoreMetric,
     query: &DenseVector,
     mask: Option<&CandidateMask>,
+    comparison_budget: &HnswComparisonBudget,
 ) {
     if mask.is_some_and(|mask| !mask.allows(HnswPointId::new(record.heap_tid))) {
         return;
     }
     match record.kind {
         DeltaRecordKind::Live => {
+            comparison_budget
+                .reserve_comparison()
+                .unwrap_or_else(|error| raise_hnsw_scan_error(error));
             let score = metric
                 .navigation_metric()
                 .distance_slices(query.as_slice(), record.vector.as_slice())
@@ -1240,8 +1481,11 @@ fn apply_hnsw_overlay_record(
 
 
 fn raise_hnsw_scan_error(error: HnswError) -> ! {
-    let code = match error {
+    let code = match &error {
         HnswError::DimensionMismatch { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        HnswError::ComparisonBudgetExceeded { .. } => {
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED
+        }
         _ => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
     };
     raise_sql_error(

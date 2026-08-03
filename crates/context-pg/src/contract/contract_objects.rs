@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 357;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 360;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -771,6 +771,21 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function("query_prefetch", "branches jsonb[]", SqlLifecycle::Stable),
+    SqlContractObject::function(
+        "query_prefetch",
+        "branches jsonb[], fusion text, rank_constant integer",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "query_external_rerank",
+        "branch jsonb, model_revision bigint, \"limit\" integer",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "query_topology_expand",
+        "branch jsonb, max_depth integer, \"limit\" integer",
+        SqlLifecycle::Stable,
+    ),
     SqlContractObject::function(
         "query_recommend",
         "positive_point_ids bigint[], negative_point_ids bigint[], \"limit\" integer",

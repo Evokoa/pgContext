@@ -1,6 +1,6 @@
 //! Borrowed, allocation-bounded view over mapped HNSW graph payloads.
 
-use core::iter::FusedIterator;
+use core::{iter::FusedIterator, mem::size_of};
 
 use context_codec::QuantizedCodebook;
 use context_core::policy::MAX_VECTOR_DIMENSIONS;
@@ -123,6 +123,31 @@ impl<'a> MappedGraphView<'a> {
     /// Returns [`HnswGraphPayloadError`] when any byte range, graph identity,
     /// vector, adjacency, quantization code, or version invariant is invalid.
     pub fn attach(payload: &'a [u8]) -> Result<Self, HnswGraphPayloadError> {
+        Self::attach_impl(payload, None)
+    }
+
+    /// Attaches while bounding every decoded heap allocation retained by the view.
+    ///
+    /// The node-location projection is checked before its `Vec` is allocated.
+    /// Product-codebook storage is projected from persisted counts and checked
+    /// before codec decoding allocates nested vectors.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HnswGraphPayloadError::MemoryBudgetExceeded`] before an
+    /// allocation that would cross `max_resident_bytes`, in addition to the
+    /// structural errors returned by [`Self::attach`].
+    pub fn attach_with_memory_budget(
+        payload: &'a [u8],
+        max_resident_bytes: usize,
+    ) -> Result<Self, HnswGraphPayloadError> {
+        Self::attach_impl(payload, Some(max_resident_bytes))
+    }
+
+    fn attach_impl(
+        payload: &'a [u8],
+        max_resident_bytes: Option<usize>,
+    ) -> Result<Self, HnswGraphPayloadError> {
         if payload.len() < HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1 {
             return Err(HnswGraphPayloadError::TruncatedHeader {
                 actual: payload.len(),
@@ -172,6 +197,10 @@ impl<'a> MappedGraphView<'a> {
                 maximum: MAX_HNSW_GRAPH_RECORDS,
             });
         }
+        let node_location_bytes = record_count
+            .checked_mul(size_of::<NodeLocation>())
+            .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+        require_memory_budget(node_location_bytes, max_resident_bytes)?;
         if dimensions == 0 {
             return Err(HnswGraphPayloadError::EmptyVector);
         }
@@ -282,8 +311,15 @@ impl<'a> MappedGraphView<'a> {
             require_no_trailing_bytes(payload, offset)?;
             None
         } else {
-            let codec = CodecArtifactView::attach(&payload[codec_offset..codec_end])
-                .map_err(codec_artifact_error)?;
+            let codec_payload = &payload[codec_offset..codec_end];
+            let codebook_resident_bytes =
+                CodecArtifactView::projected_resident_bytes(codec_payload)
+                    .map_err(codec_artifact_error)?;
+            let total_resident_bytes = node_location_bytes
+                .checked_add(codebook_resident_bytes)
+                .ok_or(HnswGraphPayloadError::RecordSizeOverflow { record_index: 0 })?;
+            require_memory_budget(total_resident_bytes, max_resident_bytes)?;
+            let codec = CodecArtifactView::attach(codec_payload).map_err(codec_artifact_error)?;
             if codec.dimensions() != dimensions || codec.codes().row_count() != record_count {
                 return Err(HnswGraphPayloadError::InvalidQuantization(format!(
                     "codec artifact binding mismatch: expected {record_count} rows of {dimensions} dimensions, got {} rows of {} dimensions",
@@ -355,4 +391,16 @@ impl<'a> MappedGraphView<'a> {
             code,
         })
     }
+}
+
+fn require_memory_budget(
+    required: usize,
+    maximum: Option<usize>,
+) -> Result<(), HnswGraphPayloadError> {
+    if let Some(maximum) = maximum
+        && required > maximum
+    {
+        return Err(HnswGraphPayloadError::MemoryBudgetExceeded { required, maximum });
+    }
+    Ok(())
 }

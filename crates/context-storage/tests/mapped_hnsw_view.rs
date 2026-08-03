@@ -2,10 +2,12 @@
 
 use std::error::Error;
 
+use context_codec::{CodecRevision, ContiguousCodes, QuantizedCodebook, ReconstructionPolicy};
 use context_core::DenseVector;
 use context_storage::{
     CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HnswGraphArtifactRecord, HnswGraphPayloadError,
-    MappedGraphView, encode_hnsw_graph_payload, encode_hnsw_graph_payload_current,
+    HnswGraphQuantization, MappedGraphView, encode_hnsw_graph_payload,
+    encode_hnsw_graph_payload_current,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -66,6 +68,48 @@ fn mapped_view_fails_closed_on_truncated_node_bytes() -> TestResult {
     assert!(matches!(
         MappedGraphView::attach(&payload),
         Err(HnswGraphPayloadError::TruncatedRecord { .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn budgeted_attach_rejects_declared_node_storage_before_allocation() -> TestResult {
+    let mut payload = encode_hnsw_graph_payload(&records()?)?;
+    let declared = 1_000_000_u32;
+    payload[12..16].copy_from_slice(&declared.to_le_bytes());
+
+    assert!(matches!(
+        MappedGraphView::attach_with_memory_budget(&payload, 1024),
+        Err(HnswGraphPayloadError::MemoryBudgetExceeded { maximum: 1024, .. })
+    ));
+    Ok(())
+}
+
+#[test]
+fn budgeted_attach_projects_product_codebook_before_decoding_it() -> TestResult {
+    let records = vec![HnswGraphArtifactRecord::new(
+        0,
+        10,
+        vector(&[0.0, 0.0])?,
+        Vec::new(),
+    )];
+    let codebook = QuantizedCodebook::Product {
+        dimensions: 2,
+        subvector_dimensions: 2,
+        codebooks: vec![vec![vector(&[0.0, 0.0])?, vector(&[1.0, 1.0])?]],
+    };
+    let quantization = HnswGraphQuantization::new(
+        CodecRevision::new(1)
+            .ok_or_else(|| std::io::Error::other("test codec revision is invalid"))?,
+        ReconstructionPolicy::ExactSourceRerank,
+        codebook.clone(),
+        ContiguousCodes::from_rows(codebook.code_len(), &[vec![0]])?,
+    )?;
+    let payload = encode_hnsw_graph_payload_current(&records, Some(&quantization))?;
+
+    assert!(matches!(
+        MappedGraphView::attach_with_memory_budget(&payload, 32),
+        Err(HnswGraphPayloadError::MemoryBudgetExceeded { maximum: 32, .. })
     ));
     Ok(())
 }

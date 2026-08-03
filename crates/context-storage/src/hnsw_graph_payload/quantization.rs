@@ -6,6 +6,7 @@ use context_codec::{
     validate_quantized_code as validate_codec_code,
 };
 use context_core::DenseVector;
+use core::mem::size_of;
 
 use crate::{CodecArtifact, CodecArtifactError};
 
@@ -207,6 +208,92 @@ pub(crate) fn decode_quantization_codebook(
         )));
     }
     Ok(Some(codebook))
+}
+
+pub(crate) fn projected_quantization_codebook_resident_bytes(
+    mode: u32,
+    bytes: &[u8],
+) -> Result<usize, HnswGraphPayloadError> {
+    match mode {
+        QUANTIZATION_BINARY => {
+            decode_binary_codebook(bytes)?;
+            Ok(0)
+        }
+        QUANTIZATION_SCALAR => {
+            decode_scalar_codebook(bytes)?;
+            Ok(0)
+        }
+        QUANTIZATION_PRODUCT => project_product_codebook_resident_bytes(bytes),
+        _ => Err(HnswGraphPayloadError::InvalidQuantization(format!(
+            "unknown quantization mode {mode}"
+        ))),
+    }
+}
+
+fn project_product_codebook_resident_bytes(bytes: &[u8]) -> Result<usize, HnswGraphPayloadError> {
+    if bytes.len() < PRODUCT_CODEBOOK_HEADER_LEN {
+        return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+            "truncated product codebook header: {} < {PRODUCT_CODEBOOK_HEADER_LEN}",
+            bytes.len()
+        )));
+    }
+    let subvector_dimensions = read_u32(bytes, 4) as usize;
+    let codebook_count = read_u32(bytes, 8) as usize;
+    if codebook_count == 0 || codebook_count > MAX_PRODUCT_CODEBOOKS {
+        return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+            "product codebook count must be in 1..={MAX_PRODUCT_CODEBOOKS}, got {codebook_count}"
+        )));
+    }
+    let mut resident_bytes = codebook_count
+        .checked_mul(size_of::<Vec<DenseVector>>())
+        .ok_or_else(|| {
+            HnswGraphPayloadError::InvalidQuantization(
+                "product codebook resident byte count overflows usize".to_owned(),
+            )
+        })?;
+    let mut offset = PRODUCT_CODEBOOK_HEADER_LEN;
+    for index in 0..codebook_count {
+        require_codebook_bytes(bytes, offset, size_of_u32(), index)?;
+        let centroid_count = read_u32(bytes, offset) as usize;
+        if !(1..=256).contains(&centroid_count) {
+            return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+                "product codebook {index} must contain 1..=256 centroids, got {centroid_count}"
+            )));
+        }
+        offset += size_of_u32();
+        let value_bytes = subvector_dimensions
+            .checked_mul(size_of_f32())
+            .and_then(|value| value.checked_mul(centroid_count))
+            .ok_or_else(|| {
+                HnswGraphPayloadError::InvalidQuantization(format!(
+                    "product codebook {index} byte length overflows usize"
+                ))
+            })?;
+        require_codebook_bytes(bytes, offset, value_bytes, index)?;
+        let centroid_headers = centroid_count
+            .checked_mul(size_of::<DenseVector>())
+            .ok_or_else(|| {
+                HnswGraphPayloadError::InvalidQuantization(
+                    "product centroid resident byte count overflows usize".to_owned(),
+                )
+            })?;
+        resident_bytes = resident_bytes
+            .checked_add(centroid_headers)
+            .and_then(|total| total.checked_add(value_bytes))
+            .ok_or_else(|| {
+                HnswGraphPayloadError::InvalidQuantization(
+                    "product codebook resident byte count overflows usize".to_owned(),
+                )
+            })?;
+        offset += value_bytes;
+    }
+    if offset != bytes.len() {
+        return Err(HnswGraphPayloadError::InvalidQuantization(format!(
+            "product codebook has {} trailing bytes",
+            bytes.len() - offset
+        )));
+    }
+    Ok(resident_bytes)
 }
 
 fn decode_binary_codebook(bytes: &[u8]) -> Result<QuantizedCodebook, HnswGraphPayloadError> {

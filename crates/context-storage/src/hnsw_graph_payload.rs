@@ -19,7 +19,7 @@ pub use mapped_view::{MappedGraphNodeView, MappedGraphView, MappedNeighborIter};
 pub use quantization::HnswGraphQuantization;
 pub(crate) use quantization::{
     codec_artifact_error, decode_quantization_codebook, encode_quantization_codebook,
-    quantization_mode, validate_quantization,
+    projected_quantization_codebook_resident_bytes, quantization_mode, validate_quantization,
 };
 pub use quantized_view::{
     QuantizedHnswGraphNodeView, QuantizedHnswGraphView, QuantizedNeighborIter,
@@ -169,6 +169,13 @@ pub enum HnswGraphPayloadError {
         /// Maximum accepted record count.
         maximum: usize,
     },
+    /// The decoded mapped view would exceed its caller-provided memory cap.
+    MemoryBudgetExceeded {
+        /// Projected decoded resident bytes.
+        required: usize,
+        /// Maximum decoded resident bytes allowed by the caller.
+        maximum: usize,
+    },
     /// Payload ended before a complete record could be read.
     TruncatedRecord {
         /// Zero-based record index being decoded.
@@ -238,6 +245,10 @@ impl fmt::Display for HnswGraphPayloadError {
             Self::RecordCountLimit { declared, maximum } => write!(
                 formatter,
                 "HNSW graph payload record count {declared} exceeds limit {maximum}"
+            ),
+            Self::MemoryBudgetExceeded { required, maximum } => write!(
+                formatter,
+                "mapped HNSW decoded memory budget exceeded: {required} > {maximum}"
             ),
             Self::TruncatedRecord {
                 record_index,

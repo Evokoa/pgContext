@@ -1,5 +1,7 @@
 //! Pure semantic validation for SQL-facing query-plan constructors.
 
+use std::collections::BTreeSet;
+
 use crate::{QueryError, Result};
 
 /// Semantic validators shared by JSON-plan adapters.
@@ -70,7 +72,14 @@ impl QueryPlanValidator {
                 "lookup query requires at least one point id",
             ));
         }
-        validate_point_ids(point_ids)
+        validate_point_ids(point_ids)?;
+        if point_ids.iter().copied().collect::<BTreeSet<_>>().len() != point_ids.len() {
+            return Err(invalid(
+                "point_ids",
+                "lookup query must not contain duplicate point ids",
+            ));
+        }
+        Ok(())
     }
 
     /// Validates a nonempty prefetch branch list.

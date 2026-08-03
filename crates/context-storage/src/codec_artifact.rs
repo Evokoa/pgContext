@@ -9,7 +9,8 @@ use context_codec::{
 };
 
 use crate::hnsw_graph_payload::{
-    decode_quantization_codebook, encode_quantization_codebook, quantization_mode,
+    decode_quantization_codebook, encode_quantization_codebook,
+    projected_quantization_codebook_resident_bytes, quantization_mode,
 };
 use crate::{FNV_OFFSET_BASIS, checksum_bytes};
 
@@ -122,6 +123,34 @@ pub struct CodecArtifactView<'a> {
 }
 
 impl<'a> CodecArtifactView<'a> {
+    /// Projects dynamic codebook bytes without allocating the decoded codebook.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CodecArtifactError`] when the header, section bounds, or
+    /// declared codebook shape is invalid.
+    pub fn projected_resident_bytes(input: &[u8]) -> Result<usize, CodecArtifactError> {
+        if input.len() < HEADER_LEN {
+            return Err(invalid("header is truncated"));
+        }
+        if input[..8] != MAGIC {
+            return Err(invalid("magic is invalid"));
+        }
+        let version = read_u16(input, 8);
+        if version != CURRENT_CODEC_ARTIFACT_VERSION {
+            return Err(CodecArtifactError::RebuildRequired { version });
+        }
+        let mode = u32::from(input[16]);
+        let codebook_offset = u64_to_usize(read_u64(input, 56), "codebook offset")?;
+        let codebook_len = u64_to_usize(read_u64(input, 64), "codebook length")?;
+        if codebook_offset != HEADER_LEN {
+            return Err(invalid("codebook offset is invalid"));
+        }
+        let codebook_end = checked_end(codebook_offset, codebook_len, input.len(), "codebook")?;
+        projected_quantization_codebook_resident_bytes(mode, &input[codebook_offset..codebook_end])
+            .map_err(|error| invalid(error.to_string()))
+    }
+
     /// Validates and attaches to one complete artifact byte slice.
     ///
     /// # Errors

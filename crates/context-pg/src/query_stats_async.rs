@@ -862,7 +862,17 @@ mod supported {
                         });
                     }
                 }
-                StageKind::ScoreTransform | StageKind::Rerank => {}
+                StageKind::TopologyExpansion => {
+                    active.event.visits = active
+                        .event
+                        .visits
+                        .saturating_add(saturating_u64(diagnostic.input_count()));
+                    active.event.candidates = active
+                        .event
+                        .candidates
+                        .saturating_add(saturating_u64(diagnostic.output_count()));
+                }
+                StageKind::ScoreTransform | StageKind::ExternalRerank | StageKind::Rerank => {}
             }
         });
     }

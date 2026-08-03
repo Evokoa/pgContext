@@ -19,19 +19,25 @@ mod strategy;
 mod types;
 mod validation;
 
-pub use budget::{BudgetUsage, ExecutionBudget};
+pub use budget::{
+    BudgetUsage, DEFAULT_QUERY_COMPARISONS, DEFAULT_QUERY_ELAPSED_MICROS,
+    DEFAULT_QUERY_HYDRATION_BYTES, DEFAULT_QUERY_MEMORY_BYTES, ExecutionBudget,
+    MAX_QUERY_COMPARISONS, MAX_QUERY_ELAPSED_MICROS, MAX_QUERY_HYDRATION_BYTES,
+    MAX_QUERY_MEMORY_BYTES,
+};
 pub use context_core::{Completion, PointId, ReadinessReason, ScoreOrder};
 pub use error::{QueryError, Result};
 pub use executor::QueryExecutor;
 pub use formula::{CompiledFormula, Formula, MAX_FORMULA_BYTES, MAX_FORMULA_OPERATIONS};
-pub use ir::{QueryIr, QueryKind};
+pub use ir::{Fusion, MAX_QUERY_DEPTH, MAX_QUERY_NODES, QueryIr, QueryKind};
 pub use plan::parse_query_plan;
 pub use policy::{
     CandidateExpansionDecision, LateInteractionWork, MAX_LATE_INTERACTION_COMPARISONS,
-    candidate_expansion_decision,
+    MAX_LATE_INTERACTION_SCALAR_CELLS, candidate_expansion_decision,
 };
 pub use ports::{
-    Cancellation, CandidateSource, FilterCandidateSource, SourceRechecker, TelemetrySink,
+    Cancellation, CandidateSource, ExternalReranker, FilterCandidateSource, PortBudget, QueryClock,
+    SourceRechecker, TelemetrySink, TopologyExpander,
 };
 pub use strategy::{
     FilteredAnnReason, FilteredAnnStrategy, FilteredAnnStrategyInput, FilteredAnnStrategyKind,
@@ -39,16 +45,17 @@ pub use strategy::{
     MultiVectorAnnStrategyKind, select_filtered_ann_strategy, select_multi_vector_ann_strategy,
 };
 pub use types::{
-    Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage, CandidateProvenance,
-    CandidateSourceKind, ExecutionOutcome, ExecutionState, FilterCandidateBatch, HydratedCandidate,
-    SourceReadiness, StageDiagnostic, StageKind,
+    BranchContribution, Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage,
+    CandidateProvenance, CandidateSourceKind, ExecutionOutcome, ExecutionState, ExternalRerankPage,
+    FilterCandidateBatch, HydratedCandidate, RecheckPage, SourceReadiness, StageDiagnostic,
+    StageKind,
 };
 pub use validation::QueryPlanValidator;
 
 /// Returns the version of the pure query boundary.
 #[must_use]
 pub const fn query_contract_version() -> u16 {
-    1
+    2
 }
 
 #[cfg(test)]
@@ -59,6 +66,6 @@ mod tests {
     fn query_boundary_uses_logical_point_ids() {
         let point_id = PointId::new(7);
         assert_eq!(point_id.get(), 7);
-        assert_eq!(query_contract_version(), 1);
+        assert_eq!(query_contract_version(), 2);
     }
 }

@@ -129,6 +129,81 @@ if [[ "${owner_filtered_count}" != "0" ]]; then
     exit 1
 fi
 
+lookup_visible="$(psql_db -qAt <<SQL | tail -n 1
+SET SESSION AUTHORIZATION ${OWNER_ROLE};
+SET pgcontext_heavy.tenant = 'acme';
+SELECT coalesce(string_agg(source_key, ',' ORDER BY source_key), '')
+  FROM pgcontext.execute_query(
+      'rls_acl_docs',
+      pgcontext.query_lookup(ARRAY[1, 2, 3, 4]::bigint[])
+  );
+SQL
+)"
+if [[ "${lookup_visible}" != "1,2" ]]; then
+    echo "RLS lookup returned unexpected source keys: ${lookup_visible}" >&2
+    exit 1
+fi
+
+psql_db <<SQL
+CREATE FUNCTION public.pgcontext_heavy_slow_true()
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+AS 'BEGIN PERFORM pg_catalog.pg_sleep(0.2); RETURN true; END';
+
+ALTER POLICY tenant_isolation ON public.rls_acl_docs
+    USING (
+        public.pgcontext_heavy_slow_true()
+        AND tenant = current_setting('pgcontext_heavy.tenant', true)
+    )
+    WITH CHECK (tenant = current_setting('pgcontext_heavy.tenant', true));
+
+SET SESSION AUTHORIZATION ${OWNER_ROLE};
+SELECT * FROM pgcontext.configure_collection_limits(
+    'rls_acl_docs', false,
+    NULL, NULL, NULL, NULL, NULL, NULL,
+    10,
+    NULL
+);
+RESET SESSION AUTHORIZATION;
+SQL
+
+timeout_log="${HEAVY_TMPDIR}/${DBNAME}_query_timeout.log"
+rm -f "${timeout_log}"
+if psql_db 2>"${timeout_log}" <<SQL
+SET SESSION AUTHORIZATION ${OWNER_ROLE};
+SET pgcontext_heavy.tenant = 'acme';
+SELECT count(*)
+  FROM pgcontext.execute_query(
+      'rls_acl_docs',
+      pgcontext.query_lookup(ARRAY[1, 2, 3, 4]::bigint[])
+  );
+SQL
+then
+    echo "slow SPI lookup unexpectedly exceeded its current-statement deadline" >&2
+    exit 1
+fi
+if ! grep -qi "canceling statement due to statement timeout" "${timeout_log}"; then
+    echo "slow SPI lookup failed for an unexpected reason" >&2
+    cat "${timeout_log}" >&2
+    exit 1
+fi
+
+psql_db <<SQL
+ALTER POLICY tenant_isolation ON public.rls_acl_docs
+    USING (tenant = current_setting('pgcontext_heavy.tenant', true))
+    WITH CHECK (tenant = current_setting('pgcontext_heavy.tenant', true));
+
+SET SESSION AUTHORIZATION ${OWNER_ROLE};
+SELECT * FROM pgcontext.configure_collection_limits(
+    'rls_acl_docs', false,
+    NULL, NULL, NULL, NULL, NULL, NULL,
+    NULL,
+    NULL
+);
+RESET SESSION AUTHORIZATION;
+SQL
+
 denied_log="${HEAVY_TMPDIR}/${DBNAME}_denied_role.log"
 rm -f "${denied_log}"
 if psql_db 2>"${denied_log}" <<SQL

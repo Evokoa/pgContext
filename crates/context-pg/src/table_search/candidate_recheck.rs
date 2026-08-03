@@ -1,9 +1,15 @@
 //! Batched candidate recheck for collection-backed search.
 
-use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
+use std::{
+    cell::{Cell, RefCell},
+    cmp::Reverse,
+    collections::BinaryHeap,
+    mem::size_of,
+};
 
 use context_codec::{CodecError, PreparedQuantizedQuery, QuantizedCodebook};
 use context_core::{DistanceMetric, SearchLimit};
+use context_index::HnswComparisonBudget;
 use context_storage::{HnswGraphPayloadError, MappedGraphView};
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
@@ -25,7 +31,7 @@ thread_local! {
     /// traversal. SQL callers cannot set this flag, so the internal helper is
     /// usable only while the invoker-safe outer function performs its fixed
     /// SPI call.
-    static MMAP_CANDIDATE_HELPER_ALLOWED: Cell<bool> = const { Cell::new(false) };
+    static MMAP_CANDIDATE_HELPER_BUDGET: RefCell<Option<MmapCandidateHelperBudget>> = const { RefCell::new(None) };
     static MMAP_LAST_CANDIDATE_VISITS: Cell<usize> = const { Cell::new(0) };
     static MMAP_LAST_DELTA_VISITS: Cell<usize> = const { Cell::new(0) };
 }
@@ -40,10 +46,18 @@ pub(crate) fn take_last_mmap_delta_visits() -> usize {
 
 struct MmapCandidateHelperGuard;
 
+#[derive(Clone, Debug)]
+struct MmapCandidateHelperBudget {
+    comparisons: HnswComparisonBudget,
+    max_working_memory_bytes: usize,
+    post_traversal_peak_memory_bytes: usize,
+    retained_query_vector_bytes: usize,
+}
+
 impl MmapCandidateHelperGuard {
-    fn enter() -> Self {
-        MMAP_CANDIDATE_HELPER_ALLOWED.with(|allowed| {
-            if allowed.replace(true) {
+    fn enter(budget: MmapCandidateHelperBudget) -> Self {
+        MMAP_CANDIDATE_HELPER_BUDGET.with(|active| {
+            if active.replace(Some(budget)).is_some() {
                 raise_sql_error(
                     PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
                     "mapped HNSW candidate helper authorization is already active",
@@ -56,18 +70,19 @@ impl MmapCandidateHelperGuard {
 
 impl Drop for MmapCandidateHelperGuard {
     fn drop(&mut self) {
-        MMAP_CANDIDATE_HELPER_ALLOWED.with(|allowed| allowed.set(false));
+        MMAP_CANDIDATE_HELPER_BUDGET.with(|budget| *budget.borrow_mut() = None);
     }
 }
 
-fn consume_mmap_candidate_helper_capability() {
-    let allowed = MMAP_CANDIDATE_HELPER_ALLOWED.with(|allowed| allowed.replace(false));
-    if !allowed {
+fn consume_mmap_candidate_helper_capability() -> MmapCandidateHelperBudget {
+    let budget = MMAP_CANDIDATE_HELPER_BUDGET.with(|budget| budget.borrow_mut().take());
+    let Some(budget) = budget else {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
             "pgcontext internal mapped HNSW candidate helper cannot be called directly",
         );
-    }
+    };
+    budget
 }
 
 #[pg_extern(name = "search")]
@@ -437,7 +452,7 @@ fn mmap_hnsw_artifact_candidates_internal(
     // call below can cross the private-catalog/file boundary. Require a
     // backend-local, single-use capability so callers cannot invoke it
     // directly to bypass source-table ACL/RLS hydration in the outer function.
-    consume_mmap_candidate_helper_capability();
+    let budget = consume_mmap_candidate_helper_capability();
     let collection_name = match context_core::CollectionName::new(collection) {
         Ok(collection_name) => collection_name,
         Err(error) => raise_core_error(error),
@@ -464,8 +479,40 @@ fn mmap_hnsw_artifact_candidates_internal(
             &artifact_name,
             max_mapped_bytes,
             |payload| {
-                let graph = MappedGraphView::attach(payload)
-                    .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
+                let attachment_memory_bytes = budget
+                    .max_working_memory_bytes
+                    .checked_sub(budget.retained_query_vector_bytes)
+                    .unwrap_or_else(|| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+                            format!(
+                                "mapped HNSW retained query-vector memory budget exceeded: {} > {}",
+                                budget.retained_query_vector_bytes, budget.max_working_memory_bytes
+                            ),
+                        )
+                    });
+                let graph =
+                    MappedGraphView::attach_with_memory_budget(payload, attachment_memory_bytes)
+                        .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
+                let config = crate::settings::hnsw_config_from_gucs();
+                let search_width = config.ef_search().max(candidate_limit.get());
+                let (prepared_query_bytes, codebook_resident_bytes) = graph
+                    .codebook()
+                    .map(|codebook| (codebook.prepared_query_bytes(), codebook.resident_bytes()))
+                    .unwrap_or_else(|| {
+                        let scratch_bytes = graph.dimensions().saturating_mul(size_of::<f32>());
+                        (scratch_bytes, 0)
+                    });
+                require_mmap_candidate_peak_memory(
+                    graph.len(),
+                    search_width,
+                    candidate_limit.get(),
+                    prepared_query_bytes,
+                    codebook_resident_bytes,
+                    budget.retained_query_vector_bytes,
+                    budget.post_traversal_peak_memory_bytes,
+                    budget.max_working_memory_bytes,
+                );
                 let generation_high_water = (0..graph.len())
                     .filter_map(|node_id| graph.node(node_id))
                     .map(|node| node.point_id())
@@ -489,9 +536,16 @@ fn mmap_hnsw_artifact_candidates_internal(
                             &query,
                             metric,
                             candidate_limit.get(),
+                            &budget.comparisons,
                         )
                     }
-                    None => mmap_hnsw_candidates(&graph, &query, metric, candidate_limit.get()),
+                    None => mmap_hnsw_candidates(
+                        &graph,
+                        &query,
+                        metric,
+                        candidate_limit.get(),
+                        &budget.comparisons,
+                    ),
                 };
                 (generation_high_water, candidates, visits)
             },
@@ -518,6 +572,37 @@ pub(crate) fn load_mmap_artifact_candidates(
     candidate_limit: SearchLimit,
     limit: SearchLimit,
 ) -> (u64, Vec<(i64, f32)>) {
+    let comparisons = HnswComparisonBudget::new(usize::MAX);
+    load_mmap_artifact_candidates_with_runtime_budget(
+        collection,
+        artifact_name,
+        vector,
+        max_mapped_bytes,
+        candidate_limit,
+        limit,
+        usize::MAX,
+        0,
+        0,
+        &comparisons,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the mapped traversal boundary carries independent mapping, output, and scratch budgets"
+)]
+pub(crate) fn load_mmap_artifact_candidates_with_runtime_budget(
+    collection: &str,
+    artifact_name: &str,
+    vector: &Vector,
+    max_mapped_bytes: i64,
+    candidate_limit: SearchLimit,
+    limit: SearchLimit,
+    max_working_memory_bytes: usize,
+    post_traversal_peak_memory_bytes: usize,
+    retained_query_vector_bytes: usize,
+    comparison_budget: &HnswComparisonBudget,
+) -> (u64, Vec<(i64, f32)>) {
     let candidate_limit = i32::try_from(candidate_limit.get()).unwrap_or_else(|_| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
@@ -530,7 +615,12 @@ pub(crate) fn load_mmap_artifact_candidates(
             "mmap HNSW result limit exceeds PostgreSQL integer range",
         )
     });
-    let _guard = MmapCandidateHelperGuard::enter();
+    let _guard = MmapCandidateHelperGuard::enter(MmapCandidateHelperBudget {
+        comparisons: comparison_budget.clone(),
+        max_working_memory_bytes,
+        post_traversal_peak_memory_bytes,
+        retained_query_vector_bytes,
+    });
     Spi::connect(|client| {
         let rows = client.select(
             "SELECT point_id, score, generation_high_water
@@ -589,6 +679,7 @@ fn mmap_hnsw_candidates(
     query: &context_core::DenseVector,
     metric: DistanceMetric,
     candidate_limit: usize,
+    comparison_budget: &HnswComparisonBudget,
 ) -> (Vec<(i64, f32)>, usize) {
     if query.dimension() != graph.dimensions() {
         raise_sql_error(
@@ -606,21 +697,114 @@ fn mmap_hnsw_candidates(
             .is_some_and(|node| node.neighbors().next().is_some())
     });
     let config = crate::settings::hnsw_config_from_gucs();
-    let search_width = config.ef_search().max(candidate_limit);
+    let search_width = config.ef_search().max(candidate_limit).min(graph.len());
     let mut scratch = Vec::with_capacity(graph.dimensions());
     let (candidates, visits) = if has_edges {
-        traverse_mapped_base_layer(graph, query, metric, search_width, &mut scratch)
-    } else {
-        (
-            (0..graph.len())
-                .map(|node_id| score_mapped_node(graph, query, metric, node_id, &mut scratch))
-                .collect(),
-            graph.len(),
+        traverse_mapped_base_layer(
+            graph,
+            query,
+            metric,
+            search_width,
+            &mut scratch,
+            comparison_budget,
         )
+    } else {
+        let mut candidates = Vec::with_capacity(graph.len());
+        for node_id in 0..graph.len() {
+            candidates.push(score_mapped_node(
+                graph,
+                query,
+                metric,
+                node_id,
+                &mut scratch,
+                comparison_budget,
+            ));
+        }
+        (candidates, graph.len())
     };
     (
         mapped_candidates_to_point_scores(graph, candidates, candidate_limit),
         visits,
+    )
+}
+
+fn project_mmap_candidate_peak_bytes(
+    node_count: usize,
+    search_width: usize,
+    candidate_limit: usize,
+    scoring_scratch_bytes: usize,
+    codebook_resident_bytes: usize,
+    retained_query_vector_bytes: usize,
+    post_traversal_peak_memory_bytes: usize,
+) -> Option<usize> {
+    // `MappedGraphView` retains one `u64` and three `usize` values per node.
+    // Add another `u64` as a conservative allowance for target-dependent
+    // struct padding rather than coupling this adapter to the private storage
+    // layout.
+    let node_location_bytes = size_of::<u64>()
+        .checked_mul(2)?
+        .checked_add(size_of::<usize>().checked_mul(3)?)?;
+    let retained_graph_bytes = node_count
+        .checked_mul(node_location_bytes)?
+        .checked_add(codebook_resident_bytes)?;
+    let visited_bytes = node_count.checked_mul(size_of::<bool>())?;
+    let pending_heap_bytes = node_count.checked_mul(size_of::<EncodedCandidate>())?;
+    let nearest_heap_bytes = node_count
+        .min(search_width)
+        .checked_mul(size_of::<EncodedCandidate>())?;
+    let result_tuple_bytes = node_count
+        .min(candidate_limit)
+        .checked_mul(size_of::<(i64, f32)>())?;
+    let traversal_peak = retained_graph_bytes
+        .checked_add(scoring_scratch_bytes)?
+        .checked_add(visited_bytes)?
+        .checked_add(pending_heap_bytes)?
+        .checked_add(nearest_heap_bytes)?
+        .checked_add(result_tuple_bytes)?
+        .checked_add(retained_query_vector_bytes)?;
+    Some(traversal_peak.max(post_traversal_peak_memory_bytes))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn require_mmap_candidate_peak_memory(
+    node_count: usize,
+    search_width: usize,
+    candidate_limit: usize,
+    scoring_scratch_bytes: usize,
+    codebook_resident_bytes: usize,
+    retained_query_vector_bytes: usize,
+    post_traversal_peak_memory_bytes: usize,
+    max_working_memory_bytes: usize,
+) {
+    let required = project_mmap_candidate_peak_bytes(
+        node_count,
+        search_width,
+        candidate_limit,
+        scoring_scratch_bytes,
+        codebook_resident_bytes,
+        retained_query_vector_bytes,
+        post_traversal_peak_memory_bytes,
+    )
+    .unwrap_or_else(|| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            "mapped HNSW peak-memory projection overflowed",
+        )
+    });
+    if required > max_working_memory_bytes {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            format!(
+                "mapped HNSW peak-memory budget exceeded: {required} > {max_working_memory_bytes}"
+            ),
+        );
+    }
+}
+
+fn raise_mmap_comparison_budget_error(error: context_index::HnswError) -> ! {
+    raise_sql_error(
+        PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+        format!("mapped HNSW traversal comparison budget exhausted: {error}"),
     )
 }
 
@@ -630,10 +814,13 @@ fn traverse_mapped_base_layer(
     metric: DistanceMetric,
     search_width: usize,
     scratch: &mut Vec<f32>,
+    comparison_budget: &HnswComparisonBudget,
 ) -> (Vec<EncodedCandidate>, usize) {
-    let entry = score_mapped_node(graph, query, metric, 0, scratch);
-    let mut pending = BinaryHeap::from([Reverse(entry)]);
-    let mut nearest = BinaryHeap::from([entry]);
+    let entry = score_mapped_node(graph, query, metric, 0, scratch, comparison_budget);
+    let mut pending = BinaryHeap::with_capacity(graph.len());
+    pending.push(Reverse(entry));
+    let mut nearest = BinaryHeap::with_capacity(search_width.min(graph.len()));
+    nearest.push(entry);
     let mut visited = vec![false; graph.len()];
     visited[0] = true;
 
@@ -660,7 +847,8 @@ fn traverse_mapped_base_layer(
                 continue;
             }
             *was_visited = true;
-            let scored = score_mapped_node(graph, query, metric, neighbor, scratch);
+            let scored =
+                score_mapped_node(graph, query, metric, neighbor, scratch, comparison_budget);
             let should_add = nearest.len() < search_width
                 || nearest
                     .peek()
@@ -684,7 +872,11 @@ fn score_mapped_node(
     metric: DistanceMetric,
     node_id: usize,
     scratch: &mut Vec<f32>,
+    comparison_budget: &HnswComparisonBudget,
 ) -> EncodedCandidate {
+    comparison_budget
+        .reserve_comparison()
+        .unwrap_or_else(|error| raise_mmap_comparison_budget_error(error));
     let node = graph.node(node_id).unwrap_or_else(|| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
@@ -700,36 +892,40 @@ fn score_mapped_node(
 
 fn mapped_candidates_to_point_scores(
     graph: &MappedGraphView<'_>,
-    candidates: Vec<EncodedCandidate>,
+    mut candidates: Vec<EncodedCandidate>,
     candidate_limit: usize,
 ) -> Vec<(i64, f32)> {
-    let mut candidates = candidates
-        .into_iter()
-        .map(|candidate| {
-            let node = graph.node(candidate.node_id).unwrap_or_else(|| {
-                raise_sql_error(
-                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
-                    "mapped HNSW candidate node is missing",
-                )
-            });
-            let point_id = i64::try_from(node.point_id()).unwrap_or_else(|_| {
-                raise_sql_error(
-                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
-                    "HNSW graph artifact point id exceeds PostgreSQL bigint range",
-                )
-            });
-            (point_id, candidate.score)
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(
-        |(left_point_id, left_score), (right_point_id, right_score)| {
-            left_score
-                .total_cmp(right_score)
-                .then_with(|| left_point_id.cmp(right_point_id))
-        },
-    );
+    candidates.sort_unstable_by(|left, right| {
+        let left_point_id = graph
+            .node(left.node_id)
+            .map(|node| node.point_id())
+            .unwrap_or(u64::MAX);
+        let right_point_id = graph
+            .node(right.node_id)
+            .map(|node| node.point_id())
+            .unwrap_or(u64::MAX);
+        left.score
+            .total_cmp(&right.score)
+            .then_with(|| left_point_id.cmp(&right_point_id))
+    });
     candidates.truncate(candidate_limit);
-    candidates
+    let mut point_scores = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        let node = graph.node(candidate.node_id).unwrap_or_else(|| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "mapped HNSW candidate node is missing",
+            )
+        });
+        let point_id = i64::try_from(node.point_id()).unwrap_or_else(|_| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "HNSW graph artifact point id exceeds PostgreSQL bigint range",
+            )
+        });
+        point_scores.push((point_id, candidate.score));
+    }
+    point_scores
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -760,6 +956,7 @@ fn mmap_quantized_hnsw_candidates(
     query: &context_core::DenseVector,
     metric: DistanceMetric,
     candidate_limit: usize,
+    comparison_budget: &HnswComparisonBudget,
 ) -> (Vec<(i64, f32)>, usize) {
     if query.dimension() != graph.dimensions() {
         raise_sql_error(
@@ -772,7 +969,7 @@ fn mmap_quantized_hnsw_candidates(
         );
     }
     let config = crate::settings::hnsw_config_from_gucs();
-    let search_width = config.ef_search().max(candidate_limit);
+    let search_width = config.ef_search().max(candidate_limit).min(graph.len());
     let prepared = codebook
         .prepare_query(query, metric)
         .unwrap_or_else(|error| raise_quantized_codec_error(error));
@@ -782,52 +979,36 @@ fn mmap_quantized_hnsw_candidates(
             .is_some_and(|node| node.neighbors().next().is_some())
     });
     let (candidates, visits) = if has_edges {
-        traverse_quantized_base_layer(graph, &prepared, search_width)
+        traverse_quantized_base_layer(graph, &prepared, search_width, comparison_budget)
     } else {
-        (
-            (0..graph.len())
-                .map(|node_id| score_quantized_node(graph, &prepared, node_id))
-                .collect(),
-            graph.len(),
-        )
+        let mut candidates = Vec::with_capacity(graph.len());
+        for node_id in 0..graph.len() {
+            candidates.push(score_quantized_node(
+                graph,
+                &prepared,
+                node_id,
+                comparison_budget,
+            ));
+        }
+        (candidates, graph.len())
     };
-    let mut candidates = candidates
-        .into_iter()
-        .map(|candidate| {
-            let node = graph.node(candidate.node_id).unwrap_or_else(|| {
-                raise_sql_error(
-                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
-                    "quantized HNSW candidate node is missing",
-                )
-            });
-            let point_id = i64::try_from(node.point_id()).unwrap_or_else(|_| {
-                raise_sql_error(
-                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
-                    "HNSW graph artifact point id exceeds PostgreSQL bigint range",
-                )
-            });
-            (point_id, candidate.score)
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by(
-        |(left_point_id, left_score), (right_point_id, right_score)| {
-            left_score
-                .total_cmp(right_score)
-                .then_with(|| left_point_id.cmp(right_point_id))
-        },
-    );
-    candidates.truncate(candidate_limit);
-    (candidates, visits)
+    (
+        mapped_candidates_to_point_scores(graph, candidates, candidate_limit),
+        visits,
+    )
 }
 
 fn traverse_quantized_base_layer(
     graph: &MappedGraphView<'_>,
     prepared: &PreparedQuantizedQuery,
     search_width: usize,
+    comparison_budget: &HnswComparisonBudget,
 ) -> (Vec<EncodedCandidate>, usize) {
-    let entry = score_quantized_node(graph, prepared, 0);
-    let mut pending = BinaryHeap::from([Reverse(entry)]);
-    let mut nearest = BinaryHeap::from([entry]);
+    let entry = score_quantized_node(graph, prepared, 0, comparison_budget);
+    let mut pending = BinaryHeap::with_capacity(graph.len());
+    pending.push(Reverse(entry));
+    let mut nearest = BinaryHeap::with_capacity(search_width.min(graph.len()));
+    nearest.push(entry);
     let mut visited = vec![false; graph.len()];
     visited[0] = true;
 
@@ -854,7 +1035,7 @@ fn traverse_quantized_base_layer(
                 continue;
             }
             *was_visited = true;
-            let scored = score_quantized_node(graph, prepared, neighbor);
+            let scored = score_quantized_node(graph, prepared, neighbor, comparison_budget);
             let should_add = nearest.len() < search_width
                 || nearest
                     .peek()
@@ -876,7 +1057,11 @@ fn score_quantized_node(
     graph: &MappedGraphView<'_>,
     prepared: &PreparedQuantizedQuery,
     node_id: usize,
+    comparison_budget: &HnswComparisonBudget,
 ) -> EncodedCandidate {
+    comparison_budget
+        .reserve_comparison()
+        .unwrap_or_else(|error| raise_mmap_comparison_budget_error(error));
     let node = graph.node(node_id).unwrap_or_else(|| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
@@ -902,6 +1087,24 @@ pub(crate) fn mmap_delta_candidates(
     generation_high_water: u64,
     candidate_limit: usize,
 ) -> Vec<(i64, f32)> {
+    mmap_delta_candidates_with_comparison_budget(
+        collection_id,
+        registered_vector,
+        query,
+        generation_high_water,
+        candidate_limit,
+        &HnswComparisonBudget::new(usize::MAX),
+    )
+}
+
+pub(crate) fn mmap_delta_candidates_with_comparison_budget(
+    collection_id: i64,
+    registered_vector: &super::SearchVector,
+    query: &Vector,
+    generation_high_water: u64,
+    candidate_limit: usize,
+    comparison_budget: &HnswComparisonBudget,
+) -> Vec<(i64, f32)> {
     let high_water = i64::try_from(generation_high_water).unwrap_or(i64::MAX);
     let table_name = quote_qualified_identifier(
         &registered_vector.schema_name,
@@ -909,29 +1112,49 @@ pub(crate) fn mmap_delta_candidates(
     );
     let vector_column = quote_identifier(&registered_vector.vector_column_name);
     let distance_function = distance_function(registered_vector.metric);
+    let remaining = comparison_budget.remaining();
+    let sql_remaining = i64::try_from(remaining).unwrap_or(i64::MAX);
+    let sql_probe_limit = sql_remaining.saturating_add(1);
     let sql = format!(
-        "SELECT points.point_id,
-                pgcontext.{distance_function}(source.{vector_column}, $1) AS score,
-                count(*) OVER ()::bigint AS scored_count
-           FROM pgcontext._visible_collection_points AS points
-           JOIN {table_name} AS source ON source.id::text = points.source_key
-          WHERE points.collection_id = $2
-            AND points.deleted_at IS NULL
-            AND points.point_id > $3
-          ORDER BY score, points.point_id
-          LIMIT $4"
+        "WITH visible_delta AS MATERIALIZED (
+             SELECT points.point_id, source.{vector_column} AS vector_value
+               FROM pgcontext._visible_collection_points AS points
+               JOIN {table_name} AS source ON source.id::text = points.source_key
+              WHERE points.collection_id = $2
+                AND points.deleted_at IS NULL
+                AND points.point_id > $3
+              LIMIT $5
+         ),
+         admission AS MATERIALIZED (
+             SELECT count(*)::bigint AS scored_count FROM visible_delta
+         ),
+         scored AS MATERIALIZED (
+             SELECT visible_delta.point_id,
+                    pgcontext.{distance_function}(visible_delta.vector_value, $1) AS score
+               FROM visible_delta
+               CROSS JOIN admission
+              WHERE admission.scored_count <= $6
+              ORDER BY score, visible_delta.point_id
+              LIMIT $4
+         )
+         SELECT scored.point_id, scored.score, admission.scored_count
+           FROM admission
+           LEFT JOIN scored ON true
+          ORDER BY scored.score NULLS LAST, scored.point_id"
     );
     let limit = i64::try_from(candidate_limit).unwrap_or(i64::MAX);
-    Spi::connect(|client| {
+    let (candidates, scored_count) = Spi::connect(|client| {
         let rows = client
             .select(
                 &sql,
-                Some(limit),
+                Some(limit.max(1)),
                 &[
                     query.clone().into(),
                     collection_id.into(),
                     high_water.into(),
                     limit.into(),
+                    sql_probe_limit.into(),
+                    sql_remaining.into(),
                 ],
             )
             .unwrap_or_else(|error| {
@@ -940,39 +1163,52 @@ pub(crate) fn mmap_delta_candidates(
                     format!("failed to search mmap mutable delta: {error}"),
                 )
             });
-        let mut scored_count = 0;
-        let candidates = rows
-            .into_iter()
-            .map(|row| {
-                scored_count = row
-                    .get::<i64>(3)
-                    .ok()
-                    .flatten()
-                    .and_then(|count| usize::try_from(count).ok())
-                    .unwrap_or_default();
-                (
-                    row.get::<i64>(1).ok().flatten().unwrap_or_else(|| {
-                        raise_sql_error(
-                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                            "mmap mutable delta returned a null point id",
-                        )
-                    }),
-                    row.get::<f32>(2).ok().flatten().unwrap_or_else(|| {
-                        raise_sql_error(
-                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                            "mmap mutable delta returned a null score",
-                        )
-                    }),
+        let mut candidates = Vec::with_capacity(candidate_limit);
+        let mut scored_count = 0_usize;
+        for row in rows {
+            scored_count = row
+                .get::<i64>(3)
+                .ok()
+                .flatten()
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or_else(|| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE,
+                        "mmap mutable delta score count exceeds usize",
+                    )
+                });
+            let Some(point_id) = row.get::<i64>(1).ok().flatten() else {
+                continue;
+            };
+            let score = row.get::<f32>(2).ok().flatten().unwrap_or_else(|| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    "mmap mutable delta returned a null score",
                 )
-            })
-            .collect();
-        MMAP_LAST_DELTA_VISITS.with(|visits| visits.set(scored_count));
-        candidates
-    })
+            });
+            candidates.push((point_id, score));
+        }
+        (candidates, scored_count)
+    });
+    // Mapped traversal has joined before this statement starts, so no other
+    // clone can consume the shared counter between admission and reservation.
+    // The statement-local gate prevents scoring when the complete batch does
+    // not fit, including under volatile row-security policies.
+    comparison_budget
+        .reserve_comparisons(scored_count)
+        .unwrap_or_else(|error| raise_mmap_comparison_budget_error(error));
+    MMAP_LAST_DELTA_VISITS.with(|visits| visits.set(scored_count));
+    candidates
 }
 
 fn raise_hnsw_graph_payload_error(error: HnswGraphPayloadError) -> ! {
-    raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error.to_string())
+    let sqlstate = match &error {
+        HnswGraphPayloadError::MemoryBudgetExceeded { .. } => {
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED
+        }
+        _ => PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+    };
+    raise_sql_error(sqlstate, error.to_string())
 }
 
 fn raise_quantized_codec_error(error: CodecError) -> ! {
@@ -984,5 +1220,31 @@ fn raise_quantized_codec_error(error: CodecError) -> ! {
         CodecError::InvalidCode(_) => {
             raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod mmap_memory_tests {
+    use super::*;
+
+    #[test]
+    fn edgeless_projection_accounts_for_full_candidate_materialization() {
+        let node_count = 1_024;
+        let candidate_limit = 8;
+        let prepared_query_bytes = 256;
+        let projected = project_mmap_candidate_peak_bytes(
+            node_count,
+            candidate_limit,
+            candidate_limit,
+            prepared_query_bytes,
+            0,
+            0,
+            0,
+        )
+        .expect("bounded projection should not overflow");
+        let visited_only = node_count * size_of::<bool>();
+
+        assert!(projected > visited_only);
+        assert!(projected >= node_count * size_of::<EncodedCandidate>());
     }
 }

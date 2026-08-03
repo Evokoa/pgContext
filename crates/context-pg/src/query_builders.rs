@@ -183,21 +183,53 @@ pub fn query_lookup(point_ids: Vec<i64>) -> JsonB {
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_prefetch(branches: Vec<JsonB>) -> JsonB {
     validate_or_raise(QueryPlanValidator::prefetch_branches(branches.len()));
-    JsonB(json!({
+    let plan = json!({
         "kind": "prefetch",
         "branches": json_values(branches),
-    }))
+        "fusion": "rrf",
+        "rank_constant": 60,
+    });
+    parse_query_plan(&plan).unwrap_or_else(|error| raise_query_error(error));
+    JsonB(plan)
+}
+
+/// Builds a prefetch node with explicit rank-only fusion policy.
+#[pg_extern(name = "query_prefetch")]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn query_prefetch_configured(
+    branches: Vec<JsonB>,
+    fusion: String,
+    rank_constant: i32,
+) -> JsonB {
+    validate_or_raise(QueryPlanValidator::prefetch_branches(branches.len()));
+    if !matches!(fusion.as_str(), "rrf" | "weighted_rrf") {
+        raise_query_error(context_query::QueryError::InvalidInput {
+            field: "fusion",
+            reason: "must be rrf or weighted_rrf".to_owned(),
+        });
+    }
+    let rank_constant = query_limit(rank_constant);
+    let plan = json!({
+        "kind": "prefetch",
+        "branches": json_values(branches),
+        "fusion": fusion,
+        "rank_constant": rank_constant,
+    });
+    parse_query_plan(&plan).unwrap_or_else(|error| raise_query_error(error));
+    JsonB(plan)
 }
 
 #[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_weight(branch: JsonB, weight: f64) -> JsonB {
     validate_or_raise(QueryPlanValidator::weight(weight));
-    JsonB(json!({
+    let plan = json!({
         "kind": "weight",
         "weight": weight,
         "branch": branch.0,
-    }))
+    });
+    parse_query_plan(&plan).unwrap_or_else(|error| raise_query_error(error));
+    JsonB(plan)
 }
 
 #[pg_extern]
@@ -208,12 +240,14 @@ pub fn query_score_threshold(
     max_score: Option<f64>,
 ) -> JsonB {
     validate_or_raise(QueryPlanValidator::score_threshold(min_score, max_score));
-    JsonB(json!({
+    let plan = json!({
         "kind": "score_threshold",
         "min_score": min_score,
         "max_score": max_score,
         "branch": branch.0,
-    }))
+    });
+    parse_query_plan(&plan).unwrap_or_else(|error| raise_query_error(error));
+    JsonB(plan)
 }
 
 #[pg_extern]
@@ -223,21 +257,62 @@ pub fn query_formula(branch: JsonB, formula: String) -> JsonB {
         Ok(formula) => formula,
         Err(error) => raise_query_error(error),
     };
-    JsonB(json!({
+    formula
+        .compile()
+        .unwrap_or_else(|error| raise_query_error(error));
+    let plan = json!({
         "kind": "formula",
         "formula": formula.into_string(),
         "branch": branch.0,
-    }))
+    });
+    parse_query_plan(&plan).unwrap_or_else(|error| raise_query_error(error));
+    JsonB(plan)
 }
 
 #[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_rerank(branch: JsonB, limit: i32) -> JsonB {
-    JsonB(json!({
+    let plan = json!({
         "kind": "rerank",
         "limit": query_limit(limit),
         "branch": branch.0,
-    }))
+    });
+    parse_query_plan(&plan).unwrap_or_else(|error| raise_query_error(error));
+    JsonB(plan)
+}
+
+/// Builds a model-revision-bound external rerank node.
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn query_external_rerank(branch: JsonB, model_revision: i64, limit: i32) -> JsonB {
+    if model_revision <= 0 {
+        raise_query_error(context_query::QueryError::InvalidInput {
+            field: "model_revision",
+            reason: "must be positive".to_owned(),
+        });
+    }
+    let plan = json!({
+        "kind": "external_rerank",
+        "model_revision": model_revision,
+        "limit": query_limit(limit),
+        "branch": branch.0,
+    });
+    parse_query_plan(&plan).unwrap_or_else(|error| raise_query_error(error));
+    JsonB(plan)
+}
+
+/// Builds a bounded topology-expansion node.
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn query_topology_expand(branch: JsonB, max_depth: i32, limit: i32) -> JsonB {
+    let plan = json!({
+        "kind": "topology_expand",
+        "max_depth": query_limit(max_depth),
+        "limit": query_limit(limit),
+        "branch": branch.0,
+    });
+    parse_query_plan(&plan).unwrap_or_else(|error| raise_query_error(error));
+    JsonB(plan)
 }
 
 /// Executes a validated query-constructor plan against a registered collection.

@@ -15,7 +15,8 @@ use crate::domain_types::distance_metric_from_catalog;
 use crate::error::{raise_core_error, raise_sql_error};
 use crate::vector::Vector;
 pub(crate) use candidate_recheck::{
-    load_mmap_artifact_candidates, mmap_delta_candidates, take_last_mmap_candidate_visits,
+    load_mmap_artifact_candidates_with_runtime_budget,
+    mmap_delta_candidates_with_comparison_budget, take_last_mmap_candidate_visits,
     take_last_mmap_delta_visits,
 };
 pub(crate) use named::resolve_registered_vector_by_name;

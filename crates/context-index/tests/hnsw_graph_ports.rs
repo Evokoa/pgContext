@@ -5,10 +5,11 @@
 use context_core::{DenseVector, DistanceMetric, SearchLimit};
 use context_index::{
     CandidateMask, GraphError, GraphMetadata, GraphNeighbors, GraphNodeRecord, GraphNodeScore,
-    GraphNodeView, GraphRead, GraphRecordId, GraphResult, GraphWrite, HnswConfig, HnswError,
-    HnswNodeId, HnswPointId, InMemoryGraphStore, LayerIndex, MAX_GRAPH_LAYERS,
-    MAX_GRAPH_NEIGHBORS_PER_LAYER, NeverCancel, NewGraphNode, search_graph_read,
-    search_graph_read_with_mask, search_graph_read_with_mask_budgeted,
+    GraphNodeView, GraphRead, GraphRecordId, GraphResult, GraphWrite, HnswComparisonBudget,
+    HnswConfig, HnswError, HnswNodeId, HnswPointId, InMemoryGraphStore, LayerIndex,
+    MAX_GRAPH_LAYERS, MAX_GRAPH_NEIGHBORS_PER_LAYER, NeverCancel, NewGraphNode, search_graph_read,
+    search_graph_read_with_comparison_budget, search_graph_read_with_mask,
+    search_graph_read_with_mask_and_comparison_budget, search_graph_read_with_mask_budgeted,
 };
 
 fn vector(values: &[f32]) -> DenseVector {
@@ -108,6 +109,114 @@ fn graph_read_traversal_returns_owned_point_identities() {
             .collect::<Vec<_>>(),
         vec![1010, 1020]
     );
+}
+
+#[test]
+fn graph_read_comparison_budget_stops_before_the_next_score() {
+    let mut graph = InMemoryGraphStore::new();
+    let first = append(&mut graph, 10, &[0.0, 0.0], vec![vec![]]);
+    let second = append(&mut graph, 20, &[2.0, 0.0], vec![vec![first]]);
+    graph
+        .replace_neighbors(first, LayerIndex::base(), vec![second])
+        .expect("base-layer rewire should succeed");
+    graph
+        .publish_entry_point(Some(second))
+        .expect("entry-point publication should succeed");
+    let budget = HnswComparisonBudget::new(2);
+
+    let error = search_graph_read_with_comparison_budget(
+        &mut graph,
+        DistanceMetric::L2,
+        &vector(&[0.0, 0.0]),
+        HnswConfig::new(2, 4, 4).expect("test config should be valid"),
+        SearchLimit::new(2).expect("test limit should be valid"),
+        &budget,
+        &mut NeverCancel,
+    )
+    .expect_err("the third score must be rejected before it executes");
+
+    assert_eq!(
+        error,
+        HnswError::ComparisonBudgetExceeded {
+            maximum: 2,
+            consumed: 2,
+        }
+    );
+    assert_eq!(budget.consumed(), 2);
+}
+
+#[test]
+fn graph_read_comparison_budget_is_shared_across_searches() {
+    fn two_node_graph() -> InMemoryGraphStore {
+        let mut graph = InMemoryGraphStore::new();
+        let first = append(&mut graph, 10, &[0.0, 0.0], vec![vec![]]);
+        let second = append(&mut graph, 20, &[2.0, 0.0], vec![vec![first]]);
+        graph
+            .replace_neighbors(first, LayerIndex::base(), vec![second])
+            .expect("base-layer rewire should succeed");
+        graph
+            .publish_entry_point(Some(second))
+            .expect("entry-point publication should succeed");
+        graph
+    }
+
+    let budget = HnswComparisonBudget::new(7);
+    let mut first_graph = two_node_graph();
+    let first = search_graph_read_with_comparison_budget(
+        &mut first_graph,
+        DistanceMetric::L2,
+        &vector(&[0.0, 0.0]),
+        HnswConfig::new(2, 4, 4).expect("test config should be valid"),
+        SearchLimit::new(2).expect("test limit should be valid"),
+        &budget,
+        &mut NeverCancel,
+    )
+    .expect("the first search needs three scores and two result reads");
+    assert_eq!(first.work().distance_evaluations(), 3);
+
+    let mut second_graph = two_node_graph();
+    let error = search_graph_read_with_comparison_budget(
+        &mut second_graph,
+        DistanceMetric::L2,
+        &vector(&[0.0, 0.0]),
+        HnswConfig::new(2, 4, 4).expect("test config should be valid"),
+        SearchLimit::new(2).expect("test limit should be valid"),
+        &budget,
+        &mut NeverCancel,
+    )
+    .expect_err("the second search shares the remaining two comparisons");
+
+    assert!(matches!(
+        error,
+        HnswError::ComparisonBudgetExceeded {
+            maximum: 7,
+            consumed: 7,
+        }
+    ));
+    assert_eq!(budget.consumed(), 7);
+}
+
+#[test]
+fn comparison_budget_batch_reservation_is_atomic() {
+    let budget = HnswComparisonBudget::new(3);
+    budget
+        .reserve_comparisons(2)
+        .expect("the first batch should fit");
+    let error = budget
+        .reserve_comparisons(2)
+        .expect_err("an oversized batch must fail without partial reservation");
+    assert!(matches!(
+        error,
+        HnswError::ComparisonBudgetExceeded {
+            maximum: 3,
+            consumed: 2,
+        }
+    ));
+    assert_eq!(budget.remaining(), 1);
+    budget
+        .reserve_comparison()
+        .expect("the untouched final comparison should remain available");
+    assert_eq!(budget.consumed(), 3);
 }
 
 #[test]
@@ -543,6 +652,61 @@ fn sparse_graph_read_mask_uses_acorn_second_hop_for_a_better_hidden_match() {
 
     assert_eq!(outcome.results()[0].point_id().get(), 1_030);
     assert!(outcome.work().edges_examined() >= 3);
+}
+
+#[test]
+fn sparse_graph_read_budget_charges_filtered_connector_work() {
+    let mut graph = InMemoryGraphStore::new();
+    let entry = append(&mut graph, 10, &[10.0, 0.0], vec![vec![]]);
+    let far_connector = append(&mut graph, 20, &[100.0, 0.0], vec![vec![entry]]);
+    let hidden_match = append(&mut graph, 30, &[1.0, 0.0], vec![vec![far_connector]]);
+    for record_id in 40..=90_u64 {
+        append(&mut graph, record_id, &[200.0, 0.0], vec![vec![]]);
+    }
+    graph
+        .replace_neighbors(entry, LayerIndex::base(), vec![far_connector])
+        .expect("entry connector should publish");
+    graph
+        .replace_neighbors(far_connector, LayerIndex::base(), vec![entry, hidden_match])
+        .expect("far connector links should publish");
+    graph
+        .replace_neighbors(hidden_match, LayerIndex::base(), vec![far_connector])
+        .expect("hidden reciprocal link should publish");
+    graph
+        .publish_entry_point(Some(entry))
+        .expect("entry-point publication should succeed");
+    let mask = CandidateMask::only([HnswPointId::new(1_010), HnswPointId::new(1_030)]);
+    let admitted = HnswComparisonBudget::new(64);
+    search_graph_read_with_mask_and_comparison_budget(
+        &mut graph,
+        DistanceMetric::L2,
+        &vector(&[0.0, 0.0]),
+        HnswConfig::new(2, 4, 1).expect("test config should be valid"),
+        SearchLimit::new(1).expect("test limit should be valid"),
+        &mask,
+        64,
+        &admitted,
+        &mut NeverCancel,
+    )
+    .expect("bounded ACORN traversal should succeed");
+    let exact_work = admitted.consumed();
+    assert!(exact_work >= 4, "connector scoring must consume the budget");
+
+    let rejected = HnswComparisonBudget::new(exact_work - 1);
+    let error = search_graph_read_with_mask_and_comparison_budget(
+        &mut graph,
+        DistanceMetric::L2,
+        &vector(&[0.0, 0.0]),
+        HnswConfig::new(2, 4, 1).expect("test config should be valid"),
+        SearchLimit::new(1).expect("test limit should be valid"),
+        &mask,
+        64,
+        &rejected,
+        &mut NeverCancel,
+    )
+    .expect_err("one fewer comparison must fail before hidden connector work completes");
+    assert!(matches!(error, HnswError::ComparisonBudgetExceeded { .. }));
+    assert_eq!(rejected.consumed(), exact_work - 1);
 }
 
 #[test]

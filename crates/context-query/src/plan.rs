@@ -1,12 +1,16 @@
 //! Strict JSON query-plan decoding.
 
-use context_core::{PointId, SparseVector};
+use context_core::{
+    PointId, SearchLimit, SparseVector,
+    policy::{MAX_RECALL_CHECK_POINT_IDS, MAX_VECTOR_DIMENSIONS},
+};
 use serde_json::{Map, Value};
 
-use crate::{Formula, QueryError, QueryIr, QueryKind, Result, ScoreOrder};
-
-const MAX_PLAN_DEPTH: usize = 32;
-const MAX_PLAN_NODES: usize = 256;
+use crate::{
+    Formula, Fusion, LateInteractionWork, MAX_LATE_INTERACTION_COMPARISONS,
+    MAX_LATE_INTERACTION_SCALAR_CELLS, MAX_QUERY_DEPTH, MAX_QUERY_NODES, QueryError, QueryIr,
+    QueryKind, Result, ScoreOrder,
+};
 
 /// Parses an untrusted JSON value into the validated query IR.
 ///
@@ -23,11 +27,11 @@ pub fn parse_query_plan(plan: &Value) -> Result<QueryIr> {
 }
 
 fn parse_query_node(plan: &Value, depth: usize, nodes: &mut usize) -> Result<QueryIr> {
-    if depth > MAX_PLAN_DEPTH {
+    if depth > MAX_QUERY_DEPTH {
         return Err(invalid_plan("plan exceeds maximum nesting depth"));
     }
     *nodes = nodes.saturating_add(1);
-    if *nodes > MAX_PLAN_NODES {
+    if *nodes > MAX_QUERY_NODES {
         return Err(invalid_plan("plan exceeds maximum node count"));
     }
     let object = plan
@@ -142,6 +146,32 @@ fn parse_query_node(plan: &Value, depth: usize, nodes: &mut usize) -> Result<Que
                 limit_field(object)?,
             )
         }
+        "external_rerank" => {
+            require_keys(object, &["kind", "limit", "model_revision", "branch"])?;
+            let branch = child(object, depth, nodes)?;
+            QueryIr::new(
+                QueryKind::ExternalRerank {
+                    query: Box::new(branch),
+                    model_revision: positive_u64_field(object, "model_revision")?,
+                },
+                ScoreOrder::HigherIsBetter,
+                None,
+                limit_field(object)?,
+            )
+        }
+        "topology_expand" => {
+            require_keys(object, &["kind", "limit", "max_depth", "branch"])?;
+            let branch = child(object, depth, nodes)?;
+            QueryIr::new(
+                QueryKind::TopologyExpand {
+                    query: Box::new(branch),
+                    max_depth: positive_usize_field(object, "max_depth")?,
+                },
+                ScoreOrder::HigherIsBetter,
+                None,
+                limit_field(object)?,
+            )
+        }
         _ => Err(invalid_plan("unsupported query kind")),
     }
 }
@@ -182,25 +212,56 @@ fn parse_late_interaction(object: &Map<String, Value>) -> Result<QueryIr> {
         object,
         &["kind", "query_vectors", "candidates_per_query", "limit"],
     )?;
-    let vectors = object
+    let values = object
         .get("query_vectors")
         .and_then(Value::as_array)
-        .ok_or_else(|| invalid_field("query_vectors", "must be an array"))?
+        .ok_or_else(|| invalid_field("query_vectors", "must be an array"))?;
+    if values.is_empty() {
+        return Err(invalid_field(
+            "query_vectors",
+            "must contain at least one vector",
+        ));
+    }
+    if values.len() > MAX_RECALL_CHECK_POINT_IDS {
+        return Err(invalid_field(
+            "query_vectors",
+            "vector list exceeds policy maximum",
+        ));
+    }
+    let candidates_per_query =
+        SearchLimit::new(positive_usize_field(object, "candidates_per_query")?)?;
+    LateInteractionWork::new(
+        values.len(),
+        candidates_per_query.get(),
+        MAX_LATE_INTERACTION_COMPARISONS,
+    )?;
+    let mut scalar_cells = 0_usize;
+    for value in values {
+        let vector_values = value
+            .as_array()
+            .ok_or_else(|| invalid_field("query_vectors", "must contain vector arrays"))?;
+        validate_f32_array_length(vector_values, "query_vectors")?;
+        scalar_cells = scalar_cells.checked_add(vector_values.len()).ok_or(
+            QueryError::ArithmeticOverflow {
+                operation: "late_interaction_scalar_cell_projection",
+            },
+        )?;
+        if scalar_cells > MAX_LATE_INTERACTION_SCALAR_CELLS {
+            return Err(invalid_field(
+                "query_vectors",
+                "total scalar cells exceed policy maximum",
+            ));
+        }
+    }
+    let vectors = values
         .iter()
-        .map(|value| {
-            let object = Map::from_iter([("vector".to_owned(), value.clone())]);
-            f32_array(&object, "vector")
-        })
+        .map(|value| f32_value_array(value, "query_vectors"))
         .collect::<Result<Vec<_>>>()?;
-    QueryIr::late_interaction(
-        vectors,
-        positive_usize_field(object, "candidates_per_query")?,
-        limit_field(object)?,
-    )
+    QueryIr::late_interaction(vectors, candidates_per_query.get(), limit_field(object)?)
 }
 
 fn parse_prefetch(object: &Map<String, Value>, depth: usize, nodes: &mut usize) -> Result<QueryIr> {
-    require_keys(object, &["kind", "branches"])?;
+    require_keys(object, &["kind", "branches", "fusion", "rank_constant"])?;
     let values = object
         .get("branches")
         .and_then(Value::as_array)
@@ -214,12 +275,35 @@ fn parse_prefetch(object: &Map<String, Value>, depth: usize, nodes: &mut usize) 
         .map(QueryIr::limit)
         .max()
         .unwrap_or_default();
+    let rank_constant = match object.get("rank_constant") {
+        Some(_) => positive_u32_field(object, "rank_constant")?,
+        None => 60,
+    };
+    let fusion = match object.get("fusion").and_then(Value::as_str) {
+        None | Some("rrf") => Fusion::Rrf { rank_constant },
+        Some("weighted_rrf") => Fusion::WeightedRrf { rank_constant },
+        Some(_) => return Err(invalid_field("fusion", "must be rrf or weighted_rrf")),
+    };
     QueryIr::new(
-        QueryKind::Prefetch { branches },
+        QueryKind::Prefetch { branches, fusion },
         ScoreOrder::HigherIsBetter,
         None,
         limit,
     )
+}
+
+fn positive_u32_field(object: &Map<String, Value>, field: &'static str) -> Result<u32> {
+    u32::try_from(positive_usize_field(object, field)?)
+        .map_err(|_| invalid_field(field, "must fit in a positive u32"))
+}
+
+fn positive_u64_field(object: &Map<String, Value>, field: &'static str) -> Result<u64> {
+    let value = object
+        .get(field)
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or_else(|| invalid_field(field, "must be a positive integer"))?;
+    Ok(value)
 }
 
 fn child(object: &Map<String, Value>, depth: usize, nodes: &mut usize) -> Result<QueryIr> {
@@ -272,10 +356,18 @@ fn positive_usize_field(object: &Map<String, Value>, field: &'static str) -> Res
 }
 
 fn f32_array(object: &Map<String, Value>, field: &'static str) -> Result<Vec<f32>> {
-    object
+    let value = object
         .get(field)
-        .and_then(Value::as_array)
-        .ok_or_else(|| invalid_field(field, "must be an array"))?
+        .ok_or_else(|| invalid_field(field, "must be an array"))?;
+    f32_value_array(value, field)
+}
+
+fn f32_value_array(value: &Value, field: &'static str) -> Result<Vec<f32>> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| invalid_field(field, "must be an array"))?;
+    validate_f32_array_length(values, field)?;
+    values
         .iter()
         .map(|value| {
             let narrowed = value
@@ -291,11 +383,25 @@ fn f32_array(object: &Map<String, Value>, field: &'static str) -> Result<Vec<f32
         .collect()
 }
 
+fn validate_f32_array_length(values: &[Value], field: &'static str) -> Result<()> {
+    if values.len() > MAX_VECTOR_DIMENSIONS {
+        return Err(invalid_field(
+            field,
+            "vector dimensions exceed policy maximum",
+        ));
+    }
+    Ok(())
+}
+
 fn point_ids(object: &Map<String, Value>, field: &'static str) -> Result<Vec<PointId>> {
-    object
+    let values = object
         .get(field)
         .and_then(Value::as_array)
-        .ok_or_else(|| invalid_field(field, "must be an array"))?
+        .ok_or_else(|| invalid_field(field, "must be an array"))?;
+    if values.len() > MAX_RECALL_CHECK_POINT_IDS {
+        return Err(invalid_field(field, "point list exceeds policy maximum"));
+    }
+    values
         .iter()
         .map(|value| {
             let value = value
@@ -343,6 +449,7 @@ fn invalid_field(field: &'static str, reason: &'static str) -> QueryError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use context_core::policy::{MAX_RECALL_CHECK_POINT_IDS, MAX_VECTOR_DIMENSIONS};
     use serde_json::json;
 
     #[test]
@@ -379,5 +486,161 @@ mod tests {
         }))?;
         assert_eq!(query.score_order(), ScoreOrder::LowerIsBetter);
         Ok(())
+    }
+
+    #[test]
+    fn untrusted_arrays_are_rejected_at_policy_bounds() {
+        let oversized_vector = vec![Value::from(0.0); MAX_VECTOR_DIMENSIONS.saturating_add(1)];
+        assert!(matches!(
+            parse_query_plan(&json!({
+                "kind": "nearest",
+                "vector_name": null,
+                "vector": oversized_vector,
+                "filter": null,
+                "limit": 1
+            })),
+            Err(QueryError::InvalidInput {
+                field: "vector",
+                ..
+            })
+        ));
+
+        let oversized_point_ids = (1..=MAX_RECALL_CHECK_POINT_IDS.saturating_add(1))
+            .map(Value::from)
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            parse_query_plan(&json!({
+                "kind": "lookup",
+                "point_ids": oversized_point_ids
+            })),
+            Err(QueryError::InvalidInput {
+                field: "point_ids",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn lookup_rejects_duplicate_point_ids_during_json_validation() {
+        assert!(matches!(
+            parse_query_plan(&json!({
+                "kind": "lookup",
+                "point_ids": [7, 7]
+            })),
+            Err(QueryError::InvalidInput {
+                field: "point_ids",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn late_interaction_rejects_oversized_vector_lists_before_conversion() {
+        let query_vectors = vec![json!([1.0]); MAX_RECALL_CHECK_POINT_IDS.saturating_add(1)];
+        assert!(matches!(
+            parse_query_plan(&json!({
+                "kind": "late_interaction",
+                "query_vectors": query_vectors,
+                "candidates_per_query": 1,
+                "limit": 1
+            })),
+            Err(QueryError::InvalidInput {
+                field: "query_vectors",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn late_interaction_rejects_oversized_work_before_vector_conversion() {
+        let query_vectors = vec![json!([1.0]); 101];
+        assert!(matches!(
+            parse_query_plan(&json!({
+                "kind": "late_interaction",
+                "query_vectors": query_vectors,
+                "candidates_per_query": 10_000,
+                "limit": 1
+            })),
+            Err(QueryError::WorkBudgetExceeded {
+                budget: "late_interaction_comparisons",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn late_interaction_rejects_oversized_scalar_cells_before_conversion() {
+        let vector = vec![Value::from(1.0); MAX_VECTOR_DIMENSIONS];
+        let vector_count = MAX_LATE_INTERACTION_SCALAR_CELLS
+            .checked_div(MAX_VECTOR_DIMENSIONS)
+            .unwrap_or_default()
+            .saturating_add(1);
+        let query_vectors = vec![Value::Array(vector); vector_count];
+        assert!(matches!(
+            parse_query_plan(&json!({
+                "kind": "late_interaction",
+                "query_vectors": query_vectors,
+                "candidates_per_query": 1,
+                "limit": 1
+            })),
+            Err(QueryError::InvalidInput {
+                field: "query_vectors",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn prefetch_parses_parameterized_rank_only_fusion() -> Result<()> {
+        let leaf = json!({
+            "kind": "nearest",
+            "vector_name": null,
+            "vector": [1.0, 0.0],
+            "filter": null,
+            "limit": 2
+        });
+        let query = parse_query_plan(&json!({
+            "kind": "prefetch",
+            "fusion": "rrf",
+            "rank_constant": 17,
+            "branches": [leaf]
+        }))?;
+        assert!(matches!(
+            query.kind(),
+            QueryKind::Prefetch {
+                fusion: Fusion::Rrf { rank_constant: 17 },
+                ..
+            }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn weighted_rrf_rejects_unweighted_branches_and_zero_rank_constant() {
+        let leaf = json!({
+            "kind": "nearest",
+            "vector_name": null,
+            "vector": [1.0, 0.0],
+            "filter": null,
+            "limit": 2
+        });
+        assert!(
+            parse_query_plan(&json!({
+                "kind": "prefetch",
+                "fusion": "weighted_rrf",
+                "rank_constant": 17,
+                "branches": [leaf.clone()]
+            }))
+            .is_err()
+        );
+        assert!(
+            parse_query_plan(&json!({
+                "kind": "prefetch",
+                "fusion": "rrf",
+                "rank_constant": 0,
+                "branches": [leaf]
+            }))
+            .is_err()
+        );
     }
 }

@@ -452,7 +452,7 @@ CREATE TABLE pgcontext._artifact_segments (
     target_name text NOT NULL CHECK (target_name <> ''),
     generation bigint NOT NULL CHECK (generation > 0),
     segment_kind text NOT NULL CHECK (segment_kind IN ('hnsw_graph')),
-    format_version int4 NOT NULL CHECK (format_version = 1),
+    format_version int4 NOT NULL CHECK (format_version = 2),
     payload_bytes bigint NOT NULL CHECK (payload_bytes >= 0),
     checksum bigint NOT NULL,
     config_revision bigint,

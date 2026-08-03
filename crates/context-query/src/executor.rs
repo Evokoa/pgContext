@@ -1,15 +1,24 @@
 //! Bounded synchronous query orchestration.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::mem::size_of;
+use std::time::Instant;
 
 use crate::{
-    BudgetUsage, Cancellation, Candidate, CandidateSource, Completion, ExecutionBudget,
-    ExecutionOutcome, ExecutionState, FilterCandidateSource, QueryError, QueryIr, Result,
-    SourceReadiness, SourceRechecker, StageDiagnostic, StageKind, TelemetrySink,
-    types::deterministic_points,
+    BranchContribution, BudgetUsage, Cancellation, Candidate, CandidateSource, Completion,
+    ExecutionBudget, ExecutionOutcome, ExecutionState, ExternalReranker, FilterCandidateSource,
+    PointId, PortBudget, QueryClock, QueryError, QueryIr, Result, SourceReadiness, SourceRechecker,
+    StageDiagnostic, StageKind, TelemetrySink, TopologyExpander, types::deterministic_points,
 };
 
 mod composite;
+
+#[derive(Clone, Copy)]
+struct ExecutionDeadline {
+    started_micros: Option<u64>,
+    started_wall: Instant,
+    max_elapsed_micros: u64,
+}
 
 /// Pure executor composed from owned synchronous query ports.
 pub struct QueryExecutor<'a> {
@@ -18,6 +27,9 @@ pub struct QueryExecutor<'a> {
     rechecker: &'a mut dyn SourceRechecker,
     telemetry: &'a mut dyn TelemetrySink,
     cancellation: &'a dyn Cancellation,
+    clock: Option<&'a dyn QueryClock>,
+    external_reranker: Option<&'a mut dyn ExternalReranker>,
+    topology_expander: Option<&'a mut dyn TopologyExpander>,
 }
 
 impl<'a> QueryExecutor<'a> {
@@ -36,7 +48,31 @@ impl<'a> QueryExecutor<'a> {
             rechecker,
             telemetry,
             cancellation,
+            clock: None,
+            external_reranker: None,
+            topology_expander: None,
         }
+    }
+
+    /// Attaches a monotonic clock for elapsed-budget enforcement.
+    #[must_use]
+    pub fn with_clock(mut self, clock: &'a dyn QueryClock) -> Self {
+        self.clock = Some(clock);
+        self
+    }
+
+    /// Attaches the sole model-backed reranking adapter for this execution.
+    #[must_use]
+    pub fn with_external_reranker(mut self, reranker: &'a mut dyn ExternalReranker) -> Self {
+        self.external_reranker = Some(reranker);
+        self
+    }
+
+    /// Attaches the sole topology-expansion adapter for this execution.
+    #[must_use]
+    pub fn with_topology_expander(mut self, expander: &'a mut dyn TopologyExpander) -> Self {
+        self.topology_expander = Some(expander);
+        self
     }
 
     /// Executes one validated query with hard work limits.
@@ -55,6 +91,11 @@ impl<'a> QueryExecutor<'a> {
         budget: ExecutionBudget,
     ) -> Result<ExecutionOutcome> {
         query.validate()?;
+        let deadline = ExecutionDeadline {
+            started_micros: self.clock.map(QueryClock::now_micros),
+            started_wall: Instant::now(),
+            max_elapsed_micros: budget.max_elapsed_micros(),
+        };
         if query.limit() > budget.max_results() {
             return Ok(outcome(
                 Completion::BudgetExhausted,
@@ -63,16 +104,24 @@ impl<'a> QueryExecutor<'a> {
                 BudgetUsage::default(),
             ));
         }
-        if is_composite(query) {
-            return self.execute_composite(query, budget);
+        let mut outcome = if is_composite(query) {
+            self.execute_composite(query, budget, deadline)?
+        } else {
+            self.execute_leaf(query, budget, deadline)?
+        };
+        let mut usage = outcome.usage();
+        if self.checkpoint(deadline, &mut usage)? == Some(Completion::BudgetExhausted) {
+            outcome.exhaust_budget();
         }
-        self.execute_leaf(query, budget)
+        outcome.set_elapsed_micros(usage.elapsed_micros());
+        Ok(outcome)
     }
 
     fn execute_leaf(
         &mut self,
         query: &QueryIr,
         budget: ExecutionBudget,
+        deadline: ExecutionDeadline,
     ) -> Result<ExecutionOutcome> {
         let mut usage = BudgetUsage::default();
         let mut diagnostics = Vec::new();
@@ -86,23 +135,14 @@ impl<'a> QueryExecutor<'a> {
             ));
         }
 
-        if cancelled(self.cancellation)? {
-            return Ok(outcome(
-                Completion::Cancelled,
-                Vec::new(),
-                diagnostics,
-                usage,
-            ));
+        if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
         }
 
-        let readiness = self.candidates.readiness(query)?;
-        if cancelled(self.cancellation)? {
-            return Ok(outcome(
-                Completion::Cancelled,
-                Vec::new(),
-                diagnostics,
-                usage,
-            ));
+        let port_budget = self.port_budget(budget, usage, deadline)?;
+        let readiness = self.candidates.readiness(query, port_budget)?;
+        if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
         }
         match readiness {
             SourceReadiness::Ready | SourceReadiness::Exact => {}
@@ -158,13 +198,18 @@ impl<'a> QueryExecutor<'a> {
         }
 
         let filter_batch = if query.filter().is_some() {
-            let Some(filter) = self.filter.as_deref_mut() else {
-                return Err(QueryError::PortFailure {
+            let port_budget = self.port_budget(budget, usage, deadline)?;
+            let filter_limit = self
+                .filter
+                .as_deref_mut()
+                .ok_or(QueryError::PortFailure {
                     stage: "filter_candidate_source",
                     message: "query has a filter but no filter adapter is available".to_owned(),
-                });
-            };
-            let filter_limit = filter.candidate_limit(query, budget.max_filter_candidates())?;
+                })?
+                .candidate_limit(query, budget.max_filter_candidates(), port_budget)?;
+            if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+                return Ok(outcome(completion, Vec::new(), diagnostics, usage));
+            }
             if filter_limit == 0 || filter_limit > budget.max_filter_candidates() {
                 return Err(QueryError::PortFailure {
                     stage: "filter_candidate_source",
@@ -174,14 +219,17 @@ impl<'a> QueryExecutor<'a> {
                     ),
                 });
             }
-            let batch = filter.filter_candidates(query, filter_limit)?;
-            if cancelled(self.cancellation)? {
-                return Ok(outcome(
-                    Completion::Cancelled,
-                    Vec::new(),
-                    diagnostics,
-                    usage,
-                ));
+            let port_budget = self.port_budget(budget, usage, deadline)?;
+            let batch = self
+                .filter
+                .as_deref_mut()
+                .ok_or(QueryError::PortFailure {
+                    stage: "filter_candidate_source",
+                    message: "filter adapter disappeared between bounded calls".to_owned(),
+                })?
+                .filter_candidates(query, filter_limit, port_budget)?;
+            if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+                return Ok(outcome(completion, Vec::new(), diagnostics, usage));
             }
             if batch.point_ids().len() > filter_limit {
                 return Err(contract_violation(
@@ -190,7 +238,17 @@ impl<'a> QueryExecutor<'a> {
                     batch.point_ids().len(),
                 ));
             }
+            reject_duplicate_point_ids("filter_candidate_source", batch.point_ids())?;
+            if batch.evaluated_count() > port_budget.max_comparisons() {
+                return Err(contract_violation(
+                    "filter_comparisons",
+                    port_budget.max_comparisons(),
+                    batch.evaluated_count(),
+                ));
+            }
             usage.add_filter_candidates(batch.point_ids().len());
+            usage.add_memory_bytes(batch.point_ids().len().saturating_mul(size_of::<PointId>()));
+            usage.add_comparisons(batch.evaluated_count());
             usage.add_stage();
             let diagnostic = StageDiagnostic::new(
                 StageKind::FilterCandidates,
@@ -205,15 +263,13 @@ impl<'a> QueryExecutor<'a> {
             );
             self.telemetry.record(&diagnostic)?;
             diagnostics.push(diagnostic);
-            if cancelled(self.cancellation)? {
-                return Ok(outcome(
-                    Completion::Cancelled,
-                    Vec::new(),
-                    diagnostics,
-                    usage,
-                ));
+            if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+                return Ok(outcome(completion, Vec::new(), diagnostics, usage));
             }
-            if !batch.exhausted() || usage.stages() >= budget.max_stages() {
+            if !batch.exhausted()
+                || usage.stages() >= budget.max_stages()
+                || budget.resources_depleted(usage)
+            {
                 return Ok(outcome(
                     Completion::BudgetExhausted,
                     Vec::new(),
@@ -235,9 +291,13 @@ impl<'a> QueryExecutor<'a> {
             ));
         }
 
-        let candidate_limit = self
-            .candidates
-            .candidate_limit(query, budget.max_candidates())?;
+        let port_budget = self.port_budget(budget, usage, deadline)?;
+        let candidate_limit =
+            self.candidates
+                .candidate_limit(query, budget.max_candidates(), port_budget)?;
+        if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
+        }
         if candidate_limit == 0 || candidate_limit > budget.max_candidates() {
             return Err(QueryError::PortFailure {
                 stage: "candidate_source",
@@ -247,16 +307,15 @@ impl<'a> QueryExecutor<'a> {
                 ),
             });
         }
-        let page = self
-            .candidates
-            .candidates(query, filter_batch.as_ref(), candidate_limit)?;
-        if cancelled(self.cancellation)? {
-            return Ok(outcome(
-                Completion::Cancelled,
-                Vec::new(),
-                diagnostics,
-                usage,
-            ));
+        let port_budget = self.port_budget(budget, usage, deadline)?;
+        let page = self.candidates.candidates(
+            query,
+            filter_batch.as_ref(),
+            candidate_limit,
+            port_budget,
+        )?;
+        if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
         }
         if page.candidates().len() > candidate_limit {
             return Err(contract_violation(
@@ -272,8 +331,22 @@ impl<'a> QueryExecutor<'a> {
                 page.expansion_count(),
             ));
         }
+        if page.scored_count() > port_budget.max_comparisons() {
+            return Err(contract_violation(
+                "candidate_comparisons",
+                port_budget.max_comparisons(),
+                page.scored_count(),
+            ));
+        }
+        reject_duplicate_candidates("candidate_source", page.candidates())?;
         usage.add_candidates(page.candidates().len());
         usage.add_expansions(page.expansion_count());
+        usage.add_comparisons(page.scored_count());
+        usage.add_memory_bytes(
+            page.candidates()
+                .len()
+                .saturating_mul(size_of::<Candidate>()),
+        );
         usage.add_stage();
         let mut completion = if page.exhausted() {
             Completion::Complete
@@ -290,16 +363,21 @@ impl<'a> QueryExecutor<'a> {
         self.telemetry.record(&diagnostic)?;
         diagnostics.push(diagnostic);
 
-        if cancelled(self.cancellation)? {
+        if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
+        }
+        if page.candidates().is_empty() {
+            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
+        }
+        if usage.memory_bytes() >= budget.max_memory_bytes()
+            || usage.hydration_bytes() >= budget.max_hydration_bytes()
+        {
             return Ok(outcome(
-                Completion::Cancelled,
+                Completion::BudgetExhausted,
                 Vec::new(),
                 diagnostics,
                 usage,
             ));
-        }
-        if page.candidates().is_empty() {
-            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
         }
         if usage.stages() >= budget.max_stages() {
             return Ok(outcome(
@@ -314,22 +392,54 @@ impl<'a> QueryExecutor<'a> {
         if recheck_limit < page.candidates().len() {
             completion = Completion::BudgetExhausted;
         }
-        let rows = self
-            .rechecker
-            .recheck(query, page.candidates(), recheck_limit)?;
-        if cancelled(self.cancellation)? {
-            return Ok(outcome(
-                Completion::Cancelled,
-                Vec::new(),
-                diagnostics,
-                usage,
-            ));
+        let port_budget = self.port_budget(budget, usage, deadline)?;
+        let recheck_page =
+            self.rechecker
+                .recheck(query, page.candidates(), recheck_limit, port_budget)?;
+        if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
         }
-        if rows.len() > recheck_limit {
+        if recheck_page.rows().len() > recheck_limit {
             return Err(contract_violation(
                 "source_rechecker",
                 recheck_limit,
-                rows.len(),
+                recheck_page.rows().len(),
+            ));
+        }
+        if recheck_page.comparisons() > port_budget.max_comparisons() {
+            return Err(contract_violation(
+                "source_recheck_comparisons",
+                port_budget.max_comparisons(),
+                recheck_page.comparisons(),
+            ));
+        }
+        let recheck_comparisons = recheck_page.comparisons();
+        let rows = recheck_page.into_rows();
+        reject_duplicate_hydrated("source_rechecker", &rows)?;
+        let hydration_bytes = rows
+            .iter()
+            .map(|row| row.source_key().as_str().len())
+            .sum::<usize>();
+        let contribution_count = page.candidates().len();
+        let provenance_bytes = contribution_count
+            .saturating_mul(
+                size_of::<PointId>()
+                    .saturating_add(size_of::<(crate::CandidateProvenance, u32)>())
+                    .saturating_add(size_of::<BranchContribution>()),
+            )
+            .saturating_add(
+                rows.len()
+                    .saturating_mul(size_of::<Vec<BranchContribution>>()),
+            );
+        usage.add_comparisons(recheck_comparisons);
+        usage.add_hydration_bytes(hydration_bytes);
+        usage.add_memory_bytes(hydrated_allocation_bytes(&rows).saturating_add(provenance_bytes));
+        if budget.exhausted(usage) {
+            return Ok(outcome(
+                Completion::BudgetExhausted,
+                Vec::new(),
+                diagnostics,
+                usage,
             ));
         }
         let candidate_ids = page
@@ -346,6 +456,28 @@ impl<'a> QueryExecutor<'a> {
                 point_id: row.point_id(),
             });
         }
+        let mut provenance = BTreeMap::<_, Vec<_>>::new();
+        for (rank, candidate) in page.candidates().iter().enumerate() {
+            let source_rank = u32::try_from(rank).unwrap_or(u32::MAX);
+            provenance
+                .entry(candidate.point_id())
+                .or_default()
+                .push((candidate.provenance(), source_rank));
+        }
+        let rows: Vec<crate::HydratedCandidate> = rows
+            .into_iter()
+            .map(|row| {
+                let contributions = provenance
+                    .get(&row.point_id())
+                    .into_iter()
+                    .flatten()
+                    .map(|(provenance, source_rank)| {
+                        BranchContribution::source(*provenance, row.score(), *source_rank)
+                    })
+                    .collect();
+                row.with_contributions(contributions)
+            })
+            .collect();
         // Recheck work is the number of candidate identities submitted under
         // the authoritative recheck bound, not only the rows that survive
         // MVCC/RLS/deletion filtering.
@@ -362,16 +494,65 @@ impl<'a> QueryExecutor<'a> {
         self.telemetry.record(&diagnostic)?;
         diagnostics.push(diagnostic);
 
-        if cancelled(self.cancellation)? {
+        if budget.exhausted(usage) {
             return Ok(outcome(
-                Completion::Cancelled,
+                Completion::BudgetExhausted,
                 Vec::new(),
                 diagnostics,
                 usage,
             ));
         }
 
+        if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
+            return Ok(outcome(completion, Vec::new(), diagnostics, usage));
+        }
+
         Ok(outcome(completion, points, diagnostics, usage))
+    }
+
+    fn checkpoint(
+        &self,
+        deadline: ExecutionDeadline,
+        usage: &mut BudgetUsage,
+    ) -> Result<Option<Completion>> {
+        if cancelled(self.cancellation)? {
+            return Ok(Some(Completion::Cancelled));
+        }
+        let elapsed = self.elapsed_micros(deadline)?;
+        usage.set_elapsed_micros(elapsed);
+        Ok((elapsed >= deadline.max_elapsed_micros).then_some(Completion::BudgetExhausted))
+    }
+
+    fn port_budget(
+        &self,
+        budget: ExecutionBudget,
+        usage: BudgetUsage,
+        deadline: ExecutionDeadline,
+    ) -> Result<PortBudget> {
+        let elapsed = self.elapsed_micros(deadline)?;
+        Ok(PortBudget::new(
+            budget.max_comparisons().saturating_sub(usage.comparisons()),
+            budget
+                .max_memory_bytes()
+                .saturating_sub(usage.memory_bytes()),
+            budget
+                .max_hydration_bytes()
+                .saturating_sub(usage.hydration_bytes()),
+            deadline.max_elapsed_micros.saturating_sub(elapsed),
+        ))
+    }
+
+    fn elapsed_micros(&self, deadline: ExecutionDeadline) -> Result<u64> {
+        if let (Some(started), Some(clock)) = (deadline.started_micros, self.clock) {
+            return clock
+                .now_micros()
+                .checked_sub(started)
+                .ok_or(QueryError::PortFailure {
+                    stage: "query_clock",
+                    message: "clock moved backwards".to_owned(),
+                });
+        }
+        Ok(u64::try_from(deadline.started_wall.elapsed().as_micros()).unwrap_or(u64::MAX))
     }
 }
 
@@ -383,6 +564,8 @@ fn is_composite(query: &QueryIr) -> bool {
             | crate::QueryKind::ScoreThreshold { .. }
             | crate::QueryKind::Formula { .. }
             | crate::QueryKind::Rerank { .. }
+            | crate::QueryKind::ExternalRerank { .. }
+            | crate::QueryKind::TopologyExpand { .. }
     )
 }
 
@@ -407,6 +590,65 @@ fn contract_violation(stage: &'static str, requested: usize, returned: usize) ->
         requested,
         returned,
     }
+}
+
+fn reject_duplicate_candidates(stage: &'static str, candidates: &[Candidate]) -> Result<()> {
+    let mut point_ids = BTreeSet::new();
+    if let Some(candidate) = candidates
+        .iter()
+        .find(|candidate| !point_ids.insert(candidate.point_id()))
+    {
+        return Err(QueryError::PortFailure {
+            stage,
+            message: format!(
+                "adapter returned duplicate point ID {}",
+                candidate.point_id().get()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn reject_duplicate_point_ids(stage: &'static str, point_ids: &[PointId]) -> Result<()> {
+    let mut unique = BTreeSet::new();
+    if let Some(point_id) = point_ids
+        .iter()
+        .copied()
+        .find(|point_id| !unique.insert(*point_id))
+    {
+        return Err(QueryError::PortFailure {
+            stage,
+            message: format!("adapter returned duplicate point ID {}", point_id.get()),
+        });
+    }
+    Ok(())
+}
+
+fn reject_duplicate_hydrated(stage: &'static str, rows: &[crate::HydratedCandidate]) -> Result<()> {
+    let mut point_ids = BTreeSet::new();
+    if let Some(row) = rows.iter().find(|row| !point_ids.insert(row.point_id())) {
+        return Err(QueryError::PortFailure {
+            stage,
+            message: format!(
+                "adapter returned duplicate point ID {}",
+                row.point_id().get()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn hydrated_allocation_bytes(rows: &[crate::HydratedCandidate]) -> usize {
+    rows.iter().fold(0_usize, |total, row| {
+        total
+            .saturating_add(size_of::<crate::HydratedCandidate>())
+            .saturating_add(row.source_key().as_str().len())
+            .saturating_add(
+                row.contributions()
+                    .len()
+                    .saturating_mul(size_of::<BranchContribution>()),
+            )
+    })
 }
 
 fn cancelled(cancellation: &dyn Cancellation) -> Result<bool> {

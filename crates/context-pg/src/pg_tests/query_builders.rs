@@ -76,6 +76,33 @@ fn execute_query_preserves_lower_is_better_rerank_order() {
 }
 
 #[pg_test]
+fn collection_timeout_covers_preparation_before_candidate_execution() {
+    create_dense_hnsw_adapter_collection(
+        "stage_g_preparation_timeout",
+        "l2",
+        "vector_hnsw_ops",
+    );
+    Spi::run(
+        "SELECT * FROM pgcontext.configure_collection_limits(
+            'stage_g_preparation_timeout', true,
+            NULL, NULL, NULL, NULL, NULL, NULL, 1, NULL
+        )",
+    )
+    .expect("one-millisecond collection timeout should configure");
+    crate::retrieval::delay_next_query_preparation_for_test(20_000);
+
+    shared_assert_sql_failure(
+        "SELECT * FROM pgcontext.execute_query(
+            'stage_g_preparation_timeout',
+            pgcontext.query_nearest('[1,0]'::vector, 1)
+        )",
+        "57014",
+        "canceling statement due to statement timeout",
+        "query preparation timeout",
+    );
+}
+
+#[pg_test]
 fn execute_query_allocates_candidate_budget_to_every_prefetch_branch() {
     Spi::run(
         "CREATE TABLE public.stage_g_branch_budget (
@@ -454,6 +481,20 @@ fn execute_query_routes_quantized_mapped_hnsw_and_exactly_rechecks() {
     assert_eq!(events[0].lifecycle, "Indexed");
     assert!(events[0].visits >= events[0].candidates);
     assert!(events[0].candidates >= events[0].rechecks);
+    let provenance = crate::retrieval::first_provenance_for_test(
+        "stage_g_quantized_composite",
+        context_query::QueryIr::nearest(
+            None,
+            vec![0.0, 0.0],
+            context_query::ScoreOrder::LowerIsBetter,
+            None,
+            2,
+        )
+        .expect("quantized provenance query should be valid"),
+    )
+    .expect("quantized provenance should be available");
+    assert_eq!(provenance.0, context_query::CandidateBranch::Quantized);
+    assert_eq!(provenance.1, context_query::CandidateSourceKind::Quantized);
 
     Spi::run(
         "SELECT pgcontext.configure_vector(
@@ -605,6 +646,13 @@ fn query_lookup_rejects_negative_point_ids() {
 }
 
 #[pg_test]
+#[should_panic(expected = "lookup query must not contain duplicate point ids")]
+fn query_lookup_rejects_duplicate_point_ids() {
+    Spi::run("SELECT pgcontext.query_lookup(ARRAY[7, 7]::bigint[])")
+        .expect("duplicate lookup point ids should be rejected");
+}
+
+#[pg_test]
 #[should_panic(expected = "prefetch query requires at least one branch")]
 fn query_prefetch_rejects_empty_branches() {
     Spi::run("SELECT pgcontext.query_prefetch(ARRAY[]::jsonb[])")
@@ -644,17 +692,39 @@ fn query_formula_rejects_empty_formulas() {
 }
 
 #[pg_test]
-fn query_formula_preserves_whitespace_and_512_byte_formulas() {
-    let whitespace = json_value(
-        "SELECT pgcontext.query_formula('{\"kind\":\"lookup\"}'::jsonb, '   ')::jsonb",
-    );
-    assert_eq!(whitespace["formula"], "   ");
+#[should_panic(expected = "query formula")]
+fn query_formula_rejects_whitespace_only_formulas() {
+    Spi::run(
+        "SELECT pgcontext.query_formula(
+            '{\"kind\":\"lookup\",\"point_ids\":[1]}'::jsonb,
+            '   '
+        )",
+    )
+    .expect("whitespace-only formula should be rejected");
+}
 
-    let formula = "x".repeat(512).replace('\'', "''");
+#[pg_test]
+fn query_formula_preserves_valid_512_byte_formulas() {
+    let formula = format!("$score{}", " ".repeat(506)).replace('\'', "''");
     let plan = json_value(&format!(
-        "SELECT pgcontext.query_formula('{{\"kind\":\"lookup\"}}'::jsonb, '{formula}')::jsonb"
+        "SELECT pgcontext.query_formula(
+            '{{\"kind\":\"lookup\",\"point_ids\":[1]}}'::jsonb,
+            '{formula}'
+        )::jsonb"
     ));
     assert_eq!(plan["formula"].as_str().map(str::len), Some(512));
+}
+
+#[pg_test]
+#[should_panic(expected = "unknown query kind")]
+fn composite_builders_reject_invalid_child_plans_immediately() {
+    Spi::run(
+        "SELECT pgcontext.query_weight(
+            '{\"kind\":\"not_a_query\"}'::jsonb,
+            1.0
+        )",
+    )
+    .expect("invalid child plan should be rejected by the constructor");
 }
 
 #[pg_test]

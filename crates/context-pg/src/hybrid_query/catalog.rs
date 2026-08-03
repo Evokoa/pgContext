@@ -120,59 +120,10 @@ pub(super) fn resolve_registered_vector(
     })
 }
 
-pub(super) fn resolve_registered_sparse_vector(
-    collection_name: &CollectionName,
-    collection_id: i64,
-    vector_name: &str,
-) -> SparseQueryVector {
-    Spi::connect(|client| {
-        let rows = match client.select(
-            "SELECT source_schema_name,
-                    source_table_name,
-                    source_table_oid,
-                    vector_name,
-                    vector_column_name,
-                    vector_attnum,
-                    metric
-               FROM pgcontext._visible_collection_sparse_vectors
-              WHERE collection_id = $1
-                AND vector_name = $2",
-            Some(1),
-            &[collection_id.into(), vector_name.into()],
-        ) {
-            Ok(rows) => rows,
-            Err(error) => raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                format!("failed to query sparse vector registration: {error}"),
-            ),
-        };
-
-        if rows.is_empty() {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
-                format!(
-                    "sparse vector registration does not exist for collection {}: {vector_name}",
-                    collection_name.as_str()
-                ),
-            );
-        }
-
-        let row = rows.first();
-        SparseQueryVector {
-            schema_name: spi_required_column::<String>(&row, 1, "source_schema_name"),
-            table_name: spi_required_column::<String>(&row, 2, "source_table_name"),
-            table_oid: spi_required_column::<pg_sys::Oid>(&row, 3, "source_table_oid"),
-            vector_name: spi_required_column::<String>(&row, 4, "vector_name"),
-            vector_column_name: spi_required_column::<String>(&row, 5, "vector_column_name"),
-            vector_attnum: spi_required_column::<i16>(&row, 6, "vector_attnum"),
-            metric: crate::domain_types::distance_metric_from_catalog(
-                spi_required_column::<String>(&row, 7, "metric"),
-                "sparse vector",
-            ),
-        }
-    })
-}
-
+#[allow(
+    dead_code,
+    reason = "the dense-only legacy validator remains isolated from the canonical query adapter"
+)]
 pub(super) fn validate_query_vector_drift(collection_id: i64, registered_vector: &mut QueryVector) {
     Spi::connect(|client| {
         let rows = match client.select(
@@ -371,6 +322,10 @@ pub(super) fn validate_query_drift(
     });
 }
 
+#[allow(
+    dead_code,
+    reason = "the sparse legacy validator remains isolated from the canonical query adapter"
+)]
 pub(super) fn validate_sparse_query_drift(
     collection_id: i64,
     registered_vector: &mut SparseQueryVector,
@@ -600,6 +555,10 @@ pub(super) fn require_table_select_privilege(registered_vector: &QueryVector) {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "the sparse legacy privilege helper remains isolated from the canonical query adapter"
+)]
 pub(super) fn require_sparse_table_select_privilege(registered_vector: &SparseQueryVector) {
     let session_user = session_user();
     let has_select = Spi::get_one_with_args::<bool>(
@@ -628,6 +587,10 @@ pub(super) fn require_sparse_table_select_privilege(registered_vector: &SparseQu
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "legacy hybrid row conversion is retained only with its isolated adapter"
+)]
 pub(super) fn point_id_to_sql(point_id: u64) -> i64 {
     match i64::try_from(point_id) {
         Ok(point_id) => point_id,

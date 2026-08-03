@@ -48,9 +48,10 @@ pub use delta_scan::{
     merge_topk, scan_delta_topk,
 };
 pub use hnsw_hierarchy::{
-    ConcurrentHnswBuilder, HnswCancellation, HnswGraphSnapshot, HnswInsertOutcome, HnswLevel,
-    HnswLevelSeed, HnswSearchOutcome, HnswWork, NeverCancel, search_graph_read,
-    search_graph_read_with_mask, search_graph_read_with_mask_budgeted,
+    ConcurrentHnswBuilder, HnswCancellation, HnswComparisonBudget, HnswGraphSnapshot,
+    HnswInsertOutcome, HnswLevel, HnswLevelSeed, HnswSearchOutcome, HnswWork, NeverCancel,
+    search_graph_read, search_graph_read_with_comparison_budget, search_graph_read_with_mask,
+    search_graph_read_with_mask_and_comparison_budget, search_graph_read_with_mask_budgeted,
 };
 pub use ivf::{
     InMemoryIvfIndex, IvfCancellation, IvfCandidateBudget, IvfCandidateMask, IvfCentroidRead,
@@ -113,6 +114,15 @@ pub enum HnswError {
         actual: usize,
     },
 
+    /// HNSW traversal exhausted the caller-owned scoring budget.
+    #[error("HNSW comparison budget {maximum} exhausted after {consumed} scores")]
+    ComparisonBudgetExceeded {
+        /// Maximum node scores shared by every traversal in this query.
+        maximum: usize,
+        /// Scores already admitted before the rejected score.
+        consumed: usize,
+    },
+
     /// An insertion reused a point identifier already present in the graph.
     #[error("duplicate HNSW point id {point_id:?}")]
     DuplicatePointId {
@@ -143,6 +153,7 @@ impl HnswError {
             Self::DimensionMismatch { .. } => ContextError::DimensionMismatch,
             Self::Core(error) => error.context_error(),
             Self::RecallBudgetExceeded { .. } => ContextError::RecallBudgetExceeded,
+            Self::ComparisonBudgetExceeded { .. } => ContextError::RecallBudgetExceeded,
             Self::DuplicatePointId { .. } => ContextError::InvalidFilter,
             Self::Cancelled => ContextError::RecallBudgetExceeded,
             Self::InvalidSnapshot { .. } => ContextError::IndexCorrupt,

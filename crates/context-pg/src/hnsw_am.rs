@@ -13,9 +13,9 @@ use context_core::{DenseVector, DistanceMetric, SearchLimit};
 use context_index::{
     CandidateMask, ConcurrentHnswBuilder, DeltaHit, DeltaScanEntry, GraphDirectoryKeyKind,
     GraphMetadata, GraphNeighbors, GraphNodeRecord, GraphNodeScore, GraphNodeView, GraphPageId,
-    GraphPageKind, GraphRead, GraphRecordId, HnswCancellation, HnswConfig, HnswError, HnswGraph,
-    HnswGraphNodeSnapshot, HnswNodeId, HnswPointId, LayerIndex, search_graph_read,
-    search_graph_read_with_mask_budgeted,
+    GraphPageKind, GraphRead, GraphRecordId, HnswCancellation, HnswComparisonBudget, HnswConfig,
+    HnswError, HnswGraph, HnswGraphNodeSnapshot, HnswNodeId, HnswPointId, LayerIndex,
+    search_graph_read_with_comparison_budget, search_graph_read_with_mask_and_comparison_budget,
 };
 use context_storage::{
     DeltaRecordKind, HnswGraphQuantization, MappedGraphIdentity, MappedPackedGraphImage,
@@ -99,15 +99,40 @@ thread_local! {
     /// All four SQL helpers expose heap TIDs and approximate scores, so only
     /// invoker-safe adapters may open this capability before a fixed SPI call
     /// and exact ACL/RLS-aware recheck.
-    static HNSW_CANDIDATE_HELPER_INDEX: Cell<Option<pg_sys::Oid>> = const { Cell::new(None) };
+    static HNSW_CANDIDATE_HELPER_AUTHORIZATION: Cell<Option<HnswCandidateHelperAuthorization>> = const { Cell::new(None) };
+    /// Optional backend-local cap inherited by AM scans issued through nested
+    /// SPI, such as one late-interaction query spanning multiple token scans.
+    static HNSW_QUERY_BUDGET: RefCell<Option<HnswQueryBudget>> = const { RefCell::new(None) };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HnswCandidateHelperAuthorization {
+    index_oid: pg_sys::Oid,
+    max_comparisons: usize,
+    max_memory_bytes: usize,
 }
 
 struct HnswCandidateHelperGuard;
 
+struct HnswQueryBudgetGuard;
+
+#[derive(Clone, Debug)]
+struct HnswQueryBudget {
+    comparison: HnswComparisonBudget,
+    max_memory_bytes: usize,
+}
+
 impl HnswCandidateHelperGuard {
-    fn enter(index_oid: pg_sys::Oid) -> Self {
-        HNSW_CANDIDATE_HELPER_INDEX.with(|allowed_index| {
-            if allowed_index.replace(Some(index_oid)).is_some() {
+    fn enter(index_oid: pg_sys::Oid, max_comparisons: usize, max_memory_bytes: usize) -> Self {
+        HNSW_CANDIDATE_HELPER_AUTHORIZATION.with(|authorization| {
+            if authorization
+                .replace(Some(HnswCandidateHelperAuthorization {
+                    index_oid,
+                    max_comparisons,
+                    max_memory_bytes,
+                }))
+                .is_some()
+            {
                 raise_sql_error(
                     PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
                     "HNSW candidate helper authorization is already active",
@@ -120,29 +145,85 @@ impl HnswCandidateHelperGuard {
 
 impl Drop for HnswCandidateHelperGuard {
     fn drop(&mut self) {
-        HNSW_CANDIDATE_HELPER_INDEX.with(|allowed_index| allowed_index.set(None));
+        HNSW_CANDIDATE_HELPER_AUTHORIZATION.with(|authorization| authorization.set(None));
     }
+}
+
+impl HnswQueryBudgetGuard {
+    fn enter(max_comparisons: usize, max_memory_bytes: usize) -> Self {
+        HNSW_QUERY_BUDGET.with(|budget| {
+            let mut budget = budget.borrow_mut();
+            if budget.is_some() {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    "HNSW query comparison budget is already active",
+                );
+            }
+            *budget = Some(HnswQueryBudget {
+                comparison: HnswComparisonBudget::new(max_comparisons),
+                max_memory_bytes,
+            });
+        });
+        Self
+    }
+}
+
+impl Drop for HnswQueryBudgetGuard {
+    fn drop(&mut self) {
+        HNSW_QUERY_BUDGET.with(|budget| *budget.borrow_mut() = None);
+    }
+}
+
+pub(crate) fn with_hnsw_query_budget<T>(
+    max_comparisons: usize,
+    max_memory_bytes: usize,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let _guard = HnswQueryBudgetGuard::enter(max_comparisons, max_memory_bytes);
+    operation()
+}
+
+fn active_hnsw_query_budget() -> Option<HnswQueryBudget> {
+    HNSW_QUERY_BUDGET.with(|budget| budget.borrow().clone())
 }
 
 pub(crate) fn with_hnsw_candidate_helper_capability<T>(
     index_oid: pg_sys::Oid,
     operation: impl FnOnce() -> T,
 ) -> T {
-    let _guard = HnswCandidateHelperGuard::enter(index_oid);
+    with_hnsw_candidate_helper_budget(index_oid, usize::MAX, usize::MAX, operation)
+}
+
+pub(crate) fn with_hnsw_candidate_helper_budget<T>(
+    index_oid: pg_sys::Oid,
+    max_comparisons: usize,
+    max_memory_bytes: usize,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let _guard = HnswCandidateHelperGuard::enter(index_oid, max_comparisons, max_memory_bytes);
     operation()
 }
 
-fn consume_hnsw_candidate_helper_capability(index_relation: pg_sys::Relation) {
+fn consume_hnsw_candidate_helper_capability(
+    index_relation: pg_sys::Relation,
+) -> HnswCandidateHelperAuthorization {
     // SAFETY: every caller owns a live `PgRelation` for this immediate identity
     // check before any index pages or metadata are read.
     let actual_index = unsafe { (*index_relation).rd_id };
-    let allowed_index = HNSW_CANDIDATE_HELPER_INDEX.with(|allowed| allowed.replace(None));
-    if allowed_index != Some(actual_index) {
+    let authorization = HNSW_CANDIDATE_HELPER_AUTHORIZATION.with(|allowed| allowed.replace(None));
+    let Some(authorization) = authorization else {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            "pgcontext internal HNSW candidate helper cannot be called directly",
+        );
+    };
+    if authorization.index_oid != actual_index {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
             "pgcontext internal HNSW candidate helper cannot be called directly",
         );
     }
+    authorization
 }
 
 include!("hnsw_am/sql_contract.rs");
@@ -545,12 +626,20 @@ fn hnsw_candidates(
         Err(error) => raise_core_error(error),
     };
     let index_relation = index_relation.as_ptr();
-    consume_hnsw_candidate_helper_capability(index_relation);
+    let authorization = consume_hnsw_candidate_helper_capability(index_relation);
+    let comparison_budget = HnswComparisonBudget::new(authorization.max_comparisons);
     ensure_hnsw_candidate_relation(index_relation);
     // SAFETY: `PgRelation` holds AccessShareLock for a validated index relation;
     // the page scan owns every buffer pin and returns owned candidate values.
-    let mut outcome =
-        unsafe { hnsw_scan_candidates(index_relation, Some(&query), Some(limit.get())) };
+    let mut outcome = unsafe {
+        hnsw_scan_candidates_with_comparison_budget(
+            index_relation,
+            Some(&query),
+            Some(limit.get()),
+            &comparison_budget,
+            authorization.max_memory_bytes,
+        )
+    };
     // SAFETY: the validated index relation identifies the heap relation and
     // remains locked by `PgRelation` while PostgreSQL resolves each index TID
     // through its HOT chain under the active statement snapshot.
@@ -572,12 +661,20 @@ fn hnsw_sparse_candidates(
     let limit = search_limit_from_masked_candidates(limit);
     let query = densify_hnsw_sparse_query(query);
     let index_relation = index_relation.as_ptr();
-    consume_hnsw_candidate_helper_capability(index_relation);
+    let authorization = consume_hnsw_candidate_helper_capability(index_relation);
+    let comparison_budget = HnswComparisonBudget::new(authorization.max_comparisons);
     ensure_hnsw_candidate_relation(index_relation);
     // SAFETY: `PgRelation` holds AccessShareLock for a validated index relation;
     // the page scan owns every buffer pin and returns owned candidate values.
-    let mut outcome =
-        unsafe { hnsw_scan_candidates(index_relation, Some(&query), Some(limit.get())) };
+    let mut outcome = unsafe {
+        hnsw_scan_candidates_with_comparison_budget(
+            index_relation,
+            Some(&query),
+            Some(limit.get()),
+            &comparison_budget,
+            authorization.max_memory_bytes,
+        )
+    };
     // SAFETY: see `hnsw_candidates`; sparse traversal stores the same canonical
     // heap TID representation as every other HNSW opclass.
     unsafe { resolve_visible_hnsw_candidates(index_relation, &mut outcome) };
@@ -602,12 +699,19 @@ fn hnsw_masked_candidates(
         Err(error) => raise_core_error(error),
     };
     let index_relation = index_relation.as_ptr();
-    consume_hnsw_candidate_helper_capability(index_relation);
+    let authorization = consume_hnsw_candidate_helper_capability(index_relation);
+    let comparison_budget = HnswComparisonBudget::new(authorization.max_comparisons);
     let score_metric = ensure_hnsw_candidate_relation(index_relation);
     // SAFETY: the validated index relation identifies the locked source heap;
     // converting visible tuple TIDs to HOT roots makes them comparable with
     // the root TIDs stored by PostgreSQL indexes.
-    let mask = unsafe { candidate_mask_from_heap_tids(index_relation, &allowed_heap_tids) };
+    let (mask, mask_point_count) = unsafe {
+        candidate_mask_from_heap_tids(
+            index_relation,
+            &allowed_heap_tids,
+            authorization.max_memory_bytes,
+        )
+    };
     // SAFETY: The validated relation owns a live versioned metapage.
     let config = unsafe { hnsw_stored_config(index_relation, score_metric) };
     // SAFETY: `PgRelation` holds AccessShareLock and keeps the relation cache
@@ -621,6 +725,9 @@ fn hnsw_masked_candidates(
             config,
             limit,
             &mask,
+            &comparison_budget,
+            authorization.max_memory_bytes,
+            mask_point_count,
         )
     };
     // SAFETY: the source heap remains locked for this helper call.
@@ -643,10 +750,17 @@ fn hnsw_sparse_masked_candidates(
     let limit = search_limit_from_masked_candidates(limit);
     let query = densify_hnsw_sparse_query(query);
     let index_relation = index_relation.as_ptr();
-    consume_hnsw_candidate_helper_capability(index_relation);
+    let authorization = consume_hnsw_candidate_helper_capability(index_relation);
+    let comparison_budget = HnswComparisonBudget::new(authorization.max_comparisons);
     let score_metric = ensure_hnsw_candidate_relation(index_relation);
     // SAFETY: see `hnsw_masked_candidates`.
-    let mask = unsafe { candidate_mask_from_heap_tids(index_relation, &allowed_heap_tids) };
+    let (mask, mask_point_count) = unsafe {
+        candidate_mask_from_heap_tids(
+            index_relation,
+            &allowed_heap_tids,
+            authorization.max_memory_bytes,
+        )
+    };
     // SAFETY: The validated relation owns a live versioned metapage.
     let config = unsafe { hnsw_stored_config(index_relation, score_metric) };
     // SAFETY: `PgRelation` holds AccessShareLock and the page adapter returns
@@ -659,6 +773,9 @@ fn hnsw_sparse_masked_candidates(
             config,
             limit,
             &mask,
+            &comparison_budget,
+            authorization.max_memory_bytes,
+            mask_point_count,
         )
     };
     // SAFETY: the source heap remains locked for this helper call.
@@ -719,7 +836,8 @@ fn search_limit_from_masked_candidates(limit: i32) -> SearchLimit {
 unsafe fn candidate_mask_from_heap_tids(
     index_relation: pg_sys::Relation,
     heap_tids: &AnyArray,
-) -> CandidateMask {
+    max_memory_bytes: usize,
+) -> (CandidateMask, usize) {
     let array_oid = heap_tids.oid();
     if array_oid != pg_sys::TEXTARRAYOID && array_oid != pg_sys::TIDARRAYOID {
         raise_sql_error(
@@ -728,6 +846,12 @@ unsafe fn candidate_mask_from_heap_tids(
         );
     }
     let max = crate::settings::hnsw_mask_candidate_limit_from_guc();
+    let point_count = heap_tids.into_iter().len();
+    require_hnsw_scan_memory(
+        projected_mask_bytes(point_count),
+        max_memory_bytes,
+        "candidate-mask construction",
+    );
     let mut points = Vec::new();
     for (position, value) in heap_tids.into_iter().enumerate() {
         if position >= max {
@@ -769,7 +893,7 @@ unsafe fn candidate_mask_from_heap_tids(
     // SAFETY: the caller validated and holds the index relation. The parsed
     // TIDs came from the source relation or fail closed during heap-page read.
     let points = unsafe { hot_root_heap_tids(index_relation, points) };
-    CandidateMask::only(points)
+    (CandidateMask::only(points), point_count)
 }
 
 /// Converts caller-visible heap TIDs to the root TIDs stored in an index.
@@ -1173,10 +1297,12 @@ struct HnswScanCandidates {
     requested_limit: usize,
 }
 
-unsafe fn hnsw_scan_candidates(
+unsafe fn hnsw_scan_candidates_with_comparison_budget(
     index_relation: pg_sys::Relation,
     query: Option<&DenseVector>,
     requested_limit: Option<usize>,
+    comparison_budget: &HnswComparisonBudget,
+    max_memory_bytes: usize,
 ) -> HnswScanCandidates {
     // SAFETY: The caller passes a valid index relation for the current AM
     // callback, and the first opclass input type is authoritative for this
@@ -1184,7 +1310,16 @@ unsafe fn hnsw_scan_candidates(
     let metric = unsafe { hnsw_score_metric(index_relation) };
     // SAFETY: The same validated live relation and owned query are forwarded
     // with the metric certified immediately above.
-    unsafe { hnsw_scan_candidates_with_metric(index_relation, query, requested_limit, metric) }
+    unsafe {
+        hnsw_scan_candidates_with_metric_and_comparison_budget(
+            index_relation,
+            query,
+            requested_limit,
+            metric,
+            comparison_budget,
+            max_memory_bytes,
+        )
+    }
 }
 
 unsafe fn hnsw_scan_candidates_with_metric(
@@ -1192,6 +1327,32 @@ unsafe fn hnsw_scan_candidates_with_metric(
     query: Option<&DenseVector>,
     requested_limit: Option<usize>,
     metric: HnswScoreMetric,
+) -> HnswScanCandidates {
+    let query_budget = active_hnsw_query_budget().unwrap_or_else(|| HnswQueryBudget {
+        comparison: HnswComparisonBudget::new(usize::MAX),
+        max_memory_bytes: usize::MAX,
+    });
+    // SAFETY: The caller's relation, metric, and query are unchanged; regular
+    // AM scans retain their existing unbounded comparison policy.
+    unsafe {
+        hnsw_scan_candidates_with_metric_and_comparison_budget(
+            index_relation,
+            query,
+            requested_limit,
+            metric,
+            &query_budget.comparison,
+            query_budget.max_memory_bytes,
+        )
+    }
+}
+
+unsafe fn hnsw_scan_candidates_with_metric_and_comparison_budget(
+    index_relation: pg_sys::Relation,
+    query: Option<&DenseVector>,
+    requested_limit: Option<usize>,
+    metric: HnswScoreMetric,
+    comparison_budget: &HnswComparisonBudget,
+    max_memory_bytes: usize,
 ) -> HnswScanCandidates {
     if let Some(query) = query {
         // SAFETY: The versioned metapage binds this opclass metric to the
@@ -1202,7 +1363,15 @@ unsafe fn hnsw_scan_candidates_with_metric(
         // AM callback owns the relation. It fetches nodes/layers on demand and
         // never materializes the persisted graph.
         return unsafe {
-            hnsw_page_graph_scan_candidates(index_relation, metric, query, config, requested_limit)
+            hnsw_page_graph_scan_candidates(
+                index_relation,
+                metric,
+                query,
+                config,
+                requested_limit,
+                comparison_budget,
+                max_memory_bytes,
+            )
         };
     }
     // A non-ordered AM scan has no kNN strategy: it visits visible index

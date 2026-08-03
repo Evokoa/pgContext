@@ -4,6 +4,7 @@ use std::{
     cmp::Reverse,
     collections::{BTreeSet, BinaryHeap, VecDeque},
     mem::size_of,
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 use context_core::{DenseVector, DistanceMetric, SearchLimit, policy::MAX_VECTOR_DIMENSIONS};
@@ -34,7 +35,47 @@ pub fn search_graph_read(
     limit: SearchLimit,
     cancellation: &mut impl HnswCancellation,
 ) -> Result<HnswSearchOutcome> {
-    search_graph_read_impl(graph, metric, query, config, limit, None, cancellation)
+    search_graph_read_with_comparison_budget(
+        graph,
+        metric,
+        query,
+        config,
+        limit,
+        &HnswComparisonBudget::unlimited(),
+        cancellation,
+    )
+}
+
+/// Searches an owned graph adapter under a shared hard scoring budget.
+///
+/// The budget is charged immediately before each adapter node-score call, so
+/// traversal cannot perform more node reads or distance evaluations than the
+/// caller allows. Clones share one atomic counter across segmented or parallel
+/// searches.
+///
+/// # Errors
+///
+/// Returns [`HnswError::ComparisonBudgetExceeded`] before the first score that
+/// would exceed `comparison_budget`, plus the errors from [`search_graph_read`].
+pub fn search_graph_read_with_comparison_budget(
+    graph: &mut impl GraphRead,
+    metric: DistanceMetric,
+    query: &DenseVector,
+    config: HnswConfig,
+    limit: SearchLimit,
+    comparison_budget: &HnswComparisonBudget,
+    cancellation: &mut impl HnswCancellation,
+) -> Result<HnswSearchOutcome> {
+    search_graph_read_impl(
+        graph,
+        metric,
+        query,
+        config,
+        limit,
+        None,
+        comparison_budget,
+        cancellation,
+    )
 }
 
 /// Searches a graph adapter while allowing only results named by `mask`.
@@ -92,6 +133,38 @@ pub fn search_graph_read_with_mask_budgeted(
     max_mask_points: usize,
     cancellation: &mut impl HnswCancellation,
 ) -> Result<HnswSearchOutcome> {
+    search_graph_read_with_mask_and_comparison_budget(
+        graph,
+        metric,
+        query,
+        config,
+        limit,
+        mask,
+        max_mask_points,
+        &HnswComparisonBudget::unlimited(),
+        cancellation,
+    )
+}
+
+/// Masked graph search with independent mask-size and scoring budgets.
+///
+/// # Errors
+///
+/// Returns [`HnswError::ComparisonBudgetExceeded`] before a node score would
+/// cross the shared comparison cap, plus the errors from
+/// [`search_graph_read_with_mask_budgeted`].
+#[allow(clippy::too_many_arguments)]
+pub fn search_graph_read_with_mask_and_comparison_budget(
+    graph: &mut impl GraphRead,
+    metric: DistanceMetric,
+    query: &DenseVector,
+    config: HnswConfig,
+    limit: SearchLimit,
+    mask: &CandidateMask,
+    max_mask_points: usize,
+    comparison_budget: &HnswComparisonBudget,
+    cancellation: &mut impl HnswCancellation,
+) -> Result<HnswSearchOutcome> {
     mask.validate_budget_with_limit(max_mask_points)?;
     search_graph_read_impl(
         graph,
@@ -100,10 +173,15 @@ pub fn search_graph_read_with_mask_budgeted(
         config,
         limit,
         Some(mask),
+        comparison_budget,
         cancellation,
     )
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the graph-port traversal keeps filter, budget, and cancellation policies explicit"
+)]
 fn search_graph_read_impl(
     graph: &mut impl GraphRead,
     metric: DistanceMetric,
@@ -111,6 +189,7 @@ fn search_graph_read_impl(
     config: HnswConfig,
     limit: SearchLimit,
     mask: Option<&CandidateMask>,
+    comparison_budget: &HnswComparisonBudget,
     cancellation: &mut impl HnswCancellation,
 ) -> Result<HnswSearchOutcome> {
     ensure_hnsw_metric(metric)?;
@@ -134,6 +213,7 @@ fn search_graph_read_impl(
     let scorer = HnswScorer { metric, query };
     let mut work = HnswWork::default();
     work.check_cancellation(cancellation)?;
+    work.record_distance_budgeted(comparison_budget)?;
     let entry_layer_count = graph_read_node_score(graph, &scorer, current)?.2;
     for layer_index in (1..entry_layer_count).rev() {
         let candidates = search_graph_read_layer(
@@ -143,6 +223,7 @@ fn search_graph_read_impl(
             1,
             LayerIndex::new(layer_index),
             &mut work,
+            comparison_budget,
             cancellation,
         )?;
         if let Some(best) = candidates.first() {
@@ -159,6 +240,7 @@ fn search_graph_read_impl(
             LayerIndex::base(),
             mask,
             &mut work,
+            comparison_budget,
             cancellation,
         )?
     } else {
@@ -169,11 +251,13 @@ fn search_graph_read_impl(
             search_width,
             LayerIndex::base(),
             &mut work,
+            comparison_budget,
             cancellation,
         )?
     };
     let mut results = Vec::with_capacity(candidates.len());
     for candidate in candidates {
+        comparison_budget.reserve_comparison()?;
         let point_id = graph_read_point_id(graph, candidate.node_id)?;
         if mask.is_some_and(|mask| !mask.allows(point_id)) {
             continue;
@@ -197,9 +281,10 @@ fn search_graph_read_layer_filtered(
     layer: LayerIndex,
     mask: &CandidateMask,
     work: &mut HnswWork,
+    comparison_budget: &HnswComparisonBudget,
     cancellation: &mut impl HnswCancellation,
 ) -> Result<Vec<Candidate>> {
-    work.record_distance()?;
+    work.record_distance_budgeted(comparison_budget)?;
     let (entry_score, entry_point_id, _) = graph_read_node_score(graph, scorer, entry)?;
     let entry_candidate = Candidate {
         node_id: entry,
@@ -246,7 +331,7 @@ fn search_graph_read_layer_filtered(
                 continue;
             }
             *neighbor_visited = true;
-            work.record_distance()?;
+            work.record_distance_budgeted(comparison_budget)?;
             let (score, point_id, _) = graph_read_node_score(graph, scorer, neighbor)?;
             let scored = Candidate {
                 node_id: neighbor,
@@ -281,7 +366,7 @@ fn search_graph_read_layer_filtered(
                         continue;
                     }
                     *second_visited = true;
-                    work.record_distance()?;
+                    work.record_distance_budgeted(comparison_budget)?;
                     let (score, point_id, _) =
                         graph_read_node_score(graph, scorer, second_neighbor)?;
                     let second_scored = Candidate {
@@ -306,6 +391,10 @@ fn search_graph_read_layer_filtered(
     Ok(nearest.into_sorted_vec())
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one layer traversal carries explicit topology, work, budget, and cancellation state"
+)]
 fn search_graph_read_layer(
     graph: &mut impl GraphRead,
     scorer: &HnswScorer<'_>,
@@ -313,9 +402,10 @@ fn search_graph_read_layer(
     ef: usize,
     layer: LayerIndex,
     work: &mut HnswWork,
+    comparison_budget: &HnswComparisonBudget,
     cancellation: &mut impl HnswCancellation,
 ) -> Result<Vec<Candidate>> {
-    work.record_distance()?;
+    work.record_distance_budgeted(comparison_budget)?;
     let entry_candidate = Candidate {
         node_id: entry,
         score: graph_read_node_score(graph, scorer, entry)?.0,
@@ -354,7 +444,7 @@ fn search_graph_read_layer(
                 continue;
             }
             *neighbor_visited = true;
-            work.record_distance()?;
+            work.record_distance_budgeted(comparison_budget)?;
             let scored = Candidate {
                 node_id: neighbor,
                 score: graph_read_node_score(graph, scorer, neighbor)?.0,
@@ -486,6 +576,84 @@ impl HnswLevelSeed {
     }
 }
 
+/// Shared hard cap for node scoring across one logical HNSW query.
+///
+/// Clones reserve from the same atomic counter, allowing segmented parallel
+/// traversal to enforce one query-wide comparison limit without post-hoc
+/// accounting.
+#[derive(Debug, Clone)]
+pub struct HnswComparisonBudget {
+    maximum: usize,
+    consumed: Arc<AtomicUsize>,
+}
+
+impl HnswComparisonBudget {
+    /// Creates a scoring budget. A zero budget rejects every nonempty search.
+    #[must_use]
+    pub fn new(maximum: usize) -> Self {
+        Self {
+            maximum,
+            consumed: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn unlimited() -> Self {
+        Self::new(usize::MAX)
+    }
+
+    /// Returns the maximum number of scores allowed for this logical query.
+    #[must_use]
+    pub const fn maximum(&self) -> usize {
+        self.maximum
+    }
+
+    /// Returns the number of scores admitted so far.
+    #[must_use]
+    pub fn consumed(&self) -> usize {
+        self.consumed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Returns comparisons not yet reserved.
+    #[must_use]
+    pub fn remaining(&self) -> usize {
+        self.maximum.saturating_sub(self.consumed())
+    }
+
+    /// Reserves one node read or score before the adapter performs it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HnswError::ComparisonBudgetExceeded`] without incrementing
+    /// the counter when no query-wide capacity remains.
+    pub fn reserve_comparison(&self) -> Result<()> {
+        self.reserve_comparisons(1)
+    }
+
+    /// Atomically reserves `count` comparisons before a bounded batch scores.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HnswError::ComparisonBudgetExceeded`] without changing the
+    /// shared counter when the complete batch does not fit.
+    pub fn reserve_comparisons(&self, count: usize) -> Result<()> {
+        let result = self.consumed.fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |consumed| {
+                consumed
+                    .checked_add(count)
+                    .filter(|next| *next <= self.maximum)
+            },
+        );
+        result
+            .map(|_| ())
+            .map_err(|consumed| HnswError::ComparisonBudgetExceeded {
+                maximum: self.maximum,
+                consumed,
+            })
+    }
+}
+
 /// Bounded work counters returned by insertion and search.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HnswWork {
@@ -523,6 +691,11 @@ impl HnswWork {
     fn record_distance(&mut self) -> Result<()> {
         self.distance_evaluations = checked_work_increment(self.distance_evaluations)?;
         Ok(())
+    }
+
+    fn record_distance_budgeted(&mut self, budget: &HnswComparisonBudget) -> Result<()> {
+        budget.reserve_comparison()?;
+        self.record_distance()
     }
 
     fn record_expansion(&mut self) -> Result<()> {

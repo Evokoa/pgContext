@@ -2,15 +2,15 @@
 
 #![allow(clippy::expect_used)]
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, collections::BTreeMap, rc::Rc};
 
 use context_core::{OccurrenceId, PointId, SourceAuthority, SourceKey};
 use context_query::{
     Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateProvenance, CandidateSource,
     CandidateSourceKind, Completion, ExecutionBudget, ExecutionOutcome, ExecutionState,
-    FilterCandidateBatch, FilterCandidateSource, HydratedCandidate, QueryError, QueryExecutor,
-    QueryIr, ReadinessReason, ScoreOrder, SourceReadiness, SourceRechecker, StageDiagnostic,
-    TelemetrySink,
+    FilterCandidateBatch, FilterCandidateSource, HydratedCandidate, PortBudget, QueryClock,
+    QueryError, QueryExecutor, QueryIr, ReadinessReason, RecheckPage, ScoreOrder, SourceReadiness,
+    SourceRechecker, StageDiagnostic, TelemetrySink,
 };
 use proptest::prelude::*;
 
@@ -24,7 +24,11 @@ struct FakeCandidateSource {
 }
 
 impl CandidateSource for FakeCandidateSource {
-    fn readiness(&mut self, _query: &QueryIr) -> Result<SourceReadiness, QueryError> {
+    fn readiness(
+        &mut self,
+        _query: &QueryIr,
+        _budget: PortBudget,
+    ) -> Result<SourceReadiness, QueryError> {
         self.readiness_calls += 1;
         Ok(self.readiness.clone())
     }
@@ -34,6 +38,7 @@ impl CandidateSource for FakeCandidateSource {
         _query: &QueryIr,
         _filter: Option<&FilterCandidateBatch>,
         _limit: usize,
+        _budget: PortBudget,
     ) -> Result<CandidatePage, QueryError> {
         self.candidate_calls += 1;
         if let Some(cancelled) = &self.cancel_on_candidates {
@@ -55,6 +60,7 @@ impl FilterCandidateSource for FakeFilterSource {
         &mut self,
         _query: &QueryIr,
         _limit: usize,
+        _budget: PortBudget,
     ) -> Result<FilterCandidateBatch, QueryError> {
         self.calls += 1;
         if let Some(cancelled) = &self.cancel_on_call {
@@ -71,18 +77,37 @@ struct FakeRechecker {
     cancel_on_call: Option<Rc<Cell<bool>>>,
 }
 
+struct ZeroWorkRechecker {
+    rows: Vec<HydratedCandidate>,
+    calls: usize,
+}
+
+impl SourceRechecker for ZeroWorkRechecker {
+    fn recheck(
+        &mut self,
+        _query: &QueryIr,
+        _candidates: &[Candidate],
+        _limit: usize,
+        _budget: PortBudget,
+    ) -> Result<RecheckPage, QueryError> {
+        self.calls = self.calls.saturating_add(1);
+        Ok(RecheckPage::new(self.rows.clone(), 0))
+    }
+}
+
 impl SourceRechecker for FakeRechecker {
     fn recheck(
         &mut self,
         _query: &QueryIr,
         _candidates: &[Candidate],
         _limit: usize,
-    ) -> Result<Vec<HydratedCandidate>, QueryError> {
+        _budget: PortBudget,
+    ) -> Result<RecheckPage, QueryError> {
         self.calls += 1;
         if let Some(cancelled) = &self.cancel_on_call {
             cancelled.set(true);
         }
-        Ok(self.rows.clone())
+        Ok(RecheckPage::new(self.rows.clone(), _candidates.len()))
     }
 }
 
@@ -105,6 +130,14 @@ impl TelemetrySink for FakeTelemetry {
 struct CancelAfter {
     checks: Cell<usize>,
     cancel_at: usize,
+}
+
+struct StaticClock;
+
+impl QueryClock for StaticClock {
+    fn now_micros(&self) -> u64 {
+        0
+    }
 }
 
 impl CancelAfter {
@@ -188,7 +221,7 @@ fn executor_runs_filter_candidates_recheck_and_deterministic_output() {
         ..Default::default()
     };
     let mut filter = FakeFilterSource {
-        batch: FilterCandidateBatch::new(vec![PointId::new(1), PointId::new(3)], true),
+        batch: FilterCandidateBatch::new(vec![PointId::new(1), PointId::new(3)], 2, true),
         ..Default::default()
     };
     let mut rechecker = FakeRechecker {
@@ -387,6 +420,67 @@ fn executor_skips_recheck_for_an_empty_candidate_stage() {
 }
 
 #[test]
+fn executor_completes_an_empty_page_at_the_exact_comparison_boundary() {
+    let mut candidates = FakeCandidateSource {
+        readiness: SourceReadiness::Ready,
+        page: CandidatePage::with_scored_count(Vec::new(), 8, true),
+        ..Default::default()
+    };
+    let mut rechecker = FakeRechecker::default();
+    let mut telemetry = FakeTelemetry::default();
+    let exact = budget()
+        .with_resource_limits(8, 1024 * 1024, 1024 * 1024, 10_000)
+        .expect("exact comparison budget");
+
+    let outcome = QueryExecutor::new(
+        &mut candidates,
+        None,
+        &mut rechecker,
+        &mut telemetry,
+        &CancelAfter::never(),
+    )
+    .execute(&query(false), exact)
+    .expect("an exhausted empty page is complete at the inclusive maximum");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.usage().comparisons(), 8);
+    assert!(outcome.points().is_empty());
+    assert_eq!(rechecker.calls, 0);
+}
+
+#[test]
+fn executor_allows_a_zero_work_recheck_at_the_exact_comparison_boundary() {
+    let mut candidates = FakeCandidateSource {
+        readiness: SourceReadiness::Ready,
+        page: CandidatePage::with_scored_count(vec![candidate(1, 0.5)], 8, true),
+        ..Default::default()
+    };
+    let mut rechecker = ZeroWorkRechecker {
+        rows: vec![hydrated(1, 0.5)],
+        calls: 0,
+    };
+    let mut telemetry = FakeTelemetry::default();
+    let exact = budget()
+        .with_resource_limits(8, 1024 * 1024, 1024 * 1024, 10_000)
+        .expect("exact comparison budget");
+
+    let outcome = QueryExecutor::new(
+        &mut candidates,
+        None,
+        &mut rechecker,
+        &mut telemetry,
+        &CancelAfter::never(),
+    )
+    .execute(&query(false), exact)
+    .expect("zero-work recheck is valid at the inclusive maximum");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.usage().comparisons(), 8);
+    assert_eq!(outcome.points().len(), 1);
+    assert_eq!(rechecker.calls, 1);
+}
+
+#[test]
 fn executor_rejects_candidate_sources_that_exceed_the_requested_budget() {
     let mut candidates = FakeCandidateSource {
         readiness: SourceReadiness::Ready,
@@ -483,7 +577,7 @@ fn executor_checks_cancellation_after_filter_recheck_and_telemetry_ports() {
         ..Default::default()
     };
     let mut filter = FakeFilterSource {
-        batch: FilterCandidateBatch::new(vec![PointId::new(1)], true),
+        batch: FilterCandidateBatch::new(vec![PointId::new(1)], 1, true),
         cancel_on_call: Some(Rc::clone(&cancelled)),
         ..Default::default()
     };
@@ -585,7 +679,7 @@ fn partial_filter_pages_stop_before_incomplete_candidate_work() {
         ..Default::default()
     };
     let mut filter = FakeFilterSource {
-        batch: FilterCandidateBatch::new(vec![PointId::new(1)], false),
+        batch: FilterCandidateBatch::new(vec![PointId::new(1)], 1, false),
         ..Default::default()
     };
     let mut rechecker = FakeRechecker::default();
@@ -797,6 +891,7 @@ fn execute_rows(rows: Vec<HydratedCandidate>) -> ExecutionOutcome {
         &mut telemetry,
         &CancelAfter::never(),
     )
+    .with_clock(&StaticClock)
     .execute(&query(false), budget())
     .expect("generated execution should succeed")
 }
@@ -807,6 +902,8 @@ proptest! {
         raw_rows in prop::collection::vec((0_u16..16, 0_u16..1000), 0..8)
     ) {
         let rows = raw_rows
+            .into_iter()
+            .collect::<BTreeMap<_, _>>()
             .into_iter()
             .map(|(point_id, score)| hydrated(u64::from(point_id), f64::from(score) / 100.0))
             .collect::<Vec<_>>();

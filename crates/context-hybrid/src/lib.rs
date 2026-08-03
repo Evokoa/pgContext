@@ -148,6 +148,21 @@ pub struct WeightedBranch<'a> {
     order: ScoreOrder,
 }
 
+/// One ordered branch participating in weighted reciprocal-rank fusion.
+#[derive(Clone, Copy, Debug)]
+pub struct WeightedRankedBranch<'a> {
+    points: &'a [RankedPoint],
+    weight: f64,
+}
+
+impl<'a> WeightedRankedBranch<'a> {
+    /// Creates a weighted ranked branch.
+    #[must_use]
+    pub const fn new(points: &'a [RankedPoint], weight: f64) -> Self {
+        Self { points, weight }
+    }
+}
+
 impl<'a> WeightedBranch<'a> {
     /// Creates a weighted branch.
     #[must_use]
@@ -171,6 +186,67 @@ pub enum WeightedFusionError {
     MissingScore,
     /// A candidate carries a non-finite adapter score.
     InvalidScore,
+}
+
+/// Fuses ordered branches using weighted reciprocal rank fusion.
+///
+/// Unlike normalized score fusion, this operation never compares raw scores
+/// from different profiles. Each distinct point contributes
+/// `weight / (k + rank)` at most once per branch. Results are deterministic by
+/// descending fused score and then ascending point identifier.
+///
+/// # Errors
+///
+/// Returns [`WeightedFusionError::InvalidWeight`] for a negative or non-finite
+/// weight and [`WeightedFusionError::ZeroTotalWeight`] when no positive branch
+/// participates.
+pub fn weighted_reciprocal_rank_fusion(
+    branches: &[WeightedRankedBranch<'_>],
+    k: RrfK,
+    limit: usize,
+) -> Result<Vec<FusedPoint>, WeightedFusionError> {
+    if branches
+        .iter()
+        .any(|branch| !branch.weight.is_finite() || branch.weight < 0.0)
+    {
+        return Err(WeightedFusionError::InvalidWeight);
+    }
+    let total_weight = branches.iter().map(|branch| branch.weight).sum::<f64>();
+    if !total_weight.is_finite() || total_weight <= 0.0 {
+        return Err(WeightedFusionError::ZeroTotalWeight);
+    }
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+
+    let mut scores = BTreeMap::<u64, f64>::new();
+    for branch in branches.iter().filter(|branch| branch.weight > 0.0) {
+        let normalized_weight = branch.weight / total_weight;
+        let mut seen_in_branch = BTreeSet::new();
+        for (index, point) in branch.points.iter().enumerate() {
+            if !seen_in_branch.insert(point.point_id()) {
+                continue;
+            }
+            let Ok(rank) = u32::try_from(index.saturating_add(1)) else {
+                continue;
+            };
+            let contribution = normalized_weight / (f64::from(k.get()) + f64::from(rank));
+            *scores.entry(point.point_id()).or_default() += contribution;
+        }
+    }
+
+    let mut fused = scores
+        .into_iter()
+        .map(|(point_id, score)| FusedPoint::new(point_id, score))
+        .collect::<Vec<_>>();
+    fused.sort_by(|left, right| {
+        right
+            .score()
+            .total_cmp(&left.score())
+            .then_with(|| left.point_id().cmp(&right.point_id()))
+    });
+    fused.truncate(limit);
+    Ok(fused)
 }
 
 impl FusedPoint {

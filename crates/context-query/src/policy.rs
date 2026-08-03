@@ -6,6 +6,8 @@ use crate::{QueryError, Result};
 
 /// Default maximum exact MaxSim comparisons accepted by SQL adapters.
 pub const MAX_LATE_INTERACTION_COMPARISONS: usize = 1_000_000;
+/// Maximum total f32 cells accepted across one late-interaction query.
+pub const MAX_LATE_INTERACTION_SCALAR_CELLS: usize = 1_000_000;
 
 /// One bounded candidate-expansion decision after authoritative recheck.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

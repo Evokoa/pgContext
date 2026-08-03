@@ -140,6 +140,8 @@ fn query_kind_label(query: &QueryIr) -> &'static str {
             | QueryKind::ScoreThreshold { .. }
             | QueryKind::Formula { .. }
             | QueryKind::Rerank { .. }
+            | QueryKind::ExternalRerank { .. }
+            | QueryKind::TopologyExpand { .. }
     ) {
         "hybrid"
     } else if query.has_filter_in_subtree() {

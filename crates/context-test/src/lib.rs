@@ -14,6 +14,7 @@ use context_query::CandidateBranch;
 mod certification;
 mod late_interaction;
 mod p5_codec;
+mod p8_composite;
 
 pub use certification::{
     CertificationArtifactKind, CertificationArtifactManifest, CertificationDatasetManifest,
@@ -28,6 +29,12 @@ pub use p5_codec::{
     P5_CODEC_DIMENSIONS, P5_CODEC_GATES, P5_CODEC_GENERATOR_REVISION, P5_CODEC_QUERY_COUNT,
     P5_CODEC_QUERY_IDS, P5_CODEC_ROWS, P5_CODEC_SEED, P5_CODEC_TOP_K,
     P5_CODEC_TRAINING_SAMPLE_ROWS, P5CodecGate, p5_codec_manifest_hash,
+};
+pub use p8_composite::{
+    P8_DEFAULT_COMPARISONS, P8_DEFAULT_ELAPSED_MICROS, P8_DEFAULT_HYDRATION_BYTES,
+    P8_DEFAULT_MEMORY_BYTES, P8_MAX_CANDIDATES, P8_MAX_COMPARISONS, P8_MAX_ELAPSED_MICROS,
+    P8_MAX_EXPANSIONS, P8_MAX_HYDRATION_BYTES, P8_MAX_MEMORY_BYTES, P8_MAX_QUERY_DEPTH,
+    P8_MAX_QUERY_NODES, P8_MAX_RESULTS, P8_MAX_STAGES, P8_STAGE_KINDS, p8_composite_manifest_hash,
 };
 
 /// Maximum accepted latency regression before explicit review is required.

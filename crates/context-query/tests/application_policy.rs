@@ -116,6 +116,13 @@ fn query_constructor_validation_preserves_the_stable_json_builder_contract() {
         })
     ));
     assert!(matches!(
+        QueryPlanValidator::lookup_point_ids(&[7, 7]),
+        Err(QueryError::InvalidInput {
+            field: "point_ids",
+            ..
+        })
+    ));
+    assert!(matches!(
         QueryPlanValidator::weight(f64::INFINITY),
         Err(QueryError::InvalidInput {
             field: "weight",
