@@ -13,12 +13,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use context_core::{DenseVector, DistanceMetric, ExactSearchItem, SearchLimit, exact_top_k};
-use context_index::{
-    RerankCandidate, TrainedQuantizer, rerank_by_original_vectors, train_product_quantizer,
-    train_scalar_quantizer,
+use context_codec::{
+    QuantizedCodebook, RerankCandidate, TrainedQuantizer, rerank_by_original_vectors,
+    train_product_quantizer, train_scalar_quantizer,
 };
-use context_storage::HnswGraphQuantizationCodebook;
+use context_core::{DenseVector, DistanceMetric, ExactSearchItem, SearchLimit, exact_top_k};
 use context_test::{BenchmarkDatasetSpec, BenchmarkRow, RecallSummary};
 
 const LIMIT: usize = 10;
@@ -89,7 +88,7 @@ fn run_mode(
     let codes = rows
         .iter()
         .map(|row| trained.quantize(&row.vector))
-        .collect::<context_index::Result<Vec<_>>>()?;
+        .collect::<context_codec::Result<Vec<Vec<u8>>>>()?;
     let prepared = codebook.prepare_query(query, DistanceMetric::L2)?;
     let original_by_id = original_vector_map(rows);
 
@@ -109,7 +108,7 @@ fn run_mode(
                     nearest.pop();
                 }
             }
-            Ok::<_, context_storage::HnswGraphPayloadError>(nearest)
+            Ok::<_, context_codec::CodecError>(nearest)
         },
     )?;
     let rerank_candidates = approximate
@@ -204,21 +203,21 @@ impl PartialOrd for ApproximateCandidate {
     }
 }
 
-fn persisted_codebook(trained: &TrainedQuantizer) -> HnswGraphQuantizationCodebook {
+fn persisted_codebook(trained: &TrainedQuantizer) -> QuantizedCodebook {
     match trained {
-        TrainedQuantizer::Binary { dimensions } => HnswGraphQuantizationCodebook::Binary {
+        TrainedQuantizer::Binary { dimensions } => QuantizedCodebook::Binary {
             dimensions: *dimensions,
         },
         TrainedQuantizer::Scalar {
             quantizer,
             dimensions,
-        } => HnswGraphQuantizationCodebook::Scalar {
+        } => QuantizedCodebook::Scalar {
             dimensions: *dimensions,
             minimum: quantizer.min(),
             maximum: quantizer.max(),
             levels: quantizer.levels(),
         },
-        TrainedQuantizer::Product(quantizer) => HnswGraphQuantizationCodebook::Product {
+        TrainedQuantizer::Product(quantizer) => QuantizedCodebook::Product {
             dimensions: trained.dimensions(),
             subvector_dimensions: quantizer.subvector_dimensions(),
             codebooks: quantizer
@@ -230,11 +229,11 @@ fn persisted_codebook(trained: &TrainedQuantizer) -> HnswGraphQuantizationCodebo
     }
 }
 
-fn codebook_bytes(codebook: &HnswGraphQuantizationCodebook) -> usize {
+fn codebook_bytes(codebook: &QuantizedCodebook) -> usize {
     match codebook {
-        HnswGraphQuantizationCodebook::Binary { .. } => 0,
-        HnswGraphQuantizationCodebook::Scalar { .. } => 16,
-        HnswGraphQuantizationCodebook::Product { codebooks, .. } => codebooks
+        QuantizedCodebook::Binary { .. } => 0,
+        QuantizedCodebook::Scalar { .. } => 16,
+        QuantizedCodebook::Product { codebooks, .. } => codebooks
             .iter()
             .flatten()
             .map(|centroid| centroid.dimension() * size_of::<f32>())

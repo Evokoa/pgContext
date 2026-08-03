@@ -2,7 +2,8 @@
 
 use std::{collections::BTreeMap, error::Error, fmt};
 
-use context_hybrid::{BranchCandidate, CandidateBatch, CandidateBranch};
+use context_hybrid::{BranchCandidate, CandidateBatch};
+use context_query::CandidateBranch;
 
 /// One raw candidate row emitted by a PostgreSQL branch adapter.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +34,7 @@ impl HydratedCandidate {
 /// A fully hydrated branch batch ready for reciprocal-rank fusion.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct HydratedBranch {
+    pub(super) branch: CandidateBranch,
     pub(super) candidates: CandidateBatch,
     pub(super) source_keys: BTreeMap<u64, String>,
 }
@@ -123,7 +125,7 @@ pub(super) fn hydrate_sparse_planned_candidates(
     candidates: Vec<HydratedCandidate>,
     context: &'static str,
 ) -> Result<HydratedBranch, HydrationError> {
-    hydrate_scored_candidates(CandidateBranch::SparsePlanned, candidates, context)
+    hydrate_scored_candidates(CandidateBranch::Sparse, candidates, context)
 }
 
 #[allow(dead_code)]
@@ -184,7 +186,8 @@ fn hydrate_candidates(
     }
 
     Ok(HydratedBranch {
-        candidates: CandidateBatch::from_candidates(branch, branch_candidates),
+        branch,
+        candidates: CandidateBatch::from_candidates(branch_candidates),
         source_keys,
     })
 }
@@ -217,7 +220,7 @@ mod tests {
         hydrate_dense_exact_candidates, hydrate_full_text_candidates,
         hydrate_sparse_planned_candidates, hydrate_user_provided_candidates,
     };
-    use context_hybrid::CandidateBranch;
+    use context_query::CandidateBranch;
 
     #[test]
     fn hydrates_all_branch_shapes_to_candidate_batches() -> Result<(), Box<dyn std::error::Error>> {
@@ -227,11 +230,11 @@ mod tests {
         let sparse = hydrate_sparse_planned_candidates(scored_rows(), "sparse planned")?;
         let user = hydrate_user_provided_candidates(vec![7, 9], "user batch")?;
 
-        assert_eq!(dense.candidates.branch(), CandidateBranch::DenseExact);
-        assert_eq!(ann.candidates.branch(), CandidateBranch::DenseAnn);
-        assert_eq!(full_text.candidates.branch(), CandidateBranch::FullText);
-        assert_eq!(sparse.candidates.branch(), CandidateBranch::SparsePlanned);
-        assert_eq!(user.candidates.branch(), CandidateBranch::UserProvided);
+        assert_eq!(dense.branch, CandidateBranch::DenseExact);
+        assert_eq!(ann.branch, CandidateBranch::DenseAnn);
+        assert_eq!(full_text.branch, CandidateBranch::FullText);
+        assert_eq!(sparse.branch, CandidateBranch::Sparse);
+        assert_eq!(user.branch, CandidateBranch::UserProvided);
         assert_eq!(dense.candidates.points()[0].point_id(), 7);
         assert_eq!(dense.source_keys.get(&9), Some(&"beta".to_owned()));
         assert_eq!(user.source_keys.get(&7), Some(&"7".to_owned()));

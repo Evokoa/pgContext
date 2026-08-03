@@ -3,10 +3,14 @@
 mod sparse;
 pub(crate) use sparse::{SparseCandidateStrategy, run_sparse_query};
 
-use context_core::{CollectionName, DenseVector, PointId, SearchLimit, SourceKey};
+use context_core::{
+    CollectionName, ConfigurationRevision, DenseVector, GenerationId, OccurrenceId, PointId,
+    ScoreOrder, SearchLimit, SourceAuthority, SourceKey,
+};
 use context_query::{
-    Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateSource, Completion,
-    ExecutionBudget, ExecutionOutcome, ExecutionState, FilterCandidateBatch, FilterCandidateSource,
+    Cancellation, Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage,
+    CandidateProvenance, CandidateSource, CandidateSourceKind, Completion, ExecutionBudget,
+    ExecutionOutcome, ExecutionState, FilterCandidateBatch, FilterCandidateSource,
     HydratedCandidate, QueryError, QueryExecutor, QueryIr, QueryKind, Result, SourceReadiness,
     SourceRechecker, StageDiagnostic, TelemetrySink,
 };
@@ -31,6 +35,76 @@ pub(crate) enum CandidateAdapter {
     Exact,
     /// Attached PostgreSQL HNSW index ordering.
     Hnsw,
+}
+
+pub(super) fn candidate_provenance(
+    point_id: PointId,
+    branch: CandidateBranch,
+    source: CandidateSourceKind,
+    score_order: ScoreOrder,
+    authority: SourceAuthority,
+) -> Result<CandidateProvenance> {
+    let occurrence_id = candidate_occurrence_id(point_id, branch, source, None, None)?;
+    Ok(CandidateProvenance::new(
+        occurrence_id,
+        branch,
+        source,
+        score_order,
+        authority,
+    ))
+}
+
+fn artifact_candidate_provenance(
+    point_id: PointId,
+    branch: CandidateBranch,
+    source: CandidateSourceKind,
+    score_order: ScoreOrder,
+    authority: SourceAuthority,
+    generation: GenerationId,
+    configuration: ConfigurationRevision,
+) -> Result<CandidateProvenance> {
+    let occurrence_id = candidate_occurrence_id(
+        point_id,
+        branch,
+        source,
+        Some(generation),
+        Some(configuration),
+    )?;
+    Ok(
+        CandidateProvenance::new(occurrence_id, branch, source, score_order, authority)
+            .with_generation(generation)
+            .with_configuration(configuration),
+    )
+}
+
+fn candidate_occurrence_id(
+    point_id: PointId,
+    branch: CandidateBranch,
+    source: CandidateSourceKind,
+    generation: Option<GenerationId>,
+    configuration: Option<ConfigurationRevision>,
+) -> Result<OccurrenceId> {
+    // FNV-1a is deliberately fixed here: occurrence IDs must be reproducible
+    // across processes and must change when any source identity component does.
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for bytes in [
+        point_id.get().to_le_bytes(),
+        u64::from(branch.stable_code()).to_le_bytes(),
+        u64::from(source.stable_code()).to_le_bytes(),
+        generation.map_or(0, GenerationId::get).to_le_bytes(),
+        configuration
+            .map_or(0, ConfigurationRevision::get)
+            .to_le_bytes(),
+    ] {
+        for byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    OccurrenceId::new(hash).ok_or_else(|| QueryError::PortFailure {
+        stage: "candidate_provenance",
+        message: "candidate occurrence hash resolved to the reserved zero value".to_owned(),
+    })
 }
 
 /// Exact SPI candidate generation over the caller-visible source rows.
@@ -82,10 +156,17 @@ type DenseVectorMap = BTreeMap<Option<String>, SearchVector>;
 type SparseSourceCache = Rc<RefCell<BTreeMap<String, sparse::CompositeSparseSource>>>;
 type LateInteractionCache =
     Rc<RefCell<Option<crate::hybrid_query::late_interaction_ann::CompositeLateInteractionSource>>>;
-type QuantizedArtifactCache = Rc<RefCell<BTreeMap<Option<String>, String>>>;
+type QuantizedArtifactCache = Rc<RefCell<BTreeMap<Option<String>, QuantizedArtifactIdentity>>>;
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct QuantizedArtifactIdentity {
+    name: String,
+    generation: GenerationId,
+    configuration: ConfigurationRevision,
+}
 
 enum QuantizedArtifactResolution {
-    Ready(String),
+    Ready(QuantizedArtifactIdentity),
     RebuildRequired,
     Missing,
 }
@@ -132,8 +213,8 @@ impl CandidateSource for PgCandidateRouter<'_> {
                     let registered_vector =
                         registered_vector_for_query(self.registered_vectors, query)?;
                     if uses_quantized_mmap(query, registered_vector) {
-                        let artifact_name = match resolve_quantized_artifact(self.collection_id)? {
-                            QuantizedArtifactResolution::Ready(artifact_name) => artifact_name,
+                        let artifact = match resolve_quantized_artifact(self.collection_id)? {
+                            QuantizedArtifactResolution::Ready(artifact) => artifact,
                             QuantizedArtifactResolution::RebuildRequired => {
                                 return Ok(SourceReadiness::RebuildRequired {
                                     reason: context_query::ReadinessReason::ConfigurationChanged,
@@ -147,7 +228,7 @@ impl CandidateSource for PgCandidateRouter<'_> {
                         };
                         self.quantized_artifacts
                             .borrow_mut()
-                            .insert(dense_vector_key(query)?, artifact_name);
+                            .insert(dense_vector_key(query)?, artifact);
                         Ok(SourceReadiness::Ready)
                     } else {
                         SpiHnswCandidateSource::new(self.collection_id, registered_vector)
@@ -231,7 +312,7 @@ impl CandidateSource for PgCandidateRouter<'_> {
                 }
                 CandidateAdapter::Hnsw => {
                     if uses_quantized_mmap(query, registered_vector) {
-                        let artifact_name = self
+                        let artifact = self
                             .quantized_artifacts
                             .borrow()
                             .get(&dense_vector_key(query)?)
@@ -246,7 +327,7 @@ impl CandidateSource for PgCandidateRouter<'_> {
                             self.collection_id,
                             registered_vector,
                             query,
-                            &artifact_name,
+                            &artifact,
                             limit,
                         );
                     }
@@ -306,8 +387,32 @@ impl CandidateSource for PgCandidateRouter<'_> {
         let mut cache = self.cache.borrow_mut();
         cache.clear();
         let mut candidates = Vec::with_capacity(rows.len());
-        for row in rows {
-            candidates.push(Candidate::new(row.point_id(), row.score(), branch)?);
+        for (rank, row) in rows.into_iter().enumerate() {
+            let source = match branch {
+                CandidateBranch::FullText => CandidateSourceKind::FullText,
+                CandidateBranch::DenseExact => CandidateSourceKind::Exact,
+                CandidateBranch::UserProvided => CandidateSourceKind::UserProvided,
+                CandidateBranch::DenseAnn
+                | CandidateBranch::Sparse
+                | CandidateBranch::MultiVector => unreachable!("advanced branch is validated"),
+            };
+            let candidate = Candidate::new(
+                row.point_id(),
+                row.score(),
+                candidate_provenance(
+                    row.point_id(),
+                    branch,
+                    source,
+                    query.score_order(),
+                    SourceAuthority::PostgreSqlRow,
+                )?,
+            )?
+            .with_exact_score(row.score())?
+            .with_diagnostics(CandidateDiagnostics::new(
+                u32::try_from(rank).unwrap_or(u32::MAX),
+                1,
+            ));
+            candidates.push(candidate);
             cache.insert(row.point_id(), row);
         }
         let strategy = match query.kind() {
@@ -960,7 +1065,9 @@ fn resolve_quantized_artifact(collection_id: i64) -> Result<QuantizedArtifactRes
                 "SELECT artifacts.artifact_name,
                         artifacts.lifecycle_state,
                         artifacts.config_revision =
-                            pgcontext.current_vector_config_revision($1) AS config_matches
+                            pgcontext.current_vector_config_revision($1) AS config_matches,
+                        artifacts.generation,
+                        artifacts.config_revision
                    FROM pgcontext._visible_artifact_segments AS artifacts
                   WHERE artifacts.collection_id = $1
                     AND artifacts.artifact_kind = 'mmap'
@@ -977,17 +1084,39 @@ fn resolve_quantized_artifact(collection_id: i64) -> Result<QuantizedArtifactRes
                     row.get::<bool>(3)
                         .map_err(|error| port_failure("quantized_hnsw_readiness", error))?
                         .unwrap_or(false),
+                    spi_column::<i64>(&row, 4, "quantized_hnsw_readiness")?,
+                    spi_column::<i64>(&row, 5, "quantized_hnsw_readiness")?,
                 ))
             })
             .collect::<Result<Vec<_>>>()
     })?;
     let distinct = rows
         .iter()
-        .filter(|(_, lifecycle, config_matches)| {
+        .filter(|(_, lifecycle, config_matches, _, _)| {
             lifecycle == "file_materialized" && *config_matches
         })
-        .map(|(name, _, _)| name.clone())
-        .collect::<BTreeSet<_>>();
+        .map(|(name, _, _, generation, configuration)| {
+            let generation = u64::try_from(*generation)
+                .ok()
+                .and_then(GenerationId::new)
+                .ok_or_else(|| QueryError::PortFailure {
+                    stage: "quantized_hnsw_readiness",
+                    message: format!("invalid artifact generation {generation}"),
+                })?;
+            let configuration = u64::try_from(*configuration)
+                .ok()
+                .and_then(ConfigurationRevision::new)
+                .ok_or_else(|| QueryError::PortFailure {
+                    stage: "quantized_hnsw_readiness",
+                    message: format!("invalid artifact configuration revision {configuration}"),
+                })?;
+            Ok(QuantizedArtifactIdentity {
+                name: name.clone(),
+                generation,
+                configuration,
+            })
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
     if distinct.len() > 1 {
         return Err(QueryError::PortFailure {
             stage: "quantized_hnsw_readiness",
@@ -995,10 +1124,10 @@ fn resolve_quantized_artifact(collection_id: i64) -> Result<QuantizedArtifactRes
                 .to_owned(),
         });
     }
-    if let Some(name) = distinct.into_iter().next() {
-        return Ok(QuantizedArtifactResolution::Ready(name));
+    if let Some(identity) = distinct.into_iter().next() {
+        return Ok(QuantizedArtifactResolution::Ready(identity));
     }
-    if rows.iter().any(|(_, lifecycle, config_matches)| {
+    if rows.iter().any(|(_, lifecycle, config_matches, _, _)| {
         lifecycle == "rebuild_required" || (lifecycle == "file_materialized" && !*config_matches)
     }) {
         return Ok(QuantizedArtifactResolution::RebuildRequired);
@@ -1011,7 +1140,7 @@ fn quantized_mmap_candidates(
     collection_id: i64,
     registered_vector: &SearchVector,
     query: &QueryIr,
-    artifact_name: &str,
+    artifact: &QuantizedArtifactIdentity,
     limit: usize,
 ) -> Result<CandidatePage> {
     let query_vector = Vector::from_dense(nearest_vector(query)?.clone());
@@ -1024,9 +1153,9 @@ fn quantized_mmap_candidates(
                 message: "mapped serving byte budget exceeds PostgreSQL bigint".to_owned(),
             },
         )?;
-    let (generation_high_water, mut rows) = load_mmap_artifact_candidates(
+    let (generation_point_high_water, mut rows) = load_mmap_artifact_candidates(
         collection_name,
-        artifact_name,
+        &artifact.name,
         &query_vector,
         max_mapped_bytes,
         candidate_limit,
@@ -1037,7 +1166,7 @@ fn quantized_mmap_candidates(
         collection_id,
         registered_vector,
         &query_vector,
-        generation_high_water,
+        generation_point_high_water,
         limit,
     );
     let scored_count = graph_visits.saturating_add(take_last_mmap_delta_visits());
@@ -1051,15 +1180,25 @@ fn quantized_mmap_candidates(
     rows.truncate(limit);
     let candidates = rows
         .into_iter()
-        .map(|(point_id, score)| {
-            Candidate::new(
-                PointId::from_i64(point_id).ok_or_else(|| QueryError::PortFailure {
-                    stage: "quantized_hnsw_candidate_source",
-                    message: format!("invalid PostgreSQL point ID {point_id}"),
-                })?,
-                f64::from(score),
+        .enumerate()
+        .map(|(rank, (point_id, score))| {
+            let point_id = PointId::from_i64(point_id).ok_or_else(|| QueryError::PortFailure {
+                stage: "quantized_hnsw_candidate_source",
+                message: format!("invalid PostgreSQL point ID {point_id}"),
+            })?;
+            let provenance = artifact_candidate_provenance(
+                point_id,
                 CandidateBranch::DenseAnn,
-            )
+                CandidateSourceKind::Hnsw,
+                ScoreOrder::LowerIsBetter,
+                SourceAuthority::DerivedArtifact,
+                artifact.generation,
+                artifact.configuration,
+            )?;
+            let source_rank = u32::try_from(rank).unwrap_or(u32::MAX);
+            Candidate::new(point_id, f64::from(score), provenance).map(|candidate| {
+                candidate.with_diagnostics(CandidateDiagnostics::new(source_rank, 1))
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(
@@ -1352,6 +1491,10 @@ fn require_complete_outcome(outcome: &ExecutionOutcome) {
             PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
             "query execution exhausted its work budget",
         ),
+        Completion::Degraded => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            "query execution returned a degraded strategy outcome",
+        ),
     }
 }
 
@@ -1425,7 +1568,7 @@ fn exact_candidate_rows(
             .map_err(|error| port_failure("candidate_source", error))?;
         let mut candidates = Vec::new();
         let mut scored_count = 0;
-        for row in rows {
+        for (rank, row) in rows.into_iter().enumerate() {
             let point_id = spi_point_id(&row, 1, "candidate_source")?;
             let score = f64::from(spi_column::<f32>(&row, 2, "candidate_source")?);
             scored_count = usize::try_from(spi_column::<i64>(&row, 3, "candidate_source")?)
@@ -1433,11 +1576,24 @@ fn exact_candidate_rows(
                     stage: "candidate_source",
                     message: "exact scored row count exceeds usize".to_owned(),
                 })?;
-            candidates.push(Candidate::new(
-                point_id,
-                score,
-                CandidateBranch::DenseExact,
-            )?);
+            candidates.push(
+                Candidate::new(
+                    point_id,
+                    score,
+                    candidate_provenance(
+                        point_id,
+                        CandidateBranch::DenseExact,
+                        CandidateSourceKind::Exact,
+                        query.score_order(),
+                        SourceAuthority::PostgreSqlRow,
+                    )?,
+                )?
+                .with_exact_score(score)?
+                .with_diagnostics(CandidateDiagnostics::new(
+                    u32::try_from(rank).unwrap_or(u32::MAX),
+                    1,
+                )),
+            );
         }
         Ok(CandidatePage::with_scored_count(
             candidates,
@@ -1538,7 +1694,17 @@ fn hnsw_candidate_rows(
             for row in rows {
                 let point_id = spi_point_id(&row, 1, "candidate_source")?;
                 let score = spi_column::<f64>(&row, 2, "candidate_source")?;
-                candidates.push(Candidate::new(point_id, score, CandidateBranch::DenseAnn)?);
+                candidates.push(Candidate::new(
+                    point_id,
+                    score,
+                    candidate_provenance(
+                        point_id,
+                        CandidateBranch::DenseAnn,
+                        CandidateSourceKind::Hnsw,
+                        query.score_order(),
+                        SourceAuthority::DerivedArtifact,
+                    )?,
+                )?);
             }
             Ok::<_, QueryError>(candidates)
         })
@@ -1547,7 +1713,67 @@ fn hnsw_candidate_rows(
         .map_err(|error| port_failure("candidate_source", error))?
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(candidates.len());
+    let candidates = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(rank, candidate)| {
+            candidate.with_diagnostics(CandidateDiagnostics::new(
+                u32::try_from(rank).unwrap_or(u32::MAX),
+                1,
+            ))
+        })
+        .collect();
     Ok(CandidatePage::with_scored_count(candidates, visits, true))
+}
+
+#[cfg(feature = "pg_test")]
+pub(crate) fn provenance_occurrences_for_test() -> [OccurrenceId; 4] {
+    let point_id = PointId::new(7);
+    let generation_one = GenerationId::new(1).expect("fixture generation is non-zero");
+    let generation_two = GenerationId::new(2).expect("fixture generation is non-zero");
+    let configuration = ConfigurationRevision::new(1).expect("fixture configuration is non-zero");
+    [
+        candidate_provenance(
+            point_id,
+            CandidateBranch::DenseExact,
+            CandidateSourceKind::Exact,
+            ScoreOrder::LowerIsBetter,
+            SourceAuthority::PostgreSqlRow,
+        )
+        .expect("exact fixture provenance")
+        .occurrence_id(),
+        candidate_provenance(
+            point_id,
+            CandidateBranch::DenseAnn,
+            CandidateSourceKind::Hnsw,
+            ScoreOrder::LowerIsBetter,
+            SourceAuthority::DerivedArtifact,
+        )
+        .expect("HNSW fixture provenance")
+        .occurrence_id(),
+        artifact_candidate_provenance(
+            point_id,
+            CandidateBranch::DenseAnn,
+            CandidateSourceKind::Hnsw,
+            ScoreOrder::LowerIsBetter,
+            SourceAuthority::DerivedArtifact,
+            generation_one,
+            configuration,
+        )
+        .expect("generation one fixture provenance")
+        .occurrence_id(),
+        artifact_candidate_provenance(
+            point_id,
+            CandidateBranch::DenseAnn,
+            CandidateSourceKind::Hnsw,
+            ScoreOrder::LowerIsBetter,
+            SourceAuthority::DerivedArtifact,
+            generation_two,
+            configuration,
+        )
+        .expect("generation two fixture provenance")
+        .occurrence_id(),
+    ]
 }
 
 fn nearest_vector(query: &QueryIr) -> Result<&DenseVector> {
@@ -1668,7 +1894,7 @@ pub(crate) fn differential_exact_rows_for_test(
     let query = QueryIr::nearest(
         None,
         vector.as_slice().to_vec(),
-        context_query::ScoreOrder::LowerIsBetter,
+        ScoreOrder::LowerIsBetter,
         None,
         limit.get(),
     )
@@ -1716,7 +1942,7 @@ pub(crate) fn adapter_conformance_snapshot_for_test(
     let query = QueryIr::nearest(
         None,
         vec![0.0, 0.0],
-        context_query::ScoreOrder::LowerIsBetter,
+        ScoreOrder::LowerIsBetter,
         Some(serde_json::json!({
             "must": [{"key": "tenant_id", "match": "acme"}]
         })),
@@ -1781,14 +2007,8 @@ pub(crate) fn dense_metric_adapter_snapshot_for_test(
         resolve_registered_vector(&collection_name, collection.collection_id);
     validate_search_drift(collection.collection_id, &mut registered_vector);
     require_table_select_privilege(&registered_vector);
-    let query = QueryIr::nearest(
-        None,
-        vec![1.0, 0.0],
-        context_query::ScoreOrder::LowerIsBetter,
-        None,
-        3,
-    )
-    .unwrap_or_else(|error| raise_query_error(error));
+    let query = QueryIr::nearest(None, vec![1.0, 0.0], ScoreOrder::LowerIsBetter, None, 3)
+        .unwrap_or_else(|error| raise_query_error(error));
     let exact = execute_prepared_query(
         collection_name.as_str(),
         collection.collection_id,
@@ -1839,14 +2059,8 @@ pub(crate) fn dense_metric_adapter_snapshot_for_test(
 #[cfg(feature = "pg_test")]
 pub(crate) fn run_hnsw_for_test(collection: String) -> Vec<(i64, String, f32)> {
     let collection_name = crate::table_search::collection_name_from_sql(collection);
-    let query = QueryIr::nearest(
-        None,
-        vec![1.0, 0.0],
-        context_query::ScoreOrder::LowerIsBetter,
-        None,
-        1,
-    )
-    .unwrap_or_else(|error| raise_query_error(error));
+    let query = QueryIr::nearest(None, vec![1.0, 0.0], ScoreOrder::LowerIsBetter, None, 1)
+        .unwrap_or_else(|error| raise_query_error(error));
     run_query(&collection_name, query, CandidateAdapter::Hnsw)
 }
 use std::cell::RefCell;

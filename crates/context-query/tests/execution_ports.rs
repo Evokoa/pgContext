@@ -4,12 +4,13 @@
 
 use std::{cell::Cell, rc::Rc};
 
-use context_core::{PointId, SourceKey};
+use context_core::{OccurrenceId, PointId, SourceAuthority, SourceKey};
 use context_query::{
-    Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateSource, Completion,
-    ExecutionBudget, ExecutionOutcome, ExecutionState, FilterCandidateBatch, FilterCandidateSource,
-    HydratedCandidate, QueryError, QueryExecutor, QueryIr, ReadinessReason, ScoreOrder,
-    SourceReadiness, SourceRechecker, StageDiagnostic, TelemetrySink,
+    Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateProvenance, CandidateSource,
+    CandidateSourceKind, Completion, ExecutionBudget, ExecutionOutcome, ExecutionState,
+    FilterCandidateBatch, FilterCandidateSource, HydratedCandidate, QueryError, QueryExecutor,
+    QueryIr, ReadinessReason, ScoreOrder, SourceReadiness, SourceRechecker, StageDiagnostic,
+    TelemetrySink,
 };
 use proptest::prelude::*;
 
@@ -155,8 +156,19 @@ fn budget() -> ExecutionBudget {
 }
 
 fn candidate(point_id: u64, score: f64) -> Candidate {
-    Candidate::new(PointId::new(point_id), score, CandidateBranch::DenseAnn)
-        .expect("candidate fixture should be valid")
+    Candidate::new(
+        PointId::new(point_id),
+        score,
+        CandidateProvenance::new(
+            OccurrenceId::new(point_id.saturating_add(1))
+                .expect("saturating increment is non-zero"),
+            CandidateBranch::DenseAnn,
+            CandidateSourceKind::Hnsw,
+            ScoreOrder::LowerIsBetter,
+            SourceAuthority::DerivedArtifact,
+        ),
+    )
+    .expect("candidate fixture should be valid")
 }
 
 fn hydrated(point_id: u64, score: f64) -> HydratedCandidate {

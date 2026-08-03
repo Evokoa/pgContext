@@ -12,6 +12,7 @@ mod exact;
 mod identity;
 mod metric;
 mod metric_kernels;
+mod retrieval;
 mod scroll;
 mod vector;
 
@@ -22,6 +23,10 @@ pub use error::{ContextError, Error, Result};
 pub use exact::{ExactSearchItem, ScoredPoint, SearchLimit, exact_top_k};
 pub use identity::PointId;
 pub use metric::DistanceMetric;
+pub use retrieval::{
+    Completion, ConfigurationRevision, GenerationId, IndexKind, OccurrenceId, ProfileId,
+    ReadinessReason, ScoreOrder, SourceAuthority, SourceVersion,
+};
 pub use scroll::{ScrollCursor, ScrollCursorError};
 pub use vector::{
     BitVector, DenseVector, HalfVector, SparseEntry, SparseVector, VectorConversionPolicy,

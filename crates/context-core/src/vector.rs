@@ -17,6 +17,10 @@ pub enum VectorRepresentation {
     Sparse,
     /// Dense bit values.
     Bit,
+    /// Dense signed 8-bit integer values.
+    Int8,
+    /// Dense unsigned 8-bit integer values.
+    UInt8,
 }
 
 impl VectorRepresentation {
@@ -31,13 +35,20 @@ impl VectorRepresentation {
             | (Self::Half, Self::Half)
             | (Self::Sparse, Self::Sparse)
             | (Self::Bit, Self::Bit)
+            | (Self::Int8, Self::Int8)
+            | (Self::UInt8, Self::UInt8)
             | (Self::Half, Self::Dense)
             | (Self::Dense, Self::Sparse)
             | (Self::Sparse, Self::Dense)
-            | (Self::Half, Self::Sparse) => Lossless,
-            (Self::Dense, Self::Half) | (Self::Sparse, Self::Half) => CheckedLossy,
-            (Self::Dense | Self::Half | Self::Sparse, Self::Bit)
-            | (Self::Bit, Self::Dense | Self::Half | Self::Sparse) => Forbidden,
+            | (Self::Half, Self::Sparse)
+            | (Self::Int8 | Self::UInt8, Self::Dense | Self::Half | Self::Sparse) => Lossless,
+            (Self::Dense | Self::Half | Self::Sparse, Self::Half | Self::Int8 | Self::UInt8)
+            | (Self::Int8, Self::UInt8)
+            | (Self::UInt8, Self::Int8) => CheckedLossy,
+            (Self::Dense | Self::Half | Self::Sparse | Self::Int8 | Self::UInt8, Self::Bit)
+            | (Self::Bit, Self::Dense | Self::Half | Self::Sparse | Self::Int8 | Self::UInt8) => {
+                Forbidden
+            }
         }
     }
 }

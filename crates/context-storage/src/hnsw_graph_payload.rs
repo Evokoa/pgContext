@@ -14,9 +14,7 @@ mod quantization;
 mod quantized_view;
 
 pub use mapped_view::{MappedGraphNodeView, MappedGraphView, MappedNeighborIter};
-pub use quantization::{
-    HnswGraphQuantization, HnswGraphQuantizationCodebook, PreparedQuantizedQuery,
-};
+pub use quantization::HnswGraphQuantization;
 pub(crate) use quantization::{
     QUANTIZATION_NONE, decode_quantization_codebook, encode_quantization_codebook,
     quantization_mode, validate_quantization, validate_quantized_code,
@@ -767,14 +765,14 @@ const fn size_of_u32() -> usize {
 
 #[cfg(test)]
 mod tests {
+    use context_codec::QuantizedCodebook;
     use context_core::DenseVector;
 
     use super::{
         CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1,
         HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2, HnswGraphArtifactRecord, HnswGraphPayloadError,
-        HnswGraphQuantization, HnswGraphQuantizationCodebook, decode_hnsw_graph_payload,
-        decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload,
-        encode_hnsw_graph_payload_v2,
+        HnswGraphQuantization, decode_hnsw_graph_payload, decode_hnsw_graph_payload_versioned,
+        encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
     };
     use crate::{SegmentKind, encode_segment, validate_mmap_segment};
 
@@ -806,7 +804,7 @@ mod tests {
             hnsw_record(1, 102, &[1.0, -0.5], &[0])?,
         ];
         let quantization = HnswGraphQuantization::new(
-            HnswGraphQuantizationCodebook::Scalar {
+            QuantizedCodebook::Scalar {
                 dimensions: 2,
                 minimum: -1.0,
                 maximum: 1.0,
@@ -830,7 +828,7 @@ mod tests {
     {
         let records = vec![hnsw_record(0, 101, &[0.0, 1.0], &[])?];
         let quantization = HnswGraphQuantization::new(
-            HnswGraphQuantizationCodebook::Product {
+            QuantizedCodebook::Product {
                 dimensions: 2,
                 subvector_dimensions: 1,
                 codebooks: vec![
@@ -854,7 +852,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let records = vec![hnsw_record(0, 101, &[1.0; 9], &[])?];
         let quantization = HnswGraphQuantization::new(
-            HnswGraphQuantizationCodebook::Binary { dimensions: 9 },
+            QuantizedCodebook::Binary { dimensions: 9 },
             vec![vec![0xff, 0x01]],
         );
         let mut encoded = encode_hnsw_graph_payload_v2(&records, Some(&quantization))?;
@@ -874,10 +872,8 @@ mod tests {
     #[test]
     fn quantized_v2_payload_rejects_truncated_codebook() -> Result<(), Box<dyn std::error::Error>> {
         let records = vec![hnsw_record(0, 101, &[1.0], &[])?];
-        let quantization = HnswGraphQuantization::new(
-            HnswGraphQuantizationCodebook::Binary { dimensions: 1 },
-            vec![vec![1]],
-        );
+        let quantization =
+            HnswGraphQuantization::new(QuantizedCodebook::Binary { dimensions: 1 }, vec![vec![1]]);
         let encoded = encode_hnsw_graph_payload_v2(&records, Some(&quantization))?;
         let truncated = &encoded[..HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2 + 1];
 

@@ -2,10 +2,10 @@
 
 use core::{cmp::Ordering, ffi::CStr, mem::size_of};
 
+use context_codec::{CodecError, RerankCandidate, rerank_by_original_vectors};
 use context_core::{
     DenseVector, DistanceMetric, Error as CoreError, ExactSearchItem, SearchLimit, exact_top_k,
 };
-use context_index::{HnswError, RerankCandidate, rerank_by_original_vectors};
 use pgrx::InOutFuncs;
 use pgrx::prelude::*;
 
@@ -626,7 +626,7 @@ pub fn rerank_quantized_candidates(
 
     let results = match rerank_by_original_vectors(&query, &candidates, metric, limit) {
         Ok(results) => results,
-        Err(error) => raise_index_error(error),
+        Err(error) => raise_codec_error(error),
     };
     let rows = results
         .into_iter()
@@ -898,8 +898,16 @@ fn rerank_candidates_from_sql(
         .collect()
 }
 
-fn raise_index_error(error: HnswError) -> ! {
-    raise_context_error(error.context_error(), error.to_string())
+fn raise_codec_error(error: CodecError) -> ! {
+    match error {
+        CodecError::Core(error) => raise_core_error(error),
+        CodecError::DimensionMismatch { .. } => {
+            raise_context_error(context_core::ContextError::DimensionMismatch, error.to_string())
+        }
+        CodecError::InvalidCode(_) => {
+            raise_context_error(context_core::ContextError::InvalidVector, error.to_string())
+        }
+    }
 }
 
 #[cfg(test)]

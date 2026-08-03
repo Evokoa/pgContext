@@ -2,15 +2,15 @@
 
 use core::iter::FusedIterator;
 
+use context_codec::QuantizedCodebook;
 use context_core::policy::MAX_VECTOR_DIMENSIONS;
 
 use super::{
     CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HNSW_GRAPH_PAYLOAD_HEADER_LEN_V1,
     HNSW_GRAPH_PAYLOAD_HEADER_LEN_V2, HNSW_GRAPH_PAYLOAD_MAGIC, HNSW_GRAPH_PAYLOAD_VERSION_V1,
-    HNSW_GRAPH_RECORD_HEADER_LEN, HnswGraphPayloadError, HnswGraphQuantizationCodebook,
-    MAX_HNSW_GRAPH_RECORDS, decode_quantization_codebook, read_f32, read_u32, read_u64,
-    require_no_trailing_bytes, require_payload_bytes, size_of_f32, size_of_u32,
-    validate_quantized_code,
+    HNSW_GRAPH_RECORD_HEADER_LEN, HnswGraphPayloadError, MAX_HNSW_GRAPH_RECORDS,
+    decode_quantization_codebook, read_f32, read_u32, read_u64, require_no_trailing_bytes,
+    require_payload_bytes, size_of_f32, size_of_u32, validate_quantized_code,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -111,7 +111,7 @@ pub struct MappedGraphView<'a> {
     version: u32,
     dimensions: usize,
     code_len: usize,
-    codebook: Option<HnswGraphQuantizationCodebook>,
+    codebook: Option<QuantizedCodebook>,
     nodes: Vec<NodeLocation>,
 }
 
@@ -323,7 +323,7 @@ impl<'a> MappedGraphView<'a> {
 
     /// Returns the quantization codebook for encoded generations.
     #[must_use]
-    pub const fn codebook(&self) -> Option<&HnswGraphQuantizationCodebook> {
+    pub const fn codebook(&self) -> Option<&QuantizedCodebook> {
         self.codebook.as_ref()
     }
 

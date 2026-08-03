@@ -164,6 +164,34 @@ fn exact_top_k_orders_by_distance_then_point_id() -> Result<(), Box<dyn std::err
 }
 
 #[test]
+fn exact_top_k_uses_metric_order_for_inner_product_and_ties()
+-> Result<(), Box<dyn std::error::Error>> {
+    let query: DenseVector = "[1]".parse()?;
+    let items = [
+        ExactSearchItem::new(30, "[1]".parse()?),
+        ExactSearchItem::new(20, "[2]".parse()?),
+        ExactSearchItem::new(10, "[2]".parse()?),
+    ];
+
+    let results = exact_top_k(
+        &query,
+        &items,
+        DistanceMetric::InnerProduct,
+        SearchLimit::new(3)?,
+    )
+    .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(
+        results
+            .iter()
+            .map(|point| point.point_id())
+            .collect::<Vec<_>>(),
+        [10, 20, 30]
+    );
+    Ok(())
+}
+
+#[test]
 fn search_limit_rejects_zero_and_values_above_policy_max() {
     assert!(matches!(
         SearchLimit::new(0),

@@ -1,7 +1,8 @@
 //! SQL-facing hybrid retrieval over registered table-backed collections.
 
 use context_core::{CollectionName, DistanceMetric, SearchLimit};
-use context_hybrid::{CandidateBranch, RrfK, reciprocal_rank_fusion_batches};
+use context_hybrid::{RrfK, reciprocal_rank_fusion_batches};
+use context_query::CandidateBranch;
 use pgrx::prelude::*;
 
 use crate::domain_types::distance_metric_label;
@@ -445,7 +446,7 @@ fn sparse_branch(
                 format!("failed to load sparse query branch: {error}"),
             ),
         };
-        branch_from_rows(rows, CandidateBranch::SparsePlanned, "sparse query")
+        branch_from_rows(rows, CandidateBranch::Sparse, "sparse query")
     })
 }
 
@@ -508,8 +509,10 @@ fn branch_from_rows(
     let hydrated = match branch {
         CandidateBranch::DenseExact => hydrate_dense_exact_candidates(candidates, context),
         CandidateBranch::FullText => hydrate_full_text_candidates(candidates, context),
-        CandidateBranch::SparsePlanned => hydrate_sparse_planned_candidates(candidates, context),
-        CandidateBranch::DenseAnn | CandidateBranch::UserProvided => raise_sql_error(
+        CandidateBranch::Sparse => hydrate_sparse_planned_candidates(candidates, context),
+        CandidateBranch::DenseAnn
+        | CandidateBranch::MultiVector
+        | CandidateBranch::UserProvided => raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             format!("unsupported SPI branch hydration path: {branch:?}"),
         ),

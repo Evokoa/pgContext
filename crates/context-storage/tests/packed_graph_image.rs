@@ -2,11 +2,11 @@
 //! graph image codec.
 #![allow(clippy::expect_used, clippy::cast_possible_truncation)]
 
+use context_codec::QuantizedCodebook;
 use context_storage::{
     AlignedImageBuf, CURRENT_PACKED_GRAPH_IMAGE_VERSION, HnswGraphQuantization,
-    HnswGraphQuantizationCodebook, PackedGraphImageError, PackedGraphImageLayer,
-    PackedGraphImageNode, PackedGraphImageView, encode_packed_graph_image,
-    encode_packed_graph_image_v2, packed_graph_image_len,
+    PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView,
+    encode_packed_graph_image, encode_packed_graph_image_v2, packed_graph_image_len,
 };
 use proptest::prelude::*;
 
@@ -95,7 +95,7 @@ fn round_trip_preserves_nodes_vectors_and_neighbors() {
 fn quantized_v2_round_trip_keeps_codes_zero_copy() {
     let (dimensions, nodes, layers, neighbors, vectors) = sample_graph();
     let quantization = HnswGraphQuantization::new(
-        HnswGraphQuantizationCodebook::Scalar {
+        QuantizedCodebook::Scalar {
             dimensions: dimensions as usize,
             minimum: -2.0,
             maximum: 2.0,
@@ -132,7 +132,7 @@ fn quantized_v2_round_trip_keeps_codes_zero_copy() {
 fn quantized_v2_rejects_corrupt_codes_without_checksum() {
     let (dimensions, nodes, layers, neighbors, vectors) = sample_graph();
     let quantization = HnswGraphQuantization::new(
-        HnswGraphQuantizationCodebook::Scalar {
+        QuantizedCodebook::Scalar {
             dimensions: dimensions as usize,
             minimum: -2.0,
             maximum: 2.0,

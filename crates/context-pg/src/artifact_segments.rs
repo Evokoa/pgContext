@@ -22,7 +22,7 @@ use pgrx::prelude::*;
 
 use crate::domain_types::{
     ArtifactKind, ArtifactLifecycleState, artifact_kind_from_catalog,
-    artifact_lifecycle_state_from_catalog,
+    artifact_lifecycle_state_from_catalog, distance_metric_from_catalog,
 };
 use crate::error::{raise_core_error, raise_sql_error};
 
@@ -264,14 +264,17 @@ pub fn build_mmap_hnsw_artifact(build_job_id: i64) -> Vec<u8> {
             )
         })
         .collect::<Vec<_>>();
-    let quantization =
-        quantization::quantize_graph_records(&records, &registered.quantization_options)
-            .unwrap_or_else(|error| {
-                raise_sql_error(
-                    PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
-                    format!("source artifact quantization is not buildable: {error}"),
-                )
-            });
+    let quantization = quantization::quantize_graph_records(
+        &records,
+        &registered.quantization_options,
+        registered.metric,
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("source artifact quantization is not buildable: {error}"),
+        )
+    });
     let payload =
         encode_hnsw_graph_payload_v2(&records, quantization.as_ref()).unwrap_or_else(|error| {
             raise_sql_error(
@@ -477,9 +480,9 @@ fn validate_artifact_payload_policy(job: &PublishableBuildJob, segment: &Validat
     if job.artifact_kind != ArtifactKind::Mmap || segment.storage_kind != SegmentKind::HnswGraph {
         return;
     }
-    let quantization_options = Spi::connect(|client| {
+    let quantization_policy = Spi::connect(|client| {
         let rows = client.select(
-            "SELECT vectors.quantization_options
+            "SELECT vectors.quantization_options, vectors.metric
                FROM pgcontext._visible_collection_vectors AS vectors
               WHERE vectors.collection_id = $1
               ORDER BY vectors.vector_id",
@@ -489,9 +492,10 @@ fn validate_artifact_payload_policy(job: &PublishableBuildJob, segment: &Validat
         if rows.is_empty() {
             Ok::<_, spi::Error>(None)
         } else {
-            Ok(Some(required_column(
-                rows.first().get::<JsonB>(1)?,
-                "quantization_options",
+            let row = rows.first();
+            Ok(Some((
+                required_column(row.get::<JsonB>(1)?, "quantization_options"),
+                required_column(row.get::<String>(2)?, "metric"),
             )))
         }
     })
@@ -501,10 +505,11 @@ fn validate_artifact_payload_policy(job: &PublishableBuildJob, segment: &Validat
             format!("artifact quantization policy lookup failed: {error}"),
         )
     });
-    let Some(quantization_options) = quantization_options else {
+    let Some((quantization_options, metric)) = quantization_policy else {
         return;
     };
     let quantization_options = quantization_options.0;
+    let metric = distance_metric_from_catalog(metric, "registered vector");
     let configured_mode = quantization_options
         .get("mode")
         .and_then(serde_json::Value::as_str)
@@ -518,6 +523,7 @@ fn validate_artifact_payload_policy(job: &PublishableBuildJob, segment: &Validat
         graph.records(),
         graph.quantization(),
         &quantization_options,
+        metric,
     ) {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,

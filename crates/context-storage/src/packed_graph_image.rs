@@ -46,15 +46,16 @@
     reason = "zero-copy float views and aligned copies validate length and alignment before every raw-pointer construction"
 )]
 
+use context_codec::QuantizedCodebook;
 use core::{
     fmt,
     mem::{size_of, size_of_val},
 };
 
 use crate::hnsw_graph_payload::{
-    HnswGraphQuantization, HnswGraphQuantizationCodebook, QUANTIZATION_NONE,
-    decode_quantization_codebook, encode_quantization_codebook, quantization_mode,
-    validate_quantization, validate_quantized_code,
+    HnswGraphQuantization, QUANTIZATION_NONE, decode_quantization_codebook,
+    encode_quantization_codebook, quantization_mode, validate_quantization,
+    validate_quantized_code,
 };
 
 const PACKED_GRAPH_IMAGE_MAGIC: [u8; 8] = *b"PGCTXPKG";
@@ -485,7 +486,7 @@ pub struct PackedGraphImageView<'a> {
     layers_offset: usize,
     neighbors_offset: usize,
     vectors: &'a [f32],
-    quantization_codebook: Option<HnswGraphQuantizationCodebook>,
+    quantization_codebook: Option<QuantizedCodebook>,
     code_len: usize,
     codes: &'a [u8],
 }
@@ -698,7 +699,7 @@ impl<'a> PackedGraphImageView<'a> {
 
     /// Returns the optional trained navigation codebook.
     #[must_use]
-    pub const fn quantization_codebook(&self) -> Option<&HnswGraphQuantizationCodebook> {
+    pub const fn quantization_codebook(&self) -> Option<&QuantizedCodebook> {
         self.quantization_codebook.as_ref()
     }
 

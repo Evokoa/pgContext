@@ -5,6 +5,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use context_core::ScoreOrder;
+
 /// Tunable constant used by reciprocal rank fusion.
 ///
 /// Larger values flatten the contribution of each branch, while smaller values
@@ -101,49 +103,27 @@ impl BranchCandidate {
     }
 }
 
-/// Retrieval branch that produced a candidate batch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CandidateBranch {
-    /// Dense exact table-backed retrieval.
-    DenseExact,
-    /// Dense approximate retrieval.
-    DenseAnn,
-    /// PostgreSQL full-text retrieval.
-    FullText,
-    /// Sparse-vector retrieval that is planned but not released yet.
-    SparsePlanned,
-    /// Caller-provided candidate point batch.
-    UserProvided,
-}
-
 /// Ordered candidates from one retrieval branch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CandidateBatch {
-    branch: CandidateBranch,
     points: Vec<RankedPoint>,
 }
 
 impl CandidateBatch {
     /// Creates an ordered branch candidate batch.
     #[must_use]
-    pub fn new(branch: CandidateBranch, points: Vec<RankedPoint>) -> Self {
-        Self { branch, points }
+    pub fn new(points: Vec<RankedPoint>) -> Self {
+        Self { points }
     }
 
     /// Creates an ordered branch candidate batch from hydrated adapter output.
     #[must_use]
-    pub fn from_candidates(branch: CandidateBranch, candidates: Vec<BranchCandidate>) -> Self {
+    pub fn from_candidates(candidates: Vec<BranchCandidate>) -> Self {
         let points = candidates
             .into_iter()
             .map(BranchCandidate::ranked_point)
             .collect();
-        Self { branch, points }
-    }
-
-    /// Returns the branch kind that produced this batch.
-    #[must_use]
-    pub const fn branch(&self) -> CandidateBranch {
-        self.branch
+        Self { points }
     }
 
     /// Returns the ordered points in this batch.
@@ -160,35 +140,22 @@ pub struct FusedPoint {
     score: f64,
 }
 
-/// Ordering semantics for one weighted score branch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ScoreDirection {
-    /// Larger adapter scores are better.
-    HigherIsBetter,
-    /// Smaller adapter scores are better, as with distances.
-    LowerIsBetter,
-}
-
 /// One scored branch participating in normalized weighted fusion.
 #[derive(Clone, Copy, Debug)]
 pub struct WeightedBranch<'a> {
     candidates: &'a [BranchCandidate],
     weight: f64,
-    direction: ScoreDirection,
+    order: ScoreOrder,
 }
 
 impl<'a> WeightedBranch<'a> {
     /// Creates a weighted branch.
     #[must_use]
-    pub const fn new(
-        candidates: &'a [BranchCandidate],
-        weight: f64,
-        direction: ScoreDirection,
-    ) -> Self {
+    pub const fn new(candidates: &'a [BranchCandidate], weight: f64, order: ScoreOrder) -> Self {
         Self {
             candidates,
             weight,
-            direction,
+            order,
         }
     }
 }
@@ -354,11 +321,9 @@ pub fn weighted_fusion(
             let normalized = if score_range == 0.0 {
                 1.0
             } else {
-                match branch.direction {
-                    ScoreDirection::HigherIsBetter => {
-                        (score / scale - scaled_minimum) / score_range
-                    }
-                    ScoreDirection::LowerIsBetter => (scaled_maximum - score / scale) / score_range,
+                match branch.order {
+                    ScoreOrder::HigherIsBetter => (score / scale - scaled_minimum) / score_range,
+                    ScoreOrder::LowerIsBetter => (scaled_maximum - score / scale) / score_range,
                 }
             };
             if !normalized.is_finite() {

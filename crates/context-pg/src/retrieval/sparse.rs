@@ -1,17 +1,17 @@
 //! PostgreSQL ports for named sparse exact/ANN execution.
 
-use context_core::{CollectionName, SourceKey, SparseVector};
+use context_core::{CollectionName, ScoreOrder, SourceAuthority, SourceKey, SparseVector};
 use context_query::{
-    Candidate, CandidateBranch, CandidatePage, CandidateSource, ExecutionBudget, ExecutionOutcome,
-    HydratedCandidate, QueryError, QueryExecutor, QueryIr, QueryKind, Result, SourceReadiness,
-    SourceRechecker,
+    Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage, CandidateSource,
+    CandidateSourceKind, ExecutionBudget, ExecutionOutcome, HydratedCandidate, QueryError,
+    QueryExecutor, QueryIr, QueryKind, Result, SourceReadiness, SourceRechecker,
 };
 use pgrx::prelude::*;
 use serde_json::Value;
 
 use super::{
-    PgCancellation, outcome_rows, port_failure, require_complete_outcome, spi_column, spi_point_id,
-    sql_limit,
+    PgCancellation, candidate_provenance, outcome_rows, port_failure, require_complete_outcome,
+    spi_column, spi_point_id, sql_limit,
 };
 use crate::sparse_search::{
     RegisteredSparseVector, require_sparse_query_dimensions, require_sparse_table_select_privilege,
@@ -213,7 +213,7 @@ fn run_sparse_query_inner(
     let query = QueryIr::sparse_nearest(
         registered_vector.vector_name.clone(),
         query_vector,
-        context_query::ScoreOrder::LowerIsBetter,
+        ScoreOrder::LowerIsBetter,
         filter,
         limit,
     )
@@ -576,17 +576,32 @@ fn exact_sparse_candidates_with_filter(
             .map_err(|error| port_failure("sparse_candidate_source", error))?;
         let mut scored_count = 0_usize;
         let mut candidates = Vec::new();
-        for row in rows {
+        for (rank, row) in rows.into_iter().enumerate() {
             scored_count = usize::try_from(spi_column::<i64>(&row, 3, "sparse_candidate_source")?)
                 .map_err(|_| QueryError::PortFailure {
                     stage: "sparse_candidate_source",
                     message: "negative sparse scored count".to_owned(),
                 })?;
-            candidates.push(Candidate::new(
-                spi_point_id(&row, 1, "sparse_candidate_source")?,
-                f64::from(spi_column::<f32>(&row, 2, "sparse_candidate_source")?),
-                CandidateBranch::Sparse,
-            )?);
+            let point_id = spi_point_id(&row, 1, "sparse_candidate_source")?;
+            let score = f64::from(spi_column::<f32>(&row, 2, "sparse_candidate_source")?);
+            candidates.push(
+                Candidate::new(
+                    point_id,
+                    score,
+                    candidate_provenance(
+                        point_id,
+                        CandidateBranch::Sparse,
+                        CandidateSourceKind::Sparse,
+                        ScoreOrder::LowerIsBetter,
+                        SourceAuthority::PostgreSqlRow,
+                    )?,
+                )?
+                .with_exact_score(score)?
+                .with_diagnostics(CandidateDiagnostics::new(
+                    u32::try_from(rank).unwrap_or(u32::MAX),
+                    1,
+                )),
+            );
         }
         Ok(CandidatePage::with_scored_count(
             candidates,
@@ -686,10 +701,17 @@ fn hnsw_sparse_candidates(
                 .map_err(|error| port_failure("sparse_candidate_source", error))?;
             rows.into_iter()
                 .map(|row| {
+                    let point_id = spi_point_id(&row, 1, "sparse_candidate_source")?;
                     Candidate::new(
-                        spi_point_id(&row, 1, "sparse_candidate_source")?,
+                        point_id,
                         spi_column::<f64>(&row, 2, "sparse_candidate_source")?,
-                        CandidateBranch::Sparse,
+                        candidate_provenance(
+                            point_id,
+                            CandidateBranch::Sparse,
+                            CandidateSourceKind::Hnsw,
+                            ScoreOrder::LowerIsBetter,
+                            SourceAuthority::DerivedArtifact,
+                        )?,
                     )
                 })
                 .collect::<Result<Vec<_>>>()
@@ -700,6 +722,16 @@ fn hnsw_sparse_candidates(
             .map_err(|error| port_failure("sparse_candidate_source", error))?
             .and_then(|value| usize::try_from(value).ok())
             .unwrap_or(candidates.len());
+    let candidates = candidates
+        .into_iter()
+        .enumerate()
+        .map(|(rank, candidate)| {
+            candidate.with_diagnostics(CandidateDiagnostics::new(
+                u32::try_from(rank).unwrap_or(u32::MAX),
+                1,
+            ))
+        })
+        .collect();
     Ok(CandidatePage::with_scored_count(
         candidates,
         scored_count,

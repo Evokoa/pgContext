@@ -2,10 +2,9 @@
 
 use std::{cell::Cell, cmp::Reverse, collections::BinaryHeap};
 
+use context_codec::{CodecError, PreparedQuantizedQuery, QuantizedCodebook};
 use context_core::{DistanceMetric, SearchLimit};
-use context_storage::{
-    HnswGraphPayloadError, HnswGraphQuantizationCodebook, MappedGraphView, PreparedQuantizedQuery,
-};
+use context_storage::{HnswGraphPayloadError, MappedGraphView};
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
 
@@ -757,7 +756,7 @@ impl PartialOrd for EncodedCandidate {
 
 fn mmap_quantized_hnsw_candidates(
     graph: &MappedGraphView<'_>,
-    codebook: &HnswGraphQuantizationCodebook,
+    codebook: &QuantizedCodebook,
     query: &context_core::DenseVector,
     metric: DistanceMetric,
     candidate_limit: usize,
@@ -776,7 +775,7 @@ fn mmap_quantized_hnsw_candidates(
     let search_width = config.ef_search().max(candidate_limit);
     let prepared = codebook
         .prepare_query(query, metric)
-        .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
+        .unwrap_or_else(|error| raise_quantized_codec_error(error));
     let has_edges = (0..graph.len()).any(|node_id| {
         graph
             .node(node_id)
@@ -892,7 +891,7 @@ fn score_quantized_node(
     });
     let score = prepared
         .score(code)
-        .unwrap_or_else(|error| raise_hnsw_graph_payload_error(error));
+        .unwrap_or_else(|error| raise_quantized_codec_error(error));
     EncodedCandidate { node_id, score }
 }
 
@@ -974,4 +973,16 @@ pub(crate) fn mmap_delta_candidates(
 
 fn raise_hnsw_graph_payload_error(error: HnswGraphPayloadError) -> ! {
     raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error.to_string())
+}
+
+fn raise_quantized_codec_error(error: CodecError) -> ! {
+    match error {
+        CodecError::Core(error) => raise_core_error(error),
+        CodecError::DimensionMismatch { .. } => {
+            raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_EXCEPTION, error.to_string())
+        }
+        CodecError::InvalidCode(_) => {
+            raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error.to_string())
+        }
+    }
 }

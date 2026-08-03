@@ -1,7 +1,7 @@
 //! Binary quantization tests.
 
+use context_codec::binary_quantize;
 use context_core::{BitVector, DenseVector};
-use context_index::binary_quantize;
 
 #[test]
 fn binary_quantize_thresholds_dense_vector_signs() -> Result<(), Box<dyn std::error::Error>> {

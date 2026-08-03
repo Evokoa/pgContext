@@ -21,6 +21,7 @@ pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
 pg_test = []
 
 [dependencies]
+context-codec = { path = "../context-codec", version = "0.1.0" }
 context-core = { path = "../context-core", version = "0.1.0" }
 context-build = { path = "../context-build", version = "0.1.0" }
 context-filter = { path = "../context-filter", version = "0.1.0" }

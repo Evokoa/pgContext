@@ -1,7 +1,5 @@
 //! Exact top-k search over dense vectors.
 
-use core::cmp::Ordering;
-
 use crate::{DenseVector, DistanceMetric, Error, Result, policy};
 
 /// Non-zero maximum number of results returned by a search.
@@ -68,8 +66,8 @@ impl ScoredPoint {
 
 /// Computes exact top-k results for dense vector candidates.
 ///
-/// Results are sorted by ascending metric score, then ascending point id for a
-/// deterministic tie-break.
+/// Results use the metric's canonical score order, then ascending point id for
+/// a deterministic tie-break.
 #[must_use]
 pub fn exact_top_k(
     query: &DenseVector,
@@ -89,13 +87,12 @@ pub fn exact_top_k(
         }
     }
 
-    scored.sort_by(compare_scored_points);
+    let order = metric.score_order();
+    scored.sort_by(|left, right| {
+        order
+            .compare(f64::from(left.score), f64::from(right.score))
+            .then_with(|| left.point_id.cmp(&right.point_id))
+    });
     scored.truncate(limit.get());
     scored.into_iter().map(Ok).collect::<Vec<_>>().into_iter()
-}
-
-fn compare_scored_points(left: &ScoredPoint, right: &ScoredPoint) -> Ordering {
-    left.score
-        .total_cmp(&right.score)
-        .then_with(|| left.point_id.cmp(&right.point_id))
 }

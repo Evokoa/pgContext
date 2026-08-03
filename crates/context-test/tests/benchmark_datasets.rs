@@ -1,7 +1,7 @@
 //! Fixed-seed benchmark dataset tests.
 
 use context_core::{DistanceMetric, SearchLimit};
-use context_hybrid::CandidateBranch;
+use context_query::CandidateBranch;
 use context_test::{
     BENCHMARK_LATENCY_REGRESSION_LIMIT, BENCHMARK_MEMORY_REGRESSION_LIMIT,
     BENCHMARK_RECALL_DROP_LIMIT, BenchmarkDatasetSize, BenchmarkDatasetSpec,
@@ -158,10 +158,7 @@ fn hybrid_baseline_workload_pins_release_gate_cases() -> context_core::Result<()
             .iter()
             .map(|case| (
                 case.name(),
-                case.batches()
-                    .iter()
-                    .map(context_hybrid::CandidateBatch::branch)
-                    .collect::<Vec<_>>(),
+                case.branches().to_vec(),
                 case.batches()
                     .iter()
                     .map(|batch| batch.points().len())
@@ -171,11 +168,7 @@ fn hybrid_baseline_workload_pins_release_gate_cases() -> context_core::Result<()
         vec![
             ("dense_only", vec![CandidateBranch::DenseExact], vec![100]),
             ("text_only", vec![CandidateBranch::FullText], vec![100]),
-            (
-                "sparse_planned",
-                vec![CandidateBranch::SparsePlanned],
-                vec![0]
-            ),
+            ("sparse_planned", vec![CandidateBranch::Sparse], vec![0]),
             (
                 "fused_dense_text",
                 vec![CandidateBranch::DenseExact, CandidateBranch::FullText],

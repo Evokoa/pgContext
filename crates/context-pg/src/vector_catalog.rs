@@ -1,5 +1,9 @@
 //! SQL-facing vector registration metadata functions.
-use context_core::{CollectionName, DistanceMetric, SqlIdentifier, VectorDimensions, VectorName};
+use context_codec::validate_retrieval_combination;
+use context_core::{
+    CollectionName, DistanceMetric, IndexKind, SqlIdentifier, VectorDimensions, VectorName,
+    VectorRepresentation,
+};
 use pgrx::JsonB;
 use pgrx::prelude::*;
 use serde_json::Value;
@@ -9,7 +13,7 @@ use crate::domain_types::{
     vector_status_from_catalog, vector_status_from_sql,
 };
 use crate::error::{raise_core_error, raise_sql_error};
-use crate::vector_metadata_validation::validate_quantization_options;
+use crate::vector_metadata_validation::{quantization_codec_kind, validate_quantization_options};
 
 #[derive(Debug, Clone)]
 struct CollectionAcl {
@@ -153,6 +157,21 @@ pub fn configure_vector(
             ),
         ),
     };
+
+    let codec = quantization_codec_kind(&quantization_options).unwrap_or_else(|error| {
+        raise_sql_error(PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE, error)
+    });
+    if let Err(error) = validate_retrieval_combination(
+        VectorRepresentation::Dense,
+        row.metric,
+        IndexKind::Hnsw,
+        codec,
+    ) {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            error.to_string(),
+        );
+    }
 
     TableIterator::once(vector_metadata_row(row))
 }

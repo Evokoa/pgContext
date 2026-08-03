@@ -53,15 +53,72 @@ fn vector_conversion_policy_forbids_bit_numeric_casts() {
 #[test]
 fn vector_conversion_policy_covers_every_representation_pair() {
     use VectorConversionPolicy::{CheckedLossy, Forbidden, Lossless};
-    use VectorRepresentation::{Bit, Dense, Half, Sparse};
+    use VectorRepresentation::{Bit, Dense, Half, Int8, Sparse, UInt8};
 
     let expected = [
-        (Dense, [Lossless, CheckedLossy, Lossless, Forbidden]),
-        (Half, [Lossless, Lossless, Lossless, Forbidden]),
-        (Sparse, [Lossless, CheckedLossy, Lossless, Forbidden]),
-        (Bit, [Forbidden, Forbidden, Forbidden, Lossless]),
+        (
+            Dense,
+            [
+                Lossless,
+                CheckedLossy,
+                Lossless,
+                Forbidden,
+                CheckedLossy,
+                CheckedLossy,
+            ],
+        ),
+        (
+            Half,
+            [
+                Lossless,
+                Lossless,
+                Lossless,
+                Forbidden,
+                CheckedLossy,
+                CheckedLossy,
+            ],
+        ),
+        (
+            Sparse,
+            [
+                Lossless,
+                CheckedLossy,
+                Lossless,
+                Forbidden,
+                CheckedLossy,
+                CheckedLossy,
+            ],
+        ),
+        (
+            Bit,
+            [
+                Forbidden, Forbidden, Forbidden, Lossless, Forbidden, Forbidden,
+            ],
+        ),
+        (
+            Int8,
+            [
+                Lossless,
+                Lossless,
+                Lossless,
+                Forbidden,
+                Lossless,
+                CheckedLossy,
+            ],
+        ),
+        (
+            UInt8,
+            [
+                Lossless,
+                Lossless,
+                Lossless,
+                Forbidden,
+                CheckedLossy,
+                Lossless,
+            ],
+        ),
     ];
-    let targets = [Dense, Half, Sparse, Bit];
+    let targets = [Dense, Half, Sparse, Bit, Int8, UInt8];
 
     for (source, policies) in expected {
         for (target, expected_policy) in targets.into_iter().zip(policies) {

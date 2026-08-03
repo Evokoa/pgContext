@@ -2,10 +2,11 @@
 
 use std::error::Error;
 
+use context_codec::QuantizedCodebook;
 use context_core::{DenseVector, DistanceMetric};
 use context_storage::{
-    HnswGraphArtifactRecord, HnswGraphQuantization, HnswGraphQuantizationCodebook,
-    QuantizedHnswGraphView, encode_hnsw_graph_payload_v2,
+    HnswGraphArtifactRecord, HnswGraphQuantization, QuantizedHnswGraphView,
+    encode_hnsw_graph_payload_v2,
 };
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
@@ -21,7 +22,7 @@ fn quantized_view_borrows_codes_and_neighbors() -> TestResult {
         HnswGraphArtifactRecord::new(1, 20, vector(&[1.0, -1.0])?, vec![0]),
     ];
     let quantization = HnswGraphQuantization::new(
-        HnswGraphQuantizationCodebook::Binary { dimensions: 2 },
+        QuantizedCodebook::Binary { dimensions: 2 },
         vec![vec![0b10], vec![0b01]],
     );
     let payload = encode_hnsw_graph_payload_v2(&records, Some(&quantization))?;
@@ -43,7 +44,7 @@ fn quantized_view_borrows_codes_and_neighbors() -> TestResult {
 
 #[test]
 fn encoded_distance_matches_reconstruction_without_allocating_a_node_vector() -> TestResult {
-    let codebook = HnswGraphQuantizationCodebook::Scalar {
+    let codebook = QuantizedCodebook::Scalar {
         dimensions: 3,
         minimum: -2.0,
         maximum: 2.0,
@@ -70,7 +71,7 @@ fn encoded_distance_matches_reconstruction_without_allocating_a_node_vector() ->
 
 #[test]
 fn cosine_navigation_deprioritizes_a_quantized_zero_vector() -> TestResult {
-    let codebook = HnswGraphQuantizationCodebook::Product {
+    let codebook = QuantizedCodebook::Product {
         dimensions: 2,
         subvector_dimensions: 2,
         codebooks: vec![vec![vector(&[0.0, 0.0])?, vector(&[1.0, 1.0])?]],

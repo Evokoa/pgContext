@@ -2,11 +2,42 @@
 
 use serde_json::Value;
 
+use context_codec::CodecKind;
+
 const CURRENT_QUANTIZATION_METADATA_VERSION: u64 = 1;
 const MIN_SCALAR_LEVELS: u64 = 2;
 const MAX_SCALAR_LEVELS: u64 = 256;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum QuantizationConfig {
+    Plain,
+    Binary,
+    Scalar {
+        levels: u16,
+        minimum: Option<f32>,
+        maximum: Option<f32>,
+    },
+    Product {
+        subvector_dimensions: Option<usize>,
+    },
+}
+
+impl QuantizationConfig {
+    pub(crate) const fn codec_kind(self) -> CodecKind {
+        match self {
+            Self::Plain => CodecKind::Plain,
+            Self::Binary => CodecKind::Binary,
+            Self::Scalar { .. } => CodecKind::Scalar,
+            Self::Product { .. } => CodecKind::Product,
+        }
+    }
+}
+
 pub(crate) fn validate_quantization_options(value: &Value) -> Result<(), String> {
+    parse_quantization_options(value).map(|_| ())
+}
+
+pub(crate) fn parse_quantization_options(value: &Value) -> Result<QuantizationConfig, String> {
     let Some(options) = value.as_object() else {
         return Err("quantization_options must be a JSON object".to_owned());
     };
@@ -25,24 +56,27 @@ pub(crate) fn validate_quantization_options(value: &Value) -> Result<(), String>
         }
     }
 
-    let Some(mode) = options.get("mode") else {
-        return Ok(());
-    };
-    let mode = mode
-        .as_str()
-        .ok_or_else(|| "quantization_options mode must be a string".to_owned())?;
+    let mode = options.get("mode").map_or(Ok("none"), |mode| {
+        mode.as_str()
+            .ok_or_else(|| "quantization_options mode must be a string".to_owned())
+    })?;
     match mode {
-        "none" | "binary" => Ok(()),
-        "scalar" | "sq8" => validate_scalar_quantization_options(options),
-        "pq" => validate_product_quantization_options(options),
+        "none" => Ok(QuantizationConfig::Plain),
+        "binary" => Ok(QuantizationConfig::Binary),
+        "scalar" | "sq8" => parse_scalar_quantization_options(options),
+        "pq" => parse_product_quantization_options(options),
         _ => Err(format!("unsupported quantization_options mode: {mode}")),
     }
 }
 
-fn validate_scalar_quantization_options(
+pub(crate) fn quantization_codec_kind(value: &Value) -> Result<CodecKind, String> {
+    parse_quantization_options(value).map(QuantizationConfig::codec_kind)
+}
+
+fn parse_scalar_quantization_options(
     options: &serde_json::Map<String, Value>,
-) -> Result<(), String> {
-    if let Some(levels) = options.get("levels") {
+) -> Result<QuantizationConfig, String> {
+    let levels = if let Some(levels) = options.get("levels") {
         let levels = levels
             .as_u64()
             .ok_or_else(|| "quantization_options levels must be a positive integer".to_owned())?;
@@ -51,10 +85,15 @@ fn validate_scalar_quantization_options(
                 "quantization_options levels must be between {MIN_SCALAR_LEVELS} and {MAX_SCALAR_LEVELS}: {levels}"
             ));
         }
-    }
+        u16::try_from(levels)
+            .map_err(|_| format!("quantization_options levels exceed u16: {levels}"))?
+    } else {
+        u16::try_from(MAX_SCALAR_LEVELS)
+            .map_err(|_| "default scalar levels exceed u16".to_owned())?
+    };
 
-    let min = optional_finite_number(options, "min")?;
-    let max = optional_finite_number(options, "max")?;
+    let min = optional_finite_f32(options, "min")?;
+    let max = optional_finite_f32(options, "max")?;
     if let (Some(min), Some(max)) = (min, max)
         && min >= max
     {
@@ -62,27 +101,42 @@ fn validate_scalar_quantization_options(
             "quantization_options min must be less than max: {min} >= {max}"
         ));
     }
-    Ok(())
+    Ok(QuantizationConfig::Scalar {
+        levels,
+        minimum: min,
+        maximum: max,
+    })
 }
 
-fn validate_product_quantization_options(
+fn parse_product_quantization_options(
     options: &serde_json::Map<String, Value>,
-) -> Result<(), String> {
-    if let Some(dimensions) = options.get("subvector_dimensions") {
+) -> Result<QuantizationConfig, String> {
+    let subvector_dimensions = if let Some(dimensions) = options.get("subvector_dimensions") {
         let dimensions = dimensions.as_u64().ok_or_else(|| {
             "quantization_options subvector_dimensions must be a positive integer".to_owned()
         })?;
         if dimensions == 0 {
             return Err("quantization_options subvector_dimensions must be positive: 0".to_owned());
         }
-    }
-    Ok(())
+        Some(usize::try_from(dimensions).map_err(|_| {
+            format!("quantization_options subvector_dimensions exceed usize: {dimensions}")
+        })?)
+    } else {
+        None
+    };
+    Ok(QuantizationConfig::Product {
+        subvector_dimensions,
+    })
 }
 
-fn optional_finite_number(
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the finite f64 value is checked again after conversion to the f32 codec domain"
+)]
+fn optional_finite_f32(
     options: &serde_json::Map<String, Value>,
     key: &'static str,
-) -> Result<Option<f64>, String> {
+) -> Result<Option<f32>, String> {
     let Some(value) = options.get(key) else {
         return Ok(None);
     };
@@ -92,6 +146,12 @@ fn optional_finite_number(
     if !value.is_finite() {
         return Err(format!(
             "quantization_options {key} must be a finite number"
+        ));
+    }
+    let value = value as f32;
+    if !value.is_finite() {
+        return Err(format!(
+            "quantization_options {key} exceeds the finite f32 codec domain"
         ));
     }
     Ok(Some(value))
@@ -116,6 +176,33 @@ mod tests {
             validate_quantization_options(&value)
                 .map_err(|error| format!("expected valid metadata {value}: {error}"))?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn aliases_and_build_options_resolve_to_one_typed_configuration() -> Result<(), String> {
+        assert_eq!(
+            parse_quantization_options(&json!({
+                "mode": "sq8",
+                "levels": 16,
+                "min": -2.0,
+                "max": 3.0
+            }))?,
+            QuantizationConfig::Scalar {
+                levels: 16,
+                minimum: Some(-2.0),
+                maximum: Some(3.0),
+            }
+        );
+        assert_eq!(
+            parse_quantization_options(&json!({
+                "mode": "pq",
+                "subvector_dimensions": 4
+            }))?,
+            QuantizationConfig::Product {
+                subvector_dimensions: Some(4),
+            }
+        );
         Ok(())
     }
 

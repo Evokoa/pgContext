@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use context_core::{PointId, SourceKey};
+use context_core::{
+    Completion, ConfigurationRevision, GenerationId, OccurrenceId, PointId, ProfileId,
+    ReadinessReason, ScoreOrder, SourceAuthority, SourceKey, SourceVersion,
+};
 
 use crate::{BudgetUsage, QueryError, Result};
 
@@ -23,12 +26,248 @@ pub enum CandidateBranch {
     UserProvided,
 }
 
+impl CandidateBranch {
+    /// Returns the stable numeric registration code for occurrence identities.
+    #[must_use]
+    pub const fn stable_code(self) -> u8 {
+        match self {
+            Self::DenseExact => 0,
+            Self::DenseAnn => 1,
+            Self::FullText => 2,
+            Self::Sparse => 3,
+            Self::MultiVector => 4,
+            Self::UserProvided => 5,
+        }
+    }
+
+    /// Returns the bounded stable diagnostic name for this branch.
+    #[must_use]
+    pub const fn stable_name(self) -> &'static str {
+        match self {
+            Self::DenseExact => "dense_exact",
+            Self::DenseAnn => "dense_ann",
+            Self::FullText => "full_text",
+            Self::Sparse => "sparse",
+            Self::MultiVector => "multi_vector",
+            Self::UserProvided => "user_provided",
+        }
+    }
+}
+
+/// Physical or logical source that produced a candidate occurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CandidateSourceKind {
+    /// Authoritative exact source-row scan.
+    Exact,
+    /// HNSW graph or delta candidate source.
+    Hnsw,
+    /// IVFFlat candidate source.
+    IvfFlat,
+    /// PostgreSQL full-text candidate source.
+    FullText,
+    /// Sparse exact or sparse-index candidate source.
+    Sparse,
+    /// Multi-vector token candidate source.
+    MultiVector,
+    /// Caller-provided logical identifiers.
+    UserProvided,
+    /// Topology expansion candidate source.
+    Topology,
+}
+
+impl CandidateSourceKind {
+    /// Returns the stable numeric registration code for occurrence identities.
+    #[must_use]
+    pub const fn stable_code(self) -> u8 {
+        match self {
+            Self::Exact => 0,
+            Self::Hnsw => 1,
+            Self::IvfFlat => 2,
+            Self::FullText => 3,
+            Self::Sparse => 4,
+            Self::MultiVector => 5,
+            Self::UserProvided => 6,
+            Self::Topology => 7,
+        }
+    }
+
+    /// Returns the bounded stable diagnostic name for this source kind.
+    #[must_use]
+    pub const fn stable_name(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Hnsw => "hnsw",
+            Self::IvfFlat => "ivf_flat",
+            Self::FullText => "full_text",
+            Self::Sparse => "sparse",
+            Self::MultiVector => "multi_vector",
+            Self::UserProvided => "user_provided",
+            Self::Topology => "topology",
+        }
+    }
+}
+
+/// Typed provenance attached to one candidate occurrence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CandidateProvenance {
+    occurrence_id: OccurrenceId,
+    branch: CandidateBranch,
+    source: CandidateSourceKind,
+    score_order: ScoreOrder,
+    authority: SourceAuthority,
+    generation: Option<GenerationId>,
+    configuration: Option<ConfigurationRevision>,
+    profile: Option<ProfileId>,
+    source_version: Option<SourceVersion>,
+}
+
+impl CandidateProvenance {
+    /// Creates required candidate provenance before optional revision IDs are attached.
+    #[must_use]
+    pub const fn new(
+        occurrence_id: OccurrenceId,
+        branch: CandidateBranch,
+        source: CandidateSourceKind,
+        score_order: ScoreOrder,
+        authority: SourceAuthority,
+    ) -> Self {
+        Self {
+            occurrence_id,
+            branch,
+            source,
+            score_order,
+            authority,
+            generation: None,
+            configuration: None,
+            profile: None,
+            source_version: None,
+        }
+    }
+
+    /// Attaches the artifact generation used by the candidate source.
+    #[must_use]
+    pub const fn with_generation(mut self, generation: GenerationId) -> Self {
+        self.generation = Some(generation);
+        self
+    }
+
+    /// Attaches the immutable retrieval configuration revision.
+    #[must_use]
+    pub const fn with_configuration(mut self, configuration: ConfigurationRevision) -> Self {
+        self.configuration = Some(configuration);
+        self
+    }
+
+    /// Attaches the vector or model profile identity.
+    #[must_use]
+    pub const fn with_profile(mut self, profile: ProfileId) -> Self {
+        self.profile = Some(profile);
+        self
+    }
+
+    /// Attaches the authoritative source version observed by the adapter.
+    #[must_use]
+    pub const fn with_source_version(mut self, source_version: SourceVersion) -> Self {
+        self.source_version = Some(source_version);
+        self
+    }
+
+    /// Returns the stable occurrence identity.
+    #[must_use]
+    pub const fn occurrence_id(self) -> OccurrenceId {
+        self.occurrence_id
+    }
+
+    /// Returns the query-owned branch identity.
+    #[must_use]
+    pub const fn branch(self) -> CandidateBranch {
+        self.branch
+    }
+
+    /// Returns the candidate source kind.
+    #[must_use]
+    pub const fn source(self) -> CandidateSourceKind {
+        self.source
+    }
+
+    /// Returns the candidate score ordering.
+    #[must_use]
+    pub const fn score_order(self) -> ScoreOrder {
+        self.score_order
+    }
+
+    /// Returns the source authority classification.
+    #[must_use]
+    pub const fn authority(self) -> SourceAuthority {
+        self.authority
+    }
+
+    /// Returns the artifact generation, when applicable.
+    #[must_use]
+    pub const fn generation(self) -> Option<GenerationId> {
+        self.generation
+    }
+
+    /// Returns the configuration revision, when applicable.
+    #[must_use]
+    pub const fn configuration(self) -> Option<ConfigurationRevision> {
+        self.configuration
+    }
+
+    /// Returns the model or vector profile, when applicable.
+    #[must_use]
+    pub const fn profile(self) -> Option<ProfileId> {
+        self.profile
+    }
+
+    /// Returns the authoritative source version, when applicable.
+    #[must_use]
+    pub const fn source_version(self) -> Option<SourceVersion> {
+        self.source_version
+    }
+}
+
+/// Fixed-width, content-free diagnostics for one candidate occurrence.
+///
+/// The integer fields bound telemetry cardinality and prevent adapters from
+/// attaching row contents or unbounded diagnostic strings to candidates.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CandidateDiagnostics {
+    source_rank: u32,
+    work_units: u32,
+}
+
+impl CandidateDiagnostics {
+    /// Creates bounded candidate diagnostics.
+    #[must_use]
+    pub const fn new(source_rank: u32, work_units: u32) -> Self {
+        Self {
+            source_rank,
+            work_units,
+        }
+    }
+
+    /// Returns the candidate's zero-based rank at its source.
+    #[must_use]
+    pub const fn source_rank(self) -> u32 {
+        self.source_rank
+    }
+
+    /// Returns source-defined bounded work units spent on the occurrence.
+    #[must_use]
+    pub const fn work_units(self) -> u32 {
+        self.work_units
+    }
+}
+
 /// Owned candidate produced by a candidate-source adapter.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Candidate {
     point_id: PointId,
-    score: f64,
-    branch: CandidateBranch,
+    approximate_score: f64,
+    exact_score: Option<f64>,
+    provenance: CandidateProvenance,
+    diagnostics: CandidateDiagnostics,
 }
 
 impl Candidate {
@@ -37,8 +276,12 @@ impl Candidate {
     /// # Errors
     ///
     /// Returns [`QueryError::InvalidInput`] for a non-finite score.
-    pub fn new(point_id: PointId, score: f64, branch: CandidateBranch) -> Result<Self> {
-        if !score.is_finite() {
+    pub fn new(
+        point_id: PointId,
+        approximate_score: f64,
+        provenance: CandidateProvenance,
+    ) -> Result<Self> {
+        if !approximate_score.is_finite() {
             return Err(QueryError::InvalidInput {
                 field: "candidate_score",
                 reason: "must be finite".to_owned(),
@@ -46,9 +289,34 @@ impl Candidate {
         }
         Ok(Self {
             point_id,
-            score,
-            branch,
+            approximate_score,
+            exact_score: None,
+            provenance,
+            diagnostics: CandidateDiagnostics::default(),
         })
+    }
+
+    /// Attaches a finite authoritative score already computed by the source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] when `exact_score` is not finite.
+    pub fn with_exact_score(mut self, exact_score: f64) -> Result<Self> {
+        if !exact_score.is_finite() {
+            return Err(QueryError::InvalidInput {
+                field: "candidate_exact_score",
+                reason: "must be finite".to_owned(),
+            });
+        }
+        self.exact_score = Some(exact_score);
+        Ok(self)
+    }
+
+    /// Attaches fixed-width, content-free source diagnostics.
+    #[must_use]
+    pub const fn with_diagnostics(mut self, diagnostics: CandidateDiagnostics) -> Self {
+        self.diagnostics = diagnostics;
+        self
     }
 
     /// Returns the logical point identifier.
@@ -59,14 +327,26 @@ impl Candidate {
 
     /// Returns the adapter score.
     #[must_use]
-    pub const fn score(&self) -> f64 {
-        self.score
+    pub const fn approximate_score(&self) -> f64 {
+        self.approximate_score
     }
 
-    /// Returns the producing branch.
+    /// Returns an authoritative score already computed by the source.
     #[must_use]
-    pub const fn branch(&self) -> CandidateBranch {
-        self.branch
+    pub const fn exact_score(&self) -> Option<f64> {
+        self.exact_score
+    }
+
+    /// Returns typed candidate provenance.
+    #[must_use]
+    pub const fn provenance(&self) -> CandidateProvenance {
+        self.provenance
+    }
+
+    /// Returns fixed-width source diagnostics.
+    #[must_use]
+    pub const fn diagnostics(&self) -> CandidateDiagnostics {
+        self.diagnostics
     }
 }
 
@@ -257,38 +537,12 @@ pub enum SourceReadiness {
     },
 }
 
-/// Bounded source-readiness reason safe for telemetry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReadinessReason {
-    /// Adapter has not established readiness yet.
-    Uninitialized,
-    /// No active generation or index exists.
-    GenerationMissing,
-    /// Configuration changed after the active generation was built.
-    ConfigurationChanged,
-    /// Source metadata or artifact generation is stale.
-    StaleGeneration,
-    /// Selected source kind cannot serve this query shape.
-    UnsupportedQuery,
-    /// Source failed validation and requires repair/rebuild.
-    ValidationFailed,
-}
-
 impl Default for SourceReadiness {
     fn default() -> Self {
         Self::NotReady {
             reason: ReadinessReason::Uninitialized,
         }
     }
-}
-
-/// Ordering direction for final rechecked scores.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ScoreOrder {
-    /// Smaller distance values rank first.
-    LowerIsBetter,
-    /// Larger similarity or fusion scores rank first.
-    HigherIsBetter,
 }
 
 /// Overall execution readiness state.
@@ -306,18 +560,6 @@ pub enum ExecutionState {
         /// Bounded diagnostic reason.
         reason: ReadinessReason,
     },
-}
-
-/// Terminal completion classification.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Completion {
-    /// Execution completed normally.
-    Complete,
-    /// Cooperative cancellation stopped execution at a port boundary.
-    Cancelled,
-    /// A result, candidate, recheck, stage, or expansion limit prevented a
-    /// complete authoritative result.
-    BudgetExhausted,
 }
 
 /// Logical execution stage for diagnostics.
@@ -471,10 +713,7 @@ pub(crate) fn deterministic_points(
     }
     let mut rows = best.into_values().collect::<Vec<_>>();
     rows.sort_by(|left, right| {
-        let score_order = match order {
-            ScoreOrder::LowerIsBetter => left.score().total_cmp(&right.score()),
-            ScoreOrder::HigherIsBetter => right.score().total_cmp(&left.score()),
-        };
+        let score_order = order.compare(left.score(), right.score());
         score_order.then_with(|| left.point_id().cmp(&right.point_id()))
     });
     rows.truncate(limit);
@@ -482,8 +721,5 @@ pub(crate) fn deterministic_points(
 }
 
 fn score_is_better_or_equal(existing: f64, candidate: f64, order: ScoreOrder) -> bool {
-    match order {
-        ScoreOrder::LowerIsBetter => existing.total_cmp(&candidate).is_le(),
-        ScoreOrder::HigherIsBetter => existing.total_cmp(&candidate).is_ge(),
-    }
+    order.compare(existing, candidate).is_le()
 }

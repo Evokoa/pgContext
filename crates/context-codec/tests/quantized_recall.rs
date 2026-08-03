@@ -1,10 +1,10 @@
 //! Quantized-vs-exact recall fixtures.
 
+use context_codec::{CodecError, RerankCandidate, binary_quantize, rerank_by_original_vectors};
 use context_core::{DenseVector, DistanceMetric, ExactSearchItem, SearchLimit, exact_top_k};
-use context_index::{HnswError, RerankCandidate, binary_quantize, rerank_by_original_vectors};
 
 #[test]
-fn binary_quantized_candidates_rerank_to_exact_top_k() -> context_index::Result<()> {
+fn binary_quantized_candidates_rerank_to_exact_top_k() -> context_codec::Result<()> {
     let metric = DistanceMetric::L2;
     let query = vector(&[1.0, 1.0])?;
     let fixtures = [
@@ -19,7 +19,7 @@ fn binary_quantized_candidates_rerank_to_exact_top_k() -> context_index::Result<
         .collect::<Vec<_>>();
     let exact = exact_top_k(&query, &exact_items, metric, SearchLimit::new(2)?)
         .collect::<context_core::Result<Vec<_>>>()
-        .map_err(HnswError::from)?;
+        .map_err(CodecError::from)?;
 
     let query_code = binary_quantize(&query)?;
     let mut quantized_candidates = fixtures
@@ -28,10 +28,10 @@ fn binary_quantized_candidates_rerank_to_exact_top_k() -> context_index::Result<
             let code = binary_quantize(vector)?;
             let distance = query_code
                 .hamming_distance(&code)
-                .map_err(HnswError::from)?;
+                .map_err(CodecError::from)?;
             Ok((*point_id, distance, vector.clone()))
         })
-        .collect::<context_index::Result<Vec<_>>>()?;
+        .collect::<context_codec::Result<Vec<_>>>()?;
     quantized_candidates.sort_by_key(|(point_id, distance, _)| (*distance, *point_id));
 
     let candidates = quantized_candidates
@@ -55,6 +55,6 @@ fn binary_quantized_candidates_rerank_to_exact_top_k() -> context_index::Result<
     Ok(())
 }
 
-fn vector(values: &[f32]) -> context_index::Result<DenseVector> {
-    DenseVector::new(values.to_vec()).map_err(HnswError::from)
+fn vector(values: &[f32]) -> context_codec::Result<DenseVector> {
+    DenseVector::new(values.to_vec()).map_err(CodecError::from)
 }

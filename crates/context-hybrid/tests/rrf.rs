@@ -1,7 +1,7 @@
 //! Reciprocal rank fusion known-answer tests.
 
 use context_hybrid::{
-    BranchCandidate, CandidateBatch, CandidateBranch, RankedPoint, RrfK, reciprocal_rank_fusion,
+    BranchCandidate, CandidateBatch, RankedPoint, RrfK, reciprocal_rank_fusion,
     reciprocal_rank_fusion_batches,
 };
 
@@ -103,18 +103,9 @@ fn reciprocal_rank_fusion_rejects_zero_k() {
 }
 
 #[test]
-fn candidate_batch_carries_branch_identity_to_fusion() {
-    let dense = CandidateBatch::new(
-        CandidateBranch::DenseExact,
-        vec![RankedPoint::new(10), RankedPoint::new(20)],
-    );
-    let full_text = CandidateBatch::new(
-        CandidateBranch::FullText,
-        vec![RankedPoint::new(20), RankedPoint::new(30)],
-    );
-
-    assert_eq!(dense.branch(), CandidateBranch::DenseExact);
-    assert_eq!(full_text.branch(), CandidateBranch::FullText);
+fn candidate_batch_fuses_without_owning_query_branch_provenance() {
+    let dense = CandidateBatch::new(vec![RankedPoint::new(10), RankedPoint::new(20)]);
+    let full_text = CandidateBatch::new(vec![RankedPoint::new(20), RankedPoint::new(30)]);
 
     let fused = reciprocal_rank_fusion_batches(&[dense, full_text], RrfK::STANDARD, 10);
 
@@ -131,11 +122,10 @@ fn branch_candidate_preserves_adapter_score_before_fusion() {
 
 #[test]
 fn candidate_batch_accepts_hydrated_branch_candidates() {
-    let batch = CandidateBatch::from_candidates(
-        CandidateBranch::DenseAnn,
-        vec![BranchCandidate::with_score(3, 0.1), BranchCandidate::new(5)],
-    );
+    let batch = CandidateBatch::from_candidates(vec![
+        BranchCandidate::with_score(3, 0.1),
+        BranchCandidate::new(5),
+    ]);
 
-    assert_eq!(batch.branch(), CandidateBranch::DenseAnn);
     assert_eq!(batch.points(), &[RankedPoint::new(3), RankedPoint::new(5)]);
 }

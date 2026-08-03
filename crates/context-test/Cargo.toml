@@ -11,6 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
+context-codec = { path = "../context-codec", version = "0.1.0" }
 context-core = { path = "../context-core", version = "0.1.0" }
 context-build = { path = "../context-build", version = "0.1.0" }
 context-filter = { path = "../context-filter", version = "0.1.0" }

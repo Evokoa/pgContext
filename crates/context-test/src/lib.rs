@@ -7,8 +7,9 @@ use std::{collections::BTreeSet, mem::size_of};
 
 use context_core::{DenseVector, DistanceMetric, ExactSearchItem, ScoredPoint, SearchLimit};
 use context_hybrid::{
-    CandidateBatch, CandidateBranch, FusedPoint, RankedPoint, RrfK, reciprocal_rank_fusion_batches,
+    CandidateBatch, FusedPoint, RankedPoint, RrfK, reciprocal_rank_fusion_batches,
 };
+use context_query::CandidateBranch;
 
 mod late_interaction;
 
@@ -285,6 +286,7 @@ pub struct HybridBaselineWorkload {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HybridBenchmarkCase {
     name: &'static str,
+    branches: Vec<CandidateBranch>,
     batches: Vec<CandidateBatch>,
 }
 
@@ -371,8 +373,8 @@ impl HybridBaselineWorkload {
     pub fn from_spec(spec: BenchmarkDatasetSpec) -> context_core::Result<Self> {
         let dense = dense_hybrid_branch(spec)?;
         let text = text_hybrid_branch(spec)?;
-        let sparse_planned = CandidateBatch::new(CandidateBranch::SparsePlanned, Vec::new());
-        let empty = CandidateBatch::new(CandidateBranch::UserProvided, Vec::new());
+        let sparse_planned = CandidateBatch::new(Vec::new());
+        let empty = CandidateBatch::new(Vec::new());
 
         Ok(Self {
             spec,
@@ -393,14 +395,31 @@ impl HybridBaselineWorkload {
     #[must_use]
     pub fn cases(&self) -> Vec<HybridBenchmarkCase> {
         vec![
-            HybridBenchmarkCase::new("dense_only", vec![self.dense.clone()]),
-            HybridBenchmarkCase::new("text_only", vec![self.text.clone()]),
-            HybridBenchmarkCase::new("sparse_planned", vec![self.sparse_planned.clone()]),
+            HybridBenchmarkCase::new(
+                "dense_only",
+                vec![CandidateBranch::DenseExact],
+                vec![self.dense.clone()],
+            ),
+            HybridBenchmarkCase::new(
+                "text_only",
+                vec![CandidateBranch::FullText],
+                vec![self.text.clone()],
+            ),
+            HybridBenchmarkCase::new(
+                "sparse_planned",
+                vec![CandidateBranch::Sparse],
+                vec![self.sparse_planned.clone()],
+            ),
             HybridBenchmarkCase::new(
                 "fused_dense_text",
+                vec![CandidateBranch::DenseExact, CandidateBranch::FullText],
                 vec![self.dense.clone(), self.text.clone()],
             ),
-            HybridBenchmarkCase::new("fully_empty", vec![self.empty.clone()]),
+            HybridBenchmarkCase::new(
+                "fully_empty",
+                vec![CandidateBranch::UserProvided],
+                vec![self.empty.clone()],
+            ),
         ]
     }
 
@@ -434,14 +453,29 @@ impl HybridBaselineWorkload {
 }
 
 impl HybridBenchmarkCase {
-    fn new(name: &'static str, batches: Vec<CandidateBatch>) -> Self {
-        Self { name, batches }
+    fn new(
+        name: &'static str,
+        branches: Vec<CandidateBranch>,
+        batches: Vec<CandidateBatch>,
+    ) -> Self {
+        debug_assert_eq!(branches.len(), batches.len());
+        Self {
+            name,
+            branches,
+            batches,
+        }
     }
 
     /// Returns the stable case name printed by the benchmark runner.
     #[must_use]
     pub const fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// Returns query-owned provenance for the measured branches.
+    #[must_use]
+    pub fn branches(&self) -> &[CandidateBranch] {
+        &self.branches
     }
 
     /// Returns the branch batches measured by this case.
@@ -782,7 +816,7 @@ fn dense_hybrid_branch(spec: BenchmarkDatasetSpec) -> context_core::Result<Candi
         .take(100)
         .map(|row| row.map(|row| RankedPoint::new(row.point_id)))
         .collect::<context_core::Result<Vec<_>>>()?;
-    Ok(CandidateBatch::new(CandidateBranch::DenseExact, points))
+    Ok(CandidateBatch::new(points))
 }
 
 fn text_hybrid_branch(spec: BenchmarkDatasetSpec) -> context_core::Result<CandidateBatch> {
@@ -796,7 +830,7 @@ fn text_hybrid_branch(spec: BenchmarkDatasetSpec) -> context_core::Result<Candid
         .take(100)
         .collect::<context_core::Result<Vec<_>>>()?;
     points.reverse();
-    Ok(CandidateBatch::new(CandidateBranch::FullText, points))
+    Ok(CandidateBatch::new(points))
 }
 
 fn deterministic_vector(seed: u64, dimensions: usize) -> context_core::Result<DenseVector> {

@@ -3,12 +3,15 @@
 #![allow(clippy::expect_used)]
 
 use context_core::{
+    ConfigurationRevision, GenerationId, OccurrenceId, ProfileId, SourceAuthority, SourceVersion,
+};
+use context_core::{
     PointId, SparseEntry, SparseVector,
     policy::{MAX_HNSW_CANDIDATE_MASK_POINTS, MAX_RECALL_CHECK_POINT_IDS},
 };
 use context_query::{
-    Candidate, CandidateBranch, ExecutionBudget, Formula, QueryError, QueryIr, QueryKind,
-    ScoreOrder,
+    Candidate, CandidateBranch, CandidateDiagnostics, CandidateProvenance, CandidateSourceKind,
+    ExecutionBudget, Formula, QueryError, QueryIr, QueryKind, ScoreOrder,
 };
 
 #[test]
@@ -140,13 +143,127 @@ fn named_source_leaves_validate_full_text_and_late_interaction_inputs() {
 
 #[test]
 fn candidate_scores_must_be_finite() {
+    let provenance = CandidateProvenance::new(
+        OccurrenceId::new(1).expect("non-zero occurrence"),
+        CandidateBranch::DenseAnn,
+        CandidateSourceKind::Hnsw,
+        ScoreOrder::LowerIsBetter,
+        SourceAuthority::DerivedArtifact,
+    )
+    .with_generation(GenerationId::new(3).expect("non-zero generation"))
+    .with_configuration(ConfigurationRevision::new(4).expect("non-zero configuration"))
+    .with_profile(ProfileId::new(5).expect("non-zero profile"));
     assert!(matches!(
-        Candidate::new(PointId::new(1), f64::NAN, CandidateBranch::DenseAnn),
+        Candidate::new(PointId::new(1), f64::NAN, provenance),
         Err(QueryError::InvalidInput {
             field: "candidate_score",
             ..
         })
     ));
+}
+
+#[test]
+fn candidate_branch_and_source_registries_are_exhaustive() {
+    let branches = [
+        CandidateBranch::DenseExact,
+        CandidateBranch::DenseAnn,
+        CandidateBranch::FullText,
+        CandidateBranch::Sparse,
+        CandidateBranch::MultiVector,
+        CandidateBranch::UserProvided,
+    ];
+    let sources = [
+        CandidateSourceKind::Exact,
+        CandidateSourceKind::Hnsw,
+        CandidateSourceKind::IvfFlat,
+        CandidateSourceKind::FullText,
+        CandidateSourceKind::Sparse,
+        CandidateSourceKind::MultiVector,
+        CandidateSourceKind::UserProvided,
+        CandidateSourceKind::Topology,
+    ];
+
+    assert_eq!(
+        branches.map(CandidateBranch::stable_name),
+        [
+            "dense_exact",
+            "dense_ann",
+            "full_text",
+            "sparse",
+            "multi_vector",
+            "user_provided",
+        ]
+    );
+    assert_eq!(
+        branches.map(CandidateBranch::stable_code),
+        [0, 1, 2, 3, 4, 5]
+    );
+    assert_eq!(
+        sources.map(CandidateSourceKind::stable_name),
+        [
+            "exact",
+            "hnsw",
+            "ivf_flat",
+            "full_text",
+            "sparse",
+            "multi_vector",
+            "user_provided",
+            "topology",
+        ]
+    );
+    assert_eq!(
+        sources.map(CandidateSourceKind::stable_code),
+        [0, 1, 2, 3, 4, 5, 6, 7]
+    );
+}
+
+#[test]
+fn candidate_envelope_preserves_typed_provenance_and_scores() -> Result<(), QueryError> {
+    let provenance = CandidateProvenance::new(
+        OccurrenceId::new(11).expect("non-zero occurrence"),
+        CandidateBranch::DenseAnn,
+        CandidateSourceKind::Hnsw,
+        ScoreOrder::LowerIsBetter,
+        SourceAuthority::DerivedArtifact,
+    )
+    .with_generation(GenerationId::new(12).expect("non-zero generation"))
+    .with_configuration(ConfigurationRevision::new(13).expect("non-zero configuration"))
+    .with_profile(ProfileId::new(14).expect("non-zero profile"))
+    .with_source_version(SourceVersion::new(15).expect("non-zero source version"));
+    let diagnostics = CandidateDiagnostics::new(3, 21);
+    let candidate = Candidate::new(PointId::new(7), 0.25, provenance)?
+        .with_exact_score(0.2)?
+        .with_diagnostics(diagnostics);
+
+    assert_eq!(candidate.approximate_score(), 0.25);
+    assert_eq!(candidate.exact_score(), Some(0.2));
+    assert_eq!(candidate.provenance().occurrence_id().get(), 11);
+    assert_eq!(
+        candidate.provenance().generation().map(GenerationId::get),
+        Some(12)
+    );
+    assert_eq!(
+        candidate
+            .provenance()
+            .configuration()
+            .map(ConfigurationRevision::get),
+        Some(13)
+    );
+    assert_eq!(
+        candidate.provenance().profile().map(ProfileId::get),
+        Some(14)
+    );
+    assert_eq!(
+        candidate
+            .provenance()
+            .source_version()
+            .map(SourceVersion::get),
+        Some(15)
+    );
+    assert_eq!(candidate.diagnostics(), diagnostics);
+    assert_eq!(candidate.diagnostics().source_rank(), 3);
+    assert_eq!(candidate.diagnostics().work_units(), 21);
+    Ok(())
 }
 
 #[test]

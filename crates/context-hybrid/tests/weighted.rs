@@ -2,8 +2,9 @@
 
 #![allow(clippy::expect_used)]
 
+use context_core::ScoreOrder;
 use context_hybrid::{
-    BranchCandidate, RankedPoint, RrfK, ScoreDirection, WeightedBranch, WeightedFusionError,
+    BranchCandidate, RankedPoint, RrfK, WeightedBranch, WeightedFusionError,
     reciprocal_rank_fusion, weighted_fusion,
 };
 use proptest::prelude::*;
@@ -18,8 +19,8 @@ fn weighted_fusion_normalizes_direction_and_deduplicates_per_branch() {
     let sparse = [scored(1, 1.0), scored(3, 0.0)];
     let fused = weighted_fusion(
         &[
-            WeightedBranch::new(&dense, 3.0, ScoreDirection::HigherIsBetter),
-            WeightedBranch::new(&sparse, 1.0, ScoreDirection::LowerIsBetter),
+            WeightedBranch::new(&dense, 3.0, ScoreOrder::HigherIsBetter),
+            WeightedBranch::new(&sparse, 1.0, ScoreOrder::LowerIsBetter),
         ],
         10,
     )
@@ -44,7 +45,7 @@ fn weighted_fusion_rejects_invalid_weights_and_missing_scores() {
             &[WeightedBranch::new(
                 &unscored,
                 1.0,
-                ScoreDirection::HigherIsBetter,
+                ScoreOrder::HigherIsBetter,
             )],
             1,
         ),
@@ -52,11 +53,7 @@ fn weighted_fusion_rejects_invalid_weights_and_missing_scores() {
     );
     assert_eq!(
         weighted_fusion(
-            &[WeightedBranch::new(
-                &[],
-                0.0,
-                ScoreDirection::HigherIsBetter,
-            )],
+            &[WeightedBranch::new(&[], 0.0, ScoreOrder::HigherIsBetter,)],
             1,
         ),
         Err(WeightedFusionError::ZeroTotalWeight)
@@ -70,7 +67,7 @@ fn weighted_fusion_normalizes_extreme_finite_scores_without_nan() {
         &[WeightedBranch::new(
             &points,
             1.0,
-            ScoreDirection::HigherIsBetter,
+            ScoreOrder::HigherIsBetter,
         )],
         3,
     )
@@ -107,7 +104,7 @@ proptest! {
             &[WeightedBranch::new(
                 &weighted_points,
                 1.0,
-                ScoreDirection::LowerIsBetter,
+                ScoreOrder::LowerIsBetter,
             )],
             usize::MAX,
         ).expect("strict finite scores should fuse");

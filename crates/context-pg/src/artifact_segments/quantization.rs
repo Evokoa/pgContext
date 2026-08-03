@@ -1,13 +1,15 @@
 //! Build-side quantization policy adaptation for mmap HNSW artifacts.
 
-use context_core::DenseVector;
-use context_index::{TrainedQuantizer, train_product_quantizer, train_scalar_quantizer};
-use context_storage::{
-    HnswGraphArtifactRecord, HnswGraphQuantization, HnswGraphQuantizationCodebook,
+use context_codec::{
+    QuantizedCodebook, TrainedQuantizer, train_product_quantizer, train_scalar_quantizer,
+    validate_retrieval_combination,
 };
+use context_core::{DenseVector, DistanceMetric, IndexKind, VectorRepresentation};
+use context_storage::{HnswGraphArtifactRecord, HnswGraphQuantization};
 use serde_json::Value;
 
-const DEFAULT_SCALAR_LEVELS: u16 = 256;
+use crate::vector_metadata_validation::{QuantizationConfig, parse_quantization_options};
+
 const DEFAULT_PQ_SUBVECTOR_DIMENSIONS: usize = 8;
 const DEFAULT_PQ_CENTROIDS: usize = 16;
 const DEFAULT_PQ_ITERATIONS: usize = 8;
@@ -16,35 +18,41 @@ const MAX_QUANTIZATION_TRAINING_SAMPLE: usize = 4_096;
 pub(super) fn quantize_graph_records(
     records: &[HnswGraphArtifactRecord],
     options: &Value,
+    metric: DistanceMetric,
 ) -> Result<Option<HnswGraphQuantization>, String> {
-    let mode = options
-        .get("mode")
-        .and_then(Value::as_str)
-        .unwrap_or("none");
-    if mode == "none" {
+    let config = parse_quantization_options(options)?;
+    if config == QuantizationConfig::Plain {
         return Ok(None);
     }
+    let codec = config.codec_kind();
+    validate_retrieval_combination(VectorRepresentation::Dense, metric, IndexKind::Hnsw, codec)
+        .map_err(|error| error.to_string())?;
     let sample = deterministic_training_sample(records);
     let dimensions = sample
         .first()
         .map(DenseVector::dimension)
         .ok_or_else(|| "cannot train quantization for an empty graph".to_owned())?;
-    let trained = match mode {
-        "binary" => TrainedQuantizer::binary(dimensions),
-        "scalar" | "sq8" => {
-            let levels = option_u16(options, "levels")?.unwrap_or(DEFAULT_SCALAR_LEVELS);
+    let trained = match config {
+        QuantizationConfig::Binary => TrainedQuantizer::binary(dimensions),
+        QuantizationConfig::Scalar {
+            levels,
+            minimum,
+            maximum,
+        } => {
             let observed =
                 train_scalar_quantizer(&sample, levels, None).map_err(|error| error.to_string())?;
             let observed = observed
                 .scalar()
                 .ok_or_else(|| "scalar training returned a non-scalar codebook".to_owned())?;
-            let minimum = option_f32(options, "min")?.unwrap_or(observed.min());
-            let maximum = option_f32(options, "max")?.unwrap_or(observed.max());
+            let minimum = minimum.unwrap_or(observed.min());
+            let maximum = maximum.unwrap_or(observed.max());
             train_scalar_quantizer(&sample, levels, Some((minimum, maximum)))
         }
-        "pq" => {
-            let subvector_dimensions = option_usize(options, "subvector_dimensions")?
-                .unwrap_or_else(|| default_subvector_dimensions(dimensions));
+        QuantizationConfig::Product {
+            subvector_dimensions,
+        } => {
+            let subvector_dimensions =
+                subvector_dimensions.unwrap_or_else(|| default_subvector_dimensions(dimensions));
             let centroid_count = DEFAULT_PQ_CENTROIDS.min(sample.len());
             train_product_quantizer(
                 &sample,
@@ -53,7 +61,7 @@ pub(super) fn quantize_graph_records(
                 DEFAULT_PQ_ITERATIONS,
             )
         }
-        unsupported => return Err(format!("unsupported quantization mode: {unsupported}")),
+        QuantizationConfig::Plain => unreachable!("plain mode returns before codec training"),
     }
     .map_err(|error| error.to_string())?;
     let codebook = persisted_codebook(&trained);
@@ -72,8 +80,9 @@ pub(super) fn validate_graph_quantization_policy(
     records: &[HnswGraphArtifactRecord],
     actual: Option<&HnswGraphQuantization>,
     options: &Value,
+    metric: DistanceMetric,
 ) -> Result<(), String> {
-    let expected = quantize_graph_records(records, options)?;
+    let expected = quantize_graph_records(records, options, metric)?;
     if expected.as_ref() == actual {
         Ok(())
     } else {
@@ -88,9 +97,9 @@ pub(super) fn validate_graph_quantization_policy(
 fn quantization_mode(quantization: Option<&HnswGraphQuantization>) -> &'static str {
     match quantization.map(HnswGraphQuantization::codebook) {
         None => "none",
-        Some(HnswGraphQuantizationCodebook::Binary { .. }) => "binary",
-        Some(HnswGraphQuantizationCodebook::Scalar { .. }) => "scalar",
-        Some(HnswGraphQuantizationCodebook::Product { .. }) => "pq",
+        Some(QuantizedCodebook::Binary { .. }) => "binary",
+        Some(QuantizedCodebook::Scalar { .. }) => "scalar",
+        Some(QuantizedCodebook::Product { .. }) => "pq",
     }
 }
 
@@ -104,21 +113,21 @@ fn deterministic_training_sample(records: &[HnswGraphArtifactRecord]) -> Vec<Den
         .collect()
 }
 
-fn persisted_codebook(trained: &TrainedQuantizer) -> HnswGraphQuantizationCodebook {
+fn persisted_codebook(trained: &TrainedQuantizer) -> QuantizedCodebook {
     match trained {
-        TrainedQuantizer::Binary { dimensions } => HnswGraphQuantizationCodebook::Binary {
+        TrainedQuantizer::Binary { dimensions } => QuantizedCodebook::Binary {
             dimensions: *dimensions,
         },
         TrainedQuantizer::Scalar {
             quantizer,
             dimensions,
-        } => HnswGraphQuantizationCodebook::Scalar {
+        } => QuantizedCodebook::Scalar {
             dimensions: *dimensions,
             minimum: quantizer.min(),
             maximum: quantizer.max(),
             levels: quantizer.levels(),
         },
-        TrainedQuantizer::Product(quantizer) => HnswGraphQuantizationCodebook::Product {
+        TrainedQuantizer::Product(quantizer) => QuantizedCodebook::Product {
             dimensions: trained.dimensions(),
             subvector_dimensions: quantizer.subvector_dimensions(),
             codebooks: quantizer
@@ -135,51 +144,4 @@ fn default_subvector_dimensions(dimensions: usize) -> usize {
         .rev()
         .find(|candidate| dimensions.is_multiple_of(*candidate))
         .unwrap_or(1)
-}
-
-fn option_u16(options: &Value, key: &'static str) -> Result<Option<u16>, String> {
-    options
-        .get(key)
-        .map(|value| {
-            let value = value
-                .as_u64()
-                .ok_or_else(|| format!("quantization option {key} must be an integer"))?;
-            u16::try_from(value)
-                .map_err(|_| format!("quantization option {key} exceeds u16: {value}"))
-        })
-        .transpose()
-}
-
-fn option_usize(options: &Value, key: &'static str) -> Result<Option<usize>, String> {
-    options
-        .get(key)
-        .map(|value| {
-            let value = value
-                .as_u64()
-                .ok_or_else(|| format!("quantization option {key} must be an integer"))?;
-            usize::try_from(value)
-                .map_err(|_| format!("quantization option {key} exceeds usize: {value}"))
-        })
-        .transpose()
-}
-
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "metadata validation bounds finite JSON numbers to f32-compatible quantizer policy"
-)]
-fn option_f32(options: &Value, key: &'static str) -> Result<Option<f32>, String> {
-    options
-        .get(key)
-        .map(|value| {
-            let value = value
-                .as_f64()
-                .ok_or_else(|| format!("quantization option {key} must be numeric"))?;
-            let converted = value as f32;
-            if converted.is_finite() {
-                Ok(converted)
-            } else {
-                Err(format!("quantization option {key} exceeds f32"))
-            }
-        })
-        .transpose()
 }

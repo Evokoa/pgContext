@@ -2,12 +2,13 @@
 
 #![allow(clippy::expect_used)]
 
-use context_core::{PointId, SourceKey};
+use context_core::{OccurrenceId, PointId, SourceAuthority, SourceKey};
 use context_query::{
-    Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateSource, Completion,
-    ExecutionBudget, ExecutionState, FilterCandidateBatch, FilterCandidateSource, Formula,
-    HydratedCandidate, QueryError, QueryExecutor, QueryIr, QueryKind, ScoreOrder, SourceReadiness,
-    SourceRechecker, StageDiagnostic, StageKind, TelemetrySink,
+    Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateProvenance, CandidateSource,
+    CandidateSourceKind, Completion, ExecutionBudget, ExecutionState, FilterCandidateBatch,
+    FilterCandidateSource, Formula, HydratedCandidate, QueryError, QueryExecutor, QueryIr,
+    QueryKind, ScoreOrder, SourceReadiness, SourceRechecker, StageDiagnostic, StageKind,
+    TelemetrySink,
 };
 use std::cell::Cell;
 
@@ -67,7 +68,7 @@ impl SourceRechecker for ExactRechecker {
                 HydratedCandidate::new(
                     candidate.point_id(),
                     SourceKey::new(candidate.point_id().get().to_string())?,
-                    candidate.score(),
+                    candidate.approximate_score(),
                 )
             })
             .collect()
@@ -125,8 +126,19 @@ impl Cancellation for CancelOnCall {
 }
 
 fn candidate(point_id: u64, score: f64) -> Candidate {
-    Candidate::new(PointId::new(point_id), score, CandidateBranch::DenseAnn)
-        .expect("candidate fixture should be finite")
+    Candidate::new(
+        PointId::new(point_id),
+        score,
+        CandidateProvenance::new(
+            OccurrenceId::new(point_id.saturating_add(1))
+                .expect("saturating increment is non-zero"),
+            CandidateBranch::DenseAnn,
+            CandidateSourceKind::Hnsw,
+            ScoreOrder::LowerIsBetter,
+            SourceAuthority::DerivedArtifact,
+        ),
+    )
+    .expect("candidate fixture should be finite")
 }
 
 fn branch(first_dimension: f32) -> QueryIr {

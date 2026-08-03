@@ -1,7 +1,7 @@
 //! Product quantization prototype tests.
 
+use context_codec::{ProductCodebook, ProductQuantizedVector, ProductQuantizer};
 use context_core::DenseVector;
-use context_index::{ProductCodebook, ProductQuantizedVector, ProductQuantizer};
 
 #[test]
 fn product_quantize_selects_nearest_centroids() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,7 +37,7 @@ fn product_quantizer_rejects_mismatched_vector_dimensions() -> Result<(), Box<dy
 
     assert!(matches!(
         result,
-        Err(context_index::HnswError::DimensionMismatch { left: 4, right: 2 })
+        Err(context_codec::CodecError::DimensionMismatch { left: 4, right: 2 })
     ));
 
     Ok(())
@@ -47,12 +47,12 @@ fn product_quantizer_rejects_mismatched_vector_dimensions() -> Result<(), Box<dy
 fn product_quantizer_rejects_invalid_codebooks() -> Result<(), Box<dyn std::error::Error>> {
     assert!(matches!(
         ProductCodebook::new(Vec::new()),
-        Err(context_index::HnswError::Core(context_core::Error::InvalidVector(message)))
+        Err(context_codec::CodecError::Core(context_core::Error::InvalidVector(message)))
             if message == "invalid product quantization codebook: centroids must not be empty"
     ));
     assert!(matches!(
         ProductQuantizer::new(0, vec![ProductCodebook::new(vec!["[0]".parse()?])?]),
-        Err(context_index::HnswError::Core(context_core::Error::InvalidVector(message)))
+        Err(context_codec::CodecError::Core(context_core::Error::InvalidVector(message)))
             if message == "invalid product quantization codebook: subvector dimensions must be greater than zero"
     ));
 
@@ -68,7 +68,7 @@ fn product_reconstruct_rejects_codes_outside_codebook() -> Result<(), Box<dyn st
 
     assert!(matches!(
         result,
-        Err(context_index::HnswError::Core(context_core::Error::InvalidVector(message)))
+        Err(context_codec::CodecError::Core(context_core::Error::InvalidVector(message)))
             if message == "product quantized code 2 exceeds codebook size 2"
     ));
 

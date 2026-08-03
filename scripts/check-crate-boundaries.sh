@@ -23,6 +23,7 @@ packages = {package["name"]: package for package in metadata["packages"]}
 
 pure_crates = (
     "context-core",
+    "context-codec",
     "context-filter",
     "context-hybrid",
     "context-index",
@@ -73,6 +74,11 @@ def exact_dependencies(
         fail(f"{crate} required dependency is missing: {sorted(missing)[0]}")
 
 
+exact_dependencies(
+    "context-codec",
+    {"context-core", "thiserror"},
+    {"proptest"},
+)
 exact_dependencies(
     "context-query",
     {"context-core", "context-filter", "context-hybrid", "serde", "serde_json"},
@@ -172,12 +178,14 @@ for crate in pure_crates:
 
 
 source_forbidden = {
+    "context-codec": re.compile(r"\bcontext_(?:filter|hybrid|index|storage|query|build)\b"),
     "context-query": re.compile(r"\bcontext_(?:index|storage|build)\b"),
     "context-index": re.compile(r"\bcontext_(?:storage|query|build)\b"),
     "context-storage": re.compile(r"\bcontext_(?:index|query|build)\b"),
     "context-build": re.compile(r"\bcontext_(?:filter|hybrid|index|storage|query)\b"),
 }
 source_messages = {
+    "context-codec": "context-codec source imports a sibling crate",
     "context-query": "context-query source imports an infrastructure crate",
     "context-index": "context-index source imports a forbidden sibling crate",
     "context-storage": "context-storage source imports a forbidden sibling crate",
@@ -192,6 +200,54 @@ for crate, pattern in source_forbidden.items():
                 f"{source_messages[crate]}: "
                 f"{path.relative_to(root)}:{line_number(text, match.start())}"
             )
+
+
+canonical_definitions = {
+    re.compile(r"\bpub\s+enum\s+ScoreOrder\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"\bpub\s+enum\s+VectorRepresentation\b"): Path("crates/context-core/src/vector.rs"),
+    re.compile(r"\bpub\s+enum\s+IndexKind\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"\bpub\s+enum\s+SourceAuthority\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"(?:\bpub\s+struct\s+|\bnonzero_id!\(\s*)GenerationId\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"(?:\bpub\s+struct\s+|\bnonzero_id!\(\s*)ConfigurationRevision\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"(?:\bpub\s+struct\s+|\bnonzero_id!\(\s*)ProfileId\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"(?:\bpub\s+struct\s+|\bnonzero_id!\(\s*)OccurrenceId\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"(?:\bpub\s+struct\s+|\bnonzero_id!\(\s*)SourceVersion\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"\bpub\s+enum\s+ReadinessReason\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"\bpub\s+enum\s+Completion\b"): Path("crates/context-core/src/retrieval.rs"),
+    re.compile(r"\bpub\s+enum\s+CandidateBranch\b"): Path("crates/context-query/src/types.rs"),
+    re.compile(r"\bpub\s+enum\s+CandidateSourceKind\b"): Path("crates/context-query/src/types.rs"),
+    re.compile(r"\bpub\s+struct\s+CandidateProvenance\b"): Path("crates/context-query/src/types.rs"),
+    re.compile(r"\bpub\s+struct\s+CandidateDiagnostics\b"): Path("crates/context-query/src/types.rs"),
+    re.compile(r"\bpub\s+struct\s+Candidate\b"): Path("crates/context-query/src/types.rs"),
+    re.compile(r"\bpub\s+enum\s+RetrievalRegistrationError\b"): Path("crates/context-codec/src/registration.rs"),
+    re.compile(r"\bpub\s+enum\s+CodecKind\b"): Path("crates/context-codec/src/lib.rs"),
+    re.compile(r"\bpub\s+enum\s+TrainedQuantizer\b"): Path("crates/context-codec/src/training.rs"),
+    re.compile(r"\bpub\s+enum\s+QuantizedCodebook\b"): Path("crates/context-codec/src/encoded.rs"),
+    re.compile(r"\bpub\s+struct\s+PreparedQuantizedQuery\b"): Path("crates/context-codec/src/encoded.rs"),
+    re.compile(r"\bpub\s+struct\s+ScalarQuantizer\b"): Path("crates/context-codec/src/quantization.rs"),
+    re.compile(r"\bpub\s+struct\s+ProductQuantizer\b"): Path("crates/context-codec/src/quantization.rs"),
+}
+workspace_sources = sorted((root / "crates").glob("*/**/*.rs"))
+for pattern, owner in canonical_definitions.items():
+    definitions = []
+    for path in workspace_sources:
+        text = path.read_text(encoding="utf-8")
+        if pattern.search(text):
+            definitions.append(path.relative_to(root))
+    if definitions != [owner]:
+        fail(
+            f"canonical retrieval definition ownership mismatch for {pattern.pattern}: "
+            f"expected {owner}, got {definitions}"
+        )
+
+for path in workspace_sources:
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"\bScoreDirection\b", text)
+    if match:
+        fail(
+            f"obsolete ScoreDirection definition or adapter remains: "
+            f"{path.relative_to(root)}:{line_number(text, match.start())}"
+        )
 
 filesystem_api = re.compile(
     r"\bstd::(?:fs|path)\b|\bfs::|\bstd::\{[^}]*\b(?:fs|path)\b|"

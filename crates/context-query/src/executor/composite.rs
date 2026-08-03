@@ -4,8 +4,7 @@ use std::collections::BTreeMap;
 
 use context_core::{PointId, SourceKey};
 use context_hybrid::{
-    BranchCandidate, RankedPoint, RrfK, ScoreDirection, WeightedBranch, reciprocal_rank_fusion,
-    weighted_fusion,
+    BranchCandidate, RankedPoint, RrfK, WeightedBranch, reciprocal_rank_fusion, weighted_fusion,
 };
 
 use super::{QueryExecutor, cancelled, outcome};
@@ -350,16 +349,7 @@ fn weighted_points(
         .iter()
         .zip(branches)
         .zip(weights)
-        .map(|((candidates, (order, _)), weight)| {
-            WeightedBranch::new(
-                candidates,
-                *weight,
-                match order {
-                    ScoreOrder::LowerIsBetter => ScoreDirection::LowerIsBetter,
-                    ScoreOrder::HigherIsBetter => ScoreDirection::HigherIsBetter,
-                },
-            )
-        })
+        .map(|((candidates, (order, _)), weight)| WeightedBranch::new(candidates, *weight, *order))
         .collect::<Vec<_>>();
     let fused = weighted_fusion(&weighted, limit).map_err(|error| QueryError::InvalidInput {
         field: "weight",

@@ -1,6 +1,6 @@
 //! Exact distance metrics for framework-free vector representations.
 
-use crate::{DenseVector, Error, HalfVector, Result, SparseVector, metric_kernels};
+use crate::{DenseVector, Error, HalfVector, Result, ScoreOrder, SparseVector, metric_kernels};
 
 /// Distance or similarity family used for vector comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +28,20 @@ pub enum DistanceMetric {
 }
 
 impl DistanceMetric {
+    /// Returns the total result ordering for this metric.
+    #[must_use]
+    pub const fn score_order(self) -> ScoreOrder {
+        match self {
+            Self::InnerProduct => ScoreOrder::HigherIsBetter,
+            Self::L2
+            | Self::NegativeInnerProduct
+            | Self::Cosine
+            | Self::L1
+            | Self::Hamming
+            | Self::Jaccard => ScoreOrder::LowerIsBetter,
+        }
+    }
+
     /// Computes this metric between two dense vectors.
     ///
     /// # Errors

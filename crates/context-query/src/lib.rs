@@ -20,7 +20,7 @@ mod types;
 mod validation;
 
 pub use budget::{BudgetUsage, ExecutionBudget};
-pub use context_core::PointId;
+pub use context_core::{Completion, PointId, ReadinessReason, ScoreOrder};
 pub use error::{QueryError, Result};
 pub use executor::QueryExecutor;
 pub use formula::{CompiledFormula, Formula, MAX_FORMULA_BYTES, MAX_FORMULA_OPERATIONS};
@@ -39,9 +39,9 @@ pub use strategy::{
     MultiVectorAnnStrategyKind, select_filtered_ann_strategy, select_multi_vector_ann_strategy,
 };
 pub use types::{
-    Candidate, CandidateBranch, CandidatePage, Completion, ExecutionOutcome, ExecutionState,
-    FilterCandidateBatch, HydratedCandidate, ReadinessReason, ScoreOrder, SourceReadiness,
-    StageDiagnostic, StageKind,
+    Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage, CandidateProvenance,
+    CandidateSourceKind, ExecutionOutcome, ExecutionState, FilterCandidateBatch, HydratedCandidate,
+    SourceReadiness, StageDiagnostic, StageKind,
 };
 pub use validation::QueryPlanValidator;
 

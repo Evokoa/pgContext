@@ -4,12 +4,13 @@ use core::cmp::Ordering;
 use std::collections::HashSet;
 
 use context_core::{
-    CollectionName, DenseVector, Error as CoreError, QualifiedTableName, SearchLimit, SqlIdentifier,
+    CollectionName, DenseVector, Error as CoreError, QualifiedTableName, ScoreOrder, SearchLimit,
+    SourceAuthority, SqlIdentifier,
 };
 use context_query::MultiVectorAnnStrategyKind;
 use context_query::{
-    Candidate, CandidateBranch, CandidatePage, HydratedCandidate, QueryError, QueryIr, QueryKind,
-    ReadinessReason, Result, SourceReadiness,
+    Candidate, CandidateBranch, CandidatePage, CandidateSourceKind, HydratedCandidate, QueryError,
+    QueryIr, QueryKind, ReadinessReason, Result, SourceReadiness,
 };
 use pgrx::{pg_sys, prelude::*};
 
@@ -128,15 +129,22 @@ impl CompositeLateInteractionSource {
         let candidates = point_ids
             .into_iter()
             .map(|point_id| {
+                let point_id = context_core::PointId::from_i64(point_id).ok_or_else(|| {
+                    QueryError::PortFailure {
+                        stage: "late_interaction_candidate_source",
+                        message: format!("invalid PostgreSQL point ID {point_id}"),
+                    }
+                })?;
                 Candidate::new(
-                    context_core::PointId::from_i64(point_id).ok_or_else(|| {
-                        QueryError::PortFailure {
-                            stage: "late_interaction_candidate_source",
-                            message: format!("invalid PostgreSQL point ID {point_id}"),
-                        }
-                    })?,
+                    point_id,
                     0.0,
-                    CandidateBranch::MultiVector,
+                    crate::retrieval::candidate_provenance(
+                        point_id,
+                        CandidateBranch::MultiVector,
+                        CandidateSourceKind::MultiVector,
+                        ScoreOrder::LowerIsBetter,
+                        SourceAuthority::DerivedArtifact,
+                    )?,
                 )
             })
             .collect::<Result<Vec<_>>>()?;

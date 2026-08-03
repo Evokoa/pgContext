@@ -2,7 +2,7 @@
 
 use context_core::{BitVector, DenseVector, DistanceMetric, Error as CoreError, SearchLimit};
 
-use crate::{HnswError, Result};
+use crate::{CodecError, Result};
 
 /// Uniform scalar quantization codebook for dense vectors.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -207,7 +207,7 @@ impl ProductCodebook {
             .iter()
             .find(|centroid| centroid.dimension() != dimensions)
         {
-            return Err(HnswError::DimensionMismatch {
+            return Err(CodecError::DimensionMismatch {
                 left: dimensions,
                 right: centroid.dimension(),
             });
@@ -258,7 +258,7 @@ impl ProductQuantizer {
             .iter()
             .find(|codebook| codebook.centroids[0].dimension() != subvector_dimensions)
         {
-            return Err(HnswError::DimensionMismatch {
+            return Err(CodecError::DimensionMismatch {
                 left: subvector_dimensions,
                 right: codebook.centroids[0].dimension(),
             });
@@ -292,7 +292,7 @@ impl ProductQuantizer {
     pub fn quantize(&self, vector: &DenseVector) -> Result<ProductQuantizedVector> {
         let expected = self.expected_dimensions()?;
         if vector.dimension() != expected {
-            return Err(HnswError::DimensionMismatch {
+            return Err(CodecError::DimensionMismatch {
                 left: expected,
                 right: vector.dimension(),
             });
@@ -319,7 +319,7 @@ impl ProductQuantizer {
     /// when any code is outside its codebook.
     pub fn reconstruct(&self, vector: &ProductQuantizedVector) -> Result<DenseVector> {
         if vector.codes().len() != self.codebooks.len() {
-            return Err(HnswError::DimensionMismatch {
+            return Err(CodecError::DimensionMismatch {
                 left: self.codebooks.len(),
                 right: vector.codes().len(),
             });
@@ -484,7 +484,8 @@ impl RerankResult {
 
 /// Reranks candidates by exact distance to their original dense vectors.
 ///
-/// Results are ordered by score and then point id for deterministic ties.
+/// Results use the metric's canonical score order and then point id for
+/// deterministic ties.
 ///
 /// # Errors
 ///
@@ -505,9 +506,10 @@ pub fn rerank_by_original_vectors(
         });
     }
 
+    let order = metric.score_order();
     results.sort_by(|left, right| {
-        left.score
-            .total_cmp(&right.score)
+        order
+            .compare(f64::from(left.score), f64::from(right.score))
             .then_with(|| left.point_id.cmp(&right.point_id))
     });
     results.truncate(limit.get());

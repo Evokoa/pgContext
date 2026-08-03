@@ -3,8 +3,8 @@
 use context_core::{DenseVector, DistanceMetric, Error as CoreError};
 
 use crate::{
-    ProductCodebook, ProductQuantizedVector, ProductQuantizer, Result, ScalarQuantizedVector,
-    ScalarQuantizer,
+    CodecError, ProductCodebook, ProductQuantizedVector, ProductQuantizer, Result,
+    ScalarQuantizedVector, ScalarQuantizer,
 };
 
 /// A trained, self-contained quantizer suitable for persistence in an artifact.
@@ -232,7 +232,7 @@ fn validate_sample(sample: &[DenseVector]) -> Result<usize> {
         .iter()
         .find(|vector| vector.dimension() != dimensions)
     {
-        return Err(crate::HnswError::DimensionMismatch {
+        return Err(CodecError::DimensionMismatch {
             left: dimensions,
             right: vector.dimension(),
         });
@@ -327,7 +327,7 @@ fn require_dimensions(expected: usize, actual: usize) -> Result<()> {
     if expected == actual {
         Ok(())
     } else {
-        Err(crate::HnswError::DimensionMismatch {
+        Err(CodecError::DimensionMismatch {
             left: expected,
             right: actual,
         })

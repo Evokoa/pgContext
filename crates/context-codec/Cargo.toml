@@ -1,5 +1,5 @@
 [package]
-name = "context-storage"
+name = "context-codec"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -11,9 +11,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-context-codec = { path = "../context-codec", version = "0.1.0" }
 context-core = { path = "../context-core", version = "0.1.0" }
-libc.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

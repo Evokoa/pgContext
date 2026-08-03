@@ -43,11 +43,10 @@ pub use delta_segment::{
 };
 pub use hnsw_graph_payload::{
     CURRENT_HNSW_GRAPH_PAYLOAD_VERSION, HnswGraphArtifactRecord, HnswGraphPayload,
-    HnswGraphPayloadError, HnswGraphQuantization, HnswGraphQuantizationCodebook,
-    MIN_READABLE_HNSW_GRAPH_PAYLOAD_VERSION, MappedGraphNodeView, MappedGraphView,
-    MappedNeighborIter, PreparedQuantizedQuery, QuantizedHnswGraphNodeView, QuantizedHnswGraphView,
-    QuantizedNeighborIter, decode_hnsw_graph_payload, decode_hnsw_graph_payload_versioned,
-    encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
+    HnswGraphPayloadError, HnswGraphQuantization, MIN_READABLE_HNSW_GRAPH_PAYLOAD_VERSION,
+    MappedGraphNodeView, MappedGraphView, MappedNeighborIter, QuantizedHnswGraphNodeView,
+    QuantizedHnswGraphView, QuantizedNeighborIter, decode_hnsw_graph_payload,
+    decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
 };
 pub use mapped_packed_graph::{
     MappedGraphIdentity, MappedPackedGraphError, MappedPackedGraphImage, encode_mapped_packed_graph,

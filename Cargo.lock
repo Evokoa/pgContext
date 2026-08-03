@@ -305,6 +305,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "context-codec"
+version = "0.1.0"
+dependencies = [
+ "context-core",
+ "proptest",
+ "thiserror",
+]
+
+[[package]]
 name = "context-core"
 version = "0.1.0"
 dependencies = [
@@ -344,6 +353,7 @@ name = "context-pg"
 version = "0.2.0"
 dependencies = [
  "context-build",
+ "context-codec",
  "context-core",
  "context-filter",
  "context-hybrid",
@@ -373,6 +383,7 @@ dependencies = [
 name = "context-storage"
 version = "0.1.0"
 dependencies = [
+ "context-codec",
  "context-core",
  "libc",
  "proptest",
@@ -383,6 +394,7 @@ name = "context-test"
 version = "0.1.0"
 dependencies = [
  "context-build",
+ "context-codec",
  "context-core",
  "context-filter",
  "context-hybrid",

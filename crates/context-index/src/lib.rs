@@ -14,8 +14,6 @@ mod graph_mvcc;
 mod graph_port;
 mod hnsw_hierarchy;
 mod page_codec;
-mod quantization;
-mod quantization_training;
 
 pub use graph_mutation::{
     CURRENT_GRAPH_LAYOUT_VERSION, GRAPH_PAGE_HEADER_BYTES, GRAPH_PAGE_MAGIC,
@@ -53,14 +51,6 @@ pub use hnsw_hierarchy::{
     search_graph_read_with_mask, search_graph_read_with_mask_budgeted,
 };
 pub use page_codec::{GraphPageCodecError, GraphPageEnvelope};
-
-pub use quantization::{
-    ProductCodebook, ProductQuantizedVector, ProductQuantizer, RerankCandidate, RerankResult,
-    ScalarQuantizedVector, ScalarQuantizer, binary_quantize, rerank_by_original_vectors,
-};
-pub use quantization_training::{
-    TrainedQuantizer, train_product_quantizer, train_scalar_quantizer,
-};
 
 /// Result type used by pure index structures.
 pub type Result<T> = core::result::Result<T, HnswError>;

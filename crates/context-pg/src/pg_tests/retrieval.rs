@@ -61,6 +61,17 @@ fn table_search_postgres_adapters_obey_bounded_executor_contracts() {
 }
 
 #[pg_test]
+fn adapter_occurrence_identity_distinguishes_sources_and_generations() {
+    let occurrences = crate::retrieval::provenance_occurrences_for_test();
+    for (index, occurrence) in occurrences.iter().enumerate() {
+        assert!(
+            occurrences[..index].iter().all(|prior| prior != occurrence),
+            "occurrence {index} must be unique across source identities"
+        );
+    }
+}
+
+#[pg_test]
 fn zero_mask_budget_selects_dense_exact_fallback() {
     create_filter_search_collection("stage_b_zero_mask_fallback");
     upsert_search_points(

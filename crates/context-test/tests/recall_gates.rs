@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 
-use context_core::{DenseVector, DistanceMetric, ExactSearchItem, SearchLimit, exact_top_k};
-use context_index::{
-    HnswConfig, HnswGraph, HnswPointId, RerankCandidate, ScalarQuantizer, binary_quantize,
-    rerank_by_original_vectors,
+use context_codec::{
+    CodecError, RerankCandidate, ScalarQuantizer, binary_quantize, rerank_by_original_vectors,
 };
+use context_core::{DenseVector, DistanceMetric, ExactSearchItem, SearchLimit, exact_top_k};
+use context_index::{HnswConfig, HnswGraph, HnswPointId};
 use context_test::{
     BenchmarkDatasetSpec, BenchmarkRow, LATE_INTERACTION_BASELINE_LIMIT,
     LateInteractionAnnBaselineWorkload, RecallSummary,
@@ -34,7 +34,8 @@ fn hnsw_recall_gate_matches_exact_top_k_fixture() -> context_index::Result<()> {
 }
 
 #[test]
-fn scalar_quantized_rerank_recall_gate_matches_exact_top_k_fixture() -> context_index::Result<()> {
+fn scalar_quantized_rerank_recall_gate_matches_exact_top_k_fixture()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = RecallFixture::small()?;
     let quantizer = ScalarQuantizer::new(-1.0, 1.0, 256)?;
     let query_reconstructed = quantizer.reconstruct(&quantizer.quantize(&fixture.query)?)?;
@@ -46,7 +47,7 @@ fn scalar_quantized_rerank_recall_gate_matches_exact_top_k_fixture() -> context_
             let reconstructed = quantizer.reconstruct(&quantizer.quantize(&row.vector)?)?;
             Ok(ExactSearchItem::new(row.point_id, reconstructed))
         })
-        .collect::<context_index::Result<Vec<_>>>()?;
+        .collect::<context_codec::Result<Vec<_>>>()?;
     let approximate = exact_top_k(
         &query_reconstructed,
         &reconstructed,
@@ -66,11 +67,13 @@ fn scalar_quantized_rerank_recall_gate_matches_exact_top_k_fixture() -> context_
         reranked.iter().map(|point| point.point_id()),
     );
 
-    assert_recall_at_least("scalar_sq8_rerank", summary, 0.95)
+    assert_recall_at_least("scalar_sq8_rerank", summary, 0.95)?;
+    Ok(())
 }
 
 #[test]
-fn binary_quantized_rerank_recall_gate_matches_exact_top_k_fixture() -> context_index::Result<()> {
+fn binary_quantized_rerank_recall_gate_matches_exact_top_k_fixture()
+-> Result<(), Box<dyn std::error::Error>> {
     let fixture = RecallFixture::small()?;
     let query_code = binary_quantize(&fixture.query)?;
     let mut candidates = fixture
@@ -80,10 +83,10 @@ fn binary_quantized_rerank_recall_gate_matches_exact_top_k_fixture() -> context_
             let code = binary_quantize(&row.vector)?;
             let distance = query_code
                 .hamming_distance(&code)
-                .map_err(context_index::HnswError::from)?;
+                .map_err(CodecError::from)?;
             Ok((row.point_id, distance, row.vector.clone()))
         })
-        .collect::<context_index::Result<Vec<_>>>()?;
+        .collect::<context_codec::Result<Vec<_>>>()?;
     candidates.sort_by_key(|(point_id, distance, _)| (*distance, *point_id));
     let candidates = candidates
         .into_iter()
@@ -101,7 +104,8 @@ fn binary_quantized_rerank_recall_gate_matches_exact_top_k_fixture() -> context_
         reranked.iter().map(|point| point.point_id()),
     );
 
-    assert_recall_at_least("binary_rerank", summary, 0.75)
+    assert_recall_at_least("binary_rerank", summary, 0.75)?;
+    Ok(())
 }
 
 #[test]
@@ -181,13 +185,13 @@ fn original_vector_map(rows: &[BenchmarkRow]) -> BTreeMap<u64, DenseVector> {
 fn rerank_candidates(
     approximate: &[context_core::ScoredPoint],
     original_by_id: &BTreeMap<u64, DenseVector>,
-) -> context_index::Result<Vec<RerankCandidate>> {
+) -> context_codec::Result<Vec<RerankCandidate>> {
     approximate
         .iter()
         .map(|point| {
             let point_id = point.point_id();
             let vector = original_by_id.get(&point_id).cloned().ok_or_else(|| {
-                context_index::HnswError::Core(context_core::Error::InvalidVector(format!(
+                CodecError::Core(context_core::Error::InvalidVector(format!(
                     "missing original vector for rerank point {point_id}"
                 )))
             })?;

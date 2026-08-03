@@ -1,8 +1,8 @@
 //! Quantized compatibility view over the general mapped graph decoder.
 
-use super::{
-    HnswGraphPayloadError, HnswGraphQuantizationCodebook, MappedGraphView, MappedNeighborIter,
-};
+use context_codec::QuantizedCodebook;
+
+use super::{HnswGraphPayloadError, MappedGraphView, MappedNeighborIter};
 
 /// Validated borrowed view of a quantized HNSW base-layer node.
 #[derive(Debug, Clone, Copy)]
@@ -43,7 +43,7 @@ pub type QuantizedNeighborIter<'a> = MappedNeighborIter<'a>;
 #[derive(Debug)]
 pub struct QuantizedHnswGraphView<'a> {
     graph: MappedGraphView<'a>,
-    codebook: HnswGraphQuantizationCodebook,
+    codebook: QuantizedCodebook,
 }
 
 impl<'a> QuantizedHnswGraphView<'a> {
@@ -84,7 +84,7 @@ impl<'a> QuantizedHnswGraphView<'a> {
 
     /// Returns the persisted codebook used by every node code.
     #[must_use]
-    pub fn codebook(&self) -> &HnswGraphQuantizationCodebook {
+    pub fn codebook(&self) -> &QuantizedCodebook {
         &self.codebook
     }
 

@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/context-core",
+    "crates/context-codec",
     "crates/context-build",
     "crates/context-filter",
     "crates/context-hybrid",

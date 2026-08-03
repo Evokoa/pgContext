@@ -154,6 +154,7 @@ pub(crate) fn completion_label(completion: Completion) -> &'static str {
         Completion::Complete => "complete",
         Completion::Cancelled => "cancelled",
         Completion::BudgetExhausted => "budget_exhausted",
+        Completion::Degraded => "degraded",
     }
 }
 

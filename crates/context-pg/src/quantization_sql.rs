@@ -1,10 +1,10 @@
 //! SQL-facing quantization helpers.
 
-use context_core::DenseVector;
-use context_index::{
-    HnswError, ProductCodebook, ProductQuantizedVector, ProductQuantizer, ScalarQuantizedVector,
+use context_codec::{
+    CodecError, ProductCodebook, ProductQuantizedVector, ProductQuantizer, ScalarQuantizedVector,
     ScalarQuantizer, binary_quantize as index_binary_quantize,
 };
+use context_core::DenseVector;
 use pgrx::JsonB;
 use pgrx::prelude::*;
 use serde_json::Value;
@@ -212,6 +212,15 @@ fn f64_to_checked_f32(value: f64) -> f32 {
     value as f32
 }
 
-fn raise_index_error(error: HnswError) -> ! {
-    raise_context_error(error.context_error(), error.to_string())
+fn raise_index_error(error: CodecError) -> ! {
+    match error {
+        CodecError::Core(error) => raise_core_error(error),
+        CodecError::DimensionMismatch { .. } => raise_context_error(
+            context_core::ContextError::DimensionMismatch,
+            error.to_string(),
+        ),
+        CodecError::InvalidCode(_) => {
+            raise_context_error(context_core::ContextError::InvalidVector, error.to_string())
+        }
+    }
 }
