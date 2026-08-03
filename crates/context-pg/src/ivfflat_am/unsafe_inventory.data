@@ -1,0 +1,40 @@
+# relative source|unsafe function|reason
+ivfflat_am.rs|from_polymorphic_datum|decodes a by-value regclass OID without opening or locking the relation
+ivfflat_am.rs|unbox_arg_unchecked|unboxes the declared regclass argument through the lock-free OID newtype
+ivfflat_am.rs|pgcontext_ivfflat_handler|guarded PostgreSQL V1 handler
+ivfflat_am.rs|ivfflat_build_phase_name|guarded PostgreSQL build-phase callback
+ivfflat_am.rs|ivfflat_build|guarded PostgreSQL build callback and joined worker coordinator
+ivfflat_am.rs|write_ivfflat_generation|writes and atomically publishes one checksummed generation
+ivfflat_am.rs|ivfflat_build_callback|guarded PostgreSQL table-build visitor
+ivfflat_am.rs|ivfflat_build_empty|guarded PostgreSQL empty-build callback
+ivfflat_am.rs|ivfflat_insert|guarded PostgreSQL insert callback
+ivfflat_am.rs|ivfflat_cost_estimate|guarded PostgreSQL planner callback
+ivfflat_am.rs|ivfflat_validate|guarded PostgreSQL opclass validator
+ivfflat_am.rs|ivfflat_begin_scan|guarded PostgreSQL begin-scan callback
+ivfflat_am.rs|ivfflat_rescan|guarded PostgreSQL rescan callback
+ivfflat_am.rs|ivfflat_get_tuple|guarded PostgreSQL tuple callback
+ivfflat_am.rs|ivfflat_end_scan|guarded PostgreSQL end-scan callback
+ivfflat_am.rs|ivfflat_bulk_delete|guarded PostgreSQL bulk-delete callback
+ivfflat_am.rs|ivfflat_vacuum_cleanup|guarded PostgreSQL vacuum-cleanup callback
+ivfflat_am.rs|prepare_scan|reads a generation and populates callback-owned scan state
+ivfflat_am.rs|scan_state|dereferences the memory-context-owned scan state slot
+ivfflat_am.rs|initialize_metapage|initializes the exclusively owned index metapage
+ivfflat_am.rs|append_delta_record|WAL-appends one mutation and publishes its cursor
+ivfflat_am.rs|publish_meta|atomically WAL-publishes a checksummed metapage
+ivfflat_am.rs|write_chunk_pages|writes immutable checksummed section pages
+ivfflat_am.rs|write_chunk_pages_from_temp|streams a bounded temporary run into immutable section pages
+ivfflat_am.rs|wal_log_build_pages|emits the PostgreSQL new-page range build record
+ivfflat_am.rs|read_meta|copies and validates the page-native publication record
+ivfflat_am.rs|read_delta_records|copies and validates the chronological delta extent
+ivfflat_am.rs|read_all_live_tids|folds one pinned base generation and its delta records
+ivfflat_am.rs|read_chunk_range|copies and validates an exact immutable section range
+ivfflat_am.rs|compact_ivfflat_oid|establishes heap-before-index locks before opening the manual-compaction relation
+ivfflat_am.rs|compact_ivfflat_relation|rebuilds and atomically cuts over one locked generation
+ivfflat_am/external_build.rs|postgres_parallel_assignment_runs|owns PostgreSQL ParallelContext, DSM, shared files, and worker joins
+ivfflat_am/external_build.rs|finish_parallel|retains locked build relations through the synchronous PostgreSQL worker lifecycle
+ivfflat_am/external_build.rs|pgcontext_ivfflat_parallel_build_main|guarded PostgreSQL dynamic parallel-worker entrypoint
+ivfflat_am/external_build.rs|ivfflat_parallel_build_callback|guarded PostgreSQL parallel table-build visitor
+ivfflat_am/options.rs|pgcontext_ivfflat_options|guarded PostgreSQL reloptions callback
+ivfflat_am/options.rs|list_count|reads validated relation reloptions
+ivfflat_am/options.rs|codec_spec|reads validated codec reloptions
+ivfflat_am/options.rs|ivfflat_reloption_kind|registers PostgreSQL reloptions once per backend

@@ -33,8 +33,13 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "26ed7be9cb76a27156bc1aefaef62633673f4f07e16b557946feb85f770582ea",
+  "navigation_sha256": "8bccf93cd9904d14c8787e85832ef1cc6b393f65c12c7f7e600306b235090740",
   "pages": [
+    {
+      "links": [],
+      "path": "benchmarks/ivfflat_1m.md",
+      "sha256": "0b74d0640a17975c02e8cb8312ad428d847331b8336defbcd581a44e6b237d42"
+    },
     {
       "links": [],
       "path": "benchmarks/late_interaction_owned.md",
@@ -238,7 +243,7 @@
         "user_guide/troubleshooting.md"
       ],
       "path": "known_issues.md",
-      "sha256": "48527c1f2968435acfd7a16bc75385c3f58a74cd5691737ffdec73b068011003"
+      "sha256": "8a340c591b714ad10aa1d594f929da39eeb9ba23f2523da962130642f30393c8"
     },
     {
       "links": [
@@ -311,7 +316,7 @@
         "user_guide/pgvector_migration.md"
       ],
       "path": "pgcontext-vs-pgvector-vs-qdrant.md",
-      "sha256": "f368f48ec0526cbb9556d05a1ea82a8786b768964643655ac74a65f3a7cc080c"
+      "sha256": "8677ab22f9062c82a6d23743ade3f1b6cd2e70257501029c58f3742a312ad5ac"
     },
     {
       "links": [
@@ -365,23 +370,22 @@
         "sql_object_inventory.md",
         "storage.md",
         "support_policy.md",
-        "supported_features.md",
-        "supported_features.md",
         "troubleshooting.md",
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "4b1aa8d7aec556dfd9745693195c4fc5d98632abafbae13642f3795219da9233"
+      "sha256": "b9fd0d02a06dbae7f4ba40aa144e018230db0943ce2ee98fd0db3c5c71012018"
     },
     {
       "links": [
+        "indexes.md",
         "indexes.md",
         "pgvector_coexist.md",
         "pgvector_coexist.md",
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "c461a499f9ff2eb6092cfe4654081d33e0859688be634d07f18ef3ba753f3378"
+      "sha256": "592c367e1f63cc3320bc9f06059bff04c4cb83f8a15eaa1dddf62ec94daaaaf0"
     },
     {
       "links": [],
@@ -411,7 +415,7 @@
     {
       "links": [],
       "path": "user_guide/filters.md",
-      "sha256": "cf128b5577f506316611b133ed5e71d7e3c0b5ac8adac6a0ad20c20ae3be38ba"
+      "sha256": "b203189e75047e7260d2ed523a04095a47126511688b15cea3fb9cdd0e2dea8d"
     },
     {
       "links": [],
@@ -420,20 +424,19 @@
     },
     {
       "links": [
+        "../benchmarks/ivfflat_1m.md",
         "pgvector_coexist.md"
       ],
       "path": "user_guide/indexes.md",
-      "sha256": "2a60e704f29c72f48941187ba46e3d9e84bdf2c71c0dfaa1cc60649833fb5186"
+      "sha256": "7fcc8513023215072b156655294e7df39b2f8539e199da141316e6bae1f336d9"
     },
     {
       "links": [
-        "https://github.com/Evokoa/homebrew-tap",
-        "https://pgxn.org/dist/pgcontext/0.2.0/",
         "operations.md",
         "troubleshooting.md"
       ],
       "path": "user_guide/installation.md",
-      "sha256": "f95375d4cb6af48a903349425b38d3c61aad56937fafbf8a88a74b542c2b8dca"
+      "sha256": "6ceefa1e8dbb5f212c2b8b1347793bc14c7250794d456349c2fa6eacc7559b56"
     },
     {
       "links": [
@@ -471,26 +474,26 @@
         "troubleshooting.md"
       ],
       "path": "user_guide/operations.md",
-      "sha256": "0ecfba6f7c6ba66532413c9c26c819663a7ef53337d7afdb48f3a119b903f42e"
+      "sha256": "f372f0b75e69ef3d6ab0f015e645624f04060fafb10c9bb4e499a4b0bcc93133"
     },
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "4b0fbf83860b33727177c861b0ae10e8db176416adfe2dfd8ab6183a0c3a5205"
+      "sha256": "cd1ba381d8b32ec5a1d4f1eebdc61c583d124d6a083e6487b03e1cd56b3b2c1c"
     },
     {
       "links": [
         "pgvector_migration.md#converting-column-ownership"
       ],
       "path": "user_guide/pgvector_coexist.md",
-      "sha256": "f898d21df2e47fe8ba9761a5967950c4661c33f23f2dd1baa8d7b79e44ad285f"
+      "sha256": "ea2ee1cc0ad00d3b85401ce1af6bb74a79c59cbc1c2afef78e7087ec1fa7e2b3"
     },
     {
       "links": [
         "pgvector_coexist.md"
       ],
       "path": "user_guide/pgvector_migration.md",
-      "sha256": "c2b88293f50b0f5fda440f002e4b4f6549aededdc8d6e4280134e4eb3df18a2e"
+      "sha256": "60ee78f48f5cb38e5e05cc748d3744509963c318f2bb11d042582fdacdb8e3f2"
     },
     {
       "links": [
@@ -534,7 +537,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "4201c1c785e978b66ca006a943846e9e999f82737d4db109a31cf512f919c4c3"
+      "sha256": "b3e26e10381adeef70fe5569236a5ca0eab01fa4aa46932f6297822bc7011737"
     },
     {
       "links": [
@@ -569,7 +572,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/retrieval_methods.md",
-      "sha256": "0579a4a76a56bf8c75841fe6c6dbe84798f5ee064350381c5140f55c02645fcd"
+      "sha256": "bf9a6b8afdd7cd5aa4114fe30634b90b45cad4e472ae12428a268ac873d3460c"
     },
     {
       "links": [
@@ -655,7 +658,7 @@
         "https://www.postgresql.org/docs/current/textsearch-indexes.html"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "48d043d55eb01e498ad88a56d53fd7ede9e93d3f1f487b084cd158e3b4cf260e"
+      "sha256": "ffbb3e2ccfced3989a350f96a215b09ec56fcb9902902f63cc552f54f5fe6817"
     },
     {
       "links": [],
@@ -670,7 +673,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "02215c82b3df4020356c339fb90cd0c4ba9faf5edbf2dfd0d476d227544bc225"
+      "sha256": "8c886b3de29a15631cde82386efebcdbd34c098cf1a41dc56056bb8db18ca15c"
     },
     {
       "links": [],
@@ -703,7 +706,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "85ecb527e7c8ffc0c015c98cbeadc44d53220d6ba237b36c33e3829648031aa9"
+      "sha256": "cf20a6d23e92be6a3f8fbbacabe4510f960e214635a7a4c9c109d1ed323055e8"
     },
     {
       "links": [],
@@ -792,7 +795,7 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "80fcc62e7712552b8c923e64b74b3a38274e0df8604e439fcc0fc8d92b36e50d"
+      "sha256": "ee194a7499d9530822f172019cba0174ba6c7cac4f07946b097b1bbfab1969c6"
     },
     {
       "links": [],

@@ -60,7 +60,7 @@ than collapsed into one winner.
 | Authoritative data | Existing application tables | PostgreSQL vector columns | Qdrant points and payloads | Qdrant normally requires copying/synchronizing application data; pgContext and pgvector keep it in PostgreSQL. |
 | Exact dense search | **Stable** | **Native** | [**Native**](https://qdrant.tech/documentation/search/search/) | All three support exact search. |
 | HNSW | **Implemented; PostgreSQL 17 benchmark-qualified** | **Native** | [**Native**](https://qdrant.tech/documentation/manage-data/indexing/#vector-index) | pgContext wins the current small-corpus matched-recall latency run; pgvector and Qdrant retain broader production history. |
-| IVFFlat | Not implemented | **Native** | Not implemented | IVFFlat is a pgvector advantage. |
+| IVFFlat | **Experimental native AM** with full-precision/SQ8/PQ postings and exact source rerank | **Native** | Not implemented | pgvector retains the more mature and drop-in-compatible surface; pgContext adds source-authoritative lifecycle and diagnostics under its own names. |
 | Dynamic metadata filters | **Stable** registered JSON filter API | **Native SQL** `WHERE` | [**Native** payload filters](https://qdrant.tech/documentation/search/filtering/) | pgContext and Qdrant provide structured filter grammars; pgvector allows arbitrary SQL. |
 | Filter-aware ANN | **Implemented** adaptive exact/masked traversal with ACORN-like sparse expansion | Post-filter plus iterative scan | [**Native** filterable HNSW and ACORN](https://qdrant.tech/documentation/manage-data/indexing/#filterable-hnsw-index) | All three work dynamically; their planning and graph strategies are not identical. |
 | Collections and points | **Stable** metadata/mappings over source tables | **SQL/application** | [**Native**](https://qdrant.tech/documentation/manage-data/collections/) | pgContext references PostgreSQL rows; Qdrant owns its points. |
@@ -114,7 +114,7 @@ interchangeable even when both display as `vector`.
 | HNSW dense four-metric serving | **Implemented; PostgreSQL 17 benchmark-qualified** | **Native** | [**Native**](https://qdrant.tech/documentation/manage-data/indexing/#vector-index) | Functional parity for dense L2, cosine, inner product, and L1; lifecycle and multi-version qualification differ. |
 | HNSW build/search tuning | **Implemented** GUCs and budgets | **Native** `m`, `ef_construction`, `ef_search` | [**Native** `m`, `ef_construct`, per-query `ef`](https://qdrant.tech/documentation/manage-data/indexing/#vector-index) | Similar concepts, different defaults and planner behavior. |
 | Disable HNSW/use full scan | Omit HNSW index | Omit ANN index | Set `m=0` or use optimizer/exact-query controls | All can avoid ANN when exact scanning is appropriate. |
-| IVFFlat | Not implemented | **Native** | Not implemented | Unique pgvector advantage among these products. |
+| IVFFlat | **Experimental** native dense/half/integer/bit opclasses, bounded probes, SQ8/PQ, and exact rerank | **Native** | Not implemented | Functional concepts overlap, but SQL names, format, build workers, and migration behavior are not drop-in compatible. |
 | Iterative ANN expansion | One-pass masked traversal; selective masks cross over to exact | **Native** strict/relaxed iterative scans | Qdrant planner/filterable graph/ACORN instead | These mechanisms should not be labeled 1:1 parity. |
 | Parallel HNSW build | No mature parity | **Native** PostgreSQL parallel workers | Background segment optimization | Operational models differ; Qdrant rebuilds indexes as segments optimize. |
 | Standard index build progress | Limited | **Native** `pg_stat_progress_create_index` | Collection/optimizer status and telemetry | pgvector has the clearest PostgreSQL-native progress integration. |
@@ -272,8 +272,8 @@ pgContext is not a drop-in replacement for pgvector:
 - the extensions define different PostgreSQL types and OIDs;
 - existing pgvector columns and indexes cannot be assumed to work with
   pgContext registration or `pgcontext_hnsw`;
-- pgContext lacks full pgvector helper, expression/subvector, iterative-scan,
-  parallel-build, progress-reporting, non-dense ANN, and IVFFlat parity;
+- pgContext lacks full pgvector helper, expression/subvector, drop-in naming,
+  PostgreSQL-worker build progress, and automatic IVFFlat conversion parity;
 - coexistence and in-place conversion have not graduated into a stable contract.
 
 See [Migrating from pgvector](user_guide/pgvector_migration.md).
@@ -302,7 +302,7 @@ behavior.
 
 ## Which Should You Choose?
 
-Choose **pgvector** when you want mature vector storage and ANN indexing composed directly through SQL. It’s perfect if you need IVFFlat, mature half/sparse/bit indexes, expression/subvector indexes, or if you prefer minimal abstraction above SQL.
+Choose **pgvector** when you want mature vector storage and ANN indexing composed directly through SQL. It’s a strong fit when you need its established IVFFlat surface, mature half/sparse/bit indexes, expression/subvector indexes, or minimal abstraction above SQL.
 
 Choose **Qdrant** if vector retrieval is a separate microservice and you need a mature distributed vector database with built-in sharding, replication, and rich payload filters—and you're completely comfortable managing a second data store and keeping it synchronized.
 

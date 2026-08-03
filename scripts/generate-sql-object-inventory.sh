@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SOURCE="${REPO_ROOT}/sql/pgcontext--0.2.0.sql"
 OPTIONS_SOURCE="${REPO_ROOT}/crates/context-pg/src/hnsw_am/options.rs"
+IVFFLAT_OPTIONS_SOURCE="${REPO_ROOT}/crates/context-pg/src/ivfflat_am/options.rs"
 SETTINGS_SOURCE="${REPO_ROOT}/crates/context-pg/src/settings.rs"
 POLICY_SOURCE="${REPO_ROOT}/crates/context-core/src/policy.rs"
 CATALOG_SOURCE="${REPO_ROOT}/crates/context-pg/src/contract/contract_catalog_objects.rs"
@@ -17,7 +18,7 @@ elif [[ $# -ne 0 ]]; then
   exit 2
 fi
 
-for path in "${SOURCE}" "${OPTIONS_SOURCE}" "${SETTINGS_SOURCE}" \
+for path in "${SOURCE}" "${OPTIONS_SOURCE}" "${IVFFLAT_OPTIONS_SOURCE}" "${SETTINGS_SOURCE}" \
   "${POLICY_SOURCE}" "${CATALOG_SOURCE}"; do
   if [[ ! -f "${path}" ]]; then
     echo "missing inventory source: ${path}" >&2
@@ -122,6 +123,13 @@ operator_count() {
   printf '%s\n' '| `scalar_levels` | integer from 2 through 256 | Experimental |'
   printf '%s\n' '| `pq_subvector_dimensions` | positive divisor of vector dimensions | Experimental |'
 
+  printf '\n%s\n\n' '## `pgcontext_ivfflat` Index Reloptions'
+  printf '%s\n' '| Option | Accepted shape | Lifecycle |'
+  printf '%s\n' '|---|---|---|'
+  printf '%s\n' '| `lists` | integer from 1 through 32768 | Trained centroid-list count |'
+  printf '%s\n' '| `quantization` | `none`, `sq8`, or `pq` | Candidate posting codec; exact source rerank is mandatory |'
+  printf '%s\n' '| `pq_subvector_dimensions` | positive divisor of vector dimensions | Used when `quantization = pq` |'
+
   printf '\n%s\n\n' '## HNSW GUCs'
   printf '%s\n' '| Setting | Default | Lifecycle |'
   printf '%s\n' '|---|---:|---|'
@@ -131,11 +139,35 @@ operator_count() {
   printf '%s\n' '| `pgcontext.hnsw_candidate_budget` | `32` | Experimental filtered/iterative policy |'
   printf '%s\n' '| `pgcontext.hnsw_iterative_expansion_limit` | `10000` | Experimental bounded expansion policy |'
   printf '%s\n' '| `pgcontext.hnsw_recall_threshold` | `0.95` | Experimental recall-health policy |'
+
+  printf '\n%s\n\n' '## IVFFlat GUCs'
+  printf '%s\n' '| Setting | Default | Lifecycle |'
+  printf '%s\n' '|---|---:|---|'
+  printf '%s\n' '| `pgcontext.ivfflat_probes` | `1` | Initial centroid-list count |'
+  printf '%s\n' '| `pgcontext.ivfflat_max_probes` | `32768` | Maximum lists visited by iterative widening |'
+  printf '%s\n' '| `pgcontext.ivfflat_candidate_budget` | `100000` | Hard posting/delta work ceiling |'
+  printf '%s\n' '| `pgcontext.ivfflat_iterative_scan` | `off` | `off`, `strict_order`, or `relaxed_order` |'
+  printf '%s\n' '| `pgcontext.ivfflat_build_parallel_workers` | `1` | Native PostgreSQL parallel assignment workers, maximum 16 |'
 } >"${tmp}"
 
 for option in quantization scalar_min scalar_max scalar_levels pq_subvector_dimensions; do
   if ! grep -Fq "c\"${option}\"" "${OPTIONS_SOURCE}"; then
     echo "documented HNSW reloption is not registered: ${option}" >&2
+    exit 1
+  fi
+done
+
+for option in lists quantization pq_subvector_dimensions; do
+  if ! grep -Fq "c\"${option}\"" "${IVFFLAT_OPTIONS_SOURCE}"; then
+    echo "documented IVFFlat reloption is not registered: ${option}" >&2
+    exit 1
+  fi
+done
+for fragment in \
+  'MAX_LISTS: i32 = 32_768;' \
+  'c"none".as_ptr()' 'c"sq8".as_ptr()' 'c"pq".as_ptr()'; do
+  if ! grep -Fq "${fragment}" "${IVFFLAT_OPTIONS_SOURCE}"; then
+    echo "documented IVFFlat reloption rule is not source-backed: ${fragment}" >&2
     exit 1
   fi
 done
@@ -178,6 +210,26 @@ for fragment in \
   'pq_subvector_dimensions must be positive when quantization is pq'; do
   if ! grep -Fq "${fragment}" "${OPTIONS_SOURCE}"; then
     echo "documented HNSW reloption rule is not source-backed: ${fragment}" >&2
+    exit 1
+  fi
+done
+
+for guc in \
+  pgcontext.ivfflat_probes pgcontext.ivfflat_max_probes \
+  pgcontext.ivfflat_candidate_budget pgcontext.ivfflat_iterative_scan \
+  pgcontext.ivfflat_build_parallel_workers; do
+  if ! grep -Fq "c\"${guc}\"" "${SETTINGS_SOURCE}"; then
+    echo "documented IVFFlat GUC is not registered: ${guc}" >&2
+    exit 1
+  fi
+done
+
+for fragment in \
+  'DEFAULT_IVFFLAT_PROBES: usize = 1;' \
+  'MAX_IVFFLAT_LISTS: usize = 32_768;' \
+  'DEFAULT_IVFFLAT_CANDIDATE_BUDGET: usize = 100_000;'; do
+  if ! grep -Fq "${fragment}" "${POLICY_SOURCE}"; then
+    echo "documented IVFFlat GUC default is not source-backed: ${fragment}" >&2
     exit 1
   fi
 done

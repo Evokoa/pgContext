@@ -65,7 +65,7 @@ mod bitmap;
     reason = "the executable callback inventory is consumed by tests and the source guard"
 )]
 mod callback_contract;
-mod ffi_boundary;
+pub(crate) mod ffi_boundary;
 #[allow(dead_code)]
 mod mvcc_contract;
 mod options;
@@ -983,7 +983,7 @@ struct HnswScanCandidate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HnswScoreMetric {
+pub(crate) enum HnswScoreMetric {
     L2,
     NegativeInnerProduct,
     Cosine,
@@ -993,10 +993,16 @@ enum HnswScoreMetric {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct HnswOrderByContract {
-    metric: HnswScoreMetric,
-    result_type: pg_sys::Oid,
-    exact_float8_recheck: bool,
+pub(crate) struct HnswOrderByContract {
+    pub(crate) metric: HnswScoreMetric,
+    pub(crate) result_type: pg_sys::Oid,
+    pub(crate) exact_float8_recheck: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OrderByRecheckKey {
+    Conservative,
+    Approximate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1232,7 +1238,7 @@ include!("hnsw_am_packed_cache.rs");
 include!("hnsw_am_graph_read.rs");
 include!("hnsw_am_graph_scan.rs");
 
-fn build_result(heap_tuples: f64, index_tuples: f64) -> *mut pg_sys::IndexBuildResult {
+pub(crate) fn build_result(heap_tuples: f64, index_tuples: f64) -> *mut pg_sys::IndexBuildResult {
     // SAFETY: PostgreSQL invokes AM build callbacks with a valid current memory
     // context. `IndexBuildResult` is a plain FFI result struct and every field is
     // initialized before ownership is transferred to PostgreSQL.

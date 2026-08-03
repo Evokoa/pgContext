@@ -169,7 +169,7 @@ fn hnsw_validate_safe(opclass_oid: pg_sys::Oid) -> bool {
     // SAFETY: PostgreSQL passes an opclass catalog OID. The validator performs
     // read-only syscache and extension-membership checks and retains no tuple
     // pointers after returning.
-    unsafe { hnsw_validate_opclass(opclass_oid) }
+    unsafe { validate_vector_opclass_for_method(opclass_oid, c"pgcontext_hnsw") }
 }
 
 #[pg_guard]
@@ -363,6 +363,7 @@ fn hnsw_get_tuple_safe(
                         contract,
                         candidate.score,
                         quantized_navigation,
+                        OrderByRecheckKey::Conservative,
                     );
                 } else {
                     (*scan.as_ptr()).xs_recheckorderby = false;
@@ -421,11 +422,12 @@ unsafe fn expand_hnsw_scan(scan: pg_sys::IndexScanDesc, state: &mut HnswScanStat
     !state.candidates.is_empty() || state.candidate_limit < ceiling
 }
 
-unsafe fn store_hnsw_orderby_distance(
+pub(crate) unsafe fn store_hnsw_orderby_distance(
     scan: pg_sys::IndexScanDesc,
     contract: HnswOrderByContract,
     score: f32,
     quantized_navigation: bool,
+    recheck_key: OrderByRecheckKey,
 ) {
     // SAFETY: PostgreSQL allocates these arrays in `pgcontext_hnsw_begin_scan`
     // when order-by keys are present, and this function is only called after
@@ -434,7 +436,15 @@ unsafe fn store_hnsw_orderby_distance(
     let exact_recheck = contract.exact_float8_recheck || quantized_navigation;
     if contract.result_type == pg_sys::FLOAT8OID {
         let (distance, recheck) = if exact_recheck {
-            (f64::NEG_INFINITY, true)
+            (
+                match recheck_key {
+                    OrderByRecheckKey::Conservative => f64::NEG_INFINITY,
+                    OrderByRecheckKey::Approximate => {
+                        f64::from(contract.metric.output_score(score))
+                    }
+                },
+                true,
+            )
         } else {
             float8_orderby_distance(contract.metric, score)
         };
@@ -462,9 +472,12 @@ unsafe fn store_hnsw_orderby_distance(
     }
     if contract.result_type == pg_sys::FLOAT4OID {
         let distance = if exact_recheck {
-            f32::NEG_INFINITY
+            match recheck_key {
+                OrderByRecheckKey::Conservative => f32::NEG_INFINITY,
+                OrderByRecheckKey::Approximate => contract.metric.output_score(score),
+            }
         } else {
-            score
+            contract.metric.output_score(score)
         };
         for index in 0..orderby_count {
             // SAFETY: `contract.result_type` was certified as float4 and
@@ -478,7 +491,10 @@ unsafe fn store_hnsw_orderby_distance(
     }
     if contract.result_type == pg_sys::INT4OID {
         let distance = if exact_recheck {
-            i32::MIN
+            match recheck_key {
+                OrderByRecheckKey::Conservative => i32::MIN,
+                OrderByRecheckKey::Approximate => bit_hamming_orderby_distance(score),
+            }
         } else {
             bit_hamming_orderby_distance(score)
         };
@@ -533,7 +549,7 @@ fn bit_hamming_orderby_distance(score: f32) -> i32 {
     score as i32
 }
 
-unsafe fn hnsw_visible_heap_tid(
+pub(crate) unsafe fn hnsw_visible_heap_tid(
     scan: pg_sys::IndexScanDesc,
     heap_tid: u64,
 ) -> Option<(pg_sys::BlockNumber, pg_sys::OffsetNumber)> {

@@ -12,7 +12,7 @@ use crate::error::raise_sql_error;
 /// Capabilities created through this scope borrow it, so the compiler prevents
 /// them from escaping the guarded callback stack frame that owns the scope.
 #[derive(Debug)]
-pub(super) struct PgCallbackScope {
+pub(crate) struct PgCallbackScope {
     _private: (),
 }
 
@@ -23,7 +23,7 @@ impl PgCallbackScope {
     ///
     /// The caller must be executing inside a guarded PostgreSQL callback and
     /// must drop this scope before returning to PostgreSQL.
-    pub(super) const unsafe fn new() -> Self {
+    pub(crate) const unsafe fn new() -> Self {
         Self { _private: () }
     }
 
@@ -34,7 +34,7 @@ impl PgCallbackScope {
     /// `pointer` must be non-null and valid for shared access to `T` until this
     /// scope is dropped. PostgreSQL must not mutate the referent while a shared
     /// borrow obtained from the capability is live.
-    pub(super) unsafe fn borrow<'callback, T>(
+    pub(crate) unsafe fn borrow<'callback, T>(
         &'callback self,
         pointer: *mut T,
         parameter: &'static str,
@@ -57,7 +57,7 @@ impl PgCallbackScope {
     ///
     /// Every non-null pointer must satisfy the same validity and access
     /// requirements as [`Self::borrow`].
-    pub(super) unsafe fn borrow_optional<'callback, T>(
+    pub(crate) unsafe fn borrow_optional<'callback, T>(
         &'callback self,
         pointer: *mut T,
     ) -> Option<PgCallbackRef<'callback, T>> {
@@ -73,7 +73,7 @@ impl PgCallbackScope {
     ///
     /// `pointer` must be non-null, initialized, valid, and exclusively
     /// accessible for `T` until this scope is dropped.
-    pub(super) unsafe fn borrow_mut<'callback, T>(
+    pub(crate) unsafe fn borrow_mut<'callback, T>(
         &'callback self,
         pointer: *mut T,
         parameter: &'static str,
@@ -97,7 +97,7 @@ impl PgCallbackScope {
     /// For nonzero `len`, `pointer` must be non-null, aligned, initialized,
     /// and readable for `len` consecutive `T` values until this scope is
     /// dropped. PostgreSQL must not mutate them while a shared slice is live.
-    pub(super) unsafe fn borrow_slice<'callback, T>(
+    pub(crate) unsafe fn borrow_slice<'callback, T>(
         &'callback self,
         pointer: *mut T,
         len: usize,
@@ -125,17 +125,17 @@ impl PgCallbackScope {
 /// Non-null shared PostgreSQL callback pointer established by a guarded
 /// wrapper.
 #[derive(Debug)]
-pub(super) struct PgCallbackRef<'callback, T> {
+pub(crate) struct PgCallbackRef<'callback, T> {
     pointer: NonNull<T>,
     marker: PhantomData<&'callback T>,
 }
 
 impl<T> PgCallbackRef<'_, T> {
-    pub(super) const fn as_ptr(&self) -> *mut T {
+    pub(crate) const fn as_ptr(&self) -> *mut T {
         self.pointer.as_ptr()
     }
 
-    pub(super) fn as_ref(&self) -> &T {
+    pub(crate) fn as_ref(&self) -> &T {
         // SAFETY: The only constructors require a callback-local live pointer;
         // the returned borrow is tied to this capability.
         unsafe { self.pointer.as_ref() }
@@ -145,47 +145,47 @@ impl<T> PgCallbackRef<'_, T> {
 /// Non-null exclusive PostgreSQL callback pointer established by a guarded
 /// wrapper.
 #[derive(Debug)]
-pub(super) struct PgCallbackMut<'callback, T> {
+pub(crate) struct PgCallbackMut<'callback, T> {
     pointer: NonNull<T>,
     marker: PhantomData<&'callback mut T>,
 }
 
 impl<T> PgCallbackMut<'_, T> {
-    pub(super) const fn as_ptr(&self) -> *mut T {
+    pub(crate) const fn as_ptr(&self) -> *mut T {
         self.pointer.as_ptr()
     }
 
-    pub(super) fn as_ref(&self) -> &T {
+    pub(crate) fn as_ref(&self) -> &T {
         // SAFETY: The constructor requires a live exclusive pointer and the
         // returned shared borrow is tied to this capability.
         unsafe { self.pointer.as_ref() }
     }
 
-    pub(super) fn as_mut(&mut self) -> &mut T {
+    pub(crate) fn as_mut(&mut self) -> &mut T {
         // SAFETY: This capability is non-clonable, its constructor requires
         // exclusive access, and the borrow is tied to `&mut self`.
         unsafe { self.pointer.as_mut() }
     }
 
-    pub(super) fn write(&mut self, value: T) {
+    pub(crate) fn write(&mut self, value: T) {
         *self.as_mut() = value;
     }
 }
 
 /// Length-bearing shared array borrowed for one PostgreSQL callback.
 #[derive(Debug)]
-pub(super) struct PgCallbackSlice<'callback, T> {
+pub(crate) struct PgCallbackSlice<'callback, T> {
     pointer: NonNull<T>,
     len: usize,
     marker: PhantomData<&'callback [T]>,
 }
 
 impl<T> PgCallbackSlice<'_, T> {
-    pub(super) const fn len(&self) -> usize {
+    pub(crate) const fn len(&self) -> usize {
         self.len
     }
 
-    pub(super) fn as_slice(&self) -> &[T] {
+    pub(crate) fn as_slice(&self) -> &[T] {
         // SAFETY: Construction proves readability for `len` elements, or uses
         // a valid dangling pointer for the zero-length case.
         unsafe { std::slice::from_raw_parts(self.pointer.as_ptr(), self.len) }
@@ -195,20 +195,20 @@ impl<T> PgCallbackSlice<'_, T> {
 /// Rust value registered for exactly-once destruction by a PostgreSQL memory
 /// context, with optional early value release on a normal callback path.
 #[derive(Debug)]
-pub(super) struct PgMemoryContextDropSlot<T> {
+pub(crate) struct PgMemoryContextDropSlot<T> {
     value: Option<T>,
 }
 
 impl<T> PgMemoryContextDropSlot<T> {
-    pub(super) fn new(value: T) -> Self {
+    pub(crate) fn new(value: T) -> Self {
         Self { value: Some(value) }
     }
 
-    pub(super) fn value_mut(&mut self) -> Option<&mut T> {
+    pub(crate) fn value_mut(&mut self) -> Option<&mut T> {
         self.value.as_mut()
     }
 
-    pub(super) fn take(&mut self) -> Option<T> {
+    pub(crate) fn take(&mut self) -> Option<T> {
         self.value.take()
     }
 }

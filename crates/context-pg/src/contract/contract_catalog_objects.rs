@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 200;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 219;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -48,6 +48,7 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::object(SqlObjectKind::AccessMethod, None, "pgcontext_hnsw", SqlLifecycle::Experimental),
+    SqlContractObject::object(SqlObjectKind::AccessMethod, None, "pgcontext_ivfflat", SqlLifecycle::Experimental),
     SqlContractObject::pgcontext_operator_class("vector_ops", "btree, vector", SqlLifecycle::Stable),
     SqlContractObject::pgcontext_operator_class("halfvec_ops", "btree, halfvec", SqlLifecycle::Experimental),
     SqlContractObject::pgcontext_operator_class("sparsevec_ops", "btree, sparsevec", SqlLifecycle::Experimental),
@@ -76,6 +77,24 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::pgcontext_operator_class("uint8vec_hnsw_ip_ops", "pgcontext_hnsw, uint8vec", SqlLifecycle::Experimental),
     SqlContractObject::pgcontext_operator_class("uint8vec_hnsw_cosine_ops", "pgcontext_hnsw, uint8vec", SqlLifecycle::Experimental),
     SqlContractObject::pgcontext_operator_class("uint8vec_hnsw_l1_ops", "pgcontext_hnsw, uint8vec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("vector_ivfflat_ops", "pgcontext_ivfflat, vector", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("vector_ivfflat_ip_ops", "pgcontext_ivfflat, vector", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("vector_ivfflat_cosine_ops", "pgcontext_ivfflat, vector", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("vector_ivfflat_l1_ops", "pgcontext_ivfflat, vector", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("halfvec_ivfflat_ops", "pgcontext_ivfflat, halfvec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("halfvec_ivfflat_ip_ops", "pgcontext_ivfflat, halfvec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("halfvec_ivfflat_cosine_ops", "pgcontext_ivfflat, halfvec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("halfvec_ivfflat_l1_ops", "pgcontext_ivfflat, halfvec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("int8vec_ivfflat_ops", "pgcontext_ivfflat, int8vec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("int8vec_ivfflat_ip_ops", "pgcontext_ivfflat, int8vec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("int8vec_ivfflat_cosine_ops", "pgcontext_ivfflat, int8vec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("int8vec_ivfflat_l1_ops", "pgcontext_ivfflat, int8vec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("uint8vec_ivfflat_ops", "pgcontext_ivfflat, uint8vec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("uint8vec_ivfflat_ip_ops", "pgcontext_ivfflat, uint8vec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("uint8vec_ivfflat_cosine_ops", "pgcontext_ivfflat, uint8vec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("uint8vec_ivfflat_l1_ops", "pgcontext_ivfflat, uint8vec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("bitvec_ivfflat_hamming_ops", "pgcontext_ivfflat, bitvec", SqlLifecycle::Experimental),
+    SqlContractObject::pgcontext_operator_class("bitvec_ivfflat_jaccard_ops", "pgcontext_ivfflat, bitvec", SqlLifecycle::Experimental),
     SqlContractObject::pgcontext_operator("<->", "vector, vector", SqlLifecycle::Stable),
     SqlContractObject::pgcontext_operator("<#>", "vector, vector", SqlLifecycle::Stable),
     SqlContractObject::pgcontext_operator("<=>", "vector, vector", SqlLifecycle::Stable),

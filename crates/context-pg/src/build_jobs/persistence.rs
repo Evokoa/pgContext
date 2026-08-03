@@ -261,11 +261,26 @@ fn resolve_collection_hnsw_index(
     collection_id: i64,
     index: &PgRelation,
 ) -> (u32, String) {
+    resolve_collection_index(collection_id, index, "pgcontext_hnsw")
+}
+
+fn resolve_collection_ivfflat_index(
+    collection_id: i64,
+    index: &PgRelation,
+) -> (u32, String) {
+    resolve_collection_index(collection_id, index, "pgcontext_ivfflat")
+}
+
+fn resolve_collection_index(
+    collection_id: i64,
+    index: &PgRelation,
+    expected_method: &'static str,
+) -> (u32, String) {
     let index_oid = index.oid().to_u32();
     let binding = Spi::connect(|client| {
         let rows = client.select(
             "SELECT class.relkind = 'i',
-                    access_method.amname = 'pgcontext_hnsw',
+                    access_method.amname = $3,
                     catalog_index.indrelid = collections.source_table_oid,
                     $2::oid::regclass::text
                FROM pgcontext._collections AS collections
@@ -274,7 +289,11 @@ fn resolve_collection_hnsw_index(
                JOIN pg_catalog.pg_index AS catalog_index ON catalog_index.indexrelid = class.oid
               WHERE collections.collection_id = $1",
             Some(1),
-            &[collection_id.into(), pg_sys::Oid::from_u32(index_oid).into()],
+            &[
+                collection_id.into(),
+                pg_sys::Oid::from_u32(index_oid).into(),
+                expected_method.into(),
+            ],
         )?;
         if rows.is_empty() {
             return Ok::<_, spi::Error>(None);
@@ -290,25 +309,25 @@ fn resolve_collection_hnsw_index(
     .unwrap_or_else(|error| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("HNSW compaction target lookup failed: {error}"),
+            format!("IVF/HNSW compaction target lookup failed: {error}"),
         )
     });
     let Some((is_index, is_hnsw, matches_source, index_name)) = binding else {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            "HNSW compaction target does not exist",
+            "compaction target does not exist",
         );
     };
     if !is_index || !is_hnsw {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            "HNSW compaction target must use pgcontext_hnsw",
+            format!("compaction target must use {expected_method}"),
         );
     }
     if !matches_source {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            "HNSW compaction target must index the collection source table",
+            "compaction target must index the collection source table",
         );
     }
     (index_oid, index_name)

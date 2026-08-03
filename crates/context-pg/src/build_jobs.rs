@@ -256,6 +256,88 @@ pub fn enqueue_hnsw_compaction(
     TableIterator::once(build_job_result(row))
 }
 
+/// Enqueues one supervised IVFFlat delta-fold/retraining generation.
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx SQL generation requires the explicit table row tuple"
+)]
+#[pg_extern(name = "enqueue_ivfflat_compaction", security_definer)]
+#[search_path(pg_catalog, pgcontext)]
+pub fn enqueue_ivfflat_compaction(
+    collection: String,
+    index: PgRelation,
+) -> TableIterator<
+    'static,
+    (
+        name!(build_job_id, i64),
+        name!(collection_name, String),
+        name!(artifact_kind, String),
+        name!(artifact_name, String),
+        name!(target_name, String),
+        name!(status, BuildJobStatus),
+        name!(backend_pid, Option<i32>),
+        name!(attempt, i32),
+        name!(processed_units, i64),
+        name!(total_units, i64),
+        name!(cancel_requested, bool),
+        name!(error_message, Option<String>),
+    ),
+> {
+    let collection_id = resolve_owned_collection_id(&collection);
+    let (index_oid, index_name) = resolve_collection_ivfflat_index(collection_id, &index);
+    let generation = crate::ivfflat_am::ivfflat_generation(index.as_ptr());
+    let target_name = index_oid.to_string();
+    let row = insert_supervised_build_job(
+        collection_id,
+        ArtifactKind::Index,
+        context_build::BuildJobKind::Compaction,
+        &index_name,
+        &target_name,
+        Some(generation),
+    );
+    let _worker_started = build_worker::launch_for_current_database();
+    TableIterator::once(build_job_result(row))
+}
+
+#[pg_extern(name = "_enqueue_ivfflat_compaction_debt", security_definer)]
+#[search_path(pg_catalog, pgcontext)]
+fn enqueue_ivfflat_compaction_debt(index_oid: pg_sys::Oid, generation: i64) -> bool {
+    if generation <= 0 {
+        return false;
+    }
+    Spi::get_one_with_args::<bool>(
+        "WITH target AS MATERIALIZED (
+             SELECT collections.collection_id,
+                    class.oid::regclass::text AS artifact_name,
+                    class.oid::text AS target_name
+               FROM pgcontext._collections AS collections
+               JOIN pg_catalog.pg_index AS catalog_index
+                 ON catalog_index.indrelid = collections.source_table_oid
+               JOIN pg_catalog.pg_class AS class ON class.oid = catalog_index.indexrelid
+               JOIN pg_catalog.pg_am AS access_method ON access_method.oid = class.relam
+              WHERE class.oid = $1
+                AND access_method.amname = 'pgcontext_ivfflat'
+              ORDER BY collections.collection_id
+              LIMIT 1
+         )
+         INSERT INTO pgcontext._build_jobs (
+                    collection_id, artifact_kind, artifact_name, target_name,
+                    job_kind, status, total_units, config_revision, supervised
+         )
+         SELECT collection_id, 'index', artifact_name, target_name,
+                'compaction', 'planned', 0, $2, true
+           FROM target
+         ON CONFLICT (collection_id, artifact_kind, artifact_name, target_name)
+             WHERE status IN ('planned', 'running', 'cancel_requested', 'validating', 'publishing')
+         DO NOTHING
+         RETURNING true",
+        &[index_oid.into(), generation.into()],
+    )
+    .ok()
+    .flatten()
+    .unwrap_or(false)
+}
+
 /// Best-effort post-commit wake-up for ownerless supervised work.
 ///
 /// A planned job is durable even when worker capacity is temporarily

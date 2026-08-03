@@ -387,15 +387,36 @@ Index maintenance:
   logical mutation history; use `REINDEX` when physical file shrinkage is
   required. See [index configuration](indexes.md).
 
-`pgcontext_hnsw`, its handler function, and four dense-vector operator classes
-are SQL-visible for ongoing access-method work:
+`pgcontext_hnsw` and experimental `pgcontext_ivfflat` expose metric-bound
+dense-vector operator classes:
 
 - `pgcontext.vector_hnsw_ops` for L2 (the default)
 - `pgcontext.vector_hnsw_ip_ops` for inner-product ordering
 - `pgcontext.vector_hnsw_cosine_ops` for cosine distance
 - `pgcontext.vector_hnsw_l1_ops` for L1 distance
+- `pgcontext.vector_ivfflat_ops` for L2 (the default)
+- `pgcontext.vector_ivfflat_ip_ops` for inner-product ordering
+- `pgcontext.vector_ivfflat_cosine_ops` for cosine distance
+- `pgcontext.vector_ivfflat_l1_ops` for L1 distance
 
-They are not yet covered by the first production compatibility promise.
+Equivalent IVFFlat classes exist for `halfvec`, `int8vec`, and `uint8vec`;
+`bitvec_ivfflat_hamming_ops` and `bitvec_ivfflat_jaccard_ops` are explicit.
+See [Indexes](indexes.md) for reloptions and exact-source semantics. These
+classes and the IVFFlat v4 format are not yet covered by the stable
+compatibility promise.
+
+- `pgcontext.ivfflat_index_info(index regclass) -> jsonb` verifies the complete
+  published IVF generation and reports list/page/codec/build-worker diagnostics.
+- `pgcontext.ivfflat_last_scan_work()` returns requested probes, visited lists
+  and postings, delta records, candidates, exact reranks, widening rounds,
+  completion reason, codec, and generation for the backend's latest native IVF
+  scan.
+- `pgcontext.compact_ivfflat(index regclass) -> jsonb` synchronously retrains,
+  folds foreground deltas, atomically publishes a verified generation, and
+  reports source/base rows, the prior delta, codec, and reclaimed pages.
+- `pgcontext.enqueue_ivfflat_compaction(collection text, index regclass)`
+  submits the same work to the durable supervised build lifecycle. Registered
+  indexes also enqueue debt automatically at 10,000 foreground records.
 
 Quantization helpers are SQL-visible for inspecting and testing encoded
 representations:

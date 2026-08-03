@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 351;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 357;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -667,6 +667,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function("hnsw_handler", "internal", SqlLifecycle::Experimental),
+    SqlContractObject::function("ivfflat_handler", "internal", SqlLifecycle::Experimental),
     SqlContractObject::function("index_advisor", "collection text", SqlLifecycle::Stable),
     SqlContractObject::function("index_diagnostics", "index_name text", SqlLifecycle::Stable),
     SqlContractObject::function("index_status", "index_name text", SqlLifecycle::Stable),
@@ -1272,6 +1273,21 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function("compact", "index regclass", SqlLifecycle::Experimental),
     SqlContractObject::function(
+        "compact_ivfflat",
+        "index regclass",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "_enqueue_ivfflat_compaction_debt",
+        "index_oid oid, generation bigint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "enqueue_ivfflat_compaction",
+        "collection text, index regclass",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
         "_compact_hnsw_segment_pair",
         "index regclass, expected_directory_epoch bigint",
         SqlLifecycle::Internal,
@@ -1283,6 +1299,12 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function("hnsw_build_stats", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_last_scan_work", "", SqlLifecycle::Experimental),
+    SqlContractObject::function(
+        "ivfflat_index_info",
+        "index regclass",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function("ivfflat_last_scan_work", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_serving_stats", "", SqlLifecycle::Experimental),
     SqlContractObject::function(
         "hnsw_segment_stats",

@@ -32,7 +32,7 @@ fn try_hnsw_graph_from_records_with_config(
     HnswGraph::from_persisted_snapshots(metric, config, entry_point, snapshots)
 }
 
-unsafe fn hnsw_orderby_query(scan: pg_sys::IndexScanDesc) -> Option<DenseVector> {
+pub(crate) unsafe fn hnsw_orderby_query(scan: pg_sys::IndexScanDesc) -> Option<DenseVector> {
     // SAFETY: PostgreSQL initializes `numberOfOrderBys` in live scan
     // descriptors before invoking AM scan callbacks.
     if unsafe { (*scan).numberOfOrderBys } <= 0 {
@@ -144,7 +144,7 @@ unsafe fn hnsw_dense_from_datum(
     }
 }
 
-unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric {
+pub(crate) unsafe fn hnsw_score_metric(index_relation: pg_sys::Relation) -> HnswScoreMetric {
     // SAFETY: The caller passes a valid index relation for the current AM
     // callback.
     unsafe { hnsw_score_metric_contract(index_relation) }.metric
@@ -341,7 +341,7 @@ unsafe fn hnsw_index_uses_certified_pgvector_type(index_relation: pg_sys::Relati
         || type_oid == unsafe { hnsw_certified_pgvector_type_oid(c"sparsevec") }
 }
 
-unsafe fn hnsw_orderby_contract(index_relation: pg_sys::Relation) -> HnswOrderByContract {
+pub(crate) unsafe fn hnsw_orderby_contract(index_relation: pg_sys::Relation) -> HnswOrderByContract {
     // SAFETY: Both helpers inspect the same live single-column index relation;
     // score-metric validation also certifies the operator/support pairing.
     let certified = unsafe { hnsw_score_metric_contract(index_relation) };
@@ -727,7 +727,10 @@ unsafe fn hnsw_operator_oid_matches(
         }
 }
 
-unsafe fn hnsw_validate_opclass(opclass_oid: pg_sys::Oid) -> bool {
+pub(crate) unsafe fn validate_vector_opclass_for_method(
+    opclass_oid: pg_sys::Oid,
+    method_name: &'static CStr,
+) -> bool {
     // SAFETY: CLAOID is keyed by the scalar OID passed to amvalidate.
     let tuple = unsafe {
         pg_sys::SearchSysCache1(
@@ -753,7 +756,7 @@ unsafe fn hnsw_validate_opclass(opclass_oid: pg_sys::Oid) -> bool {
     // SAFETY: The AM identifier is a static catalog name. Canonical custom
     // opclasses may live in any caller-owned schema; bridge opclasses are
     // separately constrained by extension ownership below.
-    let expected_method = unsafe { pg_sys::get_am_oid(c"pgcontext_hnsw".as_ptr(), true) };
+    let expected_method = unsafe { pg_sys::get_am_oid(method_name.as_ptr(), true) };
     if method == pg_sys::InvalidOid || method != expected_method {
         return false;
     }
@@ -1007,9 +1010,8 @@ unsafe fn hnsw_validate_opclass_candidates(
     unsafe { pg_sys::ReleaseSysCache(tuple) };
     // SAFETY: Static AM lookup and catalog family/proc helpers accept the
     // copied OIDs above.
-    let expected_method = unsafe { pg_sys::get_am_oid(c"pgcontext_hnsw".as_ptr(), true) };
     let support_proc = unsafe { pg_sys::get_opfamily_proc(family, input_type, input_type, 1) };
-    if method != expected_method
+    if method == pg_sys::InvalidOid
         || i16::from(purpose) != i16::from(pg_sys::AMOP_ORDER)
         || support_proc == pg_sys::InvalidOid
     {
@@ -1226,7 +1228,7 @@ fn integer_source_to_dense(values: impl Iterator<Item = f32>) -> DenseVector {
     DenseVector::new(values.collect()).unwrap_or_else(|error| raise_core_error(error))
 }
 
-unsafe fn hnsw_vector_from_index_values(
+pub(crate) unsafe fn hnsw_vector_from_index_values(
     index_relation: pg_sys::Relation,
     values: *mut pg_sys::Datum,
     is_null: *mut bool,

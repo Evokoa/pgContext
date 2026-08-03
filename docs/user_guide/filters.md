@@ -56,6 +56,23 @@ ordinary columns and JSONB paths, and they require source-table `UPDATE`
 privilege. This prevents arbitrary payload keys from silently mutating
 unregistered source-table columns.
 
+## IVFFlat and post-filter widening
+
+An ordered `pgcontext_ivfflat` scan produces only candidate heap TIDs. The
+PostgreSQL executor remains responsible for MVCC visibility, ACL/RLS, and SQL
+`WHERE` predicates, and it recomputes the order-by value from the authoritative
+source column. Set `pgcontext.ivfflat_iterative_scan` to `strict_order` or
+`relaxed_order` and bound widening with `pgcontext.ivfflat_max_probes` when a
+selective predicate may discard the initial lists. Both modes currently retain
+global ordering; `off` visits only `pgcontext.ivfflat_probes` lists.
+
+The scan never exceeds `pgcontext.ivfflat_candidate_budget`. Exhaustion raises
+a bounded-work error instead of silently switching to an unbounded exact scan.
+After a representative query, inspect `pgcontext.ivfflat_last_scan_work()` to
+compare visited lists/postings with surviving rows. Registered JSON filters
+still render as bound PostgreSQL predicates; native IVF does not persist filter
+values or treat a posting code as authoritative.
+
 ## Field Semantics
 
 Ordinary columns and JSONB paths deliberately follow PostgreSQL null and type

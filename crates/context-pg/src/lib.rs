@@ -33,6 +33,11 @@ mod error;
 )]
 mod hnsw_am;
 mod hybrid_query;
+#[allow(
+    unsafe_code,
+    reason = "the IVFFlat PostgreSQL access method is an audited FFI and page-storage boundary"
+)]
+mod ivfflat_am;
 mod late_interaction;
 mod late_interaction_catalog;
 mod late_interaction_catalog_schema;
@@ -179,6 +184,7 @@ mod tests {
     include!("pg_tests/hnsw_delta_segment.rs");
     include!("pg_tests/hnsw_serving.rs");
     include!("pg_tests/hnsw_scan_policy.rs");
+    include!("pg_tests/ivfflat_am.rs");
     include!("pg_tests/hybrid_query.rs");
     include!("pg_tests/hybrid_sparse_cosine.rs");
     include!("pg_tests/late_interaction_ann.rs");

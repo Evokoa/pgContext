@@ -37,6 +37,8 @@ mod codec_artifact;
 mod delta_segment;
 mod hnsw_graph_payload;
 mod hnsw_segment_directory;
+mod ivf_artifact;
+mod ivf_page;
 mod mapped_packed_graph;
 mod mmap_file;
 mod packed_graph_image;
@@ -61,6 +63,15 @@ pub use hnsw_segment_directory::{
     HNSW_SEGMENT_DIRECTORY_VERSION, HnswDeltaDescriptor, HnswSegmentDescriptor,
     HnswSegmentDirectory, HnswSegmentDirectoryError, decode_hnsw_segment_directory,
     encode_hnsw_segment_directory,
+};
+pub use ivf_artifact::{
+    CURRENT_IVF_ARTIFACT_VERSION, IvfArtifactError, IvfArtifactPosting, IvfFloatIter,
+    IvfGenerationArtifact, IvfGenerationView, IvfPostingView, encode_ivf_generation,
+};
+pub use ivf_page::{
+    IVF_PAGE_CHUNK_HEADER_BYTES, IVF_PAGE_MAX_LISTS, IVF_PAGE_META_BYTES, IVF_PAGE_META_VERSION,
+    IvfPageChunkKind, IvfPageError, IvfPageMeta, decode_ivf_delta_chunk_identity,
+    decode_ivf_page_chunk, encode_ivf_page_chunk,
 };
 pub use mapped_packed_graph::{
     MappedGraphIdentity, MappedPackedGraphError, MappedPackedGraphImage, encode_mapped_packed_graph,
@@ -131,6 +142,8 @@ pub enum SegmentKind {
     HnswDirectory,
     /// HNSW active-delta payload.
     HnswDelta,
+    /// Complete IVFFlat centroid and posting generation.
+    IvfGeneration,
 }
 
 impl SegmentKind {
@@ -139,6 +152,7 @@ impl SegmentKind {
             Self::HnswGraph => 1,
             Self::HnswDirectory => 2,
             Self::HnswDelta => 3,
+            Self::IvfGeneration => 4,
         }
     }
 
@@ -147,6 +161,7 @@ impl SegmentKind {
             1 => Ok(Self::HnswGraph),
             2 => Ok(Self::HnswDirectory),
             3 => Ok(Self::HnswDelta),
+            4 => Ok(Self::IvfGeneration),
             _ => Err(SegmentError::UnknownKind { kind }),
         }
     }

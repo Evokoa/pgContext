@@ -22,6 +22,10 @@
           "path": "benchmarks/quantized_hnsw_1m.md"
         },
         {
+          "title": "Historical IVFFlat v3 one-million-row run",
+          "path": "benchmarks/ivfflat_1m.md"
+        },
+        {
           "title": "Owned late-interaction storage benchmark",
           "path": "benchmarks/late_interaction_owned.md"
         },
@@ -49,6 +53,10 @@
         {
           "title": "User guide overview",
           "path": "user_guide/README.md"
+        },
+        {
+          "title": "Supported features",
+          "path": "user_guide/supported_features.md"
         },
         {
           "title": "Installation",

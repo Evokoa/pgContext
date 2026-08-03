@@ -233,19 +233,78 @@ or multi-page record format may raise this index-specific ceiling.
 
 ## IVFFlat
 
-pgContext does not support IVFFlat in the first production compatibility
-surface. This is an intentional product and operations boundary, not an
-unimplemented SQL spelling. pgContext is standardizing production retrieval on
-PostgreSQL source tables, exact correctness, filter rechecks, and the
-experimental `pgcontext_hnsw` path; IVFFlat's trained list/probe model would require a
-separate artifact lifecycle, planner contract, recall harness, and filtered
-search policy that are not part of the release contract.
+`pgcontext_ivfflat` is an experimental native access method with PostgreSQL
+page, WAL, MVCC, ACL/RLS, VACUUM, REINDEX, concurrent-build, partition,
+backup/restore, and replication behavior. Its centroids, list directory,
+postings, and optional codec pages are rebuildable; the source table remains
+authoritative and PostgreSQL rechecks every order-by value from that source.
 
-For pgvector migrations, keep existing pgvector IVFFlat indexes for queries that
-still need them, then introduce pgContext exact or HNSW-backed paths where
-recall checks and operational diagnostics meet the workload target. Do not treat
-pgContext HNSW as a drop-in IVFFlat replacement without validating recall,
-latency, MVCC visibility, ACL/RLS behavior, and final predicate rechecks.
+```sql
+CREATE INDEX documents_embedding_ivf
+    ON documents USING pgcontext_ivfflat
+       (embedding pgcontext.vector_ivfflat_cosine_ops)
+    WITH (lists = 100);
+
+SET pgcontext.ivfflat_probes = 10;
+SELECT id
+FROM documents
+ORDER BY embedding OPERATOR(pgcontext.<=>) $1
+LIMIT 20;
+```
+
+Continuous vector types (`vector`, `halfvec`, `int8vec`, and `uint8vec`) expose
+L2, inner-product, cosine, and L1 opclasses. `bitvec` exposes explicit Hamming
+and Jaccard opclasses. Sparse IVFFlat is not advertised. `lists` is in
+`1..=32768`; a populated build uses at most the number of indexed rows.
+
+Quantized posting codes are selected per index:
+
+```sql
+CREATE INDEX documents_embedding_ivf_sq8
+    ON documents USING pgcontext_ivfflat
+       (embedding pgcontext.vector_ivfflat_cosine_ops)
+    WITH (lists = 100, quantization = sq8);
+
+CREATE INDEX documents_embedding_ivf_pq
+    ON documents USING pgcontext_ivfflat
+       (embedding pgcontext.vector_ivfflat_cosine_ops)
+    WITH (lists = 100, quantization = pq, pq_subvector_dimensions = 8);
+```
+
+`quantization` accepts `none`, `sq8`, or `pq`. PQ subvector dimensions must
+divide the source dimensions. SQ8/PQ use the shared deterministic codec and
+checksummed codebook format; they narrow candidates but never replace exact
+source scoring. Hamming and Jaccard reject SQ8/PQ with SQLSTATE `22023`.
+
+Search policy is bounded by `pgcontext.ivfflat_probes`,
+`pgcontext.ivfflat_max_probes`, and
+`pgcontext.ivfflat_candidate_budget`. Iterative mode `off` reads the requested
+probe count. `strict_order` materializes and globally orders the complete
+bounded frontier through `max_probes` before returning its first tuple;
+`relaxed_order` starts at the requested probes and widens lazily only when the
+executor asks for more tuples. It exact-rechecks every returned source row, but
+uses approximate queue keys so ordering may differ from exact source order both
+within a batch and across later batches, especially for SQ8/PQ or stale
+foreground state. Materialize and re-sort by the distance expression when final
+global order is required. Relaxed widening visits each list and foreground delta
+record at most once and charges every visit to one scan-global hard candidate
+budget. `ivfflat_probes` must not exceed `ivfflat_max_probes`.
+
+Use `pgcontext.ivfflat_index_info(index_regclass)` to validate page checksums,
+extents, codec revision, list occupancy, and generation state. Use
+`pgcontext.ivfflat_last_scan_work()` immediately after a scan to inspect lists,
+postings, deltas, candidates, exact reranks, widening rounds, completion reason,
+codec, and generation. `pgcontext.compact_ivfflat(index_regclass)` retrains and
+atomically publishes a generation from live source rows, folds foreground
+deltas, and retires reusable superseded pages. Collection owners can enqueue
+the same operation through `pgcontext.enqueue_ivfflat_compaction`; registered
+indexes enqueue debt automatically at 10,000 delta records. Unknown or earlier
+experimental formats fail closed; `REINDEX` rebuilds the clean v4 format and is
+still required after reloption changes, format changes, or corruption.
+
+The retained [one-million-row v3 correctness run](../benchmarks/ivfflat_1m.md)
+documents historical bounded-work evidence only. It does not certify the v4
+format or provide release-performance evidence.
 
 ## HNSW Settings
 

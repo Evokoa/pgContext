@@ -128,6 +128,7 @@ enum ArtifactSegmentKind {
     Graph,
     Directory,
     Delta,
+    IvfGeneration,
 }
 
 impl ArtifactSegmentKind {
@@ -136,6 +137,7 @@ impl ArtifactSegmentKind {
             "hnsw_graph" => Self::Graph,
             "hnsw_directory" => Self::Directory,
             "hnsw_delta" => Self::Delta,
+            "ivfflat_generation" => Self::IvfGeneration,
             _ => raise_sql_error(
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
                 format!("unsupported segment kind: {kind}"),
@@ -148,6 +150,7 @@ impl ArtifactSegmentKind {
             Self::Graph => SegmentKind::HnswGraph,
             Self::Directory => SegmentKind::HnswDirectory,
             Self::Delta => SegmentKind::HnswDelta,
+            Self::IvfGeneration => SegmentKind::IvfGeneration,
         }
     }
 
@@ -156,6 +159,7 @@ impl ArtifactSegmentKind {
             Self::Graph => "hnsw_graph",
             Self::Directory => "hnsw_directory",
             Self::Delta => "hnsw_delta",
+            Self::IvfGeneration => "ivfflat_generation",
         }
     }
 
@@ -164,6 +168,7 @@ impl ArtifactSegmentKind {
             "hnsw_graph" => Self::Graph,
             "hnsw_directory" => Self::Directory,
             "hnsw_delta" => Self::Delta,
+            "ivfflat_generation" => Self::IvfGeneration,
             _ => raise_sql_error(
                 PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
                 format!("unexpected segment kind in catalog: {kind}"),
@@ -178,6 +183,7 @@ impl From<SegmentKind> for ArtifactSegmentKind {
             SegmentKind::HnswGraph => Self::Graph,
             SegmentKind::HnswDirectory => Self::Directory,
             SegmentKind::HnswDelta => Self::Delta,
+            SegmentKind::IvfGeneration => Self::IvfGeneration,
         }
     }
 }

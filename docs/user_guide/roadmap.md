@@ -43,12 +43,12 @@ For transparency, here is where the capabilities most often requested after
   construction-throughput work under
   [Delivery Phases](#delivery-phases-post-v1-overview); a concurrent builder
   already scales to roughly 3.3–3.5× at eight workers.
-- **IVFFlat** — not implemented today, but now a committed first-class index
-  track rather than a demand-dependent possibility. The target is the full
-  pgvector-compatible lifecycle—build, parallel build, insert/update/delete,
-  iterative scans, filtering, VACUUM, WAL/recovery, replication, REINDEX,
-  progress reporting, and migration—plus quantized IVF variants where evidence
-  shows a useful speed/recall/memory tradeoff. See
+- **IVFFlat** — implemented as the experimental native
+  `pgcontext_ivfflat` access method with deterministic external construction,
+  source-authoritative reranking, DML/VACUUM/REINDEX/CIC/partition lifecycle,
+  PG17/18 dump/restore, crash replay, physical replication, and SQ8/PQ posting
+  codecs. Remaining work is drop-in pgvector conversion/naming, PostgreSQL
+  progress-view integration, and matched production-scale frontier evidence. See
   [Full IVFFlat Support](#full-ivfflat-support).
 - **PostgreSQL lexical search** — full `tsvector` and `tsquery` support is a
   first-class retrieval track: stored/generated vectors, caller-supplied
@@ -814,9 +814,10 @@ Validated by an end-to-end serving test with exact-oracle and bounded-work asser
 
 ## Full Quantized Serving and TurboQuant
 
-Status: baseline scalar/SQ8, product, and binary HNSW serving is stable.
-Quantized IVFFlat and the RaBitQ, TurboQuant, QJL, and PolarQuant research
-families remain planned and are promoted independently.
+Status: baseline scalar/SQ8, product, and binary HNSW serving is stable. Native
+IVF-SQ8 and IVF-PQ serving is experimental and lifecycle-certified with exact
+source rerank. RaBitQ, TurboQuant, QJL, PolarQuant, and residual-PQ research
+remain planned and are promoted independently.
 
 Depends on: versioned vector-codec and configuration contracts, mapped HNSW
 serving, authoritative full-precision source vectors, exact reranking, and the
@@ -925,7 +926,13 @@ for one name or bit depth does not certify the others.
 
 ## Full IVFFlat Support
 
-Status: committed and planned as a first-class ANN access method.
+Status: implemented and experimental. The native clean v4 format, advertised
+opclasses, SQ8/PQ codecs, bounded scan controls, diagnostics, native PostgreSQL
+parallel assignment, supervised compaction, and PostgreSQL lifecycle are
+functionally exercised on PG17 and PG18. Release-scale 1M/10M comparative
+certification, automatic pgvector conversion, and full
+`pg_stat_progress_create_index` phase reporting remain open and are not implied
+by this status.
 
 Depends on: the stable metric/operator contract, authoritative exact scoring,
 the PostgreSQL index-AM/WAL lifecycle, parallel/external build infrastructure,
@@ -1037,8 +1044,9 @@ implied by an SSD-oriented design.
 > described below.
 
 Status: the bounded PostgreSQL 17 coexistence and migration profile is
-implemented and certified; IVFFlat remains an explicit detect-and-plan path
-until the native lifecycle above is certified.
+implemented and certified; native pgContext IVFFlat is now available, while
+existing pgvector IVFFlat remains an explicit detect-and-plan input until the
+P7 conversion contract maps and validates it.
 
 Depends on: PG17 V1 freeze, non-dense ANN opclasses, and quantized HNSW. Full
 drop-in coverage also depends on the native IVFFlat lifecycle.
@@ -1066,9 +1074,8 @@ Scope:
 - add parallel HNSW construction and PostgreSQL progress reporting where
   benchmarks demonstrate that serial construction is an operational migration
   bottleneck;
-- until native IVFFlat is certified, detect it and generate an explicit retain,
-  exact-search, or rebuild-as-HNSW plan; after certification, add a resumable
-  rebuild-as-pgContext-IVFFlat path that preserves supported types, metrics,
+- detect pgvector IVFFlat and generate an explicit retain, exact-search, or
+  rebuild-as-HNSW plan; add a resumable rebuild-as-pgContext-IVFFlat path that preserves supported types, metrics,
   list/probe settings, dependent queries, validation, rollback, and cutover;
 - test application queries and prepared statements against both extensions and
   publish a precise compatible, translated, and unsupported SQL inventory;

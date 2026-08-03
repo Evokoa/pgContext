@@ -450,10 +450,20 @@ fn compact_hnsw_pair(job: &ClaimedJob) -> Result<(), spi::Error> {
             "HNSW compaction target no longer matches the collection source",
         );
     }
-    let compacted = Spi::get_one_with_args::<bool>(
-        "SELECT pgcontext._compact_hnsw_segment_pair($1::oid::regclass, $2)",
-        &[job.target_name.clone().into(), job.config_revision.into()],
-    );
+    let method = compaction_target_method(job)?.unwrap_or_default();
+    let compacted = if method == "pgcontext_ivfflat" {
+        Spi::get_one_with_args::<pgrx::JsonB>(
+            "SELECT pgcontext.compact_ivfflat($1::oid::regclass)",
+            &[job.target_name.clone().into()],
+        )
+        .map(|value| value.is_some())
+    } else {
+        Spi::get_one_with_args::<bool>(
+            "SELECT pgcontext._compact_hnsw_segment_pair($1::oid::regclass, $2)",
+            &[job.target_name.clone().into(), job.config_revision.into()],
+        )
+        .map(|value| value.unwrap_or(false))
+    };
     if compacted.is_err() {
         return fail_job(job, "bounded HNSW segment compaction failed");
     }
@@ -483,19 +493,30 @@ fn validate_hnsw_compaction(job: &ClaimedJob) -> Result<(), spi::Error> {
     if !hnsw_compaction_target_is_valid(job)? {
         return fail_job(job, "HNSW compaction target changed before validation");
     }
-    let valid = Spi::get_one_with_args::<bool>(
-        "SELECT stats.segment_count BETWEEN 0 AND $2
-                AND stats.active_delta_records >= 0
-                AND stats.immutable_rows >= 0
-           FROM pgcontext.hnsw_segment_stats($1::oid::regclass) AS stats",
-        &[
-            job.target_name.clone().into(),
-            i32::try_from(crate::hnsw_am::HNSW_MAX_SEGMENTS)
-                .unwrap_or(i32::MAX)
-                .into(),
-        ],
-    )?
-    .unwrap_or(false);
+    let method = compaction_target_method(job)?.unwrap_or_default();
+    let valid = if method == "pgcontext_ivfflat" {
+        Spi::get_one_with_args::<bool>(
+            "SELECT (info->>'verified')::boolean
+                    AND (info->>'delta_records')::bigint = 0
+               FROM (SELECT pgcontext.ivfflat_index_info($1::oid::regclass) AS info) checked",
+            &[job.target_name.clone().into()],
+        )?
+        .unwrap_or(false)
+    } else {
+        Spi::get_one_with_args::<bool>(
+            "SELECT stats.segment_count BETWEEN 0 AND $2
+                    AND stats.active_delta_records >= 0
+                    AND stats.immutable_rows >= 0
+               FROM pgcontext.hnsw_segment_stats($1::oid::regclass) AS stats",
+            &[
+                job.target_name.clone().into(),
+                i32::try_from(crate::hnsw_am::HNSW_MAX_SEGMENTS)
+                    .unwrap_or(i32::MAX)
+                    .into(),
+            ],
+        )?
+        .unwrap_or(false)
+    };
     if !valid {
         return fail_job(job, "bounded HNSW segment publication failed validation");
     }
@@ -550,7 +571,7 @@ fn finish_hnsw_compaction(job: &ClaimedJob) -> Result<(), spi::Error> {
 fn hnsw_compaction_target_is_valid(job: &ClaimedJob) -> Result<bool, spi::Error> {
     Ok(Spi::get_one_with_args::<bool>(
         "SELECT class.relkind = 'i'
-                AND access_method.amname = 'pgcontext_hnsw'
+                AND access_method.amname IN ('pgcontext_hnsw', 'pgcontext_ivfflat')
                 AND catalog_index.indrelid = collections.source_table_oid
            FROM pgcontext._build_jobs AS jobs
            JOIN pgcontext._collections AS collections USING (collection_id)
@@ -568,6 +589,16 @@ fn hnsw_compaction_target_is_valid(job: &ClaimedJob) -> Result<bool, spi::Error>
         ],
     )?
     .unwrap_or(false))
+}
+
+fn compaction_target_method(job: &ClaimedJob) -> Result<Option<String>, spi::Error> {
+    Spi::get_one_with_args::<String>(
+        "SELECT access_method.amname::text
+           FROM pg_catalog.pg_class AS class
+           JOIN pg_catalog.pg_am AS access_method ON access_method.oid = class.relam
+          WHERE class.oid = $1::oid",
+        &[job.target_name.clone().into()],
+    )
 }
 
 fn set_validating(job: &ClaimedJob) -> Result<(), spi::Error> {

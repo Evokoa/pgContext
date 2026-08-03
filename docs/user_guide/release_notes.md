@@ -312,7 +312,7 @@ deliberately different feature cannot be mistaken for stable parity.
 | Per-vector dense index and quantization metadata | `experimental` | Validated configuration metadata exists; complete build-and-scan consumption is planned. |
 | Named sparse vectors per collection | `experimental` | Registration, exact fallback, validated HNSW binding, filters, bounded-work explain counters, exact rerank, and exact fusion exist. |
 | Multi-vector and late-interaction query | `experimental` | Exact MaxSim and experimental token candidates exist; internal token-index maintenance is planned. |
-| IVFFlat | `intentionally different` | IVFFlat is not implemented; retain pgvector IVFFlat, use exact search, or rebuild as HNSW. |
+| IVFFlat | `experimental` | Native `pgcontext_ivfflat` supports page-native full-precision, SQ8, and PQ postings, bounded probes, DML/VACUUM/REINDEX/CIC/partition lifecycle, exact source rerank, PG17/18 dump/restore, crash replay, and physical replication. pgvector drop-in names and automatic conversion remain separate migration work. |
 | PostgreSQL-native ACL, RLS, transactions, and backups | `intentionally different` | pgContext uses PostgreSQL's authority instead of recreating it in another service. |
 | Rebuildable acceleration artifacts | `intentionally different` | PostgreSQL tables are authoritative; indexes and generated segments are disposable acceleration state. |
 
@@ -325,7 +325,8 @@ Important current limits:
 
 - PostgreSQL 17 and 18 release images are built and runtime-verified on amd64 and arm64.
 - Dense HNSW and filtered ANN remain experimental.
-- IVFFlat is not implemented.
+- Native IVFFlat is experimental. Its clean v4 format is intentionally
+  incompatible with earlier development artifacts; rebuild with `REINDEX`.
 - Non-dense SQL types and the HNSW on-disk format remain experimental, and
   densified node records must fit the documented 8,064-byte page envelope.
 - Binary, scalar/SQ8, and product-quantized HNSW serving is stable with
@@ -469,10 +470,11 @@ for real pgvector databases. Planned compatibility work includes:
 - parallel HNSW construction and PostgreSQL progress reporting where needed;
 - dependent views, functions, prepared statements, and application-query
   inventories;
-- detection of IVFFlat with retain, exact-search, or rebuild-as-HNSW plans.
+- conversion of existing pgvector IVFFlat definitions into native
+  `pgcontext_ivfflat` definitions with reviewed option mapping.
 
-IVFFlat itself remains an intentional non-goal unless measured user demand
-justifies maintaining a second ANN index lifecycle.
+Further IVFFlat compatibility remains gated on measured user demand that
+justifies maintaining the additional ANN compatibility surface.
 
 ### 9. Broader certification and distribution
 

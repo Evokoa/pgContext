@@ -21,6 +21,15 @@ default:
 - `pgcontext.index_advisor` suggests ordinary PostgreSQL indexes and statistics
   actions for registered filter fields.
 - `pgcontext.vacuum_advice` reports index-level tuple and page counters.
+- `pgcontext.ivfflat_index_info(index regclass)` performs a full native IVF
+  generation verification and reports format/generation identity, metric,
+  dimensions, list occupancy/skew, page extents, delta work, native build-worker
+  count, and SQ8/PQ codec binding. A checksum, extent, posting, codebook, or
+  revision mismatch fails closed as corruption.
+- `pgcontext.ivfflat_last_scan_work()` reports the requested/visited lists,
+  postings, foreground delta records, candidates, exact reranks, widening
+  rounds, completion reason, codec, and generation used by the most recent
+  IVFFlat scan in the backend.
 - `pgcontext.telemetry`, `pgcontext.query_cohort_stats`, and
   `pgcontext.query_execution_stats` expose local counters
   for monitoring trends, including candidates considered, rows rechecked, rows
@@ -106,6 +115,22 @@ investigating vector recall or latency. Use `REINDEX` or a replacement
 new HNSW tuning. Validate the rebuilt path with `pgcontext.recall_check` before
 controlled rollout, and keep production indexed serving gated by the final
 release notes.
+
+Native IVFFlat inserts and updates append exact, WAL-logged foreground records;
+VACUUM appends tombstones for dead heap TIDs. Run
+`pgcontext.compact_ivfflat(index_regclass)` for synchronous retraining and
+delta folding, or enqueue the same durable supervised lifecycle with
+`pgcontext.enqueue_ivfflat_compaction(collection_name, index_regclass)`.
+Registered collection indexes automatically enqueue compaction debt when the
+foreground delta reaches 10,000 records. Compaction publishes a complete
+checksummed generation before cutover, keeps the old generation readable until
+existing readers drain, and reuses or truncates superseded pages when safe.
+
+Use `REINDEX` rather than compaction when changing `lists`, `quantization`, or
+PQ width, crossing an incompatible format, or repairing corruption. Verify the
+replacement or compacted generation with `ivfflat_index_info` before increasing
+`ivfflat_probes` or enabling iterative widening. A candidate-budget error is a
+hard work-limit signal, not permission to fall back silently.
 
 Use `pgcontext.hnsw_serving_stats()` when investigating first-query latency
 cliffs or repeated slow queries after writes: `pack_builds` counts how many

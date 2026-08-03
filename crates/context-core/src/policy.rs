@@ -78,6 +78,18 @@ pub const MAX_HNSW_EF_CONSTRUCTION: usize = 4096;
 /// Maximum SQL-configurable HNSW search candidate budget.
 pub const MAX_HNSW_EF_SEARCH: usize = 4096;
 
+/// Default IVFFlat list probes per ordered scan.
+pub const DEFAULT_IVFFLAT_PROBES: usize = 1;
+
+/// Maximum IVFFlat list count and per-scan probe count.
+pub const MAX_IVFFLAT_LISTS: usize = 32_768;
+
+/// Default hard ceiling on postings scored by one IVFFlat scan.
+pub const DEFAULT_IVFFLAT_CANDIDATE_BUDGET: usize = 100_000;
+
+/// Maximum SQL-configurable IVFFlat posting budget.
+pub const MAX_IVFFLAT_CANDIDATE_BUDGET: usize = 10_000_000;
+
 /// Maximum byte length for collection names stored in pgContext catalogs.
 pub const MAX_COLLECTION_NAME_BYTES: usize = 63;
 

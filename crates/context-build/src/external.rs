@@ -3,6 +3,8 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+use context_core::DistanceMetric;
+
 const CHECKSUM_BYTES: usize = size_of::<u64>();
 const LENGTH_BYTES: usize = size_of::<u32>();
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
@@ -320,6 +322,290 @@ pub fn deterministic_kmeans(
     })
 }
 
+/// Trains deterministic centroids using the routing metric's value domain.
+///
+/// Continuous metrics use arithmetic means after metric-aware assignment.
+/// Hamming uses per-coordinate binary majorities, retaining the prior bit on
+/// an exact tie. Jaccard uses a deterministic cluster medoid so every centroid
+/// remains a valid binary vector.
+///
+/// # Errors
+///
+/// Rejects empty/ragged/non-finite input, invalid cluster counts, zero
+/// iteration budgets, and values rejected by the selected metric.
+pub fn deterministic_metric_clusters(
+    vectors: &[Vec<f32>],
+    clusters: usize,
+    max_iterations: usize,
+    seed: u64,
+    metric: DistanceMetric,
+) -> Result<KmeansResult, TrainingError> {
+    deterministic_metric_clusters_with_workers(vectors, clusters, max_iterations, seed, metric, 1)
+}
+
+/// Trains deterministic metric-aware centroids with parallel assignment.
+///
+/// Assignment chunks are joined in source order and centroid updates remain
+/// scalar, so changing `workers` cannot change the logical result.
+///
+/// # Errors
+///
+/// Returns the same validation errors as [`deterministic_metric_clusters`],
+/// plus [`TrainingError::InvalidWorkerCount`] when `workers` is zero.
+pub fn deterministic_metric_clusters_with_workers(
+    vectors: &[Vec<f32>],
+    clusters: usize,
+    max_iterations: usize,
+    seed: u64,
+    metric: DistanceMetric,
+    workers: usize,
+) -> Result<KmeansResult, TrainingError> {
+    let dimensions = validate_training_input(vectors, clusters, max_iterations)?;
+    if workers == 0 {
+        return Err(TrainingError::InvalidWorkerCount);
+    }
+    let mut centroids = deterministic_sample(vectors.len(), clusters, seed)
+        .into_iter()
+        .map(|index| vectors[index].clone())
+        .collect::<Vec<_>>();
+    let mut assignments = vec![usize::MAX; vectors.len()];
+    for _ in 0..max_iterations {
+        let next = metric_assignments(vectors, &centroids, metric, workers)?;
+        if next == assignments {
+            break;
+        }
+        assignments = next;
+        match metric {
+            DistanceMetric::Hamming => update_binary_majorities(
+                vectors,
+                &assignments,
+                &mut centroids,
+                clusters,
+                dimensions,
+            ),
+            DistanceMetric::Jaccard => {
+                update_jaccard_medoids(vectors, &assignments, &mut centroids, clusters, metric)?
+            }
+            _ => update_arithmetic_means(
+                vectors,
+                &assignments,
+                &mut centroids,
+                clusters,
+                dimensions,
+            )?,
+        }
+    }
+    assignments = metric_assignments(vectors, &centroids, metric, workers)?;
+    Ok(KmeansResult {
+        centroids,
+        assignments,
+    })
+}
+
+fn metric_assignments(
+    vectors: &[Vec<f32>],
+    centroids: &[Vec<f32>],
+    metric: DistanceMetric,
+    workers: usize,
+) -> Result<Vec<usize>, TrainingError> {
+    let workers = workers.min(vectors.len()).max(1);
+    if workers == 1 {
+        return vectors
+            .iter()
+            .map(|vector| nearest_metric_centroid(vector, centroids, metric))
+            .collect();
+    }
+    let chunk_size = vectors.len().div_ceil(workers);
+    std::thread::scope(|scope| {
+        let handles = vectors
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|vector| nearest_metric_centroid(vector, centroids, metric))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut assignments = Vec::with_capacity(vectors.len());
+        for handle in handles {
+            let chunk = handle
+                .join()
+                .unwrap_or_else(|payload| std::panic::resume_unwind(payload))?;
+            assignments.extend(chunk);
+        }
+        Ok(assignments)
+    })
+}
+
+fn validate_training_input(
+    vectors: &[Vec<f32>],
+    clusters: usize,
+    max_iterations: usize,
+) -> Result<usize, TrainingError> {
+    let dimensions = vectors.first().ok_or(TrainingError::EmptyInput)?.len();
+    if dimensions == 0 {
+        return Err(TrainingError::ZeroDimensions);
+    }
+    if clusters == 0 || clusters > vectors.len() {
+        return Err(TrainingError::InvalidClusterCount);
+    }
+    if max_iterations == 0 {
+        return Err(TrainingError::ZeroIterations);
+    }
+    if vectors
+        .iter()
+        .any(|vector| vector.len() != dimensions || vector.iter().any(|value| !value.is_finite()))
+    {
+        return Err(TrainingError::InvalidVector);
+    }
+    Ok(dimensions)
+}
+
+fn nearest_metric_centroid(
+    vector: &[f32],
+    centroids: &[Vec<f32>],
+    metric: DistanceMetric,
+) -> Result<usize, TrainingError> {
+    let mut best = None::<(usize, f32)>;
+    for (index, centroid) in centroids.iter().enumerate() {
+        let score = metric
+            .distance_slices(vector, centroid)
+            .map_err(|_| TrainingError::InvalidVector)?;
+        let replace = best.is_none_or(|(best_index, best_score)| {
+            metric
+                .score_order()
+                .compare(f64::from(score), f64::from(best_score))
+                .then(index.cmp(&best_index))
+                .is_lt()
+        });
+        if replace {
+            best = Some((index, score));
+        }
+    }
+    best.map(|(index, _)| index)
+        .ok_or(TrainingError::InvalidClusterCount)
+}
+
+fn update_arithmetic_means(
+    vectors: &[Vec<f32>],
+    assignments: &[usize],
+    centroids: &mut [Vec<f32>],
+    clusters: usize,
+    dimensions: usize,
+) -> Result<(), TrainingError> {
+    let mut sums = vec![vec![0.0_f64; dimensions]; clusters];
+    let mut counts = vec![0_usize; clusters];
+    for (vector, cluster) in vectors.iter().zip(assignments.iter().copied()) {
+        counts[cluster] += 1;
+        for (sum, value) in sums[cluster].iter_mut().zip(vector) {
+            *sum += f64::from(*value);
+        }
+    }
+    for cluster in 0..clusters {
+        if counts[cluster] == 0 {
+            continue;
+        }
+        let count =
+            u32::try_from(counts[cluster]).map_err(|_| TrainingError::PopulationTooLarge)?;
+        for dimension in 0..dimensions {
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "the f64 accumulator deliberately rounds once into the f32 centroid domain"
+            )]
+            let value = (sums[cluster][dimension] / f64::from(count)) as f32;
+            centroids[cluster][dimension] = value;
+        }
+    }
+    Ok(())
+}
+
+fn update_binary_majorities(
+    vectors: &[Vec<f32>],
+    assignments: &[usize],
+    centroids: &mut [Vec<f32>],
+    clusters: usize,
+    dimensions: usize,
+) {
+    let mut ones = vec![vec![0_usize; dimensions]; clusters];
+    let mut counts = vec![0_usize; clusters];
+    for (vector, cluster) in vectors.iter().zip(assignments.iter().copied()) {
+        counts[cluster] += 1;
+        for (count, value) in ones[cluster].iter_mut().zip(vector) {
+            *count += usize::from(*value == 1.0);
+        }
+    }
+    for cluster in 0..clusters {
+        if counts[cluster] == 0 {
+            continue;
+        }
+        for dimension in 0..dimensions {
+            let doubled = ones[cluster][dimension].saturating_mul(2);
+            centroids[cluster][dimension] = match doubled.cmp(&counts[cluster]) {
+                std::cmp::Ordering::Greater => 1.0,
+                std::cmp::Ordering::Less => 0.0,
+                std::cmp::Ordering::Equal => centroids[cluster][dimension],
+            };
+        }
+    }
+}
+
+fn update_jaccard_medoids(
+    vectors: &[Vec<f32>],
+    assignments: &[usize],
+    centroids: &mut [Vec<f32>],
+    clusters: usize,
+    metric: DistanceMetric,
+) -> Result<(), TrainingError> {
+    // Exact medoids are quadratic in a cluster's population. Preserve exact
+    // behavior for small fixtures, while deterministically sampling both the
+    // candidate and evaluation sets for production-sized clusters. The two
+    // caps bound one cluster update to 65,536 distance evaluations.
+    const MAX_MEDOID_CANDIDATES: usize = 64;
+    const MAX_MEDOID_EVALUATORS: usize = 1_024;
+
+    for (cluster, centroid) in centroids.iter_mut().enumerate().take(clusters) {
+        let members = assignments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, assigned)| (*assigned == cluster).then_some(index))
+            .collect::<Vec<_>>();
+        let Some(&first) = members.first() else {
+            continue;
+        };
+        let candidates = evenly_spaced_members(&members, MAX_MEDOID_CANDIDATES);
+        let evaluators = evenly_spaced_members(&members, MAX_MEDOID_EVALUATORS);
+        let mut best = (first, f64::INFINITY);
+        for candidate in candidates {
+            let total = evaluators.iter().try_fold(0.0_f64, |sum, member| {
+                metric
+                    .distance_slices(&vectors[candidate], &vectors[*member])
+                    .map(|score| sum + f64::from(score))
+                    .map_err(|_| TrainingError::InvalidVector)
+            })?;
+            if total
+                .total_cmp(&best.1)
+                .then(candidate.cmp(&best.0))
+                .is_lt()
+            {
+                best = (candidate, total);
+            }
+        }
+        *centroid = vectors[best.0].clone();
+    }
+    Ok(())
+}
+
+fn evenly_spaced_members(members: &[usize], limit: usize) -> Vec<usize> {
+    if members.len() <= limit {
+        return members.to_vec();
+    }
+    (0..limit)
+        .map(|sample| members[sample.saturating_mul(members.len()) / limit])
+        .collect()
+}
+
 fn nearest_centroid(vector: &[f32], centroids: &[Vec<f32>]) -> usize {
     centroids
         .iter()
@@ -353,6 +639,8 @@ pub enum TrainingError {
     InvalidVector,
     /// Training population exceeds the deterministic accumulator bound.
     PopulationTooLarge,
+    /// Parallel assignment worker count is zero.
+    InvalidWorkerCount,
 }
 
 impl Display for TrainingError {
@@ -364,6 +652,7 @@ impl Display for TrainingError {
             Self::ZeroIterations => "k-means iteration budget must be positive",
             Self::InvalidVector => "k-means vectors are ragged or non-finite",
             Self::PopulationTooLarge => "k-means population exceeds the supported bound",
+            Self::InvalidWorkerCount => "k-means worker count must be positive",
         })
     }
 }

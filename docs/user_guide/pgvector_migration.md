@@ -195,17 +195,19 @@ high-cardinality filters, joins, and partitioning. Add pgContext index paths onl
 after recall checks and operational diagnostics show that approximate retrieval
 is appropriate for the workload.
 
-pgContext does not implement pgvector IVFFlat indexes for the first production
-surface. The production serving path is exact table-backed search first, with
-`pgcontext_hnsw` maturing behind explicit recall, visibility, filter, and
-restart gates. IVFFlat's training/list maintenance model is not the selected
-artifact shape for pgContext's PostgreSQL-native source-table ownership model.
-Applications that depend on IVFFlat during bind-mode evaluation should keep
-those pgvector indexes in place for that workload, and register the same source
-tables with pgContext for exact search, filters, hybrid retrieval, diagnostics,
-and HNSW evaluation. `pgcontext.adopt_pgvector()` and fast ownership conversion
-inventory IVFFlat and emit or execute a rebuild-as-HNSW plan; pgContext does not
-translate IVFFlat options or claim an IVFFlat implementation.
+pgContext now provides its own experimental `pgcontext_ivfflat` access method.
+It is not the pgvector `ivfflat` access method and does not make existing index
+objects or reloptions binary-compatible. The current adoption and ownership
+conversion APIs still inventory a pgvector IVFFlat index conservatively and do
+not translate it automatically. Keep the pgvector index live until a separately
+built pgContext index passes exact-oracle recall, filter/RLS, latency, DML,
+backup, and recovery checks.
+
+A reviewed manual rebuild chooses the matching pgContext source type, metric
+opclass, and list count, then creates a new index with
+`USING pgcontext_ivfflat`. SQ8/PQ are pgContext-specific choices and must be
+certified independently. Automatic pgvector option/name conversion belongs to
+the migration phase and is not implied by native IVFFlat availability.
 
 ## Current Gaps
 

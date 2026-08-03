@@ -458,7 +458,7 @@ const fn hnsw_insert_lock_key(index_oid: u32) -> (i32, i32) {
 ///
 /// `index_relation` must point to the live PostgreSQL index relation owned by
 /// the current access-method callback.
-unsafe fn serialize_hnsw_insert(index_relation: pg_sys::Relation) {
+pub(crate) unsafe fn serialize_hnsw_insert(index_relation: pg_sys::Relation) {
     // SAFETY: The callback passes a live PostgreSQL index relation, so its
     // stable OID is readable for the callback duration.
     let index_oid = unsafe { (*index_relation).rd_id.to_u32() };

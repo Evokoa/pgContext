@@ -4,12 +4,13 @@ use context_core::policy::{
     DEFAULT_HNSW_BUILD_PARALLEL_WORKERS, DEFAULT_HNSW_CANDIDATE_BUDGET,
     DEFAULT_HNSW_CANDIDATE_MASK_POINTS, DEFAULT_HNSW_EF_CONSTRUCTION, DEFAULT_HNSW_EF_SEARCH,
     DEFAULT_HNSW_ITERATIVE_EXPANSION_LIMIT, DEFAULT_HNSW_M, DEFAULT_HNSW_RECALL_THRESHOLD,
-    MAX_HNSW_BUILD_PARALLEL_WORKERS, MAX_HNSW_CANDIDATE_BUDGET, MAX_HNSW_CANDIDATE_MASK_POINTS,
-    MAX_HNSW_EF_CONSTRUCTION, MAX_HNSW_EF_SEARCH, MAX_HNSW_ITERATIVE_EXPANSION_LIMIT, MAX_HNSW_M,
-    MIN_HNSW_M,
+    DEFAULT_IVFFLAT_CANDIDATE_BUDGET, DEFAULT_IVFFLAT_PROBES, MAX_HNSW_BUILD_PARALLEL_WORKERS,
+    MAX_HNSW_CANDIDATE_BUDGET, MAX_HNSW_CANDIDATE_MASK_POINTS, MAX_HNSW_EF_CONSTRUCTION,
+    MAX_HNSW_EF_SEARCH, MAX_HNSW_ITERATIVE_EXPANSION_LIMIT, MAX_HNSW_M,
+    MAX_IVFFLAT_CANDIDATE_BUDGET, MAX_IVFFLAT_LISTS, MIN_HNSW_M,
 };
 use context_index::HnswConfig;
-use pgrx::guc::{GucContext, GucFlags, GucRegistry, GucSetting};
+use pgrx::guc::{GucContext, GucFlags, GucRegistry, GucSetting, PostgresGucEnum};
 use pgrx::prelude::*;
 
 use crate::error::raise_sql_error;
@@ -34,6 +35,11 @@ const DEFAULT_HNSW_BUILD_PARALLEL_WORKERS_I32: i32 =
     policy_usize_to_i32(DEFAULT_HNSW_BUILD_PARALLEL_WORKERS);
 const MAX_HNSW_BUILD_PARALLEL_WORKERS_I32: i32 =
     policy_usize_to_i32(MAX_HNSW_BUILD_PARALLEL_WORKERS);
+const DEFAULT_IVFFLAT_PROBES_I32: i32 = policy_usize_to_i32(DEFAULT_IVFFLAT_PROBES);
+const MAX_IVFFLAT_LISTS_I32: i32 = policy_usize_to_i32(MAX_IVFFLAT_LISTS);
+const DEFAULT_IVFFLAT_CANDIDATE_BUDGET_I32: i32 =
+    policy_usize_to_i32(DEFAULT_IVFFLAT_CANDIDATE_BUDGET);
+const MAX_IVFFLAT_CANDIDATE_BUDGET_I32: i32 = policy_usize_to_i32(MAX_IVFFLAT_CANDIDATE_BUDGET);
 
 static HNSW_M: GucSetting<i32> = GucSetting::<i32>::new(DEFAULT_HNSW_M_I32);
 static HNSW_EF_CONSTRUCTION: GucSetting<i32> =
@@ -68,8 +74,77 @@ static BUILD_WORKERS_ENABLED: GucSetting<bool> = GucSetting::<bool>::new(true);
 const DEFAULT_HNSW_DELTA_SEGMENT_LIMIT: i32 = 10_000;
 static HNSW_DELTA_SEGMENT_LIMIT: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_DELTA_SEGMENT_LIMIT);
+static IVFFLAT_PROBES: GucSetting<i32> = GucSetting::<i32>::new(DEFAULT_IVFFLAT_PROBES_I32);
+static IVFFLAT_MAX_PROBES: GucSetting<i32> = GucSetting::<i32>::new(MAX_IVFFLAT_LISTS_I32);
+static IVFFLAT_CANDIDATE_BUDGET: GucSetting<i32> =
+    GucSetting::<i32>::new(DEFAULT_IVFFLAT_CANDIDATE_BUDGET_I32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PostgresGucEnum)]
+pub(crate) enum IvfflatIterativeScan {
+    #[name = c"off"]
+    Off,
+    #[name = c"strict_order"]
+    StrictOrder,
+    #[name = c"relaxed_order"]
+    RelaxedOrder,
+}
+
+static IVFFLAT_ITERATIVE_SCAN: GucSetting<IvfflatIterativeScan> =
+    GucSetting::<IvfflatIterativeScan>::new(IvfflatIterativeScan::Off);
+const DEFAULT_IVFFLAT_BUILD_PARALLEL_WORKERS: i32 = 1;
+const MAX_IVFFLAT_BUILD_PARALLEL_WORKERS: i32 = 16;
+static IVFFLAT_BUILD_PARALLEL_WORKERS: GucSetting<i32> =
+    GucSetting::<i32>::new(DEFAULT_IVFFLAT_BUILD_PARALLEL_WORKERS);
 
 pub(crate) fn init_gucs() {
+    GucRegistry::define_int_guc(
+        c"pgcontext.ivfflat_probes",
+        c"IVFFlat lists probed by one ordered scan.",
+        c"The initial number of nearest centroid lists visited by pgcontext_ivfflat.",
+        &IVFFLAT_PROBES,
+        1,
+        MAX_IVFFLAT_LISTS_I32,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+    GucRegistry::define_enum_guc(
+        c"pgcontext.ivfflat_iterative_scan",
+        c"IVFFlat post-filter probe widening policy.",
+        c"off visits probes lists; strict_order materializes the bounded max-probe frontier before returning rows; relaxed_order widens lazily after the executor exhausts each batch.",
+        &IVFFLAT_ITERATIVE_SCAN,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+    GucRegistry::define_int_guc(
+        c"pgcontext.ivfflat_build_parallel_workers",
+        c"PostgreSQL workers used for deterministic IVFFlat centroid assignment.",
+        c"Upper bound on dynamic PostgreSQL parallel workers sharing one table scan and bounded spill set; logical assignments are deterministic across admitted worker counts.",
+        &IVFFLAT_BUILD_PARALLEL_WORKERS,
+        1,
+        MAX_IVFFLAT_BUILD_PARALLEL_WORKERS,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+    GucRegistry::define_int_guc(
+        c"pgcontext.ivfflat_max_probes",
+        c"Maximum IVFFlat lists visited while widening.",
+        c"Upper bound for post-filter IVFFlat probe widening; never exceeds the index list count.",
+        &IVFFLAT_MAX_PROBES,
+        1,
+        MAX_IVFFLAT_LISTS_I32,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+    GucRegistry::define_int_guc(
+        c"pgcontext.ivfflat_candidate_budget",
+        c"Maximum IVFFlat postings scored by one scan.",
+        c"Hard bounded-work ceiling across all IVFFlat lists visited by one scan.",
+        &IVFFLAT_CANDIDATE_BUDGET,
+        1,
+        MAX_IVFFLAT_CANDIDATE_BUDGET_I32,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
     GucRegistry::define_bool_guc(
         c"pgcontext.build_workers_enabled",
         c"Run durable pgContext generation jobs in supervised workers.",
@@ -279,6 +354,32 @@ pub(crate) fn init_gucs() {
 
 pub(crate) fn query_telemetry_enabled() -> bool {
     QUERY_TELEMETRY_ENABLED.get()
+}
+
+pub(crate) fn ivfflat_probes_from_guc() -> usize {
+    positive_setting_to_usize("pgcontext.ivfflat_probes", IVFFLAT_PROBES.get())
+}
+
+pub(crate) fn ivfflat_max_probes_from_guc() -> usize {
+    positive_setting_to_usize("pgcontext.ivfflat_max_probes", IVFFLAT_MAX_PROBES.get())
+}
+
+pub(crate) fn ivfflat_candidate_budget_from_guc() -> usize {
+    positive_setting_to_usize(
+        "pgcontext.ivfflat_candidate_budget",
+        IVFFLAT_CANDIDATE_BUDGET.get(),
+    )
+}
+
+pub(crate) fn ivfflat_iterative_scan_from_guc() -> IvfflatIterativeScan {
+    IVFFLAT_ITERATIVE_SCAN.get()
+}
+
+pub(crate) fn ivfflat_build_parallel_workers_from_guc() -> usize {
+    positive_setting_to_usize(
+        "pgcontext.ivfflat_build_parallel_workers",
+        IVFFLAT_BUILD_PARALLEL_WORKERS.get(),
+    )
 }
 
 pub(crate) fn build_workers_enabled() -> bool {

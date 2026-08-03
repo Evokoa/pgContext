@@ -192,7 +192,7 @@ fn installed_access_methods() -> std::collections::BTreeSet<(String, String)> {
     names_from_query(
         "SELECT amname::text
            FROM pg_catalog.pg_am
-          WHERE amname = 'pgcontext_hnsw'",
+          WHERE amname IN ('pgcontext_hnsw', 'pgcontext_ivfflat')",
         "installed access method query should succeed",
     )
 }

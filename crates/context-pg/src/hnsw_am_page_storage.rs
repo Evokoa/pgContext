@@ -44,7 +44,7 @@ fn checked_hnsw_item_range(
 /// `page` must point to a pinned BLCKSZ PostgreSQL page that remains locked for
 /// the returned span's complete use. Mutable access additionally requires the
 /// caller to hold the buffer lock exclusively.
-unsafe fn checked_hnsw_page_item_span(
+pub(crate) unsafe fn checked_hnsw_page_item_span(
     page: pg_sys::Page,
     offset: pg_sys::OffsetNumber,
 ) -> Result<(*mut u8, usize), &'static str> {
@@ -98,7 +98,7 @@ unsafe fn checked_hnsw_page_item_span(
 ///
 /// `page` must point to a pinned BLCKSZ PostgreSQL page held under at least a
 /// shared buffer lock for this complete call.
-unsafe fn copy_hnsw_page_item(
+pub(crate) unsafe fn copy_hnsw_page_item(
     page: pg_sys::Page,
     offset: pg_sys::OffsetNumber,
 ) -> Result<Vec<u8>, &'static str> {

@@ -136,6 +136,7 @@ Remove or convert those indexes first; dropping the bridge then removes its
 casts, support functions, and opclasses without removing either parent
 extension.
 
-IVFFlat remains an inventory-and-plan input, not a pgContext access method. A
-supported conversion rebuilds it as HNSW after validation rather than claiming
-an in-place IVFFlat implementation.
+Existing pgvector IVFFlat objects remain inventory-and-plan inputs. pgContext's
+native access method is named `pgcontext_ivfflat`; coexistence tooling does not
+reinterpret an existing pgvector index in place. Build and validate a new
+pgContext HNSW or IVFFlat index, then cut application plans over explicitly.

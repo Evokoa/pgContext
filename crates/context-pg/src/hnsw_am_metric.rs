@@ -3,7 +3,7 @@ impl HnswScoreMetric {
     ///
     /// Bit metrics operate over the validated dense 0/1 storage form so their
     /// graph traversal score has the same ordering as the SQL operator.
-    const fn navigation_metric(self) -> DistanceMetric {
+    pub(crate) const fn navigation_metric(self) -> DistanceMetric {
         match self {
             Self::L2 => DistanceMetric::L2,
             Self::NegativeInnerProduct => DistanceMetric::NegativeInnerProduct,
@@ -18,7 +18,7 @@ impl HnswScoreMetric {
         clippy::cast_possible_truncation,
         reason = "normalization is accumulated in f64 to avoid overflow, then stored in the f32 vector format"
     )]
-    fn prepare_vector(
+    pub(crate) fn prepare_vector(
         self,
         vector: DenseVector,
     ) -> Result<Option<DenseVector>, context_core::Error> {
@@ -48,14 +48,14 @@ impl HnswScoreMetric {
         DenseVector::new(values).map(Some)
     }
 
-    const fn output_score(self, navigation_score: f32) -> f32 {
+    pub(crate) const fn output_score(self, navigation_score: f32) -> f32 {
         match self {
             Self::Cosine => navigation_score + 1.0,
             _ => navigation_score,
         }
     }
 
-    const fn storage_tag(self) -> u16 {
+    pub(crate) const fn storage_tag(self) -> u16 {
         match self {
             Self::L2 => 1,
             Self::NegativeInnerProduct => 2,
@@ -63,6 +63,18 @@ impl HnswScoreMetric {
             Self::L1 => 4,
             Self::BitHamming => 5,
             Self::BitJaccard => 6,
+        }
+    }
+
+    pub(crate) const fn from_storage_tag(tag: u16) -> Option<Self> {
+        match tag {
+            1 => Some(Self::L2),
+            2 => Some(Self::NegativeInnerProduct),
+            3 => Some(Self::Cosine),
+            4 => Some(Self::L1),
+            5 => Some(Self::BitHamming),
+            6 => Some(Self::BitJaccard),
+            _ => None,
         }
     }
 }

@@ -13,6 +13,7 @@ mod graph_mutation;
 mod graph_mvcc;
 mod graph_port;
 mod hnsw_hierarchy;
+mod ivf;
 mod page_codec;
 mod segment_directory;
 
@@ -50,6 +51,13 @@ pub use hnsw_hierarchy::{
     ConcurrentHnswBuilder, HnswCancellation, HnswGraphSnapshot, HnswInsertOutcome, HnswLevel,
     HnswLevelSeed, HnswSearchOutcome, HnswWork, NeverCancel, search_graph_read,
     search_graph_read_with_mask, search_graph_read_with_mask_budgeted,
+};
+pub use ivf::{
+    InMemoryIvfIndex, IvfCancellation, IvfCandidateBudget, IvfCandidateMask, IvfCentroidRead,
+    IvfConfig, IvfError, IvfHit, IvfIterativePolicy, IvfListId, IvfPointId, IvfPosting,
+    IvfPostingPayload, IvfPostingRead, IvfPostingRef, IvfProbeBudget, IvfProbeWindow, IvfScorer,
+    IvfSearchCompletion, IvfSearchOutcome, NeverCancelIvf, ivf_probe_order, search_ivf,
+    search_ivf_probe_window, search_ivf_probe_window_with_scorer, search_ivf_with_scorer,
 };
 pub use page_codec::{GraphPageCodecError, GraphPageEnvelope};
 pub use segment_directory::{

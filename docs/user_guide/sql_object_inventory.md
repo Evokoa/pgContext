@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `7c723089ce43fbee3772bbbe4b90ff23f1ffddc29a4e26f1dd4f6f50025bce79`
+Full SQL artifact SHA-256: `445e105bfa6e07ed3bc51d8a629c0854584044119b85b86a8e79db2a5900065f`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,15 +16,15 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 346 |
+| Functions | 352 |
 | Tables | 23 |
 | Views | 12 |
 | Triggers | 6 |
 | Casts | 35 |
 | Operators | 62 |
-| Operator classes | 28 |
+| Operator classes | 46 |
 | Aggregates | 12 |
-| Access methods | 1 |
+| Access methods | 2 |
 
 ## Types
 
@@ -99,6 +99,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 
 - `"_begin_pgvector_ownership_conversion"`
 - `"_compact_hnsw_segment_pair"`
+- `"_enqueue_ivfflat_compaction_debt"`
 - `"_hnsw_candidates"`
 - `"_hnsw_masked_candidates"`
 - `"_hnsw_sparse_candidates"`
@@ -148,6 +149,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"collection_sparse_vectors"`
 - `"collection_vectors"`
 - `"compact"`
+- `"compact_ivfflat"`
 - `"compare_indexes"`
 - `"configure_collection_limits"`
 - `"configure_sparse_vector"`
@@ -170,6 +172,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"encode_artifact_segment"`
 - `"enqueue_build_job"`
 - `"enqueue_hnsw_compaction"`
+- `"enqueue_ivfflat_compaction"`
 - `"estimate_index_memory"`
 - `"execute_query"`
 - `"explain"`
@@ -242,6 +245,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"int8vec_typmod_out"`
 - `"integer_vector_avg_final"`
 - `"integer_vector_sum_final"`
+- `"ivfflat_index_info"`
+- `"ivfflat_last_scan_work"`
 - `"l1_distance"`
 - `"l2_distance"`
 - `"migration_report"`
@@ -416,6 +421,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext.int8vec_send`
 - `pgcontext.int8vec_typmod_input`
 - `pgcontext.int8vec_typmod_receive`
+- `pgcontext.ivfflat_handler`
 - `pgcontext.jaccard_distance`
 - `pgcontext.uint8vec_out`
 - `pgcontext.uint8vec_send`
@@ -492,6 +498,24 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 | `uint8vec_hnsw_ip_ops` | operator class | pgcontext_hnsw, uint8vec | Experimental |
 | `uint8vec_hnsw_cosine_ops` | operator class | pgcontext_hnsw, uint8vec | Experimental |
 | `uint8vec_hnsw_l1_ops` | operator class | pgcontext_hnsw, uint8vec | Experimental |
+| `vector_ivfflat_ops` | operator class | pgcontext_ivfflat, vector | Experimental |
+| `vector_ivfflat_ip_ops` | operator class | pgcontext_ivfflat, vector | Experimental |
+| `vector_ivfflat_cosine_ops` | operator class | pgcontext_ivfflat, vector | Experimental |
+| `vector_ivfflat_l1_ops` | operator class | pgcontext_ivfflat, vector | Experimental |
+| `halfvec_ivfflat_ops` | operator class | pgcontext_ivfflat, halfvec | Experimental |
+| `halfvec_ivfflat_ip_ops` | operator class | pgcontext_ivfflat, halfvec | Experimental |
+| `halfvec_ivfflat_cosine_ops` | operator class | pgcontext_ivfflat, halfvec | Experimental |
+| `halfvec_ivfflat_l1_ops` | operator class | pgcontext_ivfflat, halfvec | Experimental |
+| `int8vec_ivfflat_ops` | operator class | pgcontext_ivfflat, int8vec | Experimental |
+| `int8vec_ivfflat_ip_ops` | operator class | pgcontext_ivfflat, int8vec | Experimental |
+| `int8vec_ivfflat_cosine_ops` | operator class | pgcontext_ivfflat, int8vec | Experimental |
+| `int8vec_ivfflat_l1_ops` | operator class | pgcontext_ivfflat, int8vec | Experimental |
+| `uint8vec_ivfflat_ops` | operator class | pgcontext_ivfflat, uint8vec | Experimental |
+| `uint8vec_ivfflat_ip_ops` | operator class | pgcontext_ivfflat, uint8vec | Experimental |
+| `uint8vec_ivfflat_cosine_ops` | operator class | pgcontext_ivfflat, uint8vec | Experimental |
+| `uint8vec_ivfflat_l1_ops` | operator class | pgcontext_ivfflat, uint8vec | Experimental |
+| `bitvec_ivfflat_hamming_ops` | operator class | pgcontext_ivfflat, bitvec | Experimental |
+| `bitvec_ivfflat_jaccard_ops` | operator class | pgcontext_ivfflat, bitvec | Experimental |
 | `<->` | operator | vector, vector | Stable |
 | `<#>` | operator | vector, vector | Stable |
 | `<=>` | operator | vector, vector | Stable |
@@ -573,18 +597,29 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 ## Access Methods And Operator Classes
 
 - access method `pgcontext_hnsw`
+- access method `pgcontext_ivfflat`
 - operator class `pgcontext.bitvec_hnsw_hamming_ops`
 - operator class `pgcontext.bitvec_hnsw_jaccard_ops`
+- operator class `pgcontext.bitvec_ivfflat_hamming_ops`
+- operator class `pgcontext.bitvec_ivfflat_jaccard_ops`
 - operator class `pgcontext.bitvec_ops`
 - operator class `pgcontext.halfvec_hnsw_cosine_ops`
 - operator class `pgcontext.halfvec_hnsw_ip_ops`
 - operator class `pgcontext.halfvec_hnsw_l1_ops`
 - operator class `pgcontext.halfvec_hnsw_ops`
+- operator class `pgcontext.halfvec_ivfflat_cosine_ops`
+- operator class `pgcontext.halfvec_ivfflat_ip_ops`
+- operator class `pgcontext.halfvec_ivfflat_l1_ops`
+- operator class `pgcontext.halfvec_ivfflat_ops`
 - operator class `pgcontext.halfvec_ops`
 - operator class `pgcontext.int8vec_hnsw_cosine_ops`
 - operator class `pgcontext.int8vec_hnsw_ip_ops`
 - operator class `pgcontext.int8vec_hnsw_l1_ops`
 - operator class `pgcontext.int8vec_hnsw_ops`
+- operator class `pgcontext.int8vec_ivfflat_cosine_ops`
+- operator class `pgcontext.int8vec_ivfflat_ip_ops`
+- operator class `pgcontext.int8vec_ivfflat_l1_ops`
+- operator class `pgcontext.int8vec_ivfflat_ops`
 - operator class `pgcontext.int8vec_ops`
 - operator class `pgcontext.sparsevec_hnsw_cosine_ops`
 - operator class `pgcontext.sparsevec_hnsw_ip_ops`
@@ -595,11 +630,19 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - operator class `pgcontext.uint8vec_hnsw_ip_ops`
 - operator class `pgcontext.uint8vec_hnsw_l1_ops`
 - operator class `pgcontext.uint8vec_hnsw_ops`
+- operator class `pgcontext.uint8vec_ivfflat_cosine_ops`
+- operator class `pgcontext.uint8vec_ivfflat_ip_ops`
+- operator class `pgcontext.uint8vec_ivfflat_l1_ops`
+- operator class `pgcontext.uint8vec_ivfflat_ops`
 - operator class `pgcontext.uint8vec_ops`
 - operator class `pgcontext.vector_hnsw_cosine_ops`
 - operator class `pgcontext.vector_hnsw_ip_ops`
 - operator class `pgcontext.vector_hnsw_l1_ops`
 - operator class `pgcontext.vector_hnsw_ops`
+- operator class `pgcontext.vector_ivfflat_cosine_ops`
+- operator class `pgcontext.vector_ivfflat_ip_ops`
+- operator class `pgcontext.vector_ivfflat_l1_ops`
+- operator class `pgcontext.vector_ivfflat_ops`
 - operator class `pgcontext.vector_ops`
 
 ## `pgcontext_hnsw` Index Reloptions
@@ -612,6 +655,14 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 | `scalar_levels` | integer from 2 through 256 | Experimental |
 | `pq_subvector_dimensions` | positive divisor of vector dimensions | Experimental |
 
+## `pgcontext_ivfflat` Index Reloptions
+
+| Option | Accepted shape | Lifecycle |
+|---|---|---|
+| `lists` | integer from 1 through 32768 | Trained centroid-list count |
+| `quantization` | `none`, `sq8`, or `pq` | Candidate posting codec; exact source rerank is mandatory |
+| `pq_subvector_dimensions` | positive divisor of vector dimensions | Used when `quantization = pq` |
+
 ## HNSW GUCs
 
 | Setting | Default | Lifecycle |
@@ -622,3 +673,13 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 | `pgcontext.hnsw_candidate_budget` | `32` | Experimental filtered/iterative policy |
 | `pgcontext.hnsw_iterative_expansion_limit` | `10000` | Experimental bounded expansion policy |
 | `pgcontext.hnsw_recall_threshold` | `0.95` | Experimental recall-health policy |
+
+## IVFFlat GUCs
+
+| Setting | Default | Lifecycle |
+|---|---:|---|
+| `pgcontext.ivfflat_probes` | `1` | Initial centroid-list count |
+| `pgcontext.ivfflat_max_probes` | `32768` | Maximum lists visited by iterative widening |
+| `pgcontext.ivfflat_candidate_budget` | `100000` | Hard posting/delta work ceiling |
+| `pgcontext.ivfflat_iterative_scan` | `off` | `off`, `strict_order`, or `relaxed_order` |
+| `pgcontext.ivfflat_build_parallel_workers` | `1` | Native PostgreSQL parallel assignment workers, maximum 16 |

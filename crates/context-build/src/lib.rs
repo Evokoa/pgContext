@@ -16,6 +16,7 @@ mod rowset;
 
 pub use external::{
     KmeansResult, MemoryBudget, SpillError, SpillRun, TrainingError, deterministic_kmeans,
+    deterministic_metric_clusters, deterministic_metric_clusters_with_workers,
     deterministic_sample,
 };
 pub use findings::{FindingCode, FindingLocation, FindingSeverity, StructuralFinding};

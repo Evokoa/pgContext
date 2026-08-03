@@ -169,12 +169,7 @@ for id in \
   fi
 done
 
-require_contract CAP-IVFFLAT intentionally\ different
-if grep -Eiq 'CREATE[[:space:]]+(ACCESS METHOD|OPERATOR CLASS).*ivfflat' \
-    "${REPO_ROOT}/sql/pgcontext--0.2.0.sql"; then
-  echo "IVFFlat SQL appeared despite the intentional-difference contract" >&2
-  exit 1
-fi
+require_contract CAP-IVFFLAT experimental
 
 awk -F'|' -v root="${REPO_ROOT}" '
   function fail(message) {
@@ -305,12 +300,12 @@ require_fixed tests/heavy/filtered_ann_recall.sh \
 require_fixed tests/heavy/pgvector_hnsw_lifecycle.sh \
   'pgvector_hnsw_lifecycle_complete' \
   'dense HNSW lifecycle trace'
+require_fixed crates/context-pg/src/ivfflat_am.rs \
+  'pub unsafe extern "C-unwind" fn pgcontext_ivfflat_handler' \
+  'native IVFFlat access-method handler'
 require_fixed docs/user_guide/indexes.md \
-  'This is an intentional product and operations boundary' \
-  'IVFFlat difference rationale'
-require_fixed docs/user_guide/indexes.md \
-  'keep existing pgvector IVFFlat indexes' \
-  'IVFFlat migration guidance'
+  '`pgcontext_ivfflat` is an experimental native access method' \
+  'native IVFFlat user guidance'
 require_fixed docs/user_guide/security.md \
   '## PostgreSQL-Native Operational Boundary' \
   'PostgreSQL-native difference guidance'
