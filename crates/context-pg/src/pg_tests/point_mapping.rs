@@ -59,6 +59,75 @@ fn upsert_points_reactivates_deleted_points() {
 }
 
 #[pg_test]
+fn set_based_point_upsert_rejects_duplicates_before_mutation() {
+    create_point_collection("p2_point_duplicate_rowset");
+    Spi::run(
+        "DO $$
+         BEGIN
+             BEGIN
+                 PERFORM * FROM pgcontext.upsert_points(
+                     'p2_point_duplicate_rowset',
+                     ARRAY['doc-1', 'doc-2', 'doc-1']
+                 );
+                 RAISE EXCEPTION 'expected duplicate rowset failure';
+             EXCEPTION WHEN SQLSTATE '22023' THEN
+                 IF SQLERRM <> 'duplicate source key at input ordinal 2; first seen at 0' THEN
+                     RAISE;
+                 END IF;
+             END;
+         END $$",
+    )
+    .expect("duplicate rowset should fail with the stable SQLSTATE");
+    assert_eq!(active_point_count("p2_point_duplicate_rowset"), 0);
+}
+
+#[pg_test]
+fn bulk_point_mutations_reject_cross_chunk_duplicates_before_mutation() {
+    create_point_collection("p2_point_cross_chunk_duplicates");
+    Spi::run(
+        "DO $$
+         BEGIN
+             BEGIN
+                 PERFORM * FROM pgcontext.bulk_upsert_points(
+                     'p2_point_cross_chunk_duplicates',
+                     ARRAY['doc-1', 'doc-2', 'doc-1'],
+                     2
+                 );
+                 RAISE EXCEPTION 'expected cross-chunk duplicate failure';
+             EXCEPTION WHEN SQLSTATE '22023' THEN
+                 NULL;
+             END;
+         END $$",
+    )
+    .expect("cross-chunk upsert duplicates should fail");
+    assert_eq!(active_point_count("p2_point_cross_chunk_duplicates"), 0);
+
+    point_upsert_rows(
+        "SELECT point_id, source_key, inserted
+           FROM pgcontext.upsert_points(
+               'p2_point_cross_chunk_duplicates', ARRAY['doc-1', 'doc-2']
+           )",
+    );
+    Spi::run(
+        "DO $$
+         BEGIN
+             BEGIN
+                 PERFORM * FROM pgcontext.bulk_delete_points(
+                     'p2_point_cross_chunk_duplicates',
+                     ARRAY['doc-1', 'doc-2', 'doc-1'],
+                     2
+                 );
+                 RAISE EXCEPTION 'expected cross-chunk duplicate failure';
+             EXCEPTION WHEN SQLSTATE '22023' THEN
+                 NULL;
+             END;
+         END $$",
+    )
+    .expect("cross-chunk delete duplicates should fail");
+    assert_eq!(active_point_count("p2_point_cross_chunk_duplicates"), 2);
+}
+
+#[pg_test]
 fn bulk_upsert_points_reports_chunk_progress_and_existing_rows() {
     create_point_collection("m13_bulk_upsert");
     point_upsert_rows(

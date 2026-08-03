@@ -82,7 +82,10 @@ fn effective_build_status_from_parts(
     backend_identity: Option<&str>,
 ) -> BuildJobStatus {
     match status {
-        BuildJobStatus::Running | BuildJobStatus::CancelRequested => {
+        BuildJobStatus::Running
+        | BuildJobStatus::CancelRequested
+        | BuildJobStatus::Validating
+        | BuildJobStatus::Publishing => {
             let Some(backend_pid) = backend_pid else {
                 return BuildJobStatus::Abandoned;
             };
@@ -166,10 +169,12 @@ fn insert_build_job(
                     backend_pid,
                     backend_identity,
                     total_units,
-                    config_revision
+                    config_revision,
+                    lease_expires_at
                )
                VALUES ($1, $2, $3, $4, 'running', $5, $6, $7,
-                       pgcontext.current_vector_config_revision($1))
+                       pgcontext.current_vector_config_revision($1),
+                       pg_catalog.clock_timestamp() + INTERVAL '30 minutes')
                RETURNING build_job_id";
     let build_job_id = Spi::get_one_with_args::<i64>(
         sql,
@@ -196,6 +201,54 @@ fn insert_build_job(
         )
     });
 
+    resolve_visible_build_job(build_job_id)
+}
+
+fn insert_supervised_build_job(
+    collection_id: i64,
+    publication_alias: &str,
+) -> BuildJobRow {
+    let artifact_kind_label = ArtifactKind::Certification.as_sql();
+    let target_name = "pgcontext._collection_points";
+    lock_build_job_target(
+        collection_id,
+        artifact_kind_label,
+        publication_alias,
+        target_name,
+    );
+    reject_duplicate_active_build_job(
+        collection_id,
+        artifact_kind_label,
+        publication_alias,
+        target_name,
+    );
+    let build_job_id = Spi::get_one_with_args::<i64>(
+        "INSERT INTO pgcontext._build_jobs (
+                    collection_id, artifact_kind, artifact_name, target_name,
+                    job_kind, status, total_units, config_revision, supervised
+             )
+             VALUES ($1, $2, $3, $4, 'certification', 'planned', 0,
+                     pgcontext.current_vector_config_revision($1), true)
+         RETURNING build_job_id",
+        &[
+            collection_id.into(),
+            artifact_kind_label.into(),
+            publication_alias.into(),
+            target_name.into(),
+        ],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("supervised build job insert failed: {error}"),
+        )
+    })
+    .unwrap_or_else(|| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "supervised build job insert did not return a build job id",
+        )
+    });
     resolve_visible_build_job(build_job_id)
 }
 
@@ -237,7 +290,7 @@ fn reject_duplicate_active_build_job(
                 AND artifact_kind = $2
                 AND artifact_name = $3
                 AND target_name = $4
-                AND status IN ('planned', 'running', 'cancel_requested')
+                AND status IN ('planned', 'running', 'cancel_requested', 'validating', 'publishing')
               ORDER BY build_job_id",
             None,
             &[
@@ -273,7 +326,11 @@ fn reject_duplicate_active_build_job(
             candidate.backend_pid,
             candidate.backend_identity.as_deref(),
         ) {
-            BuildJobStatus::Running | BuildJobStatus::CancelRequested | BuildJobStatus::Planned => {
+            BuildJobStatus::Running
+            | BuildJobStatus::CancelRequested
+            | BuildJobStatus::Validating
+            | BuildJobStatus::Publishing
+            | BuildJobStatus::Planned => {
                 raise_sql_error(
                     PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
                     format!(
@@ -327,8 +384,17 @@ fn select_build_jobs(collection_id: i64) -> Vec<BuildJobRow> {
 }
 
 fn resolve_visible_build_job(build_job_id: i64) -> BuildJobRow {
-    Spi::connect(|client| {
-        let rows = client.select(
+    resolve_visible_build_job_with_lock(build_job_id, false)
+}
+
+fn resolve_visible_build_job_for_update(build_job_id: i64) -> BuildJobRow {
+    resolve_visible_build_job_with_lock(build_job_id, true)
+}
+
+fn resolve_visible_build_job_with_lock(build_job_id: i64, lock: bool) -> BuildJobRow {
+    Spi::connect_mut(|client| {
+        let lock_clause = if lock { " FOR UPDATE OF jobs" } else { "" };
+        let query = format!(
             "SELECT jobs.build_job_id,
                     collections.collection_name,
                     jobs.artifact_kind,
@@ -347,7 +413,10 @@ fn resolve_visible_build_job(build_job_id: i64) -> BuildJobRow {
                     collections.owner_role::regrole::text
                FROM pgcontext._build_jobs AS jobs
                JOIN pgcontext._collections AS collections USING (collection_id)
-              WHERE jobs.build_job_id = $1",
+              WHERE jobs.build_job_id = $1{lock_clause}"
+        );
+        let rows = client.update(
+            &query,
             Some(1),
             &[build_job_id.into()],
         )?;
@@ -425,7 +494,10 @@ fn build_job_from_spi_iter_row(row: &spi::SpiHeapTupleData<'_>) -> Result<BuildJ
 
 fn ensure_current_backend_can_update(row: &BuildJobRow) {
     match effective_build_status(row) {
-        BuildJobStatus::Running | BuildJobStatus::CancelRequested => {}
+        BuildJobStatus::Running
+        | BuildJobStatus::CancelRequested
+        | BuildJobStatus::Validating
+        | BuildJobStatus::Publishing => {}
         status => raise_sql_error(
             PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
             format!(
@@ -447,15 +519,18 @@ fn ensure_current_backend_can_update(row: &BuildJobRow) {
 }
 
 fn status_catalog_value(status: BuildJobStatus) -> &'static str {
-    match status {
-        BuildJobStatus::Planned => "planned",
-        BuildJobStatus::Running => "running",
-        BuildJobStatus::CancelRequested => "cancel_requested",
-        BuildJobStatus::Cancelled => "cancelled",
-        BuildJobStatus::Completed => "completed",
-        BuildJobStatus::Failed => "failed",
-        BuildJobStatus::Abandoned => "abandoned",
-    }
+    let canonical = match status {
+        BuildJobStatus::Planned => context_build::BuildJobStatus::Planned,
+        BuildJobStatus::Running => context_build::BuildJobStatus::Running,
+        BuildJobStatus::CancelRequested => context_build::BuildJobStatus::CancelRequested,
+        BuildJobStatus::Cancelled => context_build::BuildJobStatus::Cancelled,
+        BuildJobStatus::Validating => context_build::BuildJobStatus::Validating,
+        BuildJobStatus::Publishing => context_build::BuildJobStatus::Publishing,
+        BuildJobStatus::Completed => context_build::BuildJobStatus::Completed,
+        BuildJobStatus::Failed => context_build::BuildJobStatus::Failed,
+        BuildJobStatus::Abandoned => context_build::BuildJobStatus::Abandoned,
+    };
+    canonical.as_catalog()
 }
 
 fn update_build_job_row(
@@ -485,6 +560,10 @@ fn update_build_job_row(
                 backend_identity = $5,
                 cancel_requested = CASE WHEN $2 = 'cancelled' THEN true ELSE cancel_requested END,
                 error_message = $6,
+                lease_expires_at = CASE
+                    WHEN $2 IN ('completed', 'failed', 'cancelled') THEN NULL
+                    ELSE pg_catalog.clock_timestamp() + INTERVAL '30 minutes'
+                END,
                 updated_at = pg_catalog.now(),
                 completed_at = CASE
                     WHEN $2 IN ('completed', 'failed', 'cancelled') THEN pg_catalog.now()
@@ -511,12 +590,14 @@ fn update_build_job_row(
 }
 
 fn request_build_cancel_row(build_job_id: i64) -> BuildJobRow {
-    Spi::run_with_args(
+    let updated = Spi::get_one_with_args::<i64>(
         "UPDATE pgcontext._build_jobs
             SET status = 'cancel_requested',
                 cancel_requested = true,
                 updated_at = pg_catalog.now()
-          WHERE build_job_id = $1",
+          WHERE build_job_id = $1
+            AND status IN ('running', 'validating')
+      RETURNING build_job_id",
         &[build_job_id.into()],
     )
     .unwrap_or_else(|error| {
@@ -525,6 +606,42 @@ fn request_build_cancel_row(build_job_id: i64) -> BuildJobRow {
             format!("build cancel request failed: {error}"),
         )
     });
+    if updated.is_none() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("build job {build_job_id} crossed the cancellation boundary"),
+        );
+    }
+    resolve_visible_build_job(build_job_id)
+}
+
+fn cancel_planned_build_job_row(build_job_id: i64) -> BuildJobRow {
+    let updated = Spi::get_one_with_args::<i64>(
+        "UPDATE pgcontext._build_jobs
+            SET status = 'cancelled',
+                cancel_requested = true,
+                backend_pid = NULL,
+                backend_identity = NULL,
+                lease_expires_at = NULL,
+                completed_at = pg_catalog.now(),
+                updated_at = pg_catalog.now()
+          WHERE build_job_id = $1
+            AND status = 'planned'
+      RETURNING build_job_id",
+        &[build_job_id.into()],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("planned build cancellation failed: {error}"),
+        )
+    });
+    if updated.is_none() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("build job {build_job_id} crossed the cancellation boundary"),
+        );
+    }
     resolve_visible_build_job(build_job_id)
 }
 
@@ -535,6 +652,7 @@ fn mark_build_job_abandoned(candidate: &ActiveBuildJobCandidate) {
             SET status = 'abandoned',
                 backend_pid = NULL,
                 backend_identity = NULL,
+                lease_expires_at = NULL,
                 updated_at = pg_catalog.now(),
                 completed_at = pg_catalog.now()
           WHERE build_job_id = $1
@@ -576,6 +694,7 @@ fn retry_build_job_row(build_job_id: i64) -> BuildJobRow {
                 attempt = attempt + 1,
                 cancel_requested = false,
                 error_message = NULL,
+                lease_expires_at = pg_catalog.clock_timestamp() + INTERVAL '30 minutes',
                 updated_at = pg_catalog.now(),
                 completed_at = NULL
           WHERE build_job_id = $3",
@@ -591,6 +710,85 @@ fn retry_build_job_row(build_job_id: i64) -> BuildJobRow {
             format!("build job retry failed: {error}"),
         )
     });
+    resolve_visible_build_job(build_job_id)
+}
+
+fn retry_supervised_build_job_row(
+    build_job_id: i64,
+    expected_status: BuildJobStatus,
+    expected_attempt: i32,
+) -> BuildJobRow {
+    Spi::run_with_args(
+        "DELETE FROM pgcontext._generation_manifests WHERE build_job_id = $1",
+        &[build_job_id.into()],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("supervised generation reset failed: {error}"),
+        )
+    });
+    Spi::run_with_args(
+        "DELETE FROM pgcontext._generation_build_rows WHERE build_job_id = $1",
+        &[build_job_id.into()],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("supervised build staging reset failed: {error}"),
+        )
+    });
+    Spi::run_with_args(
+        "DELETE FROM pgcontext._build_deltas WHERE build_job_id = $1",
+        &[build_job_id.into()],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("supervised build delta reset failed: {error}"),
+        )
+    });
+    let updated = Spi::get_one_with_args::<i64>(
+        "UPDATE pgcontext._build_jobs
+            SET status = 'planned',
+                backend_pid = NULL,
+                backend_identity = NULL,
+                attempt = attempt + 1,
+                total_units = 0,
+                processed_units = 0,
+                last_source_point_id = 0,
+                source_high_water = 0,
+                source_version = NULL,
+                cancel_requested = false,
+                validation_passed = NULL,
+                validation_findings = NULL,
+                published_generation = NULL,
+                error_message = NULL,
+                lease_expires_at = NULL,
+                updated_at = pg_catalog.now(),
+                completed_at = NULL
+          WHERE build_job_id = $1
+            AND status = $2
+            AND attempt = $3
+      RETURNING build_job_id",
+        &[
+            build_job_id.into(),
+            status_catalog_value(expected_status).into(),
+            expected_attempt.into(),
+        ],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("supervised build job retry failed: {error}"),
+        )
+    });
+    if updated.is_none() {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("build job {build_job_id} crossed the retry boundary"),
+        );
+    }
     resolve_visible_build_job(build_job_id)
 }
 

@@ -95,6 +95,460 @@ fn build_jobs_track_backend_local_progress_and_completion() {
     assert_eq!(listed.0, started.0);
     assert_eq!(listed.5, "Completed");
 }
+
+#[pg_test]
+fn supervised_worker_claims_recovers_validates_and_publishes_generation() {
+    create_optimization_collection("p2_supervised_generation");
+    seed_build_source_points("p2_supervised_generation", 3);
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+
+    let planned = build_job_row(
+        "SELECT build_job_id,
+                collection_name,
+                artifact_kind,
+                artifact_name,
+                target_name,
+                status::text,
+                backend_pid,
+                attempt,
+                processed_units,
+                total_units,
+                cancel_requested,
+                error_message
+           FROM pgcontext.enqueue_build_job(
+                'p2_supervised_generation', 'certification', 'active'
+           )",
+    );
+    assert_eq!(planned.5, "Planned");
+    assert_eq!(planned.6, None);
+
+    assert!(crate::build_worker::process_one_step());
+    assert!(crate::build_worker::process_one_step());
+    let validating = build_job_by_id(planned.0);
+    assert_eq!(validating.5, "validating");
+    assert_eq!(validating.8, 3);
+
+    Spi::run(&format!(
+        "UPDATE pgcontext._build_jobs
+            SET backend_pid = 2147483000,
+                backend_identity = 'crashed-worker',
+                lease_expires_at = pg_catalog.clock_timestamp() - INTERVAL '1 second'
+          WHERE build_job_id = {}",
+        planned.0
+    ))
+    .expect("test should simulate an expired worker lease");
+
+    assert!(crate::build_worker::process_one_step());
+    let publishing = build_job_by_id(planned.0);
+    assert_eq!(publishing.5, "publishing");
+    assert_eq!(publishing.7, 2);
+    assert_eq!(publishing.8, 3);
+
+    assert!(crate::build_worker::process_one_step());
+    let completed = build_job_by_id(planned.0);
+    assert_eq!(completed.5, "completed");
+    assert_eq!(completed.6, None);
+    let manifest_state = Spi::get_one_with_args::<String>(
+        "SELECT manifests.lifecycle_state
+           FROM pgcontext._generation_manifests AS manifests
+           JOIN pgcontext._build_jobs AS jobs USING (build_job_id)
+          WHERE jobs.build_job_id = $1",
+        &[planned.0.into()],
+    )
+    .expect("manifest lookup should succeed");
+    assert_eq!(manifest_state.as_deref(), Some("published"));
+}
+
+#[pg_test]
+fn supervised_planned_job_can_be_cancelled_without_worker() {
+    create_optimization_collection("p2_supervised_cancel");
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+    let planned = build_job_row(
+        "SELECT build_job_id,
+                collection_name,
+                artifact_kind,
+                artifact_name,
+                target_name,
+                status::text,
+                backend_pid,
+                attempt,
+                processed_units,
+                total_units,
+                cancel_requested,
+                error_message
+           FROM pgcontext.enqueue_build_job(
+                'p2_supervised_cancel', 'certification', 'cancel-me'
+           )",
+    );
+    let cancelled = build_job_row(&format!(
+        "SELECT build_job_id,
+                collection_name,
+                artifact_kind,
+                artifact_name,
+                target_name,
+                status::text,
+                backend_pid,
+                attempt,
+                processed_units,
+                total_units,
+                cancel_requested,
+                error_message
+           FROM pgcontext.request_build_cancel({})",
+        planned.0
+    ));
+    assert_eq!(cancelled.5, "Cancelled");
+    assert!(cancelled.10);
+    assert!(!crate::build_worker::process_one_step());
+}
+
+#[pg_test]
+fn supervised_certification_reconciles_deltas_and_revalidates_before_publish() {
+    create_optimization_collection("p2_supervised_source_revision");
+    seed_build_source_points("p2_supervised_source_revision", 3);
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+    let planned = build_job_row(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.enqueue_build_job(
+                'p2_supervised_source_revision', 'certification', 'active'
+           )",
+    );
+
+    assert!(crate::build_worker::process_one_step());
+    assert!(crate::build_worker::process_one_step());
+    let validating = build_job_by_id(planned.0);
+    assert_eq!(validating.5, "validating");
+    assert_eq!(validating.9, 3);
+
+    Spi::run(
+        "SELECT * FROM pgcontext.delete_points(
+             'p2_supervised_source_revision', ARRAY['1']
+         );
+         SELECT * FROM pgcontext.upsert_points(
+             'p2_supervised_source_revision', ARRAY['4']
+         )",
+    )
+    .expect("point deltas should commit before validation");
+    assert!(crate::build_worker::process_one_step());
+    assert_eq!(build_job_by_id(planned.0).5, "publishing");
+
+    Spi::run(
+        "SELECT * FROM pgcontext.delete_points(
+             'p2_supervised_source_revision', ARRAY['2']
+         );
+         SELECT * FROM pgcontext.upsert_points(
+             'p2_supervised_source_revision', ARRAY['5']
+         )",
+    )
+    .expect("publication-boundary deltas should commit");
+    assert!(crate::build_worker::process_one_step());
+    assert_eq!(build_job_by_id(planned.0).5, "validating");
+    assert!(crate::build_worker::process_one_step());
+    assert_eq!(build_job_by_id(planned.0).5, "publishing");
+    assert!(crate::build_worker::process_one_step());
+    assert_eq!(build_job_by_id(planned.0).5, "completed");
+
+    let exact_stage = Spi::get_one_with_args::<bool>(
+        "SELECT NOT EXISTS (
+             (SELECT point_id, source_key
+                FROM pgcontext._generation_build_rows WHERE build_job_id = $1
+              EXCEPT
+              SELECT point_id, source_key FROM pgcontext._collection_points
+               WHERE collection_id = (
+                   SELECT collection_id FROM pgcontext._build_jobs WHERE build_job_id = $1
+               ) AND deleted_at IS NULL)
+             UNION ALL
+             (SELECT point_id, source_key FROM pgcontext._collection_points
+               WHERE collection_id = (
+                   SELECT collection_id FROM pgcontext._build_jobs WHERE build_job_id = $1
+               ) AND deleted_at IS NULL
+              EXCEPT
+              SELECT point_id, source_key
+                FROM pgcontext._generation_build_rows WHERE build_job_id = $1)
+         )",
+        &[planned.0.into()],
+    )
+    .expect("staging parity query should succeed");
+    assert_eq!(exact_stage, Some(true));
+    let evidence_bytes = Spi::get_one_with_args::<i64>(
+        "SELECT artifacts.payload_bytes
+           FROM pgcontext._generation_artifacts AS artifacts
+           JOIN pgcontext._generation_manifests AS manifests USING (generation)
+          WHERE manifests.build_job_id = $1
+            AND artifacts.artifact_kind = 'certification_evidence'",
+        &[planned.0.into()],
+    )
+    .expect("certification evidence lookup should succeed");
+    assert!(evidence_bytes.is_some_and(|bytes| bytes > 0));
+}
+
+#[pg_test]
+fn supervised_validation_and_publication_can_exceed_lease_without_partial_commit() {
+    create_optimization_collection("p2_supervised_lease_overrun");
+    seed_build_source_points("p2_supervised_lease_overrun", 1);
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+    let planned = build_job_row(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.enqueue_build_job(
+                'p2_supervised_lease_overrun', 'certification', 'active'
+           )",
+    );
+    assert!(crate::build_worker::process_one_step());
+    assert!(crate::build_worker::process_one_step());
+    assert_eq!(build_job_by_id(planned.0).5, "validating");
+
+    crate::build_worker::delay_next_validation_past_lease_for_test();
+    assert!(crate::build_worker::process_one_step());
+    assert_eq!(build_job_by_id(planned.0).5, "publishing");
+
+    crate::build_worker::delay_next_publication_past_lease_for_test();
+    assert!(crate::build_worker::process_one_step());
+    assert_eq!(build_job_by_id(planned.0).5, "completed");
+    let published = Spi::get_one_with_args::<bool>(
+        "SELECT jobs.published_generation = aliases.generation
+           FROM pgcontext._build_jobs AS jobs
+           JOIN pgcontext._generation_aliases AS aliases
+             ON aliases.collection_id = jobs.collection_id
+            AND aliases.publication_alias = jobs.artifact_name
+          WHERE jobs.build_job_id = $1",
+        &[planned.0.into()],
+    )
+    .expect("published generation lookup should succeed");
+    assert_eq!(published, Some(true));
+}
+
+#[pg_test]
+#[should_panic(expected = "generation_artifact_payload_checksum_check")]
+fn generation_artifact_payload_corruption_is_rejected() {
+    create_optimization_collection("p2_payload_corruption");
+    seed_build_source_points("p2_payload_corruption", 1);
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+    let planned = build_job_row(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.enqueue_build_job(
+                'p2_payload_corruption', 'certification', 'active'
+           )",
+    );
+    assert!(crate::build_worker::process_one_step());
+    assert!(crate::build_worker::process_one_step());
+    assert!(crate::build_worker::process_one_step());
+    Spi::run_with_args(
+        "UPDATE pgcontext._generation_artifacts AS artifacts
+            SET payload = artifacts.payload || decode('00', 'hex')
+           FROM pgcontext._generation_manifests AS manifests
+          WHERE artifacts.generation = manifests.generation
+            AND manifests.build_job_id = $1",
+        &[planned.0.into()],
+    )
+    .expect("payload substitution must fail its checksum constraint");
+}
+
+#[pg_test]
+fn validating_supervised_job_accepts_cooperative_cancellation() {
+    create_optimization_collection("p2_cancel_validating");
+    seed_build_source_points("p2_cancel_validating", 1);
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+    let planned = build_job_row(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.enqueue_build_job(
+                'p2_cancel_validating', 'certification', 'active'
+           )",
+    );
+    assert!(crate::build_worker::process_one_step());
+    assert!(crate::build_worker::process_one_step());
+    let requested = build_job_row(&format!(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.request_build_cancel({})",
+        planned.0
+    ));
+    assert_eq!(requested.5, "CancelRequested");
+    assert!(crate::build_worker::process_one_step());
+    assert_eq!(build_job_by_id(planned.0).5, "cancelled");
+}
+
+#[pg_test]
+#[should_panic(expected = "in status Publishing")]
+fn publishing_supervised_job_rejects_cancellation() {
+    create_optimization_collection("p2_cancel_publishing");
+    seed_build_source_points("p2_cancel_publishing", 1);
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+    let planned = build_job_row(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.enqueue_build_job(
+                'p2_cancel_publishing', 'certification', 'active'
+           )",
+    );
+    assert!(crate::build_worker::process_one_step());
+    assert!(crate::build_worker::process_one_step());
+    assert!(crate::build_worker::process_one_step());
+    Spi::run(&format!(
+        "SELECT * FROM pgcontext.request_build_cancel({})",
+        planned.0
+    ))
+    .expect("publishing cancellation must be rejected");
+}
+
+#[pg_test]
+fn stale_supervised_attempt_cannot_advance_new_owner_state() {
+    create_optimization_collection("p2_stale_worker_fence");
+    seed_build_source_points("p2_stale_worker_fence", 1);
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+    let planned = build_job_row(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.enqueue_build_job(
+                'p2_stale_worker_fence', 'certification', 'active'
+           )",
+    );
+    assert!(crate::build_worker::process_one_step());
+    assert!(crate::build_worker::stale_attempt_is_fenced_for_test(
+        planned.0
+    ));
+    let current = build_job_by_id(planned.0);
+    assert_eq!(current.5, "running");
+    assert_eq!(current.7, 2);
+}
+
+#[pg_test]
+fn supervised_retry_returns_to_ownerless_planned_work_and_wake_is_idempotent() {
+    create_optimization_collection("p2_supervised_retry_wake");
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+    let planned = build_job_row(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.enqueue_build_job(
+                'p2_supervised_retry_wake', 'certification', 'active'
+           )",
+    );
+    let cancelled = build_job_row(&format!(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.request_build_cancel({})",
+        planned.0
+    ));
+    assert_eq!(cancelled.5, "Cancelled");
+    let retried = build_job_row(&format!(
+        "SELECT build_job_id, collection_name, artifact_kind, artifact_name,
+                target_name, status::text, backend_pid, attempt,
+                processed_units, total_units, cancel_requested, error_message
+           FROM pgcontext.retry_build_job({})",
+        planned.0
+    ));
+    assert_eq!(retried.5, "Planned");
+    assert_eq!(retried.6, None);
+    assert_eq!(retried.7, 2);
+    assert!(!Spi::get_one::<bool>(
+        "SELECT pgcontext.wake_build_jobs('p2_supervised_retry_wake')"
+    )
+    .expect("wake should execute")
+    .unwrap_or(true));
+}
+
+#[pg_test]
+#[should_panic(expected = "no supervised executor is registered for job kind: segment")]
+fn supervised_enqueue_rejects_unregistered_executor_kinds() {
+    create_optimization_collection("p2_supervised_unsupported");
+    Spi::run(
+        "SELECT * FROM pgcontext.enqueue_build_job(
+             'p2_supervised_unsupported', 'segment', 'active'
+         )",
+    )
+    .expect("unsupported executor should fail");
+}
+
+#[pg_test]
+fn generation_alias_replacement_respects_reader_pins() {
+    create_optimization_collection("p2_generation_pins");
+    seed_build_source_points("p2_generation_pins", 1);
+    Spi::run("SET pgcontext.build_workers_enabled = false")
+        .expect("test should disable asynchronous launch");
+
+    let enqueue = || {
+        build_job_row(
+            "SELECT build_job_id,
+                    collection_name,
+                    artifact_kind,
+                    artifact_name,
+                    target_name,
+                    status::text,
+                    backend_pid,
+                    attempt,
+                    processed_units,
+                    total_units,
+                    cancel_requested,
+                    error_message
+               FROM pgcontext.enqueue_build_job(
+                    'p2_generation_pins', 'certification', 'active'
+               )",
+        )
+    };
+    let first = enqueue();
+    for _ in 0..4 {
+        assert!(crate::build_worker::process_one_step());
+    }
+    let first_generation = Spi::get_one_with_args::<i64>(
+        "SELECT published_generation FROM pgcontext._build_jobs WHERE build_job_id = $1",
+        &[first.0.into()],
+    )
+    .expect("first generation lookup should succeed")
+    .expect("first generation should be published");
+    let pinned = Spi::get_one::<i64>(
+        "SELECT pgcontext._pin_generation(
+             (SELECT collection_id FROM pgcontext._collections
+               WHERE collection_name = 'p2_generation_pins'),
+             'active'
+         )",
+    )
+    .expect("generation pin should execute");
+    assert_eq!(pinned, Some(first_generation));
+
+    let second = enqueue();
+    assert_ne!(second.0, first.0);
+    for _ in 0..4 {
+        assert!(crate::build_worker::process_one_step());
+    }
+    let retiring = Spi::get_one_with_args::<String>(
+        "SELECT lifecycle_state FROM pgcontext._generation_manifests WHERE generation = $1",
+        &[first_generation.into()],
+    )
+    .expect("retiring generation lookup should succeed");
+    assert_eq!(retiring.as_deref(), Some("retiring"));
+
+    Spi::run_with_args(
+        "SELECT pgcontext._unpin_generation($1)",
+        &[first_generation.into()],
+    )
+    .expect("generation unpin should execute");
+    let retired = Spi::get_one_with_args::<String>(
+        "SELECT lifecycle_state FROM pgcontext._generation_manifests WHERE generation = $1",
+        &[first_generation.into()],
+    )
+    .expect("retired generation lookup should succeed");
+    assert_eq!(retired.as_deref(), Some("retired"));
+}
 #[pg_test]
 fn build_jobs_reject_duplicate_active_target_until_terminal() {
     create_optimization_collection("m10_build_duplicate");
@@ -389,6 +843,7 @@ fn build_jobs_reject_terminal_catalog_state_drift() {
                 SET status = 'completed',
                     backend_pid = NULL,
                     backend_identity = NULL,
+                    lease_expires_at = NULL,
                     completed_at = pg_catalog.now()
               WHERE build_job_id = {}",
             incomplete_completed.0
@@ -1207,12 +1662,14 @@ fn build_jobs_reject_retry_for_active_and_planned_jobs() {
         &format!("cannot retry build job {} in status Planned", planned.0),
         "retry planned build job",
     );
-    assert_build_job_sql_failure(
-        &format!("SELECT * FROM pgcontext.request_build_cancel({})", planned.0),
-        "55000",
-        &format!("cannot cancel build job {} in status Planned", planned.0),
-        "cancel planned build job",
-    );
+    Spi::run(&format!(
+        "SELECT * FROM pgcontext.request_build_cancel({})",
+        planned.0
+    ))
+    .expect("a planned durable job should cancel without being claimed");
+    let planned = build_job_by_id(planned.0);
+    assert_eq!(planned.5, "cancelled");
+    assert!(planned.10);
 }
 
 #[pg_test]

@@ -130,6 +130,7 @@ pub(crate) enum ArtifactKind {
     Segment,
     SparseIndex,
     Mmap,
+    Certification,
 }
 
 impl ArtifactKind {
@@ -139,6 +140,7 @@ impl ArtifactKind {
             "segment" => Some(Self::Segment),
             "sparse_index" => Some(Self::SparseIndex),
             "mmap" => Some(Self::Mmap),
+            "certification" => Some(Self::Certification),
             _ => None,
         }
     }
@@ -149,6 +151,7 @@ impl ArtifactKind {
             Self::Segment => "segment",
             Self::SparseIndex => "sparse_index",
             Self::Mmap => "mmap",
+            Self::Certification => "certification",
         }
     }
 }

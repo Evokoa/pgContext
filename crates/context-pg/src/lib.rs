@@ -12,6 +12,11 @@ use pgrx::prelude::*;
 )]
 mod artifact_segments;
 mod build_jobs;
+#[allow(
+    unsafe_code,
+    reason = "dynamic PostgreSQL build-worker entry and database identity use the audited pgrx background-worker boundary"
+)]
+mod build_worker;
 mod catalog;
 mod catalog_schema;
 mod collection_aliases;

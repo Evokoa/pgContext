@@ -1,39 +1,277 @@
-//! Pure contracts for resumable pgContext generation builds.
+//! Pure lifecycle contracts for resumable pgContext generation builds.
 //!
-//! PostgreSQL job persistence, WAL, files, and background execution remain in
-//! infrastructure adapters. This crate depends only on `context-core`.
+//! PostgreSQL persistence, WAL, files, clocks, and worker processes remain in
+//! infrastructure adapters. This crate owns the deterministic job, lease,
+//! validation, publication, pin, and retirement state machines.
 
-pub use context_core::PointId;
+use std::collections::BTreeSet;
+use std::error::Error;
+use std::fmt::{Display, Formatter};
 
-/// The pgContext-owned generation family a job produces.
-///
-/// Native PostgreSQL `CREATE INDEX` work is intentionally not represented:
-/// this contract coordinates only pgContext artifact and projection output.
+pub use context_core::{ConfigurationRevision, GenerationId, PointId, SourceVersion};
+
+mod external;
+mod findings;
+mod rowset;
+
+pub use external::{
+    KmeansResult, MemoryBudget, SpillError, SpillRun, TrainingError, deterministic_kmeans,
+    deterministic_sample,
+};
+pub use findings::{FindingCode, FindingLocation, FindingSeverity, StructuralFinding};
+pub use rowset::{OrderedRow, OrderedRowset, RowsetError};
+
+const MAX_PUBLICATION_ALIAS_BYTES: usize = 128;
+const MAX_ARTIFACT_NAME_BYTES: usize = 255;
+
+/// Operation performed by one supervised generation job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildJobKind {
-    /// A derived, replaceable pgContext artifact.
-    Artifact,
-    /// A derived, replaceable pgContext projection.
-    Projection,
+    /// Build a new immutable artifact inventory.
+    ArtifactBuild,
+    /// Compact bounded existing artifacts into a replacement inventory.
+    Compaction,
+    /// Backfill a derived projection from authoritative source rows.
+    ProjectionBackfill,
+    /// Produce reproducible certification evidence.
+    Certification,
 }
 
-/// Durable lifecycle status for a resumable generation job.
+impl BuildJobKind {
+    /// Parses the stable catalog representation.
+    #[must_use]
+    pub const fn from_catalog(value: &str) -> Option<Self> {
+        match value.as_bytes() {
+            b"artifact_build" => Some(Self::ArtifactBuild),
+            b"compaction" => Some(Self::Compaction),
+            b"projection_backfill" => Some(Self::ProjectionBackfill),
+            b"certification" => Some(Self::Certification),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable catalog representation.
+    #[must_use]
+    pub const fn as_catalog(self) -> &'static str {
+        match self {
+            Self::ArtifactBuild => "artifact_build",
+            Self::Compaction => "compaction",
+            Self::ProjectionBackfill => "projection_backfill",
+            Self::Certification => "certification",
+        }
+    }
+}
+
+/// Typed derived output produced by the shared lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ArtifactKind {
+    /// Immutable HNSW search segment.
+    HnswSegment,
+    /// Mutable or frozen HNSW delta segment.
+    HnswDelta,
+    /// HNSW segment directory and routing metadata.
+    HnswDirectory,
+    /// IVFFlat centroid inventory.
+    IvfCentroids,
+    /// IVFFlat posting inventory.
+    IvfPostings,
+    /// Quantized vector code inventory.
+    QuantizedCodes,
+    /// Derived document chunk projection.
+    ChunkProjection,
+    /// Derived vector projection.
+    VectorProjection,
+    /// Derived graph projection.
+    GraphProjection,
+    /// Derived graph community summaries.
+    CommunitySummary,
+    /// Reproducible benchmark or certification evidence.
+    CertificationEvidence,
+}
+
+impl ArtifactKind {
+    /// Parses the stable catalog representation.
+    #[must_use]
+    pub const fn from_catalog(value: &str) -> Option<Self> {
+        match value.as_bytes() {
+            b"hnsw_segment" => Some(Self::HnswSegment),
+            b"hnsw_delta" => Some(Self::HnswDelta),
+            b"hnsw_directory" => Some(Self::HnswDirectory),
+            b"ivf_centroids" => Some(Self::IvfCentroids),
+            b"ivf_postings" => Some(Self::IvfPostings),
+            b"quantized_codes" => Some(Self::QuantizedCodes),
+            b"chunk_projection" => Some(Self::ChunkProjection),
+            b"vector_projection" => Some(Self::VectorProjection),
+            b"graph_projection" => Some(Self::GraphProjection),
+            b"community_summary" => Some(Self::CommunitySummary),
+            b"certification_evidence" => Some(Self::CertificationEvidence),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable catalog representation.
+    #[must_use]
+    pub const fn as_catalog(self) -> &'static str {
+        match self {
+            Self::HnswSegment => "hnsw_segment",
+            Self::HnswDelta => "hnsw_delta",
+            Self::HnswDirectory => "hnsw_directory",
+            Self::IvfCentroids => "ivf_centroids",
+            Self::IvfPostings => "ivf_postings",
+            Self::QuantizedCodes => "quantized_codes",
+            Self::ChunkProjection => "chunk_projection",
+            Self::VectorProjection => "vector_projection",
+            Self::GraphProjection => "graph_projection",
+            Self::CommunitySummary => "community_summary",
+            Self::CertificationEvidence => "certification_evidence",
+        }
+    }
+}
+
+/// Durable lifecycle state for a resumable generation job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildJobStatus {
-    /// Metadata was created but work has not started.
+    /// Metadata exists but no worker holds a lease.
     Planned,
-    /// A runner owns and is advancing the job.
+    /// A supervised worker holds the lease and advances source work.
     Running,
-    /// A runner must stop at its next safe checkpoint.
+    /// The worker must stop at its next safe checkpoint.
     CancelRequested,
-    /// The runner stopped after observing cancellation.
+    /// The worker stopped without advancing past the cancellation checkpoint.
     Cancelled,
-    /// All source work and activation completed.
+    /// Source work is complete and structural validation is pending.
+    Validating,
+    /// Validation passed and atomic publication is pending.
+    Publishing,
+    /// One generation was published successfully.
     Completed,
-    /// The runner recorded a recoverable failure.
+    /// The worker or validator recorded a recoverable failure.
     Failed,
-    /// The recorded runner disappeared before reaching a terminal state.
+    /// A nonterminal worker lease expired before completion.
     Abandoned,
+}
+
+impl BuildJobStatus {
+    /// Parses the stable catalog representation.
+    #[must_use]
+    pub const fn from_catalog(value: &str) -> Option<Self> {
+        match value.as_bytes() {
+            b"planned" => Some(Self::Planned),
+            b"running" => Some(Self::Running),
+            b"cancel_requested" => Some(Self::CancelRequested),
+            b"cancelled" => Some(Self::Cancelled),
+            b"validating" => Some(Self::Validating),
+            b"publishing" => Some(Self::Publishing),
+            b"completed" => Some(Self::Completed),
+            b"failed" => Some(Self::Failed),
+            b"abandoned" => Some(Self::Abandoned),
+            _ => None,
+        }
+    }
+
+    /// Returns the stable catalog representation.
+    #[must_use]
+    pub const fn as_catalog(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Running => "running",
+            Self::CancelRequested => "cancel_requested",
+            Self::Cancelled => "cancelled",
+            Self::Validating => "validating",
+            Self::Publishing => "publishing",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Abandoned => "abandoned",
+        }
+    }
+
+    /// Returns whether the shared supervised lifecycle permits `next`.
+    #[must_use]
+    pub const fn allows_transition(self, next: Self) -> bool {
+        if self as u8 == next as u8 {
+            return true;
+        }
+        matches!(
+            (self, next),
+            (
+                Self::Planned | Self::Abandoned,
+                Self::Running | Self::Validating
+            ) | (Self::Planned, Self::Cancelled)
+                | (
+                    Self::Running,
+                    Self::CancelRequested | Self::Validating | Self::Failed | Self::Abandoned
+                )
+                | (
+                    Self::CancelRequested,
+                    Self::Cancelled | Self::Failed | Self::Abandoned
+                )
+                | (
+                    Self::Validating,
+                    Self::CancelRequested | Self::Publishing | Self::Failed | Self::Abandoned
+                )
+                | (
+                    Self::Publishing,
+                    Self::Validating | Self::Completed | Self::Failed | Self::Abandoned
+                )
+                | (
+                    Self::Failed | Self::Cancelled | Self::Abandoned,
+                    Self::Planned
+                )
+        )
+    }
+}
+
+/// Stable non-zero identity for a supervised worker instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WorkerId(u64);
+
+impl WorkerId {
+    /// Creates a worker identity, rejecting the reserved zero value.
+    #[must_use]
+    pub const fn new(value: u64) -> Option<Self> {
+        if value == 0 { None } else { Some(Self(value)) }
+    }
+
+    /// Returns the numeric worker identity.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// Logical-clock lease held by the current job attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobLease {
+    worker: WorkerId,
+    expires_at: u64,
+}
+
+impl JobLease {
+    fn new(worker: WorkerId, now: u64, ttl: u64) -> Result<Self, BuildError> {
+        if ttl == 0 {
+            return Err(BuildError::ZeroLeaseDuration);
+        }
+        let expires_at = now.checked_add(ttl).ok_or(BuildError::ClockOverflow)?;
+        Ok(Self { worker, expires_at })
+    }
+
+    /// Returns the owning worker.
+    #[must_use]
+    pub const fn worker(self) -> WorkerId {
+        self.worker
+    }
+
+    /// Returns the exclusive logical-clock expiry instant.
+    #[must_use]
+    pub const fn expires_at(self) -> u64 {
+        self.expires_at
+    }
+
+    /// Returns whether the lease has expired at `now`.
+    #[must_use]
+    pub const fn is_expired(self, now: u64) -> bool {
+        now >= self.expires_at
+    }
 }
 
 /// Monotonic source-work position persisted by an adapter.
@@ -44,15 +282,15 @@ pub struct BuildCheckpoint {
 }
 
 impl BuildCheckpoint {
-    /// Creates a checkpoint with a bounded amount of completed work.
+    /// Creates a checkpoint bounded by its declared total.
     ///
     /// # Errors
     ///
-    /// Returns [`BuildTransitionError::ProgressExceedsTotal`] when `processed`
-    /// is greater than `total`.
-    pub const fn new(processed_units: u64, total_units: u64) -> Result<Self, BuildTransitionError> {
+    /// Returns [`BuildError::ProgressExceedsTotal`] when `processed_units`
+    /// exceeds `total_units`.
+    pub const fn new(processed_units: u64, total_units: u64) -> Result<Self, BuildError> {
         if processed_units > total_units {
-            return Err(BuildTransitionError::ProgressExceedsTotal);
+            return Err(BuildError::ProgressExceedsTotal);
         }
         Ok(Self {
             processed_units,
@@ -60,279 +298,829 @@ impl BuildCheckpoint {
         })
     }
 
-    /// Returns the completed source-work units.
+    /// Returns completed source-work units.
     #[must_use]
     pub const fn processed_units(self) -> u64 {
         self.processed_units
     }
 
-    /// Returns the total source-work units.
+    /// Returns declared source-work units.
     #[must_use]
     pub const fn total_units(self) -> u64 {
         self.total_units
     }
 
-    /// Returns whether all source work has been checkpointed.
+    /// Returns whether all source work is checkpointed.
     #[must_use]
     pub const fn is_complete(self) -> bool {
         self.processed_units == self.total_units
     }
 
-    /// Advances by a bounded, nonzero amount without exceeding total work.
-    ///
-    /// Reapplying a checkpoint with the same or a smaller completed position is
-    /// deliberately idempotent, which permits at-least-once adapter retries.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`BuildTransitionError::ZeroStep`] for a zero step.
-    pub const fn advance(self, step: u64) -> Result<Self, BuildTransitionError> {
-        if step == 0 {
-            return Err(BuildTransitionError::ZeroStep);
+    fn checkpoint_to(self, processed_units: u64) -> Result<Self, BuildError> {
+        if processed_units > self.total_units {
+            return Err(BuildError::ProgressExceedsTotal);
         }
-        let remaining = self.total_units - self.processed_units;
-        let advance = if step > remaining { remaining } else { step };
+        if processed_units <= self.processed_units {
+            return Ok(self);
+        }
         Ok(Self {
-            processed_units: self.processed_units + advance,
+            processed_units,
             total_units: self.total_units,
         })
     }
 }
 
-/// Pure durable state needed to validate lifecycle transitions.
+/// Fixed-width validation outcome safe to persist in a manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ValidationResult {
+    passed: bool,
+    finding_count: u32,
+}
+
+impl ValidationResult {
+    /// Creates a passing validation result.
+    #[must_use]
+    pub const fn passed(finding_count: u32) -> Self {
+        Self {
+            passed: true,
+            finding_count,
+        }
+    }
+
+    /// Creates a failing validation result.
+    #[must_use]
+    pub const fn failed(finding_count: u32) -> Self {
+        Self {
+            passed: false,
+            finding_count,
+        }
+    }
+
+    /// Returns whether validation passed.
+    #[must_use]
+    pub const fn is_passed(self) -> bool {
+        self.passed
+    }
+
+    /// Returns the bounded structural finding count.
+    #[must_use]
+    pub const fn finding_count(self) -> u32 {
+        self.finding_count
+    }
+}
+
+/// Pure state required to validate a durable job transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuildJobState {
     kind: BuildJobKind,
+    artifact_kind: ArtifactKind,
     status: BuildJobStatus,
     attempt: u32,
     checkpoint: BuildCheckpoint,
+    lease: Option<JobLease>,
+    validation: Option<ValidationResult>,
+    published_generation: Option<GenerationId>,
 }
 
 impl BuildJobState {
     /// Creates a planned first attempt.
     #[must_use]
-    pub const fn planned(kind: BuildJobKind, total_units: u64) -> Self {
+    pub const fn planned(
+        kind: BuildJobKind,
+        artifact_kind: ArtifactKind,
+        total_units: u64,
+    ) -> Self {
         Self {
             kind,
+            artifact_kind,
             status: BuildJobStatus::Planned,
             attempt: 1,
             checkpoint: BuildCheckpoint {
                 processed_units: 0,
                 total_units,
             },
+            lease: None,
+            validation: None,
+            published_generation: None,
         }
     }
 
-    /// Returns the owned generation family.
+    /// Returns the job operation.
     #[must_use]
     pub const fn kind(self) -> BuildJobKind {
         self.kind
     }
 
-    /// Returns the lifecycle status.
+    /// Returns the output kind.
+    #[must_use]
+    pub const fn artifact_kind(self) -> ArtifactKind {
+        self.artifact_kind
+    }
+
+    /// Returns lifecycle status.
     #[must_use]
     pub const fn status(self) -> BuildJobStatus {
         self.status
     }
 
-    /// Returns the one-based retry attempt.
+    /// Returns the one-based attempt number.
     #[must_use]
     pub const fn attempt(self) -> u32 {
         self.attempt
     }
 
-    /// Returns the monotonic source-work checkpoint.
+    /// Returns the monotonic checkpoint.
     #[must_use]
     pub const fn checkpoint(self) -> BuildCheckpoint {
         self.checkpoint
     }
 
-    /// Starts planned work or resumes a retry attempt.
+    /// Returns the active worker lease.
+    #[must_use]
+    pub const fn lease(self) -> Option<JobLease> {
+        self.lease
+    }
+
+    /// Returns the recorded validation outcome.
+    #[must_use]
+    pub const fn validation(self) -> Option<ValidationResult> {
+        self.validation
+    }
+
+    /// Returns the published generation after successful completion.
+    #[must_use]
+    pub const fn published_generation(self) -> Option<GenerationId> {
+        self.published_generation
+    }
+
+    /// Claims planned or retryable work with a bounded lease.
     ///
     /// # Errors
     ///
-    /// Returns [`BuildTransitionError::InvalidTransition`] for terminal or
-    /// already-running jobs.
-    pub const fn start(mut self) -> Result<Self, BuildTransitionError> {
+    /// Returns [`BuildError::InvalidTransition`] when the job is active or
+    /// terminal, and lease errors for invalid logical-clock inputs.
+    pub fn claim(mut self, worker: WorkerId, now: u64, ttl: u64) -> Result<Self, BuildError> {
         match self.status {
-            BuildJobStatus::Planned => {
-                self.status = BuildJobStatus::Running;
+            BuildJobStatus::Planned => {}
+            BuildJobStatus::Abandoned => {
+                self.attempt = self
+                    .attempt
+                    .checked_add(1)
+                    .ok_or(BuildError::AttemptOverflow)?;
+            }
+            _ => return Err(BuildError::InvalidTransition),
+        }
+        self.lease = Some(JobLease::new(worker, now, ttl)?);
+        self.validation = None;
+        self.published_generation = None;
+        self.status = if self.checkpoint.is_complete() {
+            BuildJobStatus::Validating
+        } else {
+            BuildJobStatus::Running
+        };
+        Ok(self)
+    }
+
+    /// Resets terminal retryable work to an ownerless planned attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidTransition`] outside failed, cancelled, or
+    /// abandoned states and [`BuildError::AttemptOverflow`] at the counter
+    /// bound.
+    pub fn retry(mut self) -> Result<Self, BuildError> {
+        if !matches!(
+            self.status,
+            BuildJobStatus::Failed | BuildJobStatus::Cancelled | BuildJobStatus::Abandoned
+        ) {
+            return Err(BuildError::InvalidTransition);
+        }
+        self.attempt = self
+            .attempt
+            .checked_add(1)
+            .ok_or(BuildError::AttemptOverflow)?;
+        self.status = BuildJobStatus::Planned;
+        self.lease = None;
+        self.validation = None;
+        self.published_generation = None;
+        Ok(self)
+    }
+
+    /// Renews the current worker lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::LeaseOwnerMismatch`] for another worker and
+    /// [`BuildError::LeaseExpired`] once the existing lease has expired.
+    pub fn renew_lease(mut self, worker: WorkerId, now: u64, ttl: u64) -> Result<Self, BuildError> {
+        let lease = self.lease.ok_or(BuildError::MissingLease)?;
+        if lease.worker != worker {
+            return Err(BuildError::LeaseOwnerMismatch);
+        }
+        if lease.is_expired(now) {
+            return Err(BuildError::LeaseExpired);
+        }
+        self.lease = Some(JobLease::new(worker, now, ttl)?);
+        Ok(self)
+    }
+
+    /// Marks active work abandoned after its lease expires.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::LeaseNotExpired`] while the owner still holds a
+    /// valid lease, or [`BuildError::InvalidTransition`] outside active states.
+    pub fn recover_expired_lease(mut self, now: u64) -> Result<Self, BuildError> {
+        if !matches!(
+            self.status,
+            BuildJobStatus::Running
+                | BuildJobStatus::CancelRequested
+                | BuildJobStatus::Validating
+                | BuildJobStatus::Publishing
+        ) {
+            return Err(BuildError::InvalidTransition);
+        }
+        let lease = self.lease.ok_or(BuildError::MissingLease)?;
+        if !lease.is_expired(now) {
+            return Err(BuildError::LeaseNotExpired);
+        }
+        self.status = BuildJobStatus::Abandoned;
+        self.lease = None;
+        Ok(self)
+    }
+
+    /// Records an absolute monotonic source checkpoint.
+    ///
+    /// Replaying the same or an older checkpoint is idempotent. A cancellation
+    /// request stops at the existing checkpoint without applying new work.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::ProgressExceedsTotal`] for an out-of-range
+    /// checkpoint and [`BuildError::InvalidTransition`] outside running work.
+    pub fn checkpoint_to(mut self, processed_units: u64) -> Result<Self, BuildError> {
+        match self.status {
+            BuildJobStatus::CancelRequested => {
+                self.status = BuildJobStatus::Cancelled;
+                self.lease = None;
                 Ok(self)
             }
-            BuildJobStatus::Failed | BuildJobStatus::Cancelled | BuildJobStatus::Abandoned => {
-                self.attempt += 1;
-                self.status = BuildJobStatus::Running;
+            BuildJobStatus::Running => {
+                self.checkpoint = self.checkpoint.checkpoint_to(processed_units)?;
+                if self.checkpoint.is_complete() {
+                    self.status = BuildJobStatus::Validating;
+                }
                 Ok(self)
             }
-            _ => Err(BuildTransitionError::InvalidTransition),
+            _ => Err(BuildError::InvalidTransition),
         }
     }
 
-    /// Records a cooperative cancellation request.
+    /// Requests cooperative cancellation.
     ///
-    /// Repeating a cancellation request is idempotent.
-    pub const fn request_cancel(mut self) -> Result<Self, BuildTransitionError> {
+    /// Repeating the request is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidTransition`] outside planned, running, or
+    /// validating work.
+    pub const fn request_cancel(mut self) -> Result<Self, BuildError> {
         match self.status {
-            BuildJobStatus::Running => {
+            BuildJobStatus::Planned => {
+                self.status = BuildJobStatus::Cancelled;
+                Ok(self)
+            }
+            BuildJobStatus::Running | BuildJobStatus::Validating => {
                 self.status = BuildJobStatus::CancelRequested;
                 Ok(self)
             }
             BuildJobStatus::CancelRequested => Ok(self),
-            _ => Err(BuildTransitionError::InvalidTransition),
+            _ => Err(BuildError::InvalidTransition),
         }
     }
 
-    /// Advances one bounded source-work step.
+    /// Records structural validation and opens publication on success.
     ///
-    /// A completed checkpoint transitions directly to `Completed`; a pending
-    /// cancellation transitions to `Cancelled` without advancing work.
-    pub const fn advance(mut self, step: u64) -> Result<Self, BuildTransitionError> {
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidTransition`] unless source work is fully
+    /// checkpointed and validation is pending.
+    pub const fn record_validation(
+        mut self,
+        validation: ValidationResult,
+    ) -> Result<Self, BuildError> {
+        if !matches!(self.status, BuildJobStatus::Validating) {
+            return Err(BuildError::InvalidTransition);
+        }
+        self.validation = Some(validation);
+        if validation.passed {
+            self.status = BuildJobStatus::Publishing;
+        } else {
+            self.status = BuildJobStatus::Failed;
+            self.lease = None;
+        }
+        Ok(self)
+    }
+
+    /// Returns publication to validation after the authoritative source
+    /// revision advances before the atomic alias swap.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidTransition`] outside publication.
+    pub const fn revalidate(mut self) -> Result<Self, BuildError> {
+        if !matches!(self.status, BuildJobStatus::Publishing) {
+            return Err(BuildError::InvalidTransition);
+        }
+        self.status = BuildJobStatus::Validating;
+        self.validation = None;
+        Ok(self)
+    }
+
+    /// Atomically records the published generation.
+    ///
+    /// Repeating publication for the same generation is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::AlreadyPublishedDifferentGeneration`] when a
+    /// completed job is replayed with another generation.
+    pub fn publish(mut self, generation: GenerationId) -> Result<Self, BuildError> {
         match self.status {
-            BuildJobStatus::CancelRequested => {
-                self.status = BuildJobStatus::Cancelled;
+            BuildJobStatus::Publishing => {
+                self.published_generation = Some(generation);
+                self.status = BuildJobStatus::Completed;
+                self.lease = None;
                 Ok(self)
             }
-            BuildJobStatus::Running => {
-                self.checkpoint = match self.checkpoint.advance(step) {
-                    Ok(checkpoint) => checkpoint,
-                    Err(error) => return Err(error),
+            BuildJobStatus::Completed if self.published_generation == Some(generation) => Ok(self),
+            BuildJobStatus::Completed => Err(BuildError::AlreadyPublishedDifferentGeneration),
+            _ => Err(BuildError::InvalidTransition),
+        }
+    }
+
+    /// Records a recoverable failure in active work.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidTransition`] outside active states.
+    pub const fn fail(mut self) -> Result<Self, BuildError> {
+        if !matches!(
+            self.status,
+            BuildJobStatus::Running
+                | BuildJobStatus::CancelRequested
+                | BuildJobStatus::Validating
+                | BuildJobStatus::Publishing
+        ) {
+            return Err(BuildError::InvalidTransition);
+        }
+        self.status = BuildJobStatus::Failed;
+        self.lease = None;
+        Ok(self)
+    }
+}
+
+/// Validated publication alias switched atomically by an adapter.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PublicationAlias(String);
+
+impl PublicationAlias {
+    /// Parses a non-empty bounded alias.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidName`] for empty, surrounding-whitespace,
+    /// control-character, or overlong aliases.
+    pub fn new(value: impl Into<String>) -> Result<Self, BuildError> {
+        let value = value.into();
+        if value.is_empty()
+            || value.len() > MAX_PUBLICATION_ALIAS_BYTES
+            || value.trim() != value
+            || value.chars().any(char::is_control)
+        {
+            return Err(BuildError::InvalidName);
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the alias text.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// One checksummed item in a generation inventory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactDescriptor {
+    kind: ArtifactKind,
+    name: String,
+    payload_bytes: u64,
+    checksum: u64,
+}
+
+impl ArtifactDescriptor {
+    /// Creates a named artifact descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidName`] for invalid inventory names.
+    pub fn new(
+        kind: ArtifactKind,
+        name: impl Into<String>,
+        payload_bytes: u64,
+        checksum: u64,
+    ) -> Result<Self, BuildError> {
+        let name = name.into();
+        if name.is_empty()
+            || name.len() > MAX_ARTIFACT_NAME_BYTES
+            || name.trim() != name
+            || name.chars().any(char::is_control)
+        {
+            return Err(BuildError::InvalidName);
+        }
+        Ok(Self {
+            kind,
+            name,
+            payload_bytes,
+            checksum,
+        })
+    }
+
+    /// Returns the artifact kind.
+    #[must_use]
+    pub const fn kind(&self) -> ArtifactKind {
+        self.kind
+    }
+
+    /// Returns the inventory-local artifact name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns payload size in bytes.
+    #[must_use]
+    pub const fn payload_bytes(&self) -> u64 {
+        self.payload_bytes
+    }
+
+    /// Returns the recorded checksum.
+    #[must_use]
+    pub const fn checksum(&self) -> u64 {
+        self.checksum
+    }
+}
+
+/// Publication and retirement state for an immutable generation manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenerationState {
+    /// Inventory exists but validation has not completed.
+    Staged,
+    /// Inventory validation passed.
+    Validated,
+    /// The publication alias points at this generation.
+    Published,
+    /// Publication moved away, but readers still hold pins.
+    Retiring,
+    /// No new readers may attach and all pins are released.
+    Retired,
+    /// Validation failed and the inventory cannot be published.
+    RebuildRequired,
+}
+
+/// Generic immutable generation inventory and publication state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerationManifest {
+    generation: GenerationId,
+    source_version: SourceVersion,
+    configuration: ConfigurationRevision,
+    alias: PublicationAlias,
+    artifacts: Vec<ArtifactDescriptor>,
+    total_payload_bytes: u64,
+    validation: Option<ValidationResult>,
+    state: GenerationState,
+    reader_pins: u32,
+}
+
+impl GenerationManifest {
+    /// Creates a staged, non-empty, duplicate-free inventory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::EmptyArtifactInventory`],
+    /// [`BuildError::DuplicateArtifact`], or [`BuildError::SizeOverflow`] when
+    /// the inventory cannot form a bounded manifest.
+    pub fn staged(
+        generation: GenerationId,
+        source_version: SourceVersion,
+        configuration: ConfigurationRevision,
+        alias: PublicationAlias,
+        artifacts: Vec<ArtifactDescriptor>,
+    ) -> Result<Self, BuildError> {
+        if artifacts.is_empty() {
+            return Err(BuildError::EmptyArtifactInventory);
+        }
+        let mut identities = BTreeSet::new();
+        let mut total_payload_bytes = 0_u64;
+        for artifact in &artifacts {
+            if !identities.insert((artifact.kind, artifact.name.as_str())) {
+                return Err(BuildError::DuplicateArtifact);
+            }
+            total_payload_bytes = total_payload_bytes
+                .checked_add(artifact.payload_bytes)
+                .ok_or(BuildError::SizeOverflow)?;
+        }
+        Ok(Self {
+            generation,
+            source_version,
+            configuration,
+            alias,
+            artifacts,
+            total_payload_bytes,
+            validation: None,
+            state: GenerationState::Staged,
+            reader_pins: 0,
+        })
+    }
+
+    /// Returns the generation identity.
+    #[must_use]
+    pub const fn generation(&self) -> GenerationId {
+        self.generation
+    }
+
+    /// Returns the authoritative source version used for the build.
+    #[must_use]
+    pub const fn source_version(&self) -> SourceVersion {
+        self.source_version
+    }
+
+    /// Returns the immutable configuration revision.
+    #[must_use]
+    pub const fn configuration(&self) -> ConfigurationRevision {
+        self.configuration
+    }
+
+    /// Returns the publication alias.
+    #[must_use]
+    pub const fn alias(&self) -> &PublicationAlias {
+        &self.alias
+    }
+
+    /// Returns the immutable artifact inventory.
+    #[must_use]
+    pub fn artifacts(&self) -> &[ArtifactDescriptor] {
+        &self.artifacts
+    }
+
+    /// Returns total payload bytes across the inventory.
+    #[must_use]
+    pub const fn total_payload_bytes(&self) -> u64 {
+        self.total_payload_bytes
+    }
+
+    /// Returns validation result when recorded.
+    #[must_use]
+    pub const fn validation(&self) -> Option<ValidationResult> {
+        self.validation
+    }
+
+    /// Returns lifecycle state.
+    #[must_use]
+    pub const fn state(&self) -> GenerationState {
+        self.state
+    }
+
+    /// Returns active reader pins.
+    #[must_use]
+    pub const fn reader_pins(&self) -> u32 {
+        self.reader_pins
+    }
+
+    /// Records structural validation.
+    ///
+    /// Replaying the same result is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::ConflictingValidation`] when a different result
+    /// was already recorded, or [`BuildError::InvalidTransition`] after
+    /// publication begins.
+    pub fn record_validation(mut self, validation: ValidationResult) -> Result<Self, BuildError> {
+        match (self.state, self.validation) {
+            (GenerationState::Staged, None) => {
+                self.validation = Some(validation);
+                self.state = if validation.passed {
+                    GenerationState::Validated
+                } else {
+                    GenerationState::RebuildRequired
                 };
-                if self.checkpoint.is_complete() {
-                    self.status = BuildJobStatus::Completed;
-                }
                 Ok(self)
             }
-            _ => Err(BuildTransitionError::InvalidTransition),
+            (GenerationState::Validated | GenerationState::RebuildRequired, Some(existing))
+                if existing == validation =>
+            {
+                Ok(self)
+            }
+            (GenerationState::Validated | GenerationState::RebuildRequired, Some(_)) => {
+                Err(BuildError::ConflictingValidation)
+            }
+            _ => Err(BuildError::InvalidTransition),
         }
     }
 
-    /// Records a recoverable runner failure.
-    pub const fn fail(mut self) -> Result<Self, BuildTransitionError> {
-        match self.status {
-            BuildJobStatus::Running | BuildJobStatus::CancelRequested => {
-                self.status = BuildJobStatus::Failed;
+    /// Publishes a validated manifest.
+    ///
+    /// Repeating publication is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::ValidationFailed`] for failed validation and
+    /// [`BuildError::InvalidTransition`] before validation or after retirement.
+    pub fn publish(mut self) -> Result<Self, BuildError> {
+        match self.state {
+            GenerationState::Validated => {
+                self.state = GenerationState::Published;
                 Ok(self)
             }
-            _ => Err(BuildTransitionError::InvalidTransition),
+            GenerationState::Published => Ok(self),
+            GenerationState::RebuildRequired => Err(BuildError::ValidationFailed),
+            _ => Err(BuildError::InvalidTransition),
         }
     }
 
-    /// Records loss of a nonterminal runner.
-    pub const fn abandon(mut self) -> Result<Self, BuildTransitionError> {
-        match self.status {
-            BuildJobStatus::Running | BuildJobStatus::CancelRequested => {
-                self.status = BuildJobStatus::Abandoned;
+    /// Acquires one bounded reader pin on a published generation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidTransition`] when new readers are closed
+    /// or [`BuildError::ReaderPinOverflow`] at the counter bound.
+    pub fn pin(mut self) -> Result<Self, BuildError> {
+        if !matches!(self.state, GenerationState::Published) {
+            return Err(BuildError::InvalidTransition);
+        }
+        self.reader_pins = match self.reader_pins.checked_add(1) {
+            Some(value) => value,
+            None => return Err(BuildError::ReaderPinOverflow),
+        };
+        Ok(self)
+    }
+
+    /// Releases one reader pin and completes pending retirement at zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::ReaderPinUnderflow`] when no reader is pinned.
+    pub fn unpin(mut self) -> Result<Self, BuildError> {
+        if self.reader_pins == 0 {
+            return Err(BuildError::ReaderPinUnderflow);
+        }
+        self.reader_pins -= 1;
+        if self.reader_pins == 0 && matches!(self.state, GenerationState::Retiring) {
+            self.state = GenerationState::Retired;
+        }
+        Ok(self)
+    }
+
+    /// Closes publication and starts or completes retirement.
+    ///
+    /// Repeating retirement is idempotent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BuildError::InvalidTransition`] before publication.
+    pub fn retire(mut self) -> Result<Self, BuildError> {
+        match self.state {
+            GenerationState::Published => {
+                self.state = if self.reader_pins == 0 {
+                    GenerationState::Retired
+                } else {
+                    GenerationState::Retiring
+                };
                 Ok(self)
             }
-            _ => Err(BuildTransitionError::InvalidTransition),
+            GenerationState::Retiring | GenerationState::Retired => Ok(self),
+            _ => Err(BuildError::InvalidTransition),
         }
     }
 }
 
-/// A rejected pure lifecycle operation.
+/// Rejected shared build or generation operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuildTransitionError {
+pub enum BuildError {
+    /// A typed identity used the reserved zero value.
+    ZeroIdentity,
     /// A checkpoint exceeded its declared total.
     ProgressExceedsTotal,
-    /// A runner step must process at least one unit.
-    ZeroStep,
-    /// The requested lifecycle transition is not legal from the current state.
+    /// The requested lifecycle transition is not legal.
     InvalidTransition,
+    /// A logical lease duration was zero.
+    ZeroLeaseDuration,
+    /// Lease expiry overflowed the logical clock.
+    ClockOverflow,
+    /// The attempt counter overflowed.
+    AttemptOverflow,
+    /// The job has no active lease.
+    MissingLease,
+    /// Another worker owns the active lease.
+    LeaseOwnerMismatch,
+    /// The current lease already expired.
+    LeaseExpired,
+    /// Recovery was requested while the lease remained valid.
+    LeaseNotExpired,
+    /// A completed job was replayed with another generation.
+    AlreadyPublishedDifferentGeneration,
+    /// A public alias or artifact name is invalid.
+    InvalidName,
+    /// A generation inventory contains no artifacts.
+    EmptyArtifactInventory,
+    /// A generation inventory repeats an artifact identity.
+    DuplicateArtifact,
+    /// Aggregate payload size overflowed.
+    SizeOverflow,
+    /// A different validation outcome was already recorded.
+    ConflictingValidation,
+    /// Failed validation prevents publication.
+    ValidationFailed,
+    /// Reader pin count overflowed.
+    ReaderPinOverflow,
+    /// Reader pin release was requested at zero.
+    ReaderPinUnderflow,
 }
+
+impl Display for BuildError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::ZeroIdentity => "identity must be non-zero",
+            Self::ProgressExceedsTotal => "build progress exceeds declared total",
+            Self::InvalidTransition => "invalid build lifecycle transition",
+            Self::ZeroLeaseDuration => "job lease duration must be non-zero",
+            Self::ClockOverflow => "job lease logical clock overflow",
+            Self::AttemptOverflow => "build attempt counter overflow",
+            Self::MissingLease => "build job has no active lease",
+            Self::LeaseOwnerMismatch => "build job lease belongs to another worker",
+            Self::LeaseExpired => "build job lease has expired",
+            Self::LeaseNotExpired => "build job lease has not expired",
+            Self::AlreadyPublishedDifferentGeneration => {
+                "build job already published a different generation"
+            }
+            Self::InvalidName => "generation alias or artifact name is invalid",
+            Self::EmptyArtifactInventory => "generation artifact inventory must not be empty",
+            Self::DuplicateArtifact => "generation artifact inventory contains a duplicate",
+            Self::SizeOverflow => "generation payload size overflow",
+            Self::ConflictingValidation => {
+                "generation validation result conflicts with prior state"
+            }
+            Self::ValidationFailed => "failed generation validation prevents publication",
+            Self::ReaderPinOverflow => "generation reader pin count overflow",
+            Self::ReaderPinUnderflow => "generation reader pin count is already zero",
+        })
+    }
+}
+
+impl Error for BuildError {}
 
 /// Returns the version of the pure build boundary.
 #[must_use]
 pub const fn build_contract_version() -> u16 {
-    2
+    3
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BuildJobKind, BuildJobState, BuildJobStatus, BuildTransitionError, PointId,
-        build_contract_version,
-    };
     use proptest::prelude::*;
 
-    #[allow(clippy::panic, reason = "test helper reports an unexpected transition")]
-    fn transition(result: Result<BuildJobState, BuildTransitionError>) -> BuildJobState {
-        match result {
-            Ok(state) => state,
-            Err(error) => panic!("expected valid build transition, got {error:?}"),
-        }
-    }
+    use super::{
+        ArtifactKind, BuildError, BuildJobKind, BuildJobState, BuildJobStatus, WorkerId,
+        build_contract_version,
+    };
 
     #[test]
     fn build_boundary_uses_logical_point_ids() {
-        let point_id = PointId::new(11);
+        let point_id = super::PointId::new(11);
         assert_eq!(point_id.get(), 11);
-        assert_eq!(build_contract_version(), 2);
-    }
-
-    #[test]
-    fn retries_preserve_the_checkpoint_and_increment_attempt_once() {
-        let state = transition(
-            transition(
-                transition(
-                    transition(BuildJobState::planned(BuildJobKind::Artifact, 4).start())
-                        .advance(2),
-                )
-                .fail(),
-            )
-            .start(),
-        );
-        assert_eq!(state.status(), BuildJobStatus::Running);
-        assert_eq!(state.attempt(), 2);
-        assert_eq!(state.checkpoint().processed_units(), 2);
-    }
-
-    #[test]
-    fn cancellation_request_is_idempotent_and_does_not_advance_work() {
-        let state = transition(
-            transition(
-                transition(
-                    transition(BuildJobState::planned(BuildJobKind::Projection, 3).start())
-                        .request_cancel(),
-                )
-                .request_cancel(),
-            )
-            .advance(1),
-        );
-        assert_eq!(state.status(), BuildJobStatus::Cancelled);
-        assert_eq!(state.checkpoint().processed_units(), 0);
-    }
-
-    #[test]
-    fn invalid_state_changes_fail_closed() {
-        let state = BuildJobState::planned(BuildJobKind::Artifact, 1);
-        assert_eq!(
-            state.advance(1),
-            Err(BuildTransitionError::InvalidTransition)
-        );
-        assert_eq!(
-            transition(state.start()).advance(0),
-            Err(BuildTransitionError::ZeroStep)
-        );
+        assert_eq!(build_contract_version(), 3);
     }
 
     proptest! {
         #[test]
-        fn retries_are_idempotent_for_the_same_persisted_checkpoint(
+        fn absolute_checkpoints_never_regress_or_exceed_total(
             total in 1_u64..128,
-            completed in 0_u64..128,
+            first in 0_u64..128,
+            replay in 0_u64..128,
         ) {
-            prop_assume!(completed <= total);
-            let state = transition(
-                transition(BuildJobState::planned(BuildJobKind::Artifact, total).start())
-                    .advance(completed.max(1)),
-            );
-            let state = if state.status() == BuildJobStatus::Completed {
-                state
-            } else {
-                transition(transition(state.fail()).start())
-            };
-            prop_assert!(state.checkpoint().processed_units() <= total);
-            prop_assert!(state.attempt() <= 2);
+            prop_assume!(first <= total);
+            let worker = WorkerId::new(1).ok_or(BuildError::ZeroIdentity)?;
+            let state = BuildJobState::planned(
+                BuildJobKind::ArtifactBuild,
+                ArtifactKind::HnswSegment,
+                total,
+            ).claim(worker, 0, 10)?.checkpoint_to(first)?;
+            if state.status() == BuildJobStatus::Running {
+                let replayed = state.checkpoint_to(replay.min(first))?;
+                prop_assert_eq!(replayed.checkpoint().processed_units(), first);
+            }
         }
     }
 }

@@ -263,7 +263,11 @@ impl Drop for ArtifactReaderPin {
 fn current_backend_identity() -> (i32, String) {
     Spi::connect(|client| {
         let rows = client.select(
-            "SELECT pid, backend_start::text
+            "SELECT pid,
+                    pg_catalog.to_char(
+                        backend_start AT TIME ZONE 'UTC',
+                        'YYYY-MM-DD\"T\"HH24:MI:SS.US'
+                    )
                FROM pg_catalog.pg_stat_activity
               WHERE pid = pg_catalog.pg_backend_pid()",
             Some(1),

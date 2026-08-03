@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 271;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 279;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -186,6 +186,21 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "_enforce_build_job_terminal_state",
         "",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_publish_generation",
+        "target_generation bigint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_pin_generation",
+        "target_collection bigint, target_alias text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_unpin_generation",
+        "target_generation bigint",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
@@ -825,6 +840,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         "collection text, artifact_kind text, artifact_name text, target_name text, total_units bigint",
         SqlLifecycle::Experimental,
     ),
+    SqlContractObject::function(
+        "enqueue_build_job",
+        "collection text, job_kind text, publication_alias text",
+        SqlLifecycle::Experimental,
+    ),
     SqlContractObject::function("telemetry", "", SqlLifecycle::Stable),
     SqlContractObject::function(
         "update_build_job",
@@ -837,6 +857,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function("validate_artifact_segment", "segment bytea", SqlLifecycle::Experimental),
+    SqlContractObject::function(
+        "wake_build_jobs",
+        "collection text",
+        SqlLifecycle::Experimental,
+    ),
     SqlContractObject::function(
         "upsert_points",
         "collection_name text, source_keys text[]",
@@ -917,6 +942,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     // test that enforces this list sat outside the old gate filter, so these
     // accumulated without a lifecycle decision; classified retroactively.
     SqlContractObject::function("_capture_build_point_delta", "", SqlLifecycle::Internal),
+    SqlContractObject::function(
+        "_initialize_collection_source_revision",
+        "",
+        SqlLifecycle::Internal,
+    ),
     SqlContractObject::function(
         "_refresh_collection_source_table",
         "p_collection_id bigint",
@@ -1007,6 +1037,16 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "test_set_build_job_failpoint",
         "name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "test_run_build_worker_step",
+        "",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "test_stale_build_worker_attempt_is_fenced",
+        "build_job_id bigint",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(

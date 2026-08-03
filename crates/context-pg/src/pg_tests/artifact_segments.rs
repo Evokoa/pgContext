@@ -313,6 +313,7 @@ fn artifact_segment_publish_rejects_non_terminal_and_unsupported_jobs() {
             SET status = 'abandoned',
                 backend_pid = NULL,
                 backend_identity = NULL,
+                lease_expires_at = NULL,
                 completed_at = pg_catalog.now()
           WHERE build_job_id = {abandoned}"
     ))
@@ -387,6 +388,7 @@ fn artifact_segment_file_publish_rejects_non_terminal_and_unsupported_jobs() {
             SET status = 'abandoned',
                 backend_pid = NULL,
                 backend_identity = NULL,
+                lease_expires_at = NULL,
                 completed_at = pg_catalog.now()
           WHERE build_job_id = {abandoned}"
     ))

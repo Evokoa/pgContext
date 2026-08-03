@@ -84,8 +84,13 @@ failure.
   exact MaxSim source-table rerank, deleted-point filtering, and comparison
   budget rejection.
 - `build_job_resumability.sh`: validates backend-local build-job interruption,
-  retry progress preservation, restart abandonment recovery, mmap artifact
-  serving readiness, and source-table recheck after update/delete plus VACUUM.
+  retry progress preservation, restart abandonment recovery, supervised dynamic
+  worker launch/publication/idle shutdown, disabled-worker fail-open behavior,
+  delayed-commit post-commit wake-up, terminated-worker lease takeover, and
+  concurrent first-publication serialization, plus reverse-order overlapping
+  set-based point mutations without deadlock,
+  mmap artifact serving readiness, and source-table recheck after update/delete
+  plus VACUUM.
 - `artifact_publication_rollback.sh`: validates that a rolled-back mmap artifact
   publication leaves no visible generation, cleanup reconciles its orphan file,
   and a later committed publication becomes serving-ready.

@@ -13,8 +13,9 @@ use crate::error::raise_sql_error;
 /// operation resumable.
 pub(super) const fn build_generation_kind(kind: ArtifactKind) -> BuildJobKind {
     match kind {
-        ArtifactKind::Segment | ArtifactKind::Mmap => BuildJobKind::Artifact,
-        ArtifactKind::Index | ArtifactKind::SparseIndex => BuildJobKind::Projection,
+        ArtifactKind::Segment | ArtifactKind::Mmap => BuildJobKind::ArtifactBuild,
+        ArtifactKind::Index | ArtifactKind::SparseIndex => BuildJobKind::ProjectionBackfill,
+        ArtifactKind::Certification => BuildJobKind::Certification,
     }
 }
 
@@ -72,15 +73,17 @@ pub(super) fn parse_build_status_command(status: &str) -> BuildJobStatus {
 }
 
 pub(super) fn build_status_from_catalog(status: &str) -> BuildJobStatus {
-    match status {
-        "planned" => BuildJobStatus::Planned,
-        "running" => BuildJobStatus::Running,
-        "cancel_requested" => BuildJobStatus::CancelRequested,
-        "cancelled" => BuildJobStatus::Cancelled,
-        "completed" => BuildJobStatus::Completed,
-        "failed" => BuildJobStatus::Failed,
-        "abandoned" => BuildJobStatus::Abandoned,
-        _ => raise_sql_error(
+    match context_build::BuildJobStatus::from_catalog(status) {
+        Some(context_build::BuildJobStatus::Planned) => BuildJobStatus::Planned,
+        Some(context_build::BuildJobStatus::Running) => BuildJobStatus::Running,
+        Some(context_build::BuildJobStatus::CancelRequested) => BuildJobStatus::CancelRequested,
+        Some(context_build::BuildJobStatus::Cancelled) => BuildJobStatus::Cancelled,
+        Some(context_build::BuildJobStatus::Validating) => BuildJobStatus::Validating,
+        Some(context_build::BuildJobStatus::Publishing) => BuildJobStatus::Publishing,
+        Some(context_build::BuildJobStatus::Completed) => BuildJobStatus::Completed,
+        Some(context_build::BuildJobStatus::Failed) => BuildJobStatus::Failed,
+        Some(context_build::BuildJobStatus::Abandoned) => BuildJobStatus::Abandoned,
+        None => raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
             format!("unexpected build job status in catalog: {status}"),
         ),

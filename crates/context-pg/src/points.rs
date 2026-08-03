@@ -1,5 +1,6 @@
 //! SQL-facing point mapping functions.
 
+use context_build::{OrderedRowset, RowsetError};
 use context_core::{CollectionName, SourceKey};
 use pgrx::prelude::*;
 
@@ -83,9 +84,8 @@ pub fn upsert_points(
         &collection_name,
         &source_keys,
     );
-    let rows = source_keys
-        .iter()
-        .map(|source_key| upsert_point(&collection, source_key))
+    let rows = set_upsert_points(&collection, &source_keys)
+        .into_iter()
         .map(|row| (row.point_id, row.source_key, row.inserted))
         .collect::<Vec<_>>();
 
@@ -115,10 +115,12 @@ pub fn delete_points(
 ) -> TableIterator<'static, (name!(point_id, i64), name!(source_key, String))> {
     let collection_name = collection_name_from_sql(collection_name);
     let collection = resolve_point_collection(&collection_name);
-    let rows = source_keys
+    let source_keys = source_keys
         .into_iter()
         .map(source_key_from_sql)
-        .filter_map(|source_key| delete_point(&collection, &source_key))
+        .collect::<Vec<_>>();
+    let rows = set_delete_points(&collection, &source_keys)
+        .into_iter()
         .map(|row| (row.point_id, row.source_key))
         .collect::<Vec<_>>();
 
@@ -427,14 +429,14 @@ fn bulk_upsert_source_keys(
     source_keys: &[SourceKey],
     batch_size: usize,
 ) -> Vec<BulkUpsertProgress> {
+    validate_unique_source_keys(source_keys);
     source_keys
         .chunks(batch_size)
         .enumerate()
         .map(|(batch_index, batch)| {
             let mut inserted_count = 0_i64;
             let mut reactivated_count = 0_i64;
-            for source_key in batch {
-                let row = upsert_point(collection, source_key);
+            for row in set_upsert_points(collection, batch) {
                 if row.inserted {
                     inserted_count += 1;
                 } else {
@@ -456,16 +458,15 @@ fn bulk_delete_source_keys(
     source_keys: &[SourceKey],
     batch_size: usize,
 ) -> Vec<BulkDeleteProgress> {
+    validate_unique_source_keys(source_keys);
     source_keys
         .chunks(batch_size)
         .enumerate()
         .map(|(batch_index, batch)| {
-            let mut deleted_count = 0_i64;
-            for source_key in batch {
-                if delete_point(collection, source_key).is_some() {
-                    deleted_count += 1;
-                }
-            }
+            let deleted_count = usize_to_sql_i64(
+                set_delete_points(collection, batch).len(),
+                "bulk delete affected count",
+            );
             let processed_count = usize_to_sql_i64(batch.len(), "bulk delete processed count");
             BulkDeleteProgress {
                 batch_number: usize_to_sql_i64(batch_index + 1, "bulk delete batch number"),
@@ -547,114 +548,119 @@ fn usize_to_sql_i64(value: usize, label: &'static str) -> i64 {
     })
 }
 
-fn upsert_point(collection: &PointCollection, source_key: &SourceKey) -> PointUpsert {
-    if let Some(point_id) = find_point(collection, source_key) {
-        reactivate_point(collection, source_key);
-        return PointUpsert {
-            point_id,
-            source_key: source_key.to_string(),
-            inserted: false,
-        };
+fn set_upsert_points(collection: &PointCollection, source_keys: &[SourceKey]) -> Vec<PointUpsert> {
+    let source_keys = validated_source_key_values(source_keys);
+    if source_keys.is_empty() {
+        return Vec::new();
     }
-
-    let point_id = Spi::get_one_with_args::<i64>(
-        "INSERT INTO pgcontext._collection_points (collection_id, source_key)
-         VALUES ($1, $2)
-         RETURNING point_id",
-        &[collection.id.into(), source_key.as_str().into()],
-    )
-    .unwrap_or_else(|error| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("failed to insert point mapping: {error}"),
-        )
-    })
-    .unwrap_or_else(|| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            "point insert returned no row",
-        )
-    });
-
-    PointUpsert {
-        point_id,
-        source_key: source_key.to_string(),
-        inserted: true,
-    }
-}
-
-fn find_point(collection: &PointCollection, source_key: &SourceKey) -> Option<i64> {
-    Spi::connect(|client| {
-        let rows = match client.select(
-            "SELECT point_id
-               FROM pgcontext._collection_points
-              WHERE collection_id = $1
-                AND source_key = $2",
-            Some(1),
-            &[collection.id.into(), source_key.as_str().into()],
-        ) {
-            Ok(rows) => rows,
-            Err(error) => raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                format!("failed to query point mapping: {error}"),
-            ),
-        };
-
-        if rows.is_empty() {
-            return None;
-        }
-
-        let row = rows.first();
-        Some(spi_required_column::<i64>(&row, 1, "point_id"))
-    })
-}
-
-fn reactivate_point(collection: &PointCollection, source_key: &SourceKey) {
-    Spi::run_with_args(
-        "UPDATE pgcontext._collection_points
-            SET deleted_at = NULL,
-                updated_at = pg_catalog.now()
-          WHERE collection_id = $1
-            AND source_key = $2",
-        &[collection.id.into(), source_key.as_str().into()],
-    )
-    .unwrap_or_else(|error| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("failed to reactivate point mapping: {error}"),
-        )
-    });
-}
-
-fn delete_point(collection: &PointCollection, source_key: &SourceKey) -> Option<PointDelete> {
     Spi::connect_mut(|client| {
         let rows = match client.update(
-            "UPDATE pgcontext._collection_points
-                SET deleted_at = COALESCE(deleted_at, pg_catalog.now()),
-                    updated_at = pg_catalog.now()
-              WHERE collection_id = $1
-                AND source_key = $2
-              RETURNING point_id, source_key",
-            Some(1),
-            &[collection.id.into(), source_key.as_str().into()],
+            "WITH input AS MATERIALIZED (
+                 SELECT source_key, ordinality
+                   FROM pg_catalog.unnest($2::text[]) WITH ORDINALITY
+                        AS input(source_key, ordinality)
+             ), upserted AS (
+                 INSERT INTO pgcontext._collection_points (collection_id, source_key)
+                 SELECT $1, input.source_key
+                   FROM input
+                  ORDER BY input.source_key
+                 ON CONFLICT (collection_id, source_key) DO UPDATE
+                     SET deleted_at = NULL,
+                         updated_at = pg_catalog.now()
+             RETURNING point_id, source_key, xmax = 0 AS inserted
+             )
+             SELECT upserted.point_id, input.source_key, upserted.inserted
+               FROM input
+               JOIN upserted USING (source_key)
+              ORDER BY input.ordinality",
+            None,
+            &[collection.id.into(), source_keys.into()],
         ) {
             Ok(rows) => rows,
             Err(error) => raise_sql_error(
                 PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                format!("failed to delete point mapping: {error}"),
+                format!("failed to set-upsert point mappings: {error}"),
             ),
         };
-
-        if rows.is_empty() {
-            return None;
+        let mut output = Vec::new();
+        for row in rows {
+            output.push(PointUpsert {
+                point_id: spi_iter_required_column::<i64>(&row, 1, "point_id"),
+                source_key: spi_iter_required_column::<String>(&row, 2, "source_key"),
+                inserted: spi_iter_required_column::<bool>(&row, 3, "inserted"),
+            });
         }
-
-        let row = rows.first();
-        Some(PointDelete {
-            point_id: spi_required_column::<i64>(&row, 1, "point_id"),
-            source_key: spi_required_column::<String>(&row, 2, "source_key"),
-        })
+        output
     })
+}
+
+fn set_delete_points(collection: &PointCollection, source_keys: &[SourceKey]) -> Vec<PointDelete> {
+    let source_keys = validated_source_key_values(source_keys);
+    if source_keys.is_empty() {
+        return Vec::new();
+    }
+    Spi::connect_mut(|client| {
+        let rows = match client.update(
+            "WITH input AS MATERIALIZED (
+                 SELECT source_key, ordinality
+                   FROM pg_catalog.unnest($2::text[]) WITH ORDINALITY
+                        AS input(source_key, ordinality)
+             ), deleted AS (
+                 UPDATE pgcontext._collection_points AS points
+                    SET deleted_at = COALESCE(points.deleted_at, pg_catalog.now()),
+                        updated_at = pg_catalog.now()
+                   FROM (
+                       SELECT source_key, ordinality
+                         FROM input
+                        ORDER BY source_key
+                   ) AS input
+                  WHERE points.collection_id = $1
+                    AND points.source_key = input.source_key
+              RETURNING points.point_id, points.source_key
+             )
+             SELECT deleted.point_id, input.source_key
+               FROM input
+               JOIN deleted USING (source_key)
+              ORDER BY input.ordinality",
+            None,
+            &[collection.id.into(), source_keys.into()],
+        ) {
+            Ok(rows) => rows,
+            Err(error) => raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                format!("failed to set-delete point mappings: {error}"),
+            ),
+        };
+        let mut output = Vec::new();
+        for row in rows {
+            output.push(PointDelete {
+                point_id: spi_iter_required_column::<i64>(&row, 1, "point_id"),
+                source_key: spi_iter_required_column::<String>(&row, 2, "source_key"),
+            });
+        }
+        output
+    })
+}
+
+fn validated_source_key_values(source_keys: &[SourceKey]) -> Vec<String> {
+    validate_unique_source_keys(source_keys);
+    source_keys.iter().map(ToString::to_string).collect()
+}
+
+fn validate_unique_source_keys(source_keys: &[SourceKey]) {
+    let entries = source_keys
+        .iter()
+        .map(|source_key| (source_key.to_string(), ()))
+        .collect::<Vec<_>>();
+    OrderedRowset::new(entries, source_keys.len().max(1)).unwrap_or_else(|error| {
+        let message = match error {
+            RowsetError::DuplicateKey { first, duplicate } => {
+                format!("duplicate source key at input ordinal {duplicate}; first seen at {first}")
+            }
+            other => format!("invalid point rowset: {other}"),
+        };
+        raise_sql_error(PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE, message)
+    });
 }
 
 fn spi_required_column<T>(

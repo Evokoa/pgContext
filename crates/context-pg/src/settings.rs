@@ -60,6 +60,7 @@ static HNSW_BUILD_PARALLEL_WORKERS: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_BUILD_PARALLEL_WORKERS_I32);
 static PGVECTOR_COMPAT_WARNINGS: GucSetting<bool> = GucSetting::<bool>::new(true);
 static QUERY_TELEMETRY_ENABLED: GucSetting<bool> = GucSetting::<bool>::new(true);
+static BUILD_WORKERS_ENABLED: GucSetting<bool> = GucSetting::<bool>::new(true);
 const DEFAULT_HNSW_DELTA_SEGMENT_LIMIT: i32 = 10_000;
 static HNSW_DELTA_SEGMENT_LIMIT: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_DELTA_SEGMENT_LIMIT);
@@ -74,6 +75,14 @@ static HNSW_COMPACT_ON_THRESHOLD_MAX_MB: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_COMPACT_ON_THRESHOLD_MAX_MB);
 
 pub(crate) fn init_gucs() {
+    GucRegistry::define_bool_guc(
+        c"pgcontext.build_workers_enabled",
+        c"Run durable pgContext generation jobs in supervised workers.",
+        c"When enabled, enqueueing a generation job starts a PostgreSQL-supervised dynamic worker. When disabled or when worker capacity is saturated, the durable planned job remains retryable and exact querying remains available.",
+        &BUILD_WORKERS_ENABLED,
+        GucContext::Suset,
+        GucFlags::default(),
+    );
     GucRegistry::define_bool_guc(
         c"pgcontext.query_telemetry_enabled",
         c"Persist bounded automatic query execution telemetry.",
@@ -306,6 +315,10 @@ pub(crate) fn init_gucs() {
 
 pub(crate) fn query_telemetry_enabled() -> bool {
     QUERY_TELEMETRY_ENABLED.get()
+}
+
+pub(crate) fn build_workers_enabled() -> bool {
+    BUILD_WORKERS_ENABLED.get()
 }
 
 pub(crate) fn pgvector_compat_warnings_from_guc() -> bool {

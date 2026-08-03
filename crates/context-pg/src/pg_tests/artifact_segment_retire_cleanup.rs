@@ -252,7 +252,11 @@ fn artifact_segment_cleanup_waits_for_a_live_reader_pin() {
     Spi::run(&format!(
         "INSERT INTO pgcontext._artifact_reader_pins
              (artifact_id, backend_pid, backend_identity, pin_count)
-         SELECT {artifact_id}, activity.pid, activity.backend_start::text, 1
+         SELECT {artifact_id}, activity.pid,
+                pg_catalog.to_char(
+                    activity.backend_start AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD\"T\"HH24:MI:SS.US'
+                ), 1
            FROM pg_catalog.pg_stat_activity AS activity
           WHERE activity.pid = pg_catalog.pg_backend_pid()"
     ))

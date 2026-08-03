@@ -6,7 +6,10 @@ pub(super) fn current_backend_identity() -> (i32, String) {
     Spi::connect(|client| {
         let rows = client.select(
             "SELECT activity.pid,
-                    activity.backend_start::text
+                    pg_catalog.to_char(
+                        activity.backend_start AT TIME ZONE 'UTC',
+                        'YYYY-MM-DD\"T\"HH24:MI:SS.US'
+                    )
                FROM pg_catalog.pg_stat_activity AS activity
               WHERE activity.pid = pg_catalog.pg_backend_pid()",
             Some(1),
@@ -32,7 +35,10 @@ pub(super) fn backend_is_active(backend_pid: i32, backend_identity: &str) -> boo
             SELECT 1
               FROM pg_catalog.pg_stat_activity
              WHERE pid = $1
-               AND backend_start::text = $2
+               AND pg_catalog.to_char(
+                       backend_start AT TIME ZONE 'UTC',
+                       'YYYY-MM-DD\"T\"HH24:MI:SS.US'
+                   ) = $2
          )",
         &[backend_pid.into(), backend_identity.into()],
     )

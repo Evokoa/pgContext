@@ -11,6 +11,10 @@ pub enum BuildJobStatus {
     CancelRequested,
     /// The build stopped after a cancellation request.
     Cancelled,
+    /// Source work is complete and structural validation is pending.
+    Validating,
+    /// Validation passed and atomic publication is pending.
+    Publishing,
     /// The build completed successfully.
     Completed,
     /// The build stopped with a reported failure.

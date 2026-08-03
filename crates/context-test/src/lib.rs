@@ -11,7 +11,13 @@ use context_hybrid::{
 };
 use context_query::CandidateBranch;
 
+mod certification;
 mod late_interaction;
+
+pub use certification::{
+    CertificationArtifactKind, CertificationArtifactManifest, CertificationDatasetManifest,
+    CertificationTier, ExactNeighbor,
+};
 
 pub use late_interaction::{
     LATE_INTERACTION_BASELINE_LIMIT, LATE_INTERACTION_CANDIDATES_PER_QUERY,

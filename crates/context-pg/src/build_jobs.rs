@@ -20,6 +20,8 @@ use build_job_validation::{
     validate_positive_units,
 };
 
+use crate::build_worker;
+
 type BuildJobResult = (
     i64,
     String,
@@ -139,6 +141,93 @@ pub fn start_build_job(
     TableIterator::once(build_job_result(row))
 }
 
+/// Enqueues a durable generation job for PostgreSQL-supervised execution.
+///
+/// The row is created as ownerless `planned` work and is invisible to workers
+/// until the caller commits. If the enqueue transaction outlives the launcher's
+/// idle window, or if worker capacity is unavailable, a later
+/// [`wake_build_jobs`] call gives the committed job another launch opportunity.
+/// Exact retrieval remains available throughout.
+///
+/// # Errors
+///
+/// Raises collection ownership errors, rejects unsafe publication aliases, and
+/// fails closed for job kinds without a registered executor. P2 registers only
+/// `certification`; later phases add their real artifact executors.
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx SQL generation requires the explicit table row tuple"
+)]
+#[pg_extern(name = "enqueue_build_job", security_definer)]
+#[search_path(pg_catalog, pgcontext)]
+pub fn enqueue_build_job(
+    collection: String,
+    job_kind: String,
+    publication_alias: String,
+) -> TableIterator<
+    'static,
+    (
+        name!(build_job_id, i64),
+        name!(collection_name, String),
+        name!(artifact_kind, String),
+        name!(artifact_name, String),
+        name!(target_name, String),
+        name!(status, BuildJobStatus),
+        name!(backend_pid, Option<i32>),
+        name!(attempt, i32),
+        name!(processed_units, i64),
+        name!(total_units, i64),
+        name!(cancel_requested, bool),
+        name!(error_message, Option<String>),
+    ),
+> {
+    let artifact_kind = artifact_kind_from_sql(&job_kind);
+    if artifact_kind != ArtifactKind::Certification {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
+            format!("no supervised executor is registered for job kind: {job_kind}"),
+        );
+    }
+    context_build::PublicationAlias::new(publication_alias.clone()).unwrap_or_else(|_| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            "publication_alias must be non-empty, bounded, and contain no control characters",
+        )
+    });
+    let collection_id = resolve_owned_collection_id(&collection);
+    let row = insert_supervised_build_job(collection_id, &publication_alias);
+    let _worker_started = build_worker::launch_for_current_database();
+    TableIterator::once(build_job_result(row))
+}
+
+/// Best-effort post-commit wake-up for ownerless supervised work.
+///
+/// A planned job is durable even when worker capacity is temporarily
+/// unavailable. Calling this function from a later transaction is idempotent
+/// and gives already-committed work another launch opportunity.
+///
+/// # Errors
+///
+/// Raises collection visibility and ownership errors for `collection`.
+#[pg_extern(name = "wake_build_jobs", security_definer)]
+#[search_path(pg_catalog, pgcontext)]
+pub fn wake_build_jobs(collection: String) -> bool {
+    let _collection_id = resolve_owned_collection_id(&collection);
+    build_worker::launch_for_current_database()
+}
+
+#[cfg(feature = "pg_test")]
+#[pg_extern]
+fn test_run_build_worker_step() -> bool {
+    build_worker::process_one_step()
+}
+
+#[cfg(feature = "pg_test")]
+#[pg_extern]
+fn test_stale_build_worker_attempt_is_fenced(build_job_id: i64) -> bool {
+    build_worker::stale_attempt_is_fenced_for_test(build_job_id)
+}
+
 /// Lists build jobs for a collection owned by the caller.
 ///
 /// Running jobs whose backend identity no longer appears in `pg_stat_activity`
@@ -226,7 +315,7 @@ pub fn update_build_job(
 > {
     validate_non_negative_units(processed_units, "processed_units");
     let next_status = parse_build_status_command(&status);
-    let current = resolve_visible_build_job(build_job_id);
+    let current = resolve_visible_build_job_for_update(build_job_id);
     ensure_current_backend_can_update(&current);
     if processed_units > current.total_units {
         raise_sql_error(
@@ -301,9 +390,12 @@ pub fn request_build_cancel(
         name!(error_message, Option<String>),
     ),
 > {
-    let current = resolve_visible_build_job(build_job_id);
+    let current = resolve_visible_build_job_for_update(build_job_id);
     match effective_build_status(&current) {
-        BuildJobStatus::Running => {
+        BuildJobStatus::Planned => {
+            TableIterator::once(build_job_result(cancel_planned_build_job_row(build_job_id)))
+        }
+        BuildJobStatus::Running | BuildJobStatus::Validating => {
             TableIterator::once(build_job_result(request_build_cancel_row(build_job_id)))
         }
         BuildJobStatus::CancelRequested => TableIterator::once(build_job_result(current)),
@@ -347,11 +439,33 @@ pub fn retry_build_job(
         name!(error_message, Option<String>),
     ),
 > {
-    let current = resolve_visible_build_job(build_job_id);
+    let current = resolve_visible_build_job_for_update(build_job_id);
     match effective_build_status(&current) {
         BuildJobStatus::Failed | BuildJobStatus::Cancelled | BuildJobStatus::Abandoned => {
             build_job_failpoint(5, "before_retry");
-            TableIterator::once(build_job_result(retry_build_job_row(build_job_id)))
+            let supervised = Spi::get_one_with_args::<bool>(
+                "SELECT supervised FROM pgcontext._build_jobs WHERE build_job_id = $1",
+                &[build_job_id.into()],
+            )
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    format!("build job executor lookup failed: {error}"),
+                )
+            })
+            .unwrap_or(false);
+            let row = if supervised {
+                let row = retry_supervised_build_job_row(
+                    build_job_id,
+                    current.stored_status,
+                    current.attempt,
+                );
+                let _worker_started = build_worker::launch_for_current_database();
+                row
+            } else {
+                retry_build_job_row(build_job_id)
+            };
+            TableIterator::once(build_job_result(row))
         }
         status => raise_sql_error(
             PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,

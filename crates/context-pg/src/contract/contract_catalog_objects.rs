@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 143;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 150;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -322,10 +322,22 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
         "_build_jobs",
         SqlLifecycle::Internal,
     ),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_generation_manifests", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_generation_artifacts", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_generation_aliases", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_generation_reader_pins", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_collection_source_revisions", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_generation_build_rows", SqlLifecycle::Internal),
     SqlContractObject::object(
         SqlObjectKind::Trigger,
         Some("pgcontext"),
         "_collection_points.pgcontext_capture_build_point_delta",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::object(
+        SqlObjectKind::Trigger,
+        Some("pgcontext"),
+        "_collections.pgcontext_initialize_collection_source_revision",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::object(

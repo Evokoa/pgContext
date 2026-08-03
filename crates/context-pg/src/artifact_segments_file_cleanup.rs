@@ -70,7 +70,10 @@ fn reconcile_abandoned_artifact_reader_pins(artifact_id: i64) {
                 SELECT 1
                   FROM pg_catalog.pg_stat_activity AS activity
                  WHERE activity.pid = pins.backend_pid
-                   AND activity.backend_start::text = pins.backend_identity
+                   AND pg_catalog.to_char(
+                           activity.backend_start AT TIME ZONE 'UTC',
+                           'YYYY-MM-DD\"T\"HH24:MI:SS.US'
+                       ) = pins.backend_identity
             )",
         &[artifact_id.into()],
     )
