@@ -215,7 +215,7 @@ CREATE TABLE pgcontext._build_jobs (
     updated_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
     completed_at timestamptz,
     CHECK (processed_units <= total_units),
-    CHECK (NOT supervised OR job_kind = 'certification')
+    CHECK (NOT supervised OR job_kind IN ('certification', 'compaction'))
 );
 
 CREATE FUNCTION pgcontext._reject_build_job_progress_regression()

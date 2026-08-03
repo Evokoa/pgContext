@@ -14,6 +14,7 @@ mod graph_mvcc;
 mod graph_port;
 mod hnsw_hierarchy;
 mod page_codec;
+mod segment_directory;
 
 pub use graph_mutation::{
     CURRENT_GRAPH_LAYOUT_VERSION, GRAPH_PAGE_HEADER_BYTES, GRAPH_PAGE_MAGIC,
@@ -51,6 +52,10 @@ pub use hnsw_hierarchy::{
     search_graph_read_with_mask, search_graph_read_with_mask_budgeted,
 };
 pub use page_codec::{GraphPageCodecError, GraphPageEnvelope};
+pub use segment_directory::{
+    CompactionPlan, DirectorySnapshot, HnswSegment, SegmentDirectory, SegmentDirectoryError,
+    SegmentId, SegmentPolicy, SegmentPublication,
+};
 
 /// Result type used by pure index structures.
 pub type Result<T> = core::result::Result<T, HnswError>;
@@ -403,6 +408,13 @@ impl HnswGraphNodeSnapshot {
     pub fn base_neighbors(&self) -> &[HnswNodeId] {
         self.layers.first().map(Vec::as_slice).unwrap_or_default()
     }
+
+    /// Consumes a snapshot and returns the logical point plus its owned
+    /// vector, dropping topology that will be rebuilt for a new segment.
+    #[must_use]
+    pub fn into_point(self) -> (HnswPointId, DenseVector) {
+        (self.point_id, self.vector)
+    }
 }
 
 /// Deterministic memory estimate for the stored pure HNSW graph payload.
@@ -443,6 +455,7 @@ impl HnswMemoryEstimate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CandidateMask {
     allowed: BTreeSet<HnswPointId>,
+    excluded: BTreeSet<HnswPointId>,
     allow_all: bool,
 }
 
@@ -452,6 +465,7 @@ impl CandidateMask {
     pub fn all() -> Self {
         Self {
             allowed: BTreeSet::new(),
+            excluded: BTreeSet::new(),
             allow_all: true,
         }
     }
@@ -461,18 +475,30 @@ impl CandidateMask {
     pub fn only(points: impl IntoIterator<Item = HnswPointId>) -> Self {
         Self {
             allowed: points.into_iter().collect(),
+            excluded: BTreeSet::new(),
             allow_all: false,
         }
+    }
+
+    /// Returns this eligibility mask with the supplied point identities
+    /// excluded. Excluded points remain usable as graph connectors but can
+    /// never appear in results.
+    #[must_use]
+    pub fn excluding(mut self, points: impl IntoIterator<Item = HnswPointId>) -> Self {
+        self.excluded.extend(points);
+        self
     }
 
     /// Returns whether the point is eligible to appear in masked search work.
     #[must_use]
     pub fn allows(&self, point_id: HnswPointId) -> bool {
-        self.allow_all || self.allowed.contains(&point_id)
+        (self.allow_all || self.allowed.contains(&point_id)) && !self.excluded.contains(&point_id)
     }
 
     fn is_sparse_for(&self, node_count: usize) -> bool {
-        !self.allow_all && self.allowed.len().saturating_mul(4) < node_count
+        !self.allow_all
+            && self.excluded.is_empty()
+            && self.allowed.len().saturating_mul(4) < node_count
     }
 
     fn validate_budget(&self) -> Result<()> {
@@ -491,11 +517,11 @@ impl CandidateMask {
     /// Returns [`HnswError::RecallBudgetExceeded`] when the mask has more
     /// than `max` allowed points.
     pub fn validate_budget_with_limit(&self, max: usize) -> Result<()> {
-        if self.allow_all {
+        if self.allow_all && self.excluded.is_empty() {
             return Ok(());
         }
 
-        let actual = self.allowed.len();
+        let actual = self.allowed.len().saturating_add(self.excluded.len());
         if actual > max {
             return Err(HnswError::RecallBudgetExceeded { max, actual });
         }
@@ -713,6 +739,23 @@ impl HnswGraph {
             vector_bytes,
             link_bytes,
         }
+    }
+
+    /// Consumes the graph into durable node snapshots without cloning vector
+    /// or adjacency storage. Build pipelines use this to keep peak memory
+    /// bounded while repartitioning a large graph into immutable segments.
+    #[must_use]
+    pub fn into_node_snapshots(self) -> Vec<HnswGraphNodeSnapshot> {
+        self.nodes
+            .into_iter()
+            .enumerate()
+            .map(|(node_id, node)| HnswGraphNodeSnapshot {
+                node_id: HnswNodeId::new(node_id),
+                point_id: node.point_id,
+                vector: node.vector,
+                layers: node.layers,
+            })
+            .collect()
     }
 
     /// Returns immutable full-hierarchy node snapshots suitable for storage adapters.

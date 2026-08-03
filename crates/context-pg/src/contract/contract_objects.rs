@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 279;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 282;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -845,6 +845,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         "collection text, job_kind text, publication_alias text",
         SqlLifecycle::Experimental,
     ),
+    SqlContractObject::function(
+        "enqueue_hnsw_compaction",
+        "collection text, index regclass",
+        SqlLifecycle::Experimental,
+    ),
     SqlContractObject::function("telemetry", "", SqlLifecycle::Stable),
     SqlContractObject::function(
         "update_build_job",
@@ -1018,6 +1023,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function("compact", "index regclass", SqlLifecycle::Experimental),
     SqlContractObject::function(
+        "_compact_hnsw_segment_pair",
+        "regclass, bigint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
         "current_vector_config_revision",
         "collection bigint",
         SqlLifecycle::Internal,
@@ -1025,6 +1035,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function("hnsw_build_stats", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_last_scan_work", "", SqlLifecycle::Experimental),
     SqlContractObject::function("hnsw_serving_stats", "", SqlLifecycle::Experimental),
+    SqlContractObject::function("hnsw_segment_stats", "regclass", SqlLifecycle::Experimental),
     // Failpoint setters exist only in pg_test builds; the classification test
     // that reads this registry runs only in those builds, so listing them
     // unconditionally keeps the const array length fixed without ever

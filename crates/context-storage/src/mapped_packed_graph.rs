@@ -13,8 +13,8 @@ use crate::{
 };
 
 const IDENTITY_MAGIC: [u8; 8] = *b"PGCTXMAP";
-const IDENTITY_VERSION: u32 = 1;
-const IDENTITY_HEADER_LEN: usize = 56;
+const IDENTITY_VERSION: u32 = 2;
+const IDENTITY_HEADER_LEN: usize = 72;
 
 /// Physical PostgreSQL index generation bound to a mapped packed image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +25,10 @@ pub struct MappedGraphIdentity {
     pub index_oid: u32,
     /// Physical relfilenode, changed by REINDEX.
     pub rel_file_number: u32,
+    /// Stable immutable segment identity within the index.
+    pub segment_id: u64,
+    /// Generation stamped into every page of this segment.
+    pub segment_generation: u64,
     /// Published HNSW directory epoch.
     pub directory_epoch: u64,
     /// Metapage LSN identifying the graph publication.
@@ -157,6 +161,8 @@ pub fn encode_mapped_packed_graph(identity: MappedGraphIdentity, packed_image: &
     output.extend_from_slice(&identity.database_oid.to_le_bytes());
     output.extend_from_slice(&identity.index_oid.to_le_bytes());
     output.extend_from_slice(&identity.rel_file_number.to_le_bytes());
+    output.extend_from_slice(&identity.segment_id.to_le_bytes());
+    output.extend_from_slice(&identity.segment_generation.to_le_bytes());
     output.extend_from_slice(&identity.directory_epoch.to_le_bytes());
     output.extend_from_slice(&identity.meta_lsn.to_le_bytes());
     output.extend_from_slice(
@@ -181,12 +187,12 @@ fn decode_identity(payload: &[u8]) -> Result<(MappedGraphIdentity, &[u8]), Mappe
             "unsupported version",
         ));
     }
-    if read_u64(payload, 48) != 0 {
+    if read_u64(payload, 64) != 0 {
         return Err(MappedPackedGraphError::InvalidIdentity(
             "non-zero reserved field",
         ));
     }
-    let packed_len = usize::try_from(read_u64(payload, 40))
+    let packed_len = usize::try_from(read_u64(payload, 56))
         .map_err(|_| MappedPackedGraphError::InvalidIdentity("packed length overflow"))?;
     let packed_end = IDENTITY_HEADER_LEN.checked_add(packed_len).ok_or(
         MappedPackedGraphError::InvalidIdentity("packed range overflow"),
@@ -201,8 +207,10 @@ fn decode_identity(payload: &[u8]) -> Result<(MappedGraphIdentity, &[u8]), Mappe
             database_oid: read_u32(payload, 12),
             index_oid: read_u32(payload, 16),
             rel_file_number: read_u32(payload, 20),
-            directory_epoch: read_u64(payload, 24),
-            meta_lsn: read_u64(payload, 32),
+            segment_id: read_u64(payload, 24),
+            segment_generation: read_u64(payload, 32),
+            directory_epoch: read_u64(payload, 40),
+            meta_lsn: read_u64(payload, 48),
         },
         &payload[IDENTITY_HEADER_LEN..packed_end],
     ))

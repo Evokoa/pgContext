@@ -258,6 +258,48 @@ pub(in crate::hnsw_am) struct HnswWalRegisteredSinglePage {
     page: pg_sys::Page,
 }
 
+/// Opaque ownership of two buffers registered in one Generic-WAL record.
+#[must_use = "mutate and seal both registered pages before finishing Generic WAL"]
+pub(in crate::hnsw_am) struct HnswWalRegisteredTwoPages {
+    state: *mut pg_sys::GenericXLogState,
+    first: pg_sys::Page,
+    second: pg_sys::Page,
+}
+
+impl HnswWalRegisteredTwoPages {
+    /// Registers two pinned, exclusively locked buffers atomically.
+    ///
+    /// # Safety
+    ///
+    /// `state` must be live and unregistered. Both buffers must remain pinned
+    /// and exclusively locked through `finish`.
+    pub(in crate::hnsw_am) unsafe fn register(
+        state: *mut pg_sys::GenericXLogState,
+        first_buffer: pg_sys::Buffer,
+        second_buffer: pg_sys::Buffer,
+        flags: i32,
+    ) -> Self {
+        debug_assert!(!state.is_null());
+        // SAFETY: the caller owns the state and both locked buffers.
+        let first = unsafe { register_generic_wal_buffer(state, first_buffer, flags) };
+        // SAFETY: the same state may register the distinct second buffer.
+        let second = unsafe { register_generic_wal_buffer(state, second_buffer, flags) };
+        Self {
+            state,
+            first,
+            second,
+        }
+    }
+
+    pub(in crate::hnsw_am) const fn pages(&self) -> (pg_sys::Page, pg_sys::Page) {
+        (self.first, self.second)
+    }
+
+    pub(in crate::hnsw_am) const fn seal(self) -> HnswWalRegisteredFinishPermit {
+        HnswWalRegisteredFinishPermit { state: self.state }
+    }
+}
+
 impl HnswWalRegisteredSinglePage {
     /// Registers exactly one buffer and binds its shadow page to `state`.
     ///
@@ -272,7 +314,7 @@ impl HnswWalRegisteredSinglePage {
     ) -> Self {
         debug_assert!(!state.is_null());
         // SAFETY: the caller owns the live state and locked, pinned buffer.
-        let page = unsafe { pg_sys::GenericXLogRegisterBuffer(state, buffer, flags) };
+        let page = unsafe { register_generic_wal_buffer(state, buffer, flags) };
         Self { state, page }
     }
 
@@ -284,6 +326,21 @@ impl HnswWalRegisteredSinglePage {
     pub(in crate::hnsw_am) const fn seal(self) -> HnswWalRegisteredFinishPermit {
         HnswWalRegisteredFinishPermit { state: self.state }
     }
+}
+
+/// Contains the sole direct PostgreSQL Generic-WAL registration call.
+///
+/// # Safety
+///
+/// `state` must be live and `buffer` pinned and exclusively locked until the
+/// state is finished or aborted.
+unsafe fn register_generic_wal_buffer(
+    state: *mut pg_sys::GenericXLogState,
+    buffer: pg_sys::Buffer,
+    flags: i32,
+) -> pg_sys::Page {
+    // SAFETY: delegated caller contract; all registrations pass this boundary.
+    unsafe { pg_sys::GenericXLogRegisterBuffer(state, buffer, flags) }
 }
 
 /// Linear completion permit for one physically registered shadow page.

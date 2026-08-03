@@ -367,24 +367,19 @@ Sustained throughput is 263 rows/s — roughly two orders of magnitude above
 the 1-2 rows/s of pure inline splicing — and 11,999 of 12,000 inserts are
 sub-millisecond. Three limitations remain:
 
-- **Sustained throughput misses the 500 rows/s bar.** The figure is amortized:
-  cheap delta appends plus one full rebuild per drained segment. Compaction
-  cost is fixed per run, so raising `pgcontext.hnsw_delta_segment_limit`
-  amortizes it further and can clear 500 rows/s, at the cost of query latency
-  (scans exact-scan the whole delta).
+- **The recorded sustained-throughput figure covers the retired write path.**
+  Current writes use bounded segment rotation and adjacent-pair compaction, so
+  the old full-rebuild amortization result is retained only as historical data;
+  raising `pgcontext.hnsw_delta_segment_limit` still trades fewer rotations for
+  more exact overlay work at query time.
 - **Index size misses the ≤1.3x bar** at 2.2x. Compaction deliberately leaves
   superseded pages in place — it reclaims write throughput, not disk. `REINDEX`
   reclaims the space.
-- **The tail is the main remaining limitation.** One insert blocking for 42.9 s is
-  not acceptable as a steady-state property, and it grows with the index.
-  `pgcontext.hnsw_compact_on_threshold_max_mb` (default 1GB of projected
-  vectors, tunable) bounds which indexes an insert will compact by itself, so
-  the stall is capped rather than unbounded, but it is still paid by a user
-  statement.
-
-The planned improvement is running compaction in a background worker so no
-statement pays for it (see the roadmap); the synchronous path plus the size
-bound is what ships today.
+- **The historical tail result is not representative of the segmented path.**
+  The measured 42.9-second insert came from the removed whole-index threshold
+  rebuild. Current writes rotate a bounded delta and, only at directory
+  saturation, compact one memory-admitted adjacent pair. New scale results must
+  be collected before claiming a replacement p99 figure.
 
 Note on measurement method: the rounds table uses the harness's `churn` lane;
 the single-row insert figures use a direct insert loop, because the harness

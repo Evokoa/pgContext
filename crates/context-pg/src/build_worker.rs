@@ -31,6 +31,7 @@ struct ClaimedJob {
     collection_id: i64,
     job_kind: BuildJobKind,
     artifact_name: String,
+    target_name: String,
     status: BuildJobStatus,
     attempt: i32,
     backend_pid: i32,
@@ -40,6 +41,7 @@ struct ClaimedJob {
     last_source_point_id: i64,
     source_high_water: i64,
     source_version: Option<i64>,
+    config_revision: i64,
     cancel_requested: bool,
     newly_claimed: bool,
 }
@@ -152,6 +154,7 @@ pub(crate) fn stale_attempt_is_fenced_for_test(build_job_id: i64) -> bool {
         collection_id: 0,
         job_kind: BuildJobKind::Certification,
         artifact_name: String::new(),
+        target_name: String::new(),
         status,
         attempt,
         backend_pid,
@@ -161,6 +164,7 @@ pub(crate) fn stale_attempt_is_fenced_for_test(build_job_id: i64) -> bool {
         last_source_point_id: 0,
         source_high_water: 0,
         source_version: None,
+        config_revision: 0,
         cancel_requested: false,
         newly_claimed: false,
     };
@@ -194,6 +198,9 @@ fn process_one_step_inner() -> Result<WorkerStep, spi::Error> {
             validate_certification_generation(&job)?
         }
         (BuildJobKind::Certification, BuildJobStatus::Publishing) => publish_generation(&job)?,
+        (BuildJobKind::Compaction, BuildJobStatus::Running) => compact_hnsw_pair(&job)?,
+        (BuildJobKind::Compaction, BuildJobStatus::Validating) => validate_hnsw_compaction(&job)?,
+        (BuildJobKind::Compaction, BuildJobStatus::Publishing) => finish_hnsw_compaction(&job)?,
         _ => fail_job(&job, "unsupported supervised job executor")?,
     }
     Ok(WorkerStep::Progressed)
@@ -218,7 +225,7 @@ fn claim_or_resume_job() -> Result<Option<ClaimedJob>, spi::Error> {
                    FROM pgcontext._build_jobs AS jobs
                    CROSS JOIN worker
                   WHERE jobs.supervised
-                    AND jobs.job_kind = 'certification'
+                    AND jobs.job_kind IN ('certification', 'compaction')
                     AND (
                         jobs.status IN ('planned', 'abandoned')
                         OR (
@@ -239,8 +246,12 @@ fn claim_or_resume_job() -> Result<Option<ClaimedJob>, spi::Error> {
                         candidate.pid,
                         candidate.identity,
                         revisions.source_version,
-                        COALESCE(pg_catalog.max(points.point_id), 0) AS high_water,
-                        pg_catalog.count(points.point_id) AS total_units
+                        CASE WHEN jobs.job_kind = 'compaction' THEN 0
+                             ELSE COALESCE(pg_catalog.max(points.point_id), 0)
+                        END AS high_water,
+                        CASE WHEN jobs.job_kind = 'compaction' THEN 1
+                             ELSE pg_catalog.count(points.point_id)
+                        END AS total_units
                    FROM candidate
                    JOIN pgcontext._build_jobs AS jobs USING (build_job_id)
                    JOIN pgcontext._collection_source_revisions AS revisions
@@ -248,7 +259,8 @@ fn claim_or_resume_job() -> Result<Option<ClaimedJob>, spi::Error> {
                    LEFT JOIN pgcontext._collection_points AS points
                      ON points.collection_id = jobs.collection_id
                   GROUP BY candidate.build_job_id, candidate.previous_status,
-                           candidate.pid, candidate.identity, revisions.source_version
+                           candidate.pid, candidate.identity, revisions.source_version,
+                           jobs.job_kind
              ), claimed AS (
                  UPDATE pgcontext._build_jobs AS jobs
                     SET attempt = jobs.attempt + CASE
@@ -285,11 +297,12 @@ fn claim_or_resume_job() -> Result<Option<ClaimedJob>, spi::Error> {
                    FROM source_snapshot
                   WHERE jobs.build_job_id = source_snapshot.build_job_id
               RETURNING jobs.build_job_id, jobs.collection_id, jobs.job_kind,
-                        jobs.artifact_name, jobs.status, jobs.attempt,
+                        jobs.artifact_name, jobs.target_name, jobs.status, jobs.attempt,
                         jobs.backend_pid, jobs.backend_identity,
                         jobs.processed_units, jobs.total_units,
                         jobs.last_source_point_id, jobs.source_high_water,
                         jobs.source_version, jobs.cancel_requested,
+                        jobs.config_revision,
                         source_snapshot.previous_status
              )
              SELECT * FROM claimed",
@@ -301,8 +314,8 @@ fn claim_or_resume_job() -> Result<Option<ClaimedJob>, spi::Error> {
         }
         let row = rows.first();
         let job_kind_text = required(row.get::<String>(3)?)?;
-        let status_text = required(row.get::<String>(5)?)?;
-        let previous_status_text = required(row.get::<String>(15)?)?;
+        let status_text = required(row.get::<String>(6)?)?;
+        let previous_status_text = required(row.get::<String>(17)?)?;
         let previous_status = BuildJobStatus::from_catalog(&previous_status_text)
             .ok_or(spi::Error::InvalidPosition)?;
         let status =
@@ -316,16 +329,18 @@ fn claim_or_resume_job() -> Result<Option<ClaimedJob>, spi::Error> {
             job_kind: BuildJobKind::from_catalog(&job_kind_text)
                 .ok_or(spi::Error::InvalidPosition)?,
             artifact_name: required(row.get::<String>(4)?)?,
+            target_name: required(row.get::<String>(5)?)?,
             status,
-            attempt: required(row.get::<i32>(6)?)?,
-            backend_pid: required(row.get::<i32>(7)?)?,
-            backend_identity: required(row.get::<String>(8)?)?,
-            processed_units: required(row.get::<i64>(9)?)?,
-            total_units: required(row.get::<i64>(10)?)?,
-            last_source_point_id: required(row.get::<i64>(11)?)?,
-            source_high_water: required(row.get::<i64>(12)?)?,
-            source_version: row.get::<i64>(13)?,
-            cancel_requested: required(row.get::<bool>(14)?)?,
+            attempt: required(row.get::<i32>(7)?)?,
+            backend_pid: required(row.get::<i32>(8)?)?,
+            backend_identity: required(row.get::<String>(9)?)?,
+            processed_units: required(row.get::<i64>(10)?)?,
+            total_units: required(row.get::<i64>(11)?)?,
+            last_source_point_id: required(row.get::<i64>(12)?)?,
+            source_high_water: required(row.get::<i64>(13)?)?,
+            source_version: row.get::<i64>(14)?,
+            cancel_requested: required(row.get::<bool>(15)?)?,
+            config_revision: required(row.get::<i64>(16)?)?,
             newly_claimed: matches!(
                 previous_status,
                 BuildJobStatus::Planned | BuildJobStatus::Abandoned
@@ -426,6 +441,133 @@ fn checkpoint_certification_batch(job: &ClaimedJob) -> Result<(), spi::Error> {
             job.backend_identity.clone().into(),
         ],
     )
+}
+
+fn compact_hnsw_pair(job: &ClaimedJob) -> Result<(), spi::Error> {
+    if !hnsw_compaction_target_is_valid(job)? {
+        return fail_job(
+            job,
+            "HNSW compaction target no longer matches the collection source",
+        );
+    }
+    let compacted = Spi::get_one_with_args::<bool>(
+        "SELECT pgcontext._compact_hnsw_segment_pair($1::oid::regclass, $2)",
+        &[job.target_name.clone().into(), job.config_revision.into()],
+    );
+    if compacted.is_err() {
+        return fail_job(job, "bounded HNSW segment compaction failed");
+    }
+    fenced_job_transition(
+        job,
+        BuildJobStatus::Validating,
+        "UPDATE pgcontext._build_jobs
+            SET processed_units = 1,
+                status = 'validating',
+                lease_expires_at = pg_catalog.clock_timestamp() + INTERVAL '2 seconds',
+                updated_at = pg_catalog.now()
+          WHERE build_job_id = $1
+            AND attempt = $2
+            AND backend_pid = $3
+            AND backend_identity = $4
+      RETURNING build_job_id",
+        &[
+            job.build_job_id.into(),
+            job.attempt.into(),
+            job.backend_pid.into(),
+            job.backend_identity.clone().into(),
+        ],
+    )
+}
+
+fn validate_hnsw_compaction(job: &ClaimedJob) -> Result<(), spi::Error> {
+    if !hnsw_compaction_target_is_valid(job)? {
+        return fail_job(job, "HNSW compaction target changed before validation");
+    }
+    let valid = Spi::get_one_with_args::<bool>(
+        "SELECT stats.segment_count BETWEEN 0 AND $2
+                AND stats.active_delta_records >= 0
+                AND stats.immutable_rows >= 0
+           FROM pgcontext.hnsw_segment_stats($1::oid::regclass) AS stats",
+        &[
+            job.target_name.clone().into(),
+            i32::try_from(crate::hnsw_am::HNSW_MAX_SEGMENTS)
+                .unwrap_or(i32::MAX)
+                .into(),
+        ],
+    )?
+    .unwrap_or(false);
+    if !valid {
+        return fail_job(job, "bounded HNSW segment publication failed validation");
+    }
+    fenced_job_transition(
+        job,
+        BuildJobStatus::Publishing,
+        "UPDATE pgcontext._build_jobs
+            SET status = 'publishing',
+                validation_passed = true,
+                validation_findings = 0,
+                lease_expires_at = pg_catalog.clock_timestamp() + INTERVAL '2 seconds',
+                updated_at = pg_catalog.now()
+          WHERE build_job_id = $1
+            AND attempt = $2
+            AND backend_pid = $3
+            AND backend_identity = $4
+      RETURNING build_job_id",
+        &[
+            job.build_job_id.into(),
+            job.attempt.into(),
+            job.backend_pid.into(),
+            job.backend_identity.clone().into(),
+        ],
+    )
+}
+
+fn finish_hnsw_compaction(job: &ClaimedJob) -> Result<(), spi::Error> {
+    fenced_job_transition(
+        job,
+        BuildJobStatus::Completed,
+        "UPDATE pgcontext._build_jobs
+            SET status = 'completed',
+                backend_pid = NULL,
+                backend_identity = NULL,
+                lease_expires_at = NULL,
+                completed_at = pg_catalog.now(),
+                updated_at = pg_catalog.now()
+          WHERE build_job_id = $1
+            AND attempt = $2
+            AND backend_pid = $3
+            AND backend_identity = $4
+      RETURNING build_job_id",
+        &[
+            job.build_job_id.into(),
+            job.attempt.into(),
+            job.backend_pid.into(),
+            job.backend_identity.clone().into(),
+        ],
+    )
+}
+
+fn hnsw_compaction_target_is_valid(job: &ClaimedJob) -> Result<bool, spi::Error> {
+    Ok(Spi::get_one_with_args::<bool>(
+        "SELECT class.relkind = 'i'
+                AND access_method.amname = 'pgcontext_hnsw'
+                AND catalog_index.indrelid = collections.source_table_oid
+           FROM pgcontext._build_jobs AS jobs
+           JOIN pgcontext._collections AS collections USING (collection_id)
+           JOIN pg_catalog.pg_class AS class ON class.oid = jobs.target_name::oid
+           JOIN pg_catalog.pg_am AS access_method ON access_method.oid = class.relam
+           JOIN pg_catalog.pg_index AS catalog_index ON catalog_index.indexrelid = class.oid
+          WHERE jobs.build_job_id = $1
+            AND jobs.attempt = $2
+            AND jobs.job_kind = 'compaction'
+            AND jobs.target_name = $3",
+        &[
+            job.build_job_id.into(),
+            job.attempt.into(),
+            job.target_name.clone().into(),
+        ],
+    )?
+    .unwrap_or(false))
 }
 
 fn set_validating(job: &ClaimedJob) -> Result<(), spi::Error> {

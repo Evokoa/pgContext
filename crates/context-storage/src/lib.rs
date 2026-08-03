@@ -33,6 +33,7 @@ use std::{
 
 mod delta_segment;
 mod hnsw_graph_payload;
+mod hnsw_segment_directory;
 mod mapped_packed_graph;
 mod mmap_file;
 mod packed_graph_image;
@@ -47,6 +48,11 @@ pub use hnsw_graph_payload::{
     MappedGraphNodeView, MappedGraphView, MappedNeighborIter, QuantizedHnswGraphNodeView,
     QuantizedHnswGraphView, QuantizedNeighborIter, decode_hnsw_graph_payload,
     decode_hnsw_graph_payload_versioned, encode_hnsw_graph_payload, encode_hnsw_graph_payload_v2,
+};
+pub use hnsw_segment_directory::{
+    HNSW_SEGMENT_DIRECTORY_VERSION, HnswDeltaDescriptor, HnswSegmentDescriptor,
+    HnswSegmentDirectory, HnswSegmentDirectoryError, decode_hnsw_segment_directory,
+    encode_hnsw_segment_directory,
 };
 pub use mapped_packed_graph::{
     MappedGraphIdentity, MappedPackedGraphError, MappedPackedGraphImage, encode_mapped_packed_graph,
@@ -113,18 +119,26 @@ pub const fn is_supported_segment_format_version(version: u32) -> bool {
 pub enum SegmentKind {
     /// HNSW graph segment payload.
     HnswGraph,
+    /// HNSW multi-segment directory payload.
+    HnswDirectory,
+    /// HNSW active-delta payload.
+    HnswDelta,
 }
 
 impl SegmentKind {
     fn as_u32(self) -> u32 {
         match self {
             Self::HnswGraph => 1,
+            Self::HnswDirectory => 2,
+            Self::HnswDelta => 3,
         }
     }
 
     fn from_u32(kind: u32) -> Result<Self, SegmentError> {
         match kind {
             1 => Ok(Self::HnswGraph),
+            2 => Ok(Self::HnswDirectory),
+            3 => Ok(Self::HnswDelta),
             _ => Err(SegmentError::UnknownKind { kind }),
         }
     }

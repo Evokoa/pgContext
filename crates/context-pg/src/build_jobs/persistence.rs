@@ -206,20 +206,23 @@ fn insert_build_job(
 
 fn insert_supervised_build_job(
     collection_id: i64,
-    publication_alias: &str,
+    artifact_kind: ArtifactKind,
+    job_kind: context_build::BuildJobKind,
+    artifact_name: &str,
+    target_name: &str,
+    config_revision_override: Option<i64>,
 ) -> BuildJobRow {
-    let artifact_kind_label = ArtifactKind::Certification.as_sql();
-    let target_name = "pgcontext._collection_points";
+    let artifact_kind_label = artifact_kind.as_sql();
     lock_build_job_target(
         collection_id,
         artifact_kind_label,
-        publication_alias,
+        artifact_name,
         target_name,
     );
     reject_duplicate_active_build_job(
         collection_id,
         artifact_kind_label,
-        publication_alias,
+        artifact_name,
         target_name,
     );
     let build_job_id = Spi::get_one_with_args::<i64>(
@@ -227,14 +230,16 @@ fn insert_supervised_build_job(
                     collection_id, artifact_kind, artifact_name, target_name,
                     job_kind, status, total_units, config_revision, supervised
              )
-             VALUES ($1, $2, $3, $4, 'certification', 'planned', 0,
-                     pgcontext.current_vector_config_revision($1), true)
+             VALUES ($1, $2, $3, $4, $5, 'planned', 0,
+                     COALESCE($6, pgcontext.current_vector_config_revision($1)), true)
          RETURNING build_job_id",
         &[
             collection_id.into(),
             artifact_kind_label.into(),
-            publication_alias.into(),
+            artifact_name.into(),
             target_name.into(),
+            job_kind.as_catalog().into(),
+            config_revision_override.into(),
         ],
     )
     .unwrap_or_else(|error| {
@@ -250,6 +255,63 @@ fn insert_supervised_build_job(
         )
     });
     resolve_visible_build_job(build_job_id)
+}
+
+fn resolve_collection_hnsw_index(
+    collection_id: i64,
+    index: &PgRelation,
+) -> (u32, String) {
+    let index_oid = index.oid().to_u32();
+    let binding = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT class.relkind = 'i',
+                    access_method.amname = 'pgcontext_hnsw',
+                    catalog_index.indrelid = collections.source_table_oid,
+                    $2::oid::regclass::text
+               FROM pgcontext._collections AS collections
+               JOIN pg_catalog.pg_class AS class ON class.oid = $2
+               JOIN pg_catalog.pg_am AS access_method ON access_method.oid = class.relam
+               JOIN pg_catalog.pg_index AS catalog_index ON catalog_index.indexrelid = class.oid
+              WHERE collections.collection_id = $1",
+            Some(1),
+            &[collection_id.into(), pg_sys::Oid::from_u32(index_oid).into()],
+        )?;
+        if rows.is_empty() {
+            return Ok::<_, spi::Error>(None);
+        }
+        let row = rows.first();
+        Ok(Some((
+            required_column(row.get::<bool>(1)?, "is_index"),
+            required_column(row.get::<bool>(2)?, "is_hnsw"),
+            required_column(row.get::<bool>(3)?, "matches_source"),
+            required_column(row.get::<String>(4)?, "index_name"),
+        )))
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("HNSW compaction target lookup failed: {error}"),
+        )
+    });
+    let Some((is_index, is_hnsw, matches_source, index_name)) = binding else {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            "HNSW compaction target does not exist",
+        );
+    };
+    if !is_index || !is_hnsw {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            "HNSW compaction target must use pgcontext_hnsw",
+        );
+    }
+    if !matches_source {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            "HNSW compaction target must index the collection source table",
+        );
+    }
+    (index_oid, index_name)
 }
 
 fn lock_build_job_target(

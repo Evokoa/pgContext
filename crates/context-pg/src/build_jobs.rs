@@ -4,7 +4,7 @@ mod backend_identity;
 mod build_job_types;
 mod build_job_validation;
 
-use pgrx::{prelude::*, spi};
+use pgrx::{PgRelation, prelude::*, spi};
 
 #[cfg(any(test, feature = "pg_test"))]
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -195,7 +195,63 @@ pub fn enqueue_build_job(
         )
     });
     let collection_id = resolve_owned_collection_id(&collection);
-    let row = insert_supervised_build_job(collection_id, &publication_alias);
+    let row = insert_supervised_build_job(
+        collection_id,
+        ArtifactKind::Certification,
+        context_build::BuildJobKind::Certification,
+        &publication_alias,
+        "pgcontext._collection_points",
+        None,
+    );
+    let _worker_started = build_worker::launch_for_current_database();
+    TableIterator::once(build_job_result(row))
+}
+
+/// Enqueues one bounded HNSW segment-pair compaction for supervised execution.
+///
+/// The index must belong to the collection's authoritative source table. The
+/// durable target is its relation OID, and the worker revalidates that binding
+/// before touching the index. Each execution compacts at most one adjacent
+/// immutable pair, so neither foreground nor background work grows with the
+/// complete index.
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx SQL generation requires the explicit table row tuple"
+)]
+#[pg_extern(name = "enqueue_hnsw_compaction", security_definer)]
+#[search_path(pg_catalog, pgcontext)]
+pub fn enqueue_hnsw_compaction(
+    collection: String,
+    index: PgRelation,
+) -> TableIterator<
+    'static,
+    (
+        name!(build_job_id, i64),
+        name!(collection_name, String),
+        name!(artifact_kind, String),
+        name!(artifact_name, String),
+        name!(target_name, String),
+        name!(status, BuildJobStatus),
+        name!(backend_pid, Option<i32>),
+        name!(attempt, i32),
+        name!(processed_units, i64),
+        name!(total_units, i64),
+        name!(cancel_requested, bool),
+        name!(error_message, Option<String>),
+    ),
+> {
+    let collection_id = resolve_owned_collection_id(&collection);
+    let (index_oid, index_name) = resolve_collection_hnsw_index(collection_id, &index);
+    let directory_epoch = crate::hnsw_am::hnsw_directory_epoch(index.as_ptr());
+    let target_name = index_oid.to_string();
+    let row = insert_supervised_build_job(
+        collection_id,
+        ArtifactKind::Index,
+        context_build::BuildJobKind::Compaction,
+        &index_name,
+        &target_name,
+        Some(directory_epoch),
+    );
     let _worker_started = build_worker::launch_for_current_database();
     TableIterator::once(build_job_result(row))
 }

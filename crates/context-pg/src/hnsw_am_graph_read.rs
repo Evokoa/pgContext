@@ -10,6 +10,7 @@
 /// held, then the buffer is released before control returns to the search.
 struct PgHnswGraphRead {
     index_relation: pg_sys::Relation,
+    segment: Option<HnswSegmentMeta>,
     metadata: Option<HnswMetaPage>,
     metadata_lsn: Option<pg_sys::XLogRecPtr>,
     directory: Option<Rc<HnswDirectoryIndex>>,
@@ -17,6 +18,45 @@ struct PgHnswGraphRead {
     nodes: BTreeMap<usize, HnswVectorRecord>,
     page_visits: usize,
     node_reads: usize,
+}
+
+/// Pure, owned traversal adapter admitted to segment worker threads only
+/// after the PostgreSQL backend has copied the complete immutable segment.
+/// It contains no relation, buffer, memory-context, mapped-file, or DSM state.
+struct ParallelPackedGraphRead {
+    graph: Arc<PackedHnswGraph>,
+    metadata: GraphMetadata,
+    node_reads: usize,
+}
+
+impl ParallelPackedGraphRead {
+    fn new(
+        graph: Arc<PackedHnswGraph>,
+        segment: HnswSegmentMeta,
+        dimensions: usize,
+    ) -> context_index::GraphResult<Self> {
+        let node_count = usize::try_from(segment.graph_nodes).map_err(|_| {
+            context_index::GraphError::CapacityExceeded {
+                operation: "parallel HNSW segment nodes",
+            }
+        })?;
+        let entry = if segment.entry_node_id == u64::MAX {
+            None
+        } else {
+            Some(HnswNodeId::new(
+                usize::try_from(segment.entry_node_id).map_err(|_| {
+                    context_index::GraphError::CapacityExceeded {
+                        operation: "parallel HNSW segment entry",
+                    }
+                })?,
+            ))
+        };
+        Ok(Self {
+            graph,
+            metadata: GraphMetadata::new(node_count, entry, Some(dimensions))?,
+            node_reads: 0,
+        })
+    }
 }
 
 /// Adapter-local bridge from pure traversal checkpoints to PostgreSQL cancel
@@ -36,6 +76,7 @@ impl PgHnswGraphRead {
     fn new(index_relation: pg_sys::Relation) -> Self {
         Self {
             index_relation,
+            segment: None,
             metadata: None,
             metadata_lsn: None,
             directory: None,
@@ -44,6 +85,51 @@ impl PgHnswGraphRead {
             page_visits: 0,
             node_reads: 0,
         }
+    }
+
+    fn for_segment(index_relation: pg_sys::Relation, segment: HnswSegmentMeta) -> Self {
+        Self {
+            segment: Some(segment),
+            ..Self::new(index_relation)
+        }
+    }
+
+    unsafe fn parallel_local_read(
+        &mut self,
+    ) -> context_index::GraphResult<Option<ParallelPackedGraphRead>> {
+        // SAFETY: the active backend owns the live relation while it copies or
+        // retrieves the immutable local packed generation.
+        let meta = unsafe { self.meta() };
+        // SAFETY: this adapter was constructed with a validated descriptor.
+        let Some(segment) = (unsafe { self.selected_segment() }) else {
+            return Ok(None);
+        };
+        // SAFETY: load_packed performs every PostgreSQL operation here, before
+        // any returned owned adapter crosses to a worker thread.
+        let Some(packed) = (unsafe { self.load_packed()? }) else {
+            return Ok(None);
+        };
+        let Some(graph) = packed.parallel_local_graph() else {
+            return Ok(None);
+        };
+        ParallelPackedGraphRead::new(
+            graph,
+            segment,
+            usize::try_from(meta.dimensions).map_err(|_| {
+                context_index::GraphError::CapacityExceeded {
+                    operation: "parallel HNSW dimensions",
+                }
+            })?,
+        )
+        .map(Some)
+    }
+
+    unsafe fn selected_segment(&mut self) -> Option<HnswSegmentMeta> {
+        if let Some(segment) = self.segment {
+            return Some(segment);
+        }
+        // SAFETY: the adapter owns the relation for this scan.
+        unsafe { self.meta() }.primary_segment()
     }
 
     unsafe fn meta(&mut self) -> HnswMetaPage {
@@ -91,15 +177,23 @@ impl PgHnswGraphRead {
         if self.directory.is_some() {
             return;
         }
-        // SAFETY: this adapter owns the live relation for the current scan.
-        let meta = unsafe { self.meta() };
-        let meta_lsn = self.metadata_lsn.unwrap_or_default();
+        // SAFETY: the descriptor is copied from the validated metapage.
+        let Some(segment) = (unsafe { self.selected_segment() }) else {
+            self.directory = Some(Rc::new(HnswDirectoryIndex::default()));
+            return;
+        };
         // SAFETY: the relation cache entry is live for the current scan.
         let index_oid = unsafe { (*self.index_relation).rd_id.to_u32() };
+        // SAFETY: the relation cache entry remains live for this scan.
+        let rel_file_number = unsafe { (*self.index_relation).rd_locator.relNumber.to_u32() };
+        let cache_key = HnswSegmentCacheKey {
+            index_oid,
+            rel_file_number,
+            segment_id: segment.segment_id,
+            generation: segment.generation,
+        };
         if let Some(cached) = HNSW_DIRECTORY_CACHE.with(|cache| {
-            cache.borrow().get(&index_oid).filter(|cached| {
-                cached.epoch == meta.directory_epoch && cached.meta_lsn == meta_lsn
-            }).cloned()
+            cache.borrow().get(&cache_key).cloned()
         }) {
             self.directory = Some(cached.directory);
             return;
@@ -112,7 +206,15 @@ impl PgHnswGraphRead {
             )
         };
         let mut directory = HnswDirectoryIndex::default();
-        for block_number in HNSW_FIRST_VECTOR_BLOCK..block_count {
+        let start_block = block_number_from_u64(segment.start_block, "HNSW segment start block");
+        let end_block = block_number_from_u64(segment.end_block, "HNSW segment end block");
+        if start_block >= end_block || end_block > block_count {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "HNSW segment directory extent is outside the index relation",
+            );
+        }
+        for block_number in start_block..end_block {
             self.page_visits = self.page_visits.saturating_add(1);
             pg_sys::check_for_interrupts!();
             // SAFETY: the block is within the current main-fork block count and
@@ -168,7 +270,7 @@ impl PgHnswGraphRead {
                 // pick the right pages, since the fresh base also sits at the
                 // highest blocks. That is a coincidence of layout, not a
                 // guarantee, and it is not what makes this correct.
-                if header.generation != meta.base_generation {
+                if header.generation != segment.generation {
                     pg_sys::UnlockReleaseBuffer(buffer);
                     continue;
                 }
@@ -195,10 +297,8 @@ impl PgHnswGraphRead {
         let directory = Rc::new(directory);
         HNSW_DIRECTORY_CACHE.with(|cache| {
             cache.borrow_mut().insert(
-                index_oid,
+                cache_key,
                 CachedHnswDirectory {
-                    epoch: meta.directory_epoch,
-                    meta_lsn,
                     directory: Rc::clone(&directory),
                 },
             );
@@ -218,11 +318,21 @@ impl PgHnswGraphRead {
         }
         // SAFETY: the adapter owns the live relation and metapage snapshot.
         let meta = unsafe { self.meta() };
+        // SAFETY: the descriptor is copied from the validated metapage.
+        let Some(segment) = (unsafe { self.selected_segment() }) else {
+            return Ok(None);
+        };
         let meta_lsn = self.metadata_lsn.unwrap_or_default();
         // SAFETY: the relation cache entry remains live for this scan.
         let index_oid = unsafe { (*self.index_relation).rd_id.to_u32() };
         // SAFETY: the relation cache entry remains live for this scan.
         let rel_file_number = unsafe { (*self.index_relation).rd_locator.relNumber.to_u32() };
+        let cache_key = HnswSegmentCacheKey {
+            index_oid,
+            rel_file_number,
+            segment_id: segment.segment_id,
+            generation: segment.generation,
+        };
         // SAFETY: `MyDatabaseId` is initialized before index scans and remains
         // stable for this backend.
         let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
@@ -235,14 +345,11 @@ impl PgHnswGraphRead {
         let cached_entry = HNSW_PACKED_GRAPH_CACHE.with(|cache| {
             cache
                 .borrow()
-                .get(&index_oid)
+                .get(&cache_key)
                 .filter(|cached| cached.rel_file_number == rel_file_number)
                 .cloned()
         });
-        if let Some(cached) = &cached_entry
-            && cached.epoch == meta.directory_epoch
-            && cached.meta_lsn == meta_lsn
-        {
+        if let Some(cached) = &cached_entry {
             record_hnsw_pack_reuse();
             self.packed = Some(cached.graph.clone());
             return Ok(Some(cached.graph.clone()));
@@ -252,8 +359,10 @@ impl PgHnswGraphRead {
             database_oid,
             index_oid,
             rel_file_number,
-            meta.directory_epoch,
-            meta_lsn,
+            segment.segment_id,
+            segment.generation,
+            segment.generation,
+            0,
         );
         // SAFETY: the live relation cache entry owns an initialized pg_class
         // form for the duration of this scan.
@@ -283,11 +392,9 @@ impl PgHnswGraphRead {
                     cache.clear();
                 }
                 cache.insert(
-                    index_oid,
+                    cache_key,
                     CachedPackedHnswGraph {
                         rel_file_number,
-                        epoch: meta.directory_epoch,
-                        meta_lsn,
                         graph: graph.clone(),
                     },
                 );
@@ -302,8 +409,15 @@ impl PgHnswGraphRead {
                 "pgcontext shared-attach lookup db={database_oid} index={index_oid} epoch={} meta_lsn={meta_lsn}",
                 meta.directory_epoch
             );
-            if let Some(image) =
-                attach_shared_image(database_oid, index_oid, meta.directory_epoch, meta_lsn)
+            if let Some(image) = attach_shared_image(
+                database_oid,
+                index_oid,
+                rel_file_number,
+                segment.segment_id,
+                segment.generation,
+                segment.generation,
+                0,
+            )
             {
                 record_hnsw_shared_attach();
                 let graph = HnswPackedGeneration {
@@ -315,11 +429,9 @@ impl PgHnswGraphRead {
                         cache.clear();
                     }
                     cache.insert(
-                        index_oid,
+                        cache_key,
                         CachedPackedHnswGraph {
                             rel_file_number,
-                            epoch: meta.directory_epoch,
-                            meta_lsn,
                             graph: graph.clone(),
                         },
                     );
@@ -342,8 +454,8 @@ impl PgHnswGraphRead {
         let pack_started = std::time::Instant::now();
         // SAFETY: all relation pages are copied and decoded while individually
         // pinned; the returned records own their vectors and links.
-        let records = unsafe { read_hnsw_vector_records(self.index_relation) };
-        let node_count = usize::try_from(meta.graph_nodes).map_err(|_| {
+        let records = unsafe { read_hnsw_segment_records(self.index_relation, segment) };
+        let node_count = usize::try_from(segment.graph_nodes).map_err(|_| {
             context_index::GraphError::CapacityExceeded {
                 operation: "packed HNSW graph nodes",
             }
@@ -372,8 +484,11 @@ impl PgHnswGraphRead {
             let published = publish_packed_image(
                 database_oid,
                 index_oid,
-                meta.directory_epoch,
-                meta_lsn,
+                rel_file_number,
+                segment.segment_id,
+                segment.generation,
+                segment.generation,
+                0,
                 &image_bytes,
                 budget,
             );
@@ -390,7 +505,7 @@ impl PgHnswGraphRead {
             record_hnsw_mapped_publish(published);
         }
         let graph = HnswPackedGeneration {
-            base: PackedGraphStore::Local(Rc::new(local_graph)),
+            base: PackedGraphStore::Local(Arc::new(local_graph)),
         };
         HNSW_PACKED_GRAPH_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
@@ -398,11 +513,9 @@ impl PgHnswGraphRead {
                 cache.clear();
             }
             cache.insert(
-                index_oid,
+                cache_key,
                 CachedPackedHnswGraph {
                     rel_file_number,
-                    epoch: meta.directory_epoch,
-                    meta_lsn,
                     graph: graph.clone(),
                 },
             );

@@ -93,9 +93,49 @@ fn hnsw_cost_estimate_safe(
     };
     let config = hnsw_config_from_gucs();
     let ratio = hnsw_scan_tuple_ratio(index_tuples, config.m(), config.ef_search());
+    let (segment_count, delta_records) = if path.as_ref().indexinfo.is_null() {
+        (1_usize, 0_u64)
+    } else {
+        let index_oid = unsafe { (*path.as_ref().indexinfo).indexoid };
+        if index_oid == pg_sys::InvalidOid {
+            (1, 0)
+        } else {
+            // SAFETY: the planner already holds AccessShareLock for IndexOptInfo.
+            let relation = unsafe { PgRelation::open(index_oid) };
+            let meta = unsafe { PgHnswGraphRead::new(relation.as_ptr()).meta() };
+            (meta.segments().len().max(1), meta.delta_record_count)
+        }
+    };
+    let configured_workers = crate::settings::hnsw_segment_parallel_workers_from_guc();
+    let admitted_workers = if segment_count >= 3 {
+        configured_workers.min(segment_count).max(1)
+    } else {
+        1
+    };
+    let segmented_factor = {
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "PostgreSQL planner costs are f64"
+        )]
+        {
+            let traversal_fanout = segment_count.div_ceil(admitted_workers) as f64;
+            let merge_factor = 1.0 + (segment_count.saturating_sub(1) as f64 * 0.05);
+            let delta_factor = if index_tuples > 0.0 {
+                1.0 + (delta_records as f64 / index_tuples).min(1.0)
+            } else {
+                1.0
+            };
+            let debt_factor = if segment_count >= HNSW_MAX_SEGMENTS.saturating_sub(1) {
+                1.25
+            } else {
+                1.0
+            };
+            traversal_fanout * merge_factor * delta_factor * debt_factor
+        }
+    };
 
-    startup.write(costs.indexTotalCost * ratio);
-    total.write(costs.indexTotalCost);
+    startup.write(costs.indexTotalCost * ratio * segmented_factor);
+    total.write(costs.indexTotalCost * segmented_factor);
     selectivity.write(costs.indexSelectivity);
     correlation.write(costs.indexCorrelation);
     pages.write(costs.numIndexPages);

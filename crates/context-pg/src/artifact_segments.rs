@@ -125,13 +125,17 @@ struct ArtifactCollection {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArtifactSegmentKind {
-    HnswGraph,
+    Graph,
+    Directory,
+    Delta,
 }
 
 impl ArtifactSegmentKind {
     fn from_sql(kind: &str) -> Self {
         match kind {
-            "hnsw_graph" => Self::HnswGraph,
+            "hnsw_graph" => Self::Graph,
+            "hnsw_directory" => Self::Directory,
+            "hnsw_delta" => Self::Delta,
             _ => raise_sql_error(
                 PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
                 format!("unsupported segment kind: {kind}"),
@@ -141,19 +145,25 @@ impl ArtifactSegmentKind {
 
     const fn storage_kind(self) -> SegmentKind {
         match self {
-            Self::HnswGraph => SegmentKind::HnswGraph,
+            Self::Graph => SegmentKind::HnswGraph,
+            Self::Directory => SegmentKind::HnswDirectory,
+            Self::Delta => SegmentKind::HnswDelta,
         }
     }
 
     const fn as_sql(self) -> &'static str {
         match self {
-            Self::HnswGraph => "hnsw_graph",
+            Self::Graph => "hnsw_graph",
+            Self::Directory => "hnsw_directory",
+            Self::Delta => "hnsw_delta",
         }
     }
 
     fn from_catalog(kind: String) -> Self {
         match kind.as_str() {
-            "hnsw_graph" => Self::HnswGraph,
+            "hnsw_graph" => Self::Graph,
+            "hnsw_directory" => Self::Directory,
+            "hnsw_delta" => Self::Delta,
             _ => raise_sql_error(
                 PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
                 format!("unexpected segment kind in catalog: {kind}"),
@@ -165,7 +175,9 @@ impl ArtifactSegmentKind {
 impl From<SegmentKind> for ArtifactSegmentKind {
     fn from(kind: SegmentKind) -> Self {
         match kind {
-            SegmentKind::HnswGraph => Self::HnswGraph,
+            SegmentKind::HnswGraph => Self::Graph,
+            SegmentKind::HnswDirectory => Self::Directory,
+            SegmentKind::HnswDelta => Self::Delta,
         }
     }
 }
@@ -785,7 +797,7 @@ mod tests {
             artifact_name: "view-a".to_owned(),
             target_name: "public.collection".to_owned(),
             generation: build_job_id,
-            segment_kind: ArtifactSegmentKind::HnswGraph,
+            segment_kind: ArtifactSegmentKind::Graph,
             format_version: 1,
             payload_bytes,
             checksum,

@@ -635,11 +635,12 @@ fn page_layout_versions_and_kinds_fail_closed() {
             GraphPageKind::Adjacency,
             GraphPageKind::MutationDescriptor,
             GraphPageKind::Delta,
+            GraphPageKind::FrozenDelta,
         ]
     );
     assert_eq!(
         GraphPageKind::ALL.map(GraphPageKind::code),
-        [1, 2, 3, 4, 5, 6]
+        [1, 2, 3, 4, 5, 6, 7]
     );
     assert_eq!(
         GraphDirectoryKeyKind::ALL.map(GraphDirectoryKeyKind::code),

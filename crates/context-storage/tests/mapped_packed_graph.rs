@@ -74,8 +74,10 @@ const IDENTITY: MappedGraphIdentity = MappedGraphIdentity {
     database_oid: 1,
     index_oid: 2,
     rel_file_number: 3,
-    directory_epoch: 4,
-    meta_lsn: 5,
+    segment_id: 4,
+    segment_generation: 5,
+    directory_epoch: 6,
+    meta_lsn: 7,
 };
 
 #[test]

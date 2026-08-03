@@ -278,9 +278,9 @@ fn hnsw_compaction_rejects_a_table() {
     let _ = compact("compact_not_an_index");
 }
 
-// Threshold-triggered compaction (P2-S6): an insert that finds the delta
-// segment full compacts the index itself, so the fast append path resumes
-// instead of every later insert splicing the graph inline.
+// Bounded segmented rotation (C3): inserts always use the active delta;
+// reaching its limit rotates one immutable segment and a saturated directory
+// compacts one adjacent pair. There is no whole-index write-path rebuild.
 //
 // The discriminator in both tests below is `delta_segment_records`, the
 // cumulative count of records appended to a delta segment. It separates the
@@ -317,15 +317,12 @@ fn threshold_probe_setup(table: &str, index: &str) {
 
 fn threshold_probe_teardown() {
     Spi::run("RESET pgcontext.hnsw_delta_segment_limit").expect("delta limit should reset");
-    Spi::run("RESET pgcontext.hnsw_compact_on_threshold").expect("threshold GUC should reset");
     Spi::run("RESET enable_seqscan").expect("seqscan should reset");
 }
 
 #[pg_test]
-fn hnsw_threshold_compaction_keeps_inserts_on_the_delta_path() {
+fn hnsw_bounded_rotation_keeps_every_insert_on_the_delta_path() {
     threshold_probe_setup("threshold_probe", "threshold_probe_hnsw");
-    Spi::run("SET pgcontext.hnsw_compact_on_threshold = on")
-        .expect("threshold compaction should enable");
 
     let appended_before = read_stat("delta_segment_records");
     Spi::run(&format!(
@@ -340,9 +337,15 @@ fn hnsw_threshold_compaction_keeps_inserts_on_the_delta_path() {
     // possible if compaction drained and reopened it mid-insert.
     assert_eq!(
         appended, THRESHOLD_OVERFLOW_ROWS,
-        "with the threshold trigger on, every insert must be absorbed by a \
+        "with bounded rotation, every insert must be absorbed by a \
          delta segment; {appended} of {THRESHOLD_OVERFLOW_ROWS} were"
     );
+    let frozen: i64 = Spi::get_one(
+        "SELECT frozen_mutation_records FROM pgcontext.hnsw_segment_stats('threshold_probe_hnsw')",
+    )
+    .expect("rotation stats should run")
+    .expect("frozen count should not be null");
+    assert_eq!(frozen, 0, "rotated live rows must not remain in exact mutation logs");
 
     let top_k = "SELECT id FROM threshold_probe \
          ORDER BY embedding OPERATOR(pgcontext.<=>) \
@@ -358,118 +361,77 @@ fn hnsw_threshold_compaction_keeps_inserts_on_the_delta_path() {
 }
 
 #[pg_test]
-fn hnsw_threshold_compaction_off_leaves_inserts_on_the_inline_path() {
-    threshold_probe_setup("threshold_off_probe", "threshold_off_probe_hnsw");
-    Spi::run("SET pgcontext.hnsw_compact_on_threshold = off")
-        .expect("threshold compaction should disable");
-
-    let appended_before = read_stat("delta_segment_records");
-    Spi::run(&format!(
-        "INSERT INTO threshold_off_probe SELECT n, {COMPACT_PROBE_VECTOR} \
-           FROM generate_series(61, {}) n",
-        60 + THRESHOLD_OVERFLOW_ROWS
-    ))
-    .expect("over-threshold rows should insert");
-    let appended = read_stat("delta_segment_records") - appended_before;
-
-    // The delta fills once and is never drained, so the rows past the limit
-    // take the inline path. This is the assertion that fails if the GUC is
-    // ignored and compaction runs anyway.
-    assert!(
-        appended <= THRESHOLD_DELTA_LIMIT,
-        "with the threshold trigger off, at most the delta limit \
-         ({THRESHOLD_DELTA_LIMIT}) rows may be absorbed, saw {appended}"
-    );
-    assert!(
-        appended < THRESHOLD_OVERFLOW_ROWS,
-        "fixture check: the insert must actually exceed the delta limit"
-    );
-
-    // Correct either way: the inline path is slower, not wrong.
-    let top_k = "SELECT id FROM threshold_off_probe \
-         ORDER BY embedding OPERATOR(pgcontext.<=>) \
-         (SELECT embedding FROM threshold_off_probe WHERE id = 75) \
-         LIMIT 10";
-    assert_eq!(
-        compact_probe_ids(top_k),
-        compact_probe_exact_ids(top_k),
-        "the inline fallback must return the same rows as the oracle"
-    );
-
-    threshold_probe_teardown();
-}
-
-#[pg_test]
-fn hnsw_threshold_compaction_declines_above_the_size_bound() {
-    // The size bound exists to cap how long a single INSERT can block:
-    // compaction runs synchronously on the write path and its cost grows with
-    // the graph. Above the bound the insert must decline and take the inline
-    // path -- slower per row, but bounded -- instead of stalling on a rebuild.
-    //
-    // 384 dimensions, not the 8 the other probes use: the bound is expressed
-    // in megabytes of projected vectors, so the fixture has to be wide enough
-    // for a realistic bound to reject it. At 384 dimensions a row projects to
-    // 1,536 bytes, so ~800 rows clear the 1MB bound set below.
-    //
-    // Modulus 1009 rather than the 211 the other probes use: 211 divides
-    // 7 * 211 exactly, so ids differing by 211 would encode the *same* vector
-    // and the ordering assertion below would be comparing tie-breaks instead
-    // of distances. 1009 exceeds the id range, so every row is a distinct
-    // point.
+fn hnsw_bounded_pair_compaction_rejects_over_budget_before_publication() {
     Spi::run(
-        "CREATE TABLE bound_probe (id bigint PRIMARY KEY, embedding vector(384) NOT NULL)",
+        "CREATE TABLE bounded_budget_probe (
+             id bigint PRIMARY KEY,
+             embedding vector(384) NOT NULL
+         )",
     )
-    .expect("bound probe table should be created");
+    .expect("bounded budget table should be created");
     Spi::run(
-        "INSERT INTO bound_probe \
-         SELECT n, (SELECT '[' || string_agg(((n * 7 + d) % 1009 + 1)::text, ',') || ']' \
-                      FROM generate_series(1, 384) d)::vector \
+        "INSERT INTO bounded_budget_probe
+         SELECT n, array_fill(n::real, ARRAY[384])::vector
            FROM generate_series(1, 800) n",
     )
-    .expect("bound probe rows should insert");
+    .expect("bounded budget base rows should insert");
     Spi::run(
-        "CREATE INDEX bound_probe_hnsw ON bound_probe \
+        "CREATE INDEX bounded_budget_probe_hnsw ON bounded_budget_probe
          USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_cosine_ops)",
     )
-    .expect("bound probe index should build");
-    Spi::run("SET enable_seqscan = off").expect("seqscan off should apply");
-    Spi::run(&format!(
-        "SET pgcontext.hnsw_delta_segment_limit = {THRESHOLD_DELTA_LIMIT}"
-    ))
-    .expect("delta limit should apply");
-    Spi::run("SET pgcontext.hnsw_compact_on_threshold = on")
-        .expect("threshold compaction should enable");
-    Spi::run("SET pgcontext.hnsw_compact_on_threshold_max_mb = 1")
-        .expect("threshold size bound should be settable");
-
-    let appended_before = read_stat("delta_segment_records");
+    .expect("bounded budget index should build");
+    Spi::run("SET pgcontext.hnsw_delta_segment_limit = 400")
+        .expect("wide delta limit should apply");
     Spi::run(
-        "INSERT INTO bound_probe \
-         SELECT n, (SELECT '[' || string_agg(((n * 7 + d) % 1009 + 1)::text, ',') || ']' \
-                      FROM generate_series(1, 384) d)::vector \
-           FROM generate_series(801, 840) n",
+        "INSERT INTO bounded_budget_probe
+         SELECT n, array_fill(n::real, ARRAY[384])::vector
+           FROM generate_series(801, 1240) n",
     )
-    .expect("over-threshold rows should insert");
-    let appended = read_stat("delta_segment_records") - appended_before;
-
-    assert!(
-        appended <= THRESHOLD_DELTA_LIMIT,
-        "above the size bound the delta must not be drained and reopened; \
-         {appended} rows were absorbed"
-    );
-
-    // Declining is a latency choice, never a correctness one.
-    let top_k = "SELECT id FROM bound_probe \
-         ORDER BY embedding OPERATOR(pgcontext.<=>) \
-         (SELECT embedding FROM bound_probe WHERE id = 805), id \
-         LIMIT 10";
-    assert_eq!(
-        compact_probe_ids(top_k),
-        compact_probe_exact_ids(top_k),
-        "declining to compact must not change which rows the index returns"
-    );
-
-    Spi::run("RESET pgcontext.hnsw_compact_on_threshold_max_mb")
-        .expect("threshold size bound should reset");
-    threshold_probe_teardown();
+    .expect("bounded budget rows should rotate");
+    let before: (i32, i64) = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT segment_count, directory_epoch
+               FROM pgcontext.hnsw_segment_stats('bounded_budget_probe_hnsw')",
+            Some(1),
+            &[],
+        )?;
+        let row = rows.first();
+        Ok::<_, spi::Error>((
+            row.get::<i32>(1)?.expect("segment count should not be null"),
+            row.get::<i64>(2)?.expect("directory epoch should not be null"),
+        ))
+    })
+    .expect("preflight stats should decode");
+    assert!(before.0 >= 2, "fixture must publish a pair");
+    Spi::run("SET maintenance_work_mem = '1MB'").expect("small budget should apply");
+    let rejected = PgTryBuilder::new(|| {
+        Spi::run_with_args(
+            "SELECT pgcontext._compact_hnsw_segment_pair(
+                 'bounded_budget_probe_hnsw'::regclass, $1
+             )",
+            &[before.1.into()],
+        )
+        .expect("over-budget pair must not publish");
+        false
+    })
+    .catch_when(PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE, |_| true)
+    .execute();
+    assert!(rejected, "pair compaction must enforce maintenance_work_mem");
+    let after: (i32, i64) = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT segment_count, directory_epoch
+               FROM pgcontext.hnsw_segment_stats('bounded_budget_probe_hnsw')",
+            Some(1),
+            &[],
+        )?;
+        let row = rows.first();
+        Ok::<_, spi::Error>((
+            row.get::<i32>(1)?.expect("segment count should not be null"),
+            row.get::<i64>(2)?.expect("directory epoch should not be null"),
+        ))
+    })
+    .expect("post-rejection stats should decode");
+    assert_eq!(after, before, "budget rejection must precede publication");
+    Spi::run("RESET maintenance_work_mem").expect("budget should reset");
+    Spi::run("RESET pgcontext.hnsw_delta_segment_limit").expect("delta limit should reset");
 }

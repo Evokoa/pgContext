@@ -76,12 +76,12 @@ psql -h "${PGHOST}" -p "${PGPORT}" -d postgres -v ON_ERROR_STOP=1 \
 # Distinct prime per dimension, modulus above the row count: every row's
 # vector is unique, so ordering assertions are not really tie-breaks.
 PROBE_VECTOR="(SELECT '[' || string_agg(((n * p) % 211 + 1)::text, ',' ORDER BY ord) || ']'
-     FROM unnest(ARRAY[13,29,41,53,67,79,89,101]) WITH ORDINALITY AS primes(p, ord))::vector"
+     FROM unnest(ARRAY[13,29,41,53,67,79,89,101]) WITH ORDINALITY AS primes(p, ord))::pgcontext.vector"
 
 psql_db >/dev/null <<SQL
 CREATE EXTENSION pgcontext;
 
-CREATE TABLE crash_items (id bigint PRIMARY KEY, embedding vector(8) NOT NULL);
+CREATE TABLE crash_items (id bigint PRIMARY KEY, embedding pgcontext.vector(8) NOT NULL);
 INSERT INTO crash_items SELECT n, ${PROBE_VECTOR} FROM generate_series(1, 150) n;
 CREATE INDEX crash_items_hnsw ON crash_items
     USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_cosine_ops);
@@ -185,7 +185,7 @@ DELETE FROM crash_items WHERE id BETWEEN 180 AND 185;
 -- interrupted compaction is an orphan stamped for a generation readers skip.
 -- A row written there is accepted and then invisible. Setting the delta limit
 -- to zero is the documented way to select that path.
-SET pgcontext.hnsw_delta_segment_limit = 0;
+SET pgcontext.hnsw_delta_segment_limit = 1;
 INSERT INTO crash_items SELECT n, ${PROBE_VECTOR} FROM generate_series(190, 195) n;
 DO \$\$
 DECLARE
@@ -203,7 +203,7 @@ BEGIN
      WHERE id BETWEEN 190 AND 195;
     IF served <> 6 THEN
         RAISE EXCEPTION
-            '${label}: rows accepted on the inline path after recovery but the '
+        '${label}: rows accepted by bounded segmented rotation after recovery but the '
             'index serves only % of 6', served;
     END IF;
 END

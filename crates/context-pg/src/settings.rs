@@ -58,21 +58,16 @@ static HNSW_MASK_CANDIDATE_LIMIT: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_CANDIDATE_MASK_POINTS_I32);
 static HNSW_BUILD_PARALLEL_WORKERS: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_BUILD_PARALLEL_WORKERS_I32);
+const DEFAULT_HNSW_SEGMENT_PARALLEL_WORKERS: i32 = 1;
+const MAX_HNSW_SEGMENT_PARALLEL_WORKERS: i32 = 16;
+static HNSW_SEGMENT_PARALLEL_WORKERS: GucSetting<i32> =
+    GucSetting::<i32>::new(DEFAULT_HNSW_SEGMENT_PARALLEL_WORKERS);
 static PGVECTOR_COMPAT_WARNINGS: GucSetting<bool> = GucSetting::<bool>::new(true);
 static QUERY_TELEMETRY_ENABLED: GucSetting<bool> = GucSetting::<bool>::new(true);
 static BUILD_WORKERS_ENABLED: GucSetting<bool> = GucSetting::<bool>::new(true);
 const DEFAULT_HNSW_DELTA_SEGMENT_LIMIT: i32 = 10_000;
 static HNSW_DELTA_SEGMENT_LIMIT: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_DELTA_SEGMENT_LIMIT);
-static HNSW_COMPACT_ON_THRESHOLD: GucSetting<bool> = GucSetting::<bool>::new(true);
-/// Projected-vector-bytes ceiling for a compaction an INSERT is allowed to run
-/// itself, in megabytes. 1GB admits roughly 700,000 rows at 384 dimensions,
-/// deliberately high so ordinary workloads self-maintain rather than silently
-/// falling back to the inline path; operators trading throughput for tail
-/// latency lower it.
-const DEFAULT_HNSW_COMPACT_ON_THRESHOLD_MAX_MB: i32 = 1024;
-static HNSW_COMPACT_ON_THRESHOLD_MAX_MB: GucSetting<i32> =
-    GucSetting::<i32>::new(DEFAULT_HNSW_COMPACT_ON_THRESHOLD_MAX_MB);
 
 pub(crate) fn init_gucs() {
     GucRegistry::define_bool_guc(
@@ -241,6 +236,16 @@ pub(crate) fn init_gucs() {
         GucContext::Userset,
         GucFlags::default(),
     );
+    GucRegistry::define_int_guc(
+        c"pgcontext.hnsw_segment_parallel_workers",
+        c"Backend-local workers for immutable HNSW segment search.",
+        c"Maximum pure Rust worker threads admitted for one multi-segment HNSW scan. Relation pages and shared or mapped attachments remain backend-affine; parallel execution is admitted only after every selected segment has an owned immutable local pack within the shared serving byte budget. A value of 1 forces visible serial degradation.",
+        &HNSW_SEGMENT_PARALLEL_WORKERS,
+        1,
+        MAX_HNSW_SEGMENT_PARALLEL_WORKERS,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
     GucRegistry::define_bool_guc(
         c"pgcontext.pgvector_compat_warnings",
         c"Advise migration when serving pgvector-typed columns.",
@@ -256,58 +261,17 @@ pub(crate) fn init_gucs() {
     );
     GucRegistry::define_int_guc(
         c"pgcontext.hnsw_delta_segment_limit",
-        c"Rows an HNSW index absorbs through the delta segment before falling back to inline insertion.",
+        c"Rows an HNSW index absorbs through its active delta before rotation.",
         c"Inserts append a small fixed-format record to a bounded delta \
           segment instead of splicing the row into the HNSW graph; scans \
           merge an exact scan over the delta with the base graph results. \
-          Once an index's delta segment holds this many records (live and \
-          tombstone), further inserts fall back to the slower inline \
-          graph-splice path. pgcontext.compact() rebuilds the base graph from \
-          the index's own pages and reopens an empty delta segment, restoring \
-          the fast path; REINDEX does the same from the heap and additionally \
-          reclaims disk. Neither runs automatically, so a write-heavy index \
-          reaches the fallback and stays there until one is run. 0 disables \
-          the delta segment entirely (every insert splices inline, matching \
-          pre-delta releases).",
+          Once an index's delta holds this many records (live and tombstone), \
+          pgcontext freezes it as an immutable segment. A full directory \
+          compacts one adjacent pair before rotation. There is no whole-graph \
+          inline splice fallback.",
         &HNSW_DELTA_SEGMENT_LIMIT,
-        0,
-        i32::MAX,
-        GucContext::Userset,
-        GucFlags::default(),
-    );
-    GucRegistry::define_bool_guc(
-        c"pgcontext.hnsw_compact_on_threshold",
-        c"Compact an HNSW index when its delta segment fills.",
-        c"When enabled, the insert that fills the delta segment also compacts \
-          the index: it rebuilds the base graph from the index's own pages \
-          and reopens an empty segment, so following inserts stay on the fast \
-          append path. That insert pays the rebuild and is correspondingly \
-          slow — a predictable stall in place of an unbounded slowdown, since \
-          without it every later insert falls back to inline graph splicing. \
-          Disabling this leaves the fallback in place until pgcontext.compact() \
-          or REINDEX is run by hand.",
-        &HNSW_COMPACT_ON_THRESHOLD,
-        GucContext::Userset,
-        GucFlags::default(),
-    );
-    GucRegistry::define_int_guc(
-        c"pgcontext.hnsw_compact_on_threshold_max_mb",
-        c"Largest index an insert may compact by itself, in megabytes of vectors.",
-        c"Bounds the stall pgcontext.hnsw_compact_on_threshold can impose. The \
-          insert projects the rebuild's vector footprint from the metapage; if \
-          it exceeds this, the insert declines to compact and takes the inline \
-          path instead, leaving the rebuild to pgcontext.compact() or REINDEX. \
-          Compaction time grows with the graph, so this is a latency control: \
-          on a 100,000-row 384-dimension index (about 146MB of vectors) a \
-          compaction takes roughly a minute, so the 1GB default admits stalls \
-          of several minutes on the largest index it accepts. The default is \
-          deliberately permissive so ordinary workloads keep self-maintaining; \
-          lower it when a bounded write latency matters more than sustained \
-          throughput. maintenance_work_mem applies independently and is often \
-          the tighter limit. 0 disables this bound entirely.",
-        &HNSW_COMPACT_ON_THRESHOLD_MAX_MB,
-        0,
-        i32::MAX,
+        1,
+        DEFAULT_HNSW_DELTA_SEGMENT_LIMIT,
         GucContext::Userset,
         GucFlags::default(),
     );
@@ -326,23 +290,7 @@ pub(crate) fn pgvector_compat_warnings_from_guc() -> bool {
 }
 
 pub(crate) fn hnsw_delta_segment_limit_from_guc() -> u64 {
-    u64::try_from(HNSW_DELTA_SEGMENT_LIMIT.get().max(0)).unwrap_or(0)
-}
-
-pub(crate) fn hnsw_compact_on_threshold_from_guc() -> bool {
-    HNSW_COMPACT_ON_THRESHOLD.get()
-}
-
-/// Ceiling in bytes on the projected rebuild an insert may run itself, or
-/// `None` when the operator has removed the bound.
-pub(crate) fn hnsw_compact_on_threshold_max_bytes_from_guc() -> Option<usize> {
-    let megabytes = HNSW_COMPACT_ON_THRESHOLD_MAX_MB.get();
-    if megabytes <= 0 {
-        return None;
-    }
-    usize::try_from(megabytes)
-        .ok()
-        .and_then(|value| value.checked_mul(1024 * 1024))
+    u64::try_from(HNSW_DELTA_SEGMENT_LIMIT.get().max(1)).unwrap_or(1)
 }
 
 pub(crate) fn hnsw_config_from_gucs() -> HnswConfig {
@@ -410,6 +358,13 @@ pub(crate) fn hnsw_build_parallel_workers_from_guc() -> usize {
     positive_setting_to_usize(
         "pgcontext.hnsw_build_parallel_workers",
         HNSW_BUILD_PARALLEL_WORKERS.get(),
+    )
+}
+
+pub(crate) fn hnsw_segment_parallel_workers_from_guc() -> usize {
+    positive_setting_to_usize(
+        "pgcontext.hnsw_segment_parallel_workers",
+        HNSW_SEGMENT_PARALLEL_WORKERS.get(),
     )
 }
 

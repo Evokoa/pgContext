@@ -14,9 +14,17 @@ struct HnswDirectoryIndex {
 
 #[derive(Clone)]
 struct CachedHnswDirectory {
-    epoch: u64,
-    meta_lsn: pg_sys::XLogRecPtr,
     directory: Rc<HnswDirectoryIndex>,
+}
+
+/// Complete immutable cache identity. Segment-local node ids and generations
+/// may repeat across indexes, so no subset of these fields is sufficient.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct HnswSegmentCacheKey {
+    index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
+    generation: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -167,7 +175,7 @@ impl PackedHnswGraph {
 /// traversal code.
 #[derive(Clone)]
 enum PackedGraphStore {
-    Local(Rc<PackedHnswGraph>),
+    Local(Arc<PackedHnswGraph>),
     /// A full-layer immutable graph mapped from an index-generation-bound file.
     Mapped(Rc<MappedPackedGraphImage>),
     /// A read view attached from the shared serving registry:
@@ -320,6 +328,13 @@ impl HnswPackedGeneration {
     ) -> context_index::GraphResult<bool> {
         self.base.neighbors_into(node_id, layer, node_count, output)
     }
+
+    fn parallel_local_graph(&self) -> Option<Arc<PackedHnswGraph>> {
+        match &self.base {
+            PackedGraphStore::Local(graph) => Some(Arc::clone(graph)),
+            PackedGraphStore::Mapped(_) | PackedGraphStore::Shared(_) => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -330,8 +345,6 @@ struct CachedPackedHnswGraph {
     /// `dirty_since` watermark sees no drift — so without this field a
     /// cached pack of the pre-REINDEX graph is re-served as current.
     rel_file_number: u32,
-    epoch: u64,
-    meta_lsn: pg_sys::XLogRecPtr,
     graph: HnswPackedGeneration,
 }
 
@@ -371,12 +384,31 @@ pub(crate) struct HnswServingStats {
     /// Scans that merged an exact delta-region scan with base-graph
     /// candidates because the index's delta region held at least one record.
     pub(crate) delta_segment_scans: u64,
+    /// Full active deltas frozen as immutable graph segments.
+    pub(crate) segment_rotations: u64,
+    /// Queries that searched more than one immutable graph segment.
+    pub(crate) multi_segment_scans: u64,
+    /// Multi-segment scans admitted to the bounded pure worker pool.
+    pub(crate) parallel_segment_scans: u64,
+    /// Multi-segment scans kept serial because PostgreSQL relation access is
+    /// backend-affine and no admitted parallel worker was available.
+    pub(crate) serial_segment_degradations: u64,
+    /// Largest immutable segment fan-out observed by this backend.
+    pub(crate) max_segments_observed: u64,
+    pub(crate) segment_compactions: u64,
+    pub(crate) parallel_admission_denials: u64,
+    pub(crate) segment_merge_candidates: u64,
+    pub(crate) frozen_mutation_records_scanned: u64,
+    pub(crate) compaction_input_rows: u64,
+    pub(crate) compaction_output_rows: u64,
+    pub(crate) compaction_wal_pages: u64,
+    pub(crate) compaction_peak_projected_bytes: u64,
 }
 
 thread_local! {
-    static HNSW_DIRECTORY_CACHE: RefCell<BTreeMap<u32, CachedHnswDirectory>> =
+    static HNSW_DIRECTORY_CACHE: RefCell<BTreeMap<HnswSegmentCacheKey, CachedHnswDirectory>> =
         const { RefCell::new(BTreeMap::new()) };
-    static HNSW_PACKED_GRAPH_CACHE: RefCell<BTreeMap<u32, CachedPackedHnswGraph>> =
+    static HNSW_PACKED_GRAPH_CACHE: RefCell<BTreeMap<HnswSegmentCacheKey, CachedPackedHnswGraph>> =
         const { RefCell::new(BTreeMap::new()) };
     static HNSW_SERVING_STATS: Cell<HnswServingStats> =
         const { Cell::new(HnswServingStats {
@@ -394,6 +426,19 @@ thread_local! {
             page_native_fallbacks: 0,
             delta_segment_records: 0,
             delta_segment_scans: 0,
+            segment_rotations: 0,
+            multi_segment_scans: 0,
+            parallel_segment_scans: 0,
+            serial_segment_degradations: 0,
+            max_segments_observed: 0,
+            segment_compactions: 0,
+            parallel_admission_denials: 0,
+            segment_merge_candidates: 0,
+            frozen_mutation_records_scanned: 0,
+            compaction_input_rows: 0,
+            compaction_output_rows: 0,
+            compaction_wal_pages: 0,
+            compaction_peak_projected_bytes: 0,
         }) };
 }
 
@@ -519,6 +564,123 @@ fn record_hnsw_delta_segment_scan() {
         current.delta_segment_scans = current.delta_segment_scans.saturating_add(1);
         stats.set(current);
     });
+}
+
+fn record_hnsw_segment_rotation() {
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.segment_rotations = current.segment_rotations.saturating_add(1);
+        stats.set(current);
+    });
+}
+
+fn record_hnsw_multi_segment_scan(segment_count: usize) {
+    if segment_count <= 1 {
+        return;
+    }
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.multi_segment_scans = current.multi_segment_scans.saturating_add(1);
+        current.max_segments_observed = current
+            .max_segments_observed
+            .max(u64::try_from(segment_count).unwrap_or(u64::MAX));
+        stats.set(current);
+    });
+}
+
+fn record_hnsw_parallel_segment_scan() {
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.parallel_segment_scans = current.parallel_segment_scans.saturating_add(1);
+        stats.set(current);
+    });
+}
+
+fn record_hnsw_serial_segment_degradation() {
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.serial_segment_degradations =
+            current.serial_segment_degradations.saturating_add(1);
+        stats.set(current);
+    });
+}
+
+fn record_hnsw_parallel_admission_denial() {
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.parallel_admission_denials = current.parallel_admission_denials.saturating_add(1);
+        stats.set(current);
+    });
+}
+
+fn record_hnsw_segment_merge(base_candidates: usize, frozen_mutations: usize) {
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.segment_merge_candidates = current
+            .segment_merge_candidates
+            .saturating_add(u64::try_from(base_candidates).unwrap_or(u64::MAX));
+        current.frozen_mutation_records_scanned = current
+            .frozen_mutation_records_scanned
+            .saturating_add(u64::try_from(frozen_mutations).unwrap_or(u64::MAX));
+        stats.set(current);
+    });
+}
+
+fn record_hnsw_segment_compaction(
+    input_rows: u64,
+    output_rows: usize,
+    wal_pages: u64,
+    projected_bytes: usize,
+) {
+    HNSW_SERVING_STATS.with(|stats| {
+        let mut current = stats.get();
+        current.segment_compactions = current.segment_compactions.saturating_add(1);
+        current.compaction_input_rows = current.compaction_input_rows.saturating_add(input_rows);
+        current.compaction_output_rows = current
+            .compaction_output_rows
+            .saturating_add(u64::try_from(output_rows).unwrap_or(u64::MAX));
+        current.compaction_wal_pages = current.compaction_wal_pages.saturating_add(wal_pages);
+        current.compaction_peak_projected_bytes = current
+            .compaction_peak_projected_bytes
+            .max(u64::try_from(projected_bytes).unwrap_or(u64::MAX));
+        stats.set(current);
+    });
+}
+
+fn retire_hnsw_segment_caches(
+    database_oid: u32,
+    index_oid: u32,
+    rel_file_number: u32,
+    segment_ids: &[u64],
+) {
+    HNSW_DIRECTORY_CACHE.with(|cache| {
+        cache.borrow_mut().retain(|key, _| {
+            key.index_oid != index_oid
+                || key.rel_file_number != rel_file_number
+                || !segment_ids.contains(&key.segment_id)
+        });
+    });
+    HNSW_PACKED_GRAPH_CACHE.with(|cache| {
+        cache.borrow_mut().retain(|key, _| {
+            key.index_oid != index_oid
+                || key.rel_file_number != rel_file_number
+                || !segment_ids.contains(&key.segment_id)
+        });
+    });
+    for segment_id in segment_ids {
+        evict_shared_image(
+            database_oid,
+            index_oid,
+            rel_file_number,
+            *segment_id,
+        );
+    }
+    retire_mapped_segments(
+        database_oid,
+        index_oid,
+        rel_file_number,
+        segment_ids,
+    );
 }
 
 impl HnswDirectoryIndex {

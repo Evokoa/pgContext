@@ -140,9 +140,9 @@ order:
 2. **Write-path scalability.** pgContext uses a segmented index design:
    constant-time WAL-logged inserts into a small delta segment, merged at
    query time with the main graph, crash-safe at every WAL boundary, and
-   compaction that rebuilds from the index's own pages. When the delta
-   segment fills, the insert that fills it compacts the index inline,
-   bounded by `pgcontext.hnsw_compact_on_threshold_max_mb`.
+   bounded compaction from the index's own pages. Full deltas rotate into
+   immutable graph segments; directory saturation compacts only the smallest
+   adjacent pair after `maintenance_work_mem` admission.
 
    Source-table `INSERT`, `UPDATE`, and `DELETE` already maintain HNSW
    incrementally; ordinary writes do not require a full index rebuild. A

@@ -142,6 +142,7 @@ unsafe fn ensure_hnsw_metapage(index_relation: pg_sys::Relation) {
     }
 }
 
+#[cfg(any(test, feature = "pg_test"))]
 unsafe fn append_hnsw_vector_record(
     index_relation: pg_sys::Relation,
     record: &HnswVectorRecord,
@@ -189,6 +190,7 @@ const fn hnsw_location_revision(location: HnswPageItemLocation) -> u64 {
 unsafe fn append_hnsw_delta_record(
     index_relation: pg_sys::Relation,
     record: &context_storage::DeltaRecord,
+    dimensions: Option<u32>,
 ) -> HnswPageItemLocation {
     let payload = context_storage::encode_delta_record(record).unwrap_or_else(|error| {
         raise_sql_error(
@@ -196,8 +198,200 @@ unsafe fn append_hnsw_delta_record(
             format!("failed to encode HNSW delta record: {error}"),
         )
     });
-    // SAFETY: The owned payload is valid for the complete append call.
-    unsafe { append_hnsw_typed_record(index_relation, &payload, GraphPageKind::Delta, "delta") }
+    // SAFETY: the live metapage owns the active delta lower bound. Older
+    // Delta pages are immutable mutation extents and must never be reused.
+    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+    let delta_start = meta.delta_start_block;
+    if delta_start == u64::MAX {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+            "HNSW active delta region is not open",
+        );
+    }
+    let existing = (meta.delta_end_block > delta_start)
+        .then(|| block_number_from_u64(meta.delta_end_block - 1, "HNSW active delta page"));
+    if let Some(block) = existing {
+        // SAFETY: the exact final active block and metapage are registered in
+        // one WAL record. A full page returns None without changing either.
+        if let Some(location) = unsafe {
+            try_append_hnsw_delta_record_atomic(
+                index_relation,
+                block,
+                false,
+                &payload,
+                dimensions,
+            )
+        } {
+            return location;
+        }
+    }
+    let block_count = u64::from(unsafe {
+        pg_sys::RelationGetNumberOfBlocksInFork(
+            index_relation,
+            pg_sys::ForkNumber::MAIN_FORKNUM,
+        )
+    });
+    if meta.delta_end_block > block_count {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "HNSW active delta end is beyond the relation",
+        );
+    }
+    // Reclaim only the exact unpublished block at the active cursor. This
+    // also makes crash-orphan pages harmless without allowing a delta extent
+    // to jump over them.
+    let (target, initialize) = if meta.delta_end_block == block_count {
+        (pg_sys::InvalidBlockNumber, true)
+    } else {
+        (
+            block_number_from_u64(meta.delta_end_block, "HNSW active delta cursor"),
+            true,
+        )
+    };
+    // SAFETY: the append lock keeps the cursor stable and the helper commits
+    // the page item and updated count as one Generic-WAL transition.
+    unsafe {
+        try_append_hnsw_delta_record_atomic(
+            index_relation,
+            target,
+            initialize,
+            &payload,
+            dimensions,
+        )
+    }
+    .unwrap_or_else(|| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "failed to append HNSW delta record to a fresh page",
+        )
+    })
+}
+
+/// Appends one delta item and advances the metapage cursor in one WAL record.
+/// A crash can therefore reveal both changes or neither, never an orphan item
+/// that a later append accidentally publishes.
+unsafe fn try_append_hnsw_delta_record_atomic(
+    index_relation: pg_sys::Relation,
+    block_number: pg_sys::BlockNumber,
+    initialize: bool,
+    payload: &[u8],
+    dimensions: Option<u32>,
+) -> Option<HnswPageItemLocation> {
+    ensure_hnsw_page_record_fits(payload, "delta");
+    // Lock block zero before the data block, matching the index-wide physical
+    // lock order. The append advisory lock excludes a competing writer.
+    let meta_buffer = unsafe {
+        pg_sys::ReadBufferExtended(
+            index_relation,
+            pg_sys::ForkNumber::MAIN_FORKNUM,
+            0,
+            pg_sys::ReadBufferMode::RBM_NORMAL,
+            ptr::null_mut(),
+        )
+    };
+    unsafe { pg_sys::LockBuffer(meta_buffer, pg_sys::BUFFER_LOCK_EXCLUSIVE.cast_signed()) };
+    let mode = if block_number == pg_sys::InvalidBlockNumber {
+        pg_sys::ReadBufferMode::RBM_ZERO_AND_LOCK
+    } else {
+        pg_sys::ReadBufferMode::RBM_NORMAL
+    };
+    let data_buffer = unsafe {
+        pg_sys::ReadBufferExtended(
+            index_relation,
+            pg_sys::ForkNumber::MAIN_FORKNUM,
+            block_number,
+            mode,
+            ptr::null_mut(),
+        )
+    };
+    if block_number != pg_sys::InvalidBlockNumber {
+        unsafe { pg_sys::LockBuffer(data_buffer, pg_sys::BUFFER_LOCK_EXCLUSIVE.cast_signed()) };
+    }
+    let state = unsafe { pg_sys::GenericXLogStart(index_relation) };
+    let registered = unsafe {
+        wal_contract::critical_section::HnswWalRegisteredTwoPages::register(
+            state,
+            meta_buffer,
+            data_buffer,
+            pg_sys::GENERIC_XLOG_FULL_IMAGE.cast_signed(),
+        )
+    };
+    let (meta_page, data_page) = registered.pages();
+    let mut meta = match unsafe { read_hnsw_meta_page(meta_page) } {
+        Ok(Some(meta)) => meta,
+        Ok(None) => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "HNSW metapage is missing during delta append",
+        ),
+        Err(error) => raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error),
+    };
+    let actual_block = u64::from(unsafe { pg_sys::BufferGetBlockNumber(data_buffer) });
+    if initialize {
+        if actual_block != meta.delta_end_block {
+            unsafe {
+                pg_sys::GenericXLogAbort(state);
+                pg_sys::UnlockReleaseBuffer(data_buffer);
+                pg_sys::UnlockReleaseBuffer(meta_buffer);
+            }
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "HNSW fresh delta page does not match the published append cursor",
+            );
+        }
+        unsafe {
+            pg_sys::PageInit(data_page, pg_sys::BLCKSZ as pg_sys::Size, 0);
+            initialize_hnsw_data_page(
+                data_page,
+                actual_block,
+                GraphPageKind::Delta,
+                meta.delta_generation,
+            );
+        }
+    } else if !unsafe { page_accepts_generation(data_page, meta.delta_generation) } {
+        unsafe {
+            pg_sys::GenericXLogAbort(state);
+            pg_sys::UnlockReleaseBuffer(data_buffer);
+            pg_sys::UnlockReleaseBuffer(meta_buffer);
+        }
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "HNSW active delta page has the wrong generation",
+        );
+    }
+    let offset = unsafe {
+        pg_sys::PageAddItemExtended(
+            data_page,
+            payload.as_ptr().cast_mut().cast(),
+            payload.len() as pg_sys::Size,
+            HNSW_INVALID_OFFSET,
+            0,
+        )
+    };
+    if offset == HNSW_INVALID_OFFSET {
+        unsafe {
+            pg_sys::GenericXLogAbort(state);
+            pg_sys::UnlockReleaseBuffer(data_buffer);
+            pg_sys::UnlockReleaseBuffer(meta_buffer);
+        }
+        return None;
+    }
+    if let Some(dimensions) = dimensions
+        && meta.dimensions == 0
+    {
+        meta.dimensions = dimensions;
+    }
+    meta.record_delta_append(actual_block.saturating_add(1));
+    unsafe { write_hnsw_meta_page(meta_page, meta) };
+    let location = HnswPageItemLocation {
+        page: actual_block,
+        slot: offset,
+    };
+    unsafe { registered.seal().finish() };
+    unsafe {
+        pg_sys::UnlockReleaseBuffer(data_buffer);
+        pg_sys::UnlockReleaseBuffer(meta_buffer);
+    }
+    Some(location)
 }
 
 /// Narrows a metapage-published block number to the platform block-number
@@ -224,20 +418,121 @@ fn block_number_from_u64(value: u64, label: &str) -> pg_sys::BlockNumber {
 /// `index_relation` must be a live index relation for the complete scan.
 unsafe fn read_hnsw_delta_records(
     index_relation: pg_sys::Relation,
-    delta_start_block: u64,
+    meta: HnswMetaPage,
 ) -> Vec<context_storage::DeltaRecord> {
-    if delta_start_block == u64::MAX {
-        return Vec::new();
+    unsafe { try_read_hnsw_delta_records(index_relation, meta) }.unwrap_or_else(|| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_T_R_SERIALIZATION_FAILURE,
+            "HNSW active delta advanced while reading its publication",
+        )
+    })
+}
+
+/// Reads the active extent while holding block zero shared. The atomic writer
+/// locks block zero exclusive before its data page, so the expected count and
+/// physical items cannot diverge during this copy.
+unsafe fn try_read_hnsw_delta_records(
+    index_relation: pg_sys::Relation,
+    meta: HnswMetaPage,
+) -> Option<Vec<context_storage::DeltaRecord>> {
+    if meta.delta_start_block == u64::MAX || meta.delta_record_count == 0 {
+        return Some(Vec::new());
     }
+    let meta_buffer = unsafe {
+        pg_sys::ReadBufferExtended(
+            index_relation,
+            pg_sys::ForkNumber::MAIN_FORKNUM,
+            0,
+            pg_sys::ReadBufferMode::RBM_NORMAL,
+            ptr::null_mut(),
+        )
+    };
+    unsafe { pg_sys::LockBuffer(meta_buffer, pg_sys::BUFFER_LOCK_SHARE.cast_signed()) };
+    let current = unsafe {
+        let page = pg_sys::BufferGetPage(meta_buffer);
+        read_hnsw_meta_page(page)
+    };
+    let current = match current {
+        Ok(Some(current)) => current,
+        Ok(None) => {
+            unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "HNSW metapage is missing during active delta read",
+            )
+        }
+        Err(error) => {
+            unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
+            raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error)
+        }
+    };
+    if current.directory_epoch != meta.directory_epoch
+        || current.delta_start_block != meta.delta_start_block
+        || current.delta_end_block != meta.delta_end_block
+        || current.delta_generation != meta.delta_generation
+        || current.delta_record_count != meta.delta_record_count
+    {
+        unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
+        return None;
+    }
+    // SAFETY: the exact active extent and its generation belong to the same
+    // validated metapage publication, and block zero prevents its writer from
+    // committing another item until the range copy finishes.
+    let records = unsafe {
+        read_hnsw_delta_records_range(
+            index_relation,
+            meta.delta_start_block,
+            meta.delta_end_block,
+            meta.delta_generation,
+            GraphPageKind::Delta,
+            meta.delta_record_count,
+        )
+    };
+    unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
+    Some(records)
+}
+
+/// Reads one immutable delta/mutation extent in append order.
+///
+/// # Safety
+///
+/// `index_relation` must be live and the range must come from its validated
+/// metapage directory.
+unsafe fn read_hnsw_delta_records_range(
+    index_relation: pg_sys::Relation,
+    delta_start_block: u64,
+    delta_end_block: u64,
+    mutation_generation: u64,
+    expected_kind: GraphPageKind,
+    expected_record_count: u64,
+) -> Vec<context_storage::DeltaRecord> {
     // SAFETY: PostgreSQL relation metadata is valid for this AM callback.
     let block_count = u64::from(unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     });
+    if delta_end_block > block_count {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "HNSW delta extent is outside the index relation",
+        );
+    }
+    if delta_start_block == delta_end_block {
+        if expected_record_count == 0 {
+            return Vec::new();
+        }
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "HNSW nonempty mutation descriptor names an empty extent",
+        );
+    }
     if delta_start_block >= block_count {
-        return Vec::new();
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "HNSW nonempty mutation extent starts outside the index relation",
+        );
     }
     let start_block = block_number_from_u64(delta_start_block, "HNSW delta_start_block");
-    let end_block = block_number_from_u64(block_count, "HNSW relation block count");
+    let end_block = block_number_from_u64(delta_end_block, "HNSW delta end block");
 
     let mut records = Vec::new();
     for block_number in start_block..end_block {
@@ -260,12 +555,18 @@ unsafe fn read_hnsw_delta_records(
             let page = pg_sys::BufferGetPage(buffer);
             if pg_sys::PageIsNew(page) {
                 pg_sys::UnlockReleaseBuffer(buffer);
-                continue;
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    "HNSW mutation extent contains an uninitialized page",
+                );
             }
             let max_offset = pg_sys::PageGetMaxOffsetNumber(page);
             if max_offset < HNSW_FIRST_OFFSET {
                 pg_sys::UnlockReleaseBuffer(buffer);
-                continue;
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    "HNSW mutation extent contains an empty page",
+                );
             }
             let mut page_items = Vec::with_capacity(usize::from(max_offset));
             for offset in HNSW_FIRST_OFFSET..=max_offset {
@@ -290,8 +591,12 @@ unsafe fn read_hnsw_delta_records(
         // is either mid-append (page initialized, item not yet visible to
         // this snapshot) or a corrupt index; either way, skip rather than
         // fail the whole scan on a single racing page.
-        if header.kind != GraphPageKind::Delta {
-            continue;
+        if header.kind != expected_kind || header.generation != mutation_generation
+        {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "HNSW mutation extent contains a wrong-kind or wrong-generation page",
+            );
         }
         for item in page_items.iter().skip(1) {
             match context_storage::decode_delta_record(item) {
@@ -305,9 +610,18 @@ unsafe fn read_hnsw_delta_records(
             }
         }
     }
+    if records.len() as u64 != expected_record_count {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            format!(
+                "HNSW {expected_kind:?} record count does not match its metapage descriptor"
+            ),
+        );
+    }
     records
 }
 
+#[cfg(any(test, feature = "pg_test"))]
 unsafe fn append_hnsw_node_revision(
     index_relation: pg_sys::Relation,
     record: &HnswVectorRecord,
@@ -398,6 +712,83 @@ unsafe fn write_hnsw_node_revisions_bulk(
     };
 }
 
+/// Writes a contiguous delta-record extent on fresh pages.
+///
+/// The caller publishes the returned extent separately. Until that metapage
+/// update, its fresh generation is invisible to both active and frozen-delta
+/// readers.
+unsafe fn write_hnsw_delta_records_bulk(
+    index_relation: pg_sys::Relation,
+    records: &[context_storage::DeltaRecord],
+    generation: u64,
+    kind: GraphPageKind,
+    label: &str,
+) {
+    if records.is_empty() {
+        return;
+    }
+    // SAFETY: the caller owns the live relation and every record for this
+    // complete synchronous Generic-WAL batch.
+    unsafe {
+        append_hnsw_bulk_typed_records(
+            index_relation,
+            records.len(),
+            kind,
+            label,
+            generation,
+            |index| {
+                context_storage::encode_delta_record(&records[index]).unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                        format!("failed to encode HNSW {label} record: {error}"),
+                    )
+                })
+            },
+        );
+    }
+}
+
+/// Writes an immutable copy of a segment mutation log. `FrozenDelta` pages
+/// are invisible to active-delta readers until a metapage descriptor names
+/// their exact extent.
+unsafe fn write_hnsw_frozen_delta_records(
+    index_relation: pg_sys::Relation,
+    records: &[context_storage::DeltaRecord],
+    generation: u64,
+) {
+    // SAFETY: forwarded caller contract; the page kind and label are fixed.
+    unsafe {
+        write_hnsw_delta_records_bulk(
+            index_relation,
+            records,
+            generation,
+            GraphPageKind::FrozenDelta,
+            "frozen delta",
+        );
+    }
+}
+
+/// Rewrites an active delta onto a fresh contiguous extent. This is used when
+/// pair compaction appends graph pages after the old active extent: allowing a
+/// later single-record append to bridge those graph pages would make the
+/// metapage describe overlapping extents.
+unsafe fn write_hnsw_active_delta_records(
+    index_relation: pg_sys::Relation,
+    records: &[context_storage::DeltaRecord],
+    generation: u64,
+) {
+    // SAFETY: forwarded caller contract; the page kind and label are fixed.
+    unsafe {
+        write_hnsw_delta_records_bulk(
+            index_relation,
+            records,
+            generation,
+            GraphPageKind::Delta,
+            "active delta",
+        );
+    }
+}
+
 #[allow(dead_code, reason = "retained for pre-v6 WAL/page compatibility tests")]
 unsafe fn append_hnsw_adjacency_revision(
     index_relation: pg_sys::Relation,
@@ -462,6 +853,18 @@ unsafe fn append_hnsw_typed_record(
     kind: GraphPageKind,
     label: &str,
 ) -> HnswPageItemLocation {
+    // SAFETY: the caller owns the live relation and payload.
+    unsafe { append_hnsw_typed_record_from(index_relation, payload, kind, label, 0, None) }
+}
+
+unsafe fn append_hnsw_typed_record_from(
+    index_relation: pg_sys::Relation,
+    payload: &[u8],
+    kind: GraphPageKind,
+    label: &str,
+    minimum_block: u64,
+    generation: Option<u64>,
+) -> HnswPageItemLocation {
     ensure_hnsw_page_record_fits(payload, label);
 
     // SAFETY: The caller passes a valid index relation owned by PostgreSQL.
@@ -470,10 +873,12 @@ unsafe fn append_hnsw_typed_record(
     // published — only build and compaction create a new one — so the stamp is
     // read from the live metapage rather than passed in.
     // SAFETY: the relation is live and its metapage was ensured above.
-    let generation = unsafe { PgHnswGraphRead::new(index_relation).meta().page_generation() };
+    let generation = generation
+        .unwrap_or_else(|| unsafe { PgHnswGraphRead::new(index_relation).meta().page_generation() });
     // SAFETY: The relation remains live for this append operation, and `kind`
     // selects the typed page chain whose final block is inspected.
     let target_block = unsafe { find_last_hnsw_page(index_relation, kind) }
+        .filter(|block| u64::from(*block) >= minimum_block)
         .unwrap_or(pg_sys::InvalidBlockNumber);
     // SAFETY: The relation is valid and `payload` remains borrowed for the
     // duration of the append attempt.
@@ -677,32 +1082,39 @@ unsafe fn try_append_hnsw_typed_record(
     }
 }
 
-unsafe fn read_hnsw_vector_records(index_relation: pg_sys::Relation) -> Vec<HnswVectorRecord> {
+/// Reads one immutable HNSW graph extent. Node identities are local to the
+/// segment, so callers that combine segments must preserve the outer segment
+/// boundary rather than keying the combined records by node id.
+unsafe fn read_hnsw_segment_records(
+    index_relation: pg_sys::Relation,
+    segment: HnswSegmentMeta,
+) -> Vec<HnswVectorRecord> {
+    if segment.graph_nodes == 0 {
+        return Vec::new();
+    }
     // SAFETY: PostgreSQL relation metadata is valid for this AM callback.
     let block_count = unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     };
     if block_count <= HNSW_FIRST_VECTOR_BLOCK {
-        return Vec::new();
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "HNSW nonempty graph descriptor has no readable data blocks",
+        );
     }
 
-    // The live base starts where the metapage says, not at block 1: a
-    // compacted relation still physically holds the base it superseded, and
-    // reading that too would duplicate every node. Derived here rather than
-    // passed in so no caller can read a superseded region by omission.
-    // `meta()` releases its buffer before returning, so no block-0 lock is
-    // held while the base is scanned below.
-    // SAFETY: the caller owns a live index relation whose metapage was
-    // initialized before any typed page could be appended.
-    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
-    let base_start = block_number_from_u64(meta.base_scan_start(), "HNSW base start block");
-    if block_count <= base_start {
-        return Vec::new();
+    let base_start = block_number_from_u64(segment.start_block, "HNSW segment start block");
+    let base_end = block_number_from_u64(segment.end_block, "HNSW segment end block");
+    if base_end > block_count || base_start >= base_end {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "HNSW segment extent is outside the index relation",
+        );
     }
 
     let mut records = BTreeMap::new();
     let mut adjacency = BTreeMap::new();
-    for block_number in base_start..block_count {
+    for block_number in base_start..base_end {
         // SAFETY: PostgreSQL owns the relation pointer and returns a pinned
         // buffer for the requested block until it is released below.
         let buffer = unsafe {
@@ -722,7 +1134,10 @@ unsafe fn read_hnsw_vector_records(index_relation: pg_sys::Relation) -> Vec<Hnsw
             let page = pg_sys::BufferGetPage(buffer);
             if pg_sys::PageIsNew(page) {
                 pg_sys::UnlockReleaseBuffer(buffer);
-                continue;
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    "HNSW segment extent contains an uninitialized page",
+                );
             }
             let max_offset = pg_sys::PageGetMaxOffsetNumber(page);
             if max_offset < HNSW_FIRST_VECTOR_RECORD_OFFSET {
@@ -769,8 +1184,11 @@ unsafe fn read_hnsw_vector_records(index_relation: pg_sys::Relation) -> Vec<Hnsw
         // Without this the newer base silently overwrites the live one by node
         // id, which is a wrong-results bug for any reader running concurrently
         // with a compaction, not only after a crash.
-        if header.generation != meta.base_generation {
-            continue;
+        if header.generation != segment.generation {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "HNSW segment extent contains a wrong-generation page",
+            );
         }
         for item in page_items.iter().skip(1) {
             match header.kind {
@@ -798,7 +1216,10 @@ unsafe fn read_hnsw_vector_records(index_relation: pg_sys::Relation) -> Vec<Hnsw
                         raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, reason);
                     });
                 }
-                _ => {}
+                _ => raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    "HNSW graph extent contains a non-graph page kind",
+                ),
             }
         }
     }
@@ -823,6 +1244,12 @@ unsafe fn read_hnsw_vector_records(index_relation: pg_sys::Relation) -> Vec<Hnsw
             // reaches WAL on a later retry.
             continue;
         }
+    }
+    if records.len() as u64 != segment.graph_nodes {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            "HNSW segment node count does not match its directory descriptor",
+        );
     }
     let present_node_ids = records.keys().copied().collect::<BTreeSet<_>>();
     for record in records.values_mut() {

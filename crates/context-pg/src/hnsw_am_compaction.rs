@@ -36,6 +36,492 @@
 // trigger: the fresh base overwrites the live one by node id in any reader
 // running concurrently with a compaction.
 
+fn residual_tombstones(
+    records: &[context_storage::DeltaRecord],
+    covered_tids: Option<&BTreeSet<u64>>,
+) -> Vec<context_storage::DeltaRecord> {
+    let mut last_kind = BTreeMap::new();
+    for record in records {
+        last_kind.insert(record.heap_tid, record.kind);
+    }
+    last_kind
+        .into_iter()
+        .filter(|(heap_tid, kind)| {
+            *kind == DeltaRecordKind::Tombstone
+                && covered_tids.is_none_or(|covered| !covered.contains(heap_tid))
+        })
+        .map(|(heap_tid, _)| context_storage::DeltaRecord::tombstone(heap_tid))
+        .collect()
+}
+
+fn bounded_compaction_working_set_bytes(
+    rows: u64,
+    mutation_records: usize,
+    dimensions: u32,
+    config: HnswConfig,
+) -> Option<usize> {
+    let rows = usize::try_from(rows).ok()?.checked_add(mutation_records)?;
+    let vector_bytes = rows
+        .checked_mul(usize::try_from(dimensions).ok()?)?
+        .checked_mul(size_of::<f32>())?;
+    // Source records, folded rows, and the graph overlap during construction.
+    let vector_working_sets = vector_bytes.checked_mul(3)?;
+    // Include reciprocal base-layer links and conservative container/identity
+    // overhead. This intentionally over-admits neither allocator metadata nor
+    // upper-layer links at the maintenance boundary.
+    let per_row_graph = config
+        .m()
+        .checked_mul(2)?
+        .checked_mul(size_of::<HnswNodeId>())?
+        .checked_add(128)?;
+    vector_working_sets.checked_add(rows.checked_mul(per_row_graph)?)
+}
+
+fn enforce_bounded_compaction_budget(
+    rows: u64,
+    mutation_records: usize,
+    dimensions: u32,
+    config: HnswConfig,
+) {
+    let projected = bounded_compaction_working_set_bytes(
+        rows,
+        mutation_records,
+        dimensions,
+        config,
+    )
+    .unwrap_or(usize::MAX);
+    let budget = maintenance_work_mem_budget_bytes();
+    if projected > budget {
+        let suggested_mib = projected.div_ceil(1024 * 1024).max(1);
+        raise_sql_error_with_hint(
+            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+            format!(
+                "bounded HNSW compaction projected memory {projected} bytes exceeds maintenance_work_mem budget {budget} bytes"
+            ),
+            format!(
+                "Raise the session budget, for example SET maintenance_work_mem = '{suggested_mib}MB', then retry. No segment publication occurred."
+            ),
+        );
+    }
+}
+
+/// Freezes the full active delta and publishes its live rows as one additional
+/// immutable graph segment. The original mutation extent remains part of the
+/// descriptor so tombstones and replacements retire candidates from older
+/// segments in durable append order.
+///
+/// # Safety
+///
+/// `index_relation` must be live and the caller must hold the per-index append
+/// lock for the complete durable-write-then-publish sequence.
+unsafe fn hnsw_rotate_delta_relation(
+    index_relation: pg_sys::Relation,
+    score_metric: HnswScoreMetric,
+) -> bool {
+    // SAFETY: the caller owns a live locked relation.
+    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+    if meta.delta_start_block == u64::MAX
+        || meta.delta_record_count == 0
+        || usize::from(meta.segment_count) >= HNSW_MAX_SEGMENTS
+    {
+        return false;
+    }
+    let config = meta.stored_config(score_metric, hnsw_config_from_gucs().ef_search());
+    enforce_bounded_compaction_budget(
+        0,
+        usize::try_from(meta.delta_record_count).unwrap_or(usize::MAX),
+        meta.dimensions,
+        config,
+    );
+    // SAFETY: the active delta boundary belongs to this publication.
+    let delta_records = unsafe { read_hnsw_delta_records(index_relation, meta) };
+    if delta_records.is_empty() {
+        return false;
+    }
+    let entries = delta_records.iter().map(|record| match record.kind {
+        DeltaRecordKind::Live => DeltaScanEntry::Live {
+            heap_tid: record.heap_tid,
+            vector: record.vector.as_slice(),
+        },
+        DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
+            heap_tid: record.heap_tid,
+        },
+    });
+    let live_rows = context_index::fold_compaction_live_rows(entries);
+    let builder = ConcurrentHnswBuilder::new(
+        score_metric.navigation_metric(),
+        config,
+        live_rows.len(),
+    );
+    for row in live_rows {
+        let vector = DenseVector::new(row.vector).unwrap_or_else(|error| raise_core_error(error));
+        builder
+            .insert(HnswPointId::new(row.heap_tid), vector)
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    format!("failed to build rotated HNSW segment: {error}"),
+                )
+            });
+    }
+    let graph = builder.finish().unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            format!("failed to finalize rotated HNSW segment: {error}"),
+        )
+    });
+    let entry_point = graph.entry_point();
+    let snapshots = graph.into_node_snapshots();
+    let delta_owned_tids = delta_records
+        .iter()
+        .filter(|record| record.kind == DeltaRecordKind::Live)
+        .map(|record| record.heap_tid)
+        .collect::<BTreeSet<_>>();
+    let residual = residual_tombstones(&delta_records, Some(&delta_owned_tids));
+    let graph_start = u64::from(unsafe {
+        pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
+    });
+    let generation = meta.next_segment_generation();
+    if !snapshots.is_empty() {
+        // SAFETY: the locked relation and owned snapshots live through the
+        // complete append; this generation is invisible until publication.
+        unsafe { write_hnsw_node_revisions_bulk(index_relation, &snapshots, generation) };
+    }
+    let graph_end = u64::from(unsafe {
+        pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
+    });
+    let mutation_start = if residual.is_empty() {
+        u64::MAX
+    } else {
+        graph_end
+    };
+    if !residual.is_empty() {
+        // SAFETY: residual tombstones are immutable and generation-invisible
+        // until the directory publication below.
+        unsafe { write_hnsw_frozen_delta_records(index_relation, &residual, generation) };
+    }
+    let mutation_end = if residual.is_empty() {
+        u64::MAX
+    } else {
+        u64::from(unsafe {
+            pg_sys::RelationGetNumberOfBlocksInFork(
+                index_relation,
+                pg_sys::ForkNumber::MAIN_FORKNUM,
+            )
+        })
+    };
+    // SAFETY: re-read under the caller's append lock to fence unexpected
+    // maintenance before publishing the prepared segment.
+    let after_write = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+    if after_write.directory_epoch != meta.directory_epoch
+        || after_write.delta_record_count != meta.delta_record_count
+    {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_T_R_SERIALIZATION_FAILURE,
+            "HNSW delta rotation observed a concurrent directory mutation",
+        );
+    }
+    // SAFETY: all graph pages are durable and the mutation extent was already
+    // durable before this single metapage publication.
+    unsafe {
+        update_hnsw_metapage(index_relation, |meta| {
+            meta.publish_additional_segment(
+                generation,
+                graph_start,
+                graph_end,
+                graph_node_count(&snapshots),
+                entry_point,
+                mutation_start,
+                mutation_end,
+                residual.len() as u64,
+            );
+            let active_start = if mutation_end == u64::MAX {
+                graph_end
+            } else {
+                mutation_end
+            };
+            meta.open_delta_region(active_start);
+        });
+    }
+    record_hnsw_segment_rotation();
+    true
+}
+
+/// Compacts the smallest adjacent immutable pair and atomically replaces only
+/// those two descriptors. The read/build/write cost is bounded by the chosen
+/// pair; every other segment and the active delta remain untouched.
+///
+/// # Safety
+///
+/// `index_relation` must be live and the caller must hold the append advisory
+/// lock. This function conditionally acquires the parent-table maintenance
+/// lock and returns `false` instead of waiting behind conflicting maintenance.
+unsafe fn hnsw_compact_smallest_pair(
+    index_relation: pg_sys::Relation,
+    score_metric: HnswScoreMetric,
+) -> bool {
+    // SAFETY: the relation is live for this non-blocking maintenance lock.
+    if !unsafe { try_lock_hnsw_compaction_table(index_relation) } {
+        return false;
+    }
+    // SAFETY: the caller owns the relation and append lock.
+    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+    if meta.segments().len() < 2 {
+        return false;
+    }
+    let first = meta
+        .segments()
+        .windows(2)
+        .enumerate()
+        .min_by_key(|(index, pair)| {
+            (
+                pair[0]
+                    .graph_nodes
+                    .saturating_add(pair[1].graph_nodes)
+                    .saturating_add(pair[0].mutation_record_count)
+                    .saturating_add(pair[1].mutation_record_count),
+                *index,
+            )
+        })
+        .map_or(0, |(index, _)| index);
+    let pair = [meta.segments()[first], meta.segments()[first + 1]];
+    let pair_rows = pair[0].graph_nodes.saturating_add(pair[1].graph_nodes);
+    let config = meta.stored_config(score_metric, hnsw_config_from_gucs().ef_search());
+    let active_record_count = usize::try_from(meta.delta_record_count).unwrap_or(usize::MAX);
+    let mut projected_bytes = bounded_compaction_working_set_bytes(
+        pair_rows,
+        active_record_count,
+        meta.dimensions,
+        config,
+    )
+    .unwrap_or(usize::MAX);
+    enforce_bounded_compaction_budget(
+        pair_rows,
+        active_record_count,
+        meta.dimensions,
+        config,
+    );
+    // Pair compaction writes beyond the old active delta. Preserve its exact
+    // logical contents now so they can be republished on a new contiguous
+    // extent after the replacement graph.
+    let active_records = if meta.delta_record_count == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: the active extent belongs to the validated metapage and the
+        // append lock keeps it stable through publication.
+        unsafe { read_hnsw_delta_records(index_relation, meta) }
+    };
+    let frozen_record_count = pair.iter().fold(0_usize, |total, segment| {
+        total.saturating_add(
+            usize::try_from(segment.mutation_record_count).unwrap_or(usize::MAX),
+        )
+    });
+    let preflight_records = active_record_count.saturating_add(frozen_record_count);
+    enforce_bounded_compaction_budget(pair_rows, preflight_records, meta.dimensions, config);
+    projected_bytes = projected_bytes.max(
+        bounded_compaction_working_set_bytes(
+            pair_rows,
+            preflight_records,
+            meta.dimensions,
+            config,
+        )
+        .unwrap_or(usize::MAX),
+    );
+    let mut segment_records = Vec::with_capacity(pair.len());
+    for segment in pair {
+        // SAFETY: every descriptor belongs to this validated publication.
+        let base = unsafe { read_hnsw_segment_records(index_relation, segment) };
+        let mutations = if segment.mutation_start_block != u64::MAX {
+            // SAFETY: the immutable mutation extent belongs to this segment.
+            unsafe {
+                read_hnsw_delta_records_range(
+                    index_relation,
+                    segment.mutation_start_block,
+                    segment.mutation_end_block,
+                    segment.mutation_generation,
+                    GraphPageKind::FrozenDelta,
+                    segment.mutation_record_count,
+                )
+            }
+        } else {
+            Vec::new()
+        };
+        segment_records.push((base, mutations));
+    }
+    let covered_tids = segment_records
+        .iter()
+        .flat_map(|(base, _)| base.iter())
+        .map(hnsw_record_heap_tid)
+        .collect::<BTreeSet<_>>();
+    let residual = residual_tombstones(
+        &segment_records
+            .iter()
+            .flat_map(|(_, mutations)| mutations.iter().cloned())
+            .collect::<Vec<_>>(),
+        Some(&covered_tids),
+    );
+    let live_rows = context_index::fold_compaction_live_rows(segment_records.iter().flat_map(
+        |(base, mutations)| {
+            base.iter()
+                .map(|record| {
+                    let heap_tid = hnsw_record_heap_tid(record);
+                    if hnsw_record_is_tombstoned(record) {
+                        DeltaScanEntry::Tombstone { heap_tid }
+                    } else {
+                        DeltaScanEntry::Live {
+                            heap_tid,
+                            vector: record.vector.as_slice(),
+                        }
+                    }
+                })
+                .chain(mutations.iter().map(|record| match record.kind {
+                    DeltaRecordKind::Live => DeltaScanEntry::Live {
+                        heap_tid: record.heap_tid,
+                        vector: record.vector.as_slice(),
+                    },
+                    DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
+                        heap_tid: record.heap_tid,
+                    },
+                }))
+        },
+    ));
+    let builder = ConcurrentHnswBuilder::new(
+        score_metric.navigation_metric(),
+        config,
+        live_rows.len(),
+    );
+    for row in live_rows {
+        let vector = DenseVector::new(row.vector).unwrap_or_else(|error| raise_core_error(error));
+        builder
+            .insert(HnswPointId::new(row.heap_tid), vector)
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    format!("failed to build bounded compacted HNSW segment: {error}"),
+                )
+            });
+    }
+    let graph = builder.finish().unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            format!("failed to finalize bounded compacted HNSW segment: {error}"),
+        )
+    });
+    let entry_point = graph.entry_point();
+    let snapshots = graph.into_node_snapshots();
+    let generation = meta.next_segment_generation();
+    let graph_start = u64::from(unsafe {
+        pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
+    });
+    if !snapshots.is_empty() {
+        // SAFETY: these pages are generation-invisible until the metapage flip.
+        unsafe { write_hnsw_node_revisions_bulk(index_relation, &snapshots, generation) };
+    }
+    let graph_end = u64::from(unsafe {
+        pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
+    });
+    let mutation_start = if residual.is_empty() {
+        u64::MAX
+    } else {
+        graph_end
+    };
+    if !residual.is_empty() {
+        // SAFETY: FrozenDelta pages are skipped by old active-delta readers.
+        unsafe { write_hnsw_frozen_delta_records(index_relation, &residual, generation) };
+    }
+    let mutation_end = if residual.is_empty() {
+        u64::MAX
+    } else {
+        u64::from(unsafe {
+            pg_sys::RelationGetNumberOfBlocksInFork(
+                index_relation,
+                pg_sys::ForkNumber::MAIN_FORKNUM,
+            )
+        })
+    };
+    let active_generation = generation.saturating_add(1);
+    let active_start = u64::from(unsafe {
+        pg_sys::RelationGetNumberOfBlocksInFork(
+            index_relation,
+            pg_sys::ForkNumber::MAIN_FORKNUM,
+        )
+    });
+    if !active_records.is_empty() {
+        // SAFETY: active records are owned, append-locked, and stamped with a
+        // generation that remains invisible until the metapage flip below.
+        unsafe {
+            write_hnsw_active_delta_records(
+                index_relation,
+                &active_records,
+                active_generation,
+            );
+        }
+    }
+    let active_end = u64::from(unsafe {
+        pg_sys::RelationGetNumberOfBlocksInFork(
+            index_relation,
+            pg_sys::ForkNumber::MAIN_FORKNUM,
+        )
+    });
+    // SAFETY: fence against unexpected mutation before publication.
+    let after_write = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+    if after_write.directory_epoch != meta.directory_epoch
+        || after_write.delta_record_count != meta.delta_record_count
+    {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_T_R_SERIALIZATION_FAILURE,
+            "bounded HNSW compaction observed a concurrent directory mutation",
+        );
+    }
+    // SAFETY: every new page is durable; this is the single publication point.
+    unsafe {
+        update_hnsw_metapage(index_relation, |meta| {
+            meta.replace_segment_pair(
+                first,
+                generation,
+                graph_start,
+                graph_end,
+                graph_node_count(&snapshots),
+                entry_point,
+                mutation_start,
+                mutation_end,
+                residual.len() as u64,
+            );
+            meta.relocate_active_delta(
+                active_start,
+                active_end,
+                active_generation,
+                active_records.len() as u64,
+            );
+        });
+    }
+    hnsw_physical_failpoint(15, "after_compaction_publish");
+    // SAFETY: these backend and relation identities are stable for the call.
+    let database_oid = unsafe { pg_sys::MyDatabaseId.to_u32() };
+    let index_oid = unsafe { (*index_relation).rd_id.to_u32() };
+    let rel_file_number = unsafe { (*index_relation).rd_locator.relNumber.to_u32() };
+    retire_hnsw_segment_caches(
+        database_oid,
+        index_oid,
+        rel_file_number,
+        &[pair[0].segment_id, pair[1].segment_id],
+    );
+    let mutation_pages = if mutation_start == u64::MAX {
+        0
+    } else {
+        mutation_end.saturating_sub(mutation_start)
+    };
+    record_hnsw_segment_compaction(
+        pair_rows,
+        snapshots.len(),
+        graph_end
+            .saturating_sub(graph_start)
+            .saturating_add(mutation_pages),
+        projected_bytes,
+    );
+    true
+}
+
 /// Reads, rebuilds, and republishes one HNSW index's graph from its own
 /// pages, returning the number of rows the compacted graph holds.
 ///
@@ -47,44 +533,81 @@
 unsafe fn hnsw_compact_relation(
     index_relation: pg_sys::Relation,
     score_metric: HnswScoreMetric,
-    budget: HnswCompactionBudget,
-) -> Option<HnswCompactionOutcome> {
+) -> HnswCompactionOutcome {
     // SAFETY: the caller owns a live index relation for this call.
     let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
     // SAFETY: the validated relation owns a live versioned metapage.
     let config = unsafe { hnsw_stored_config(index_relation, score_metric) };
 
-    // SAFETY: the caller owns the relation and the append lock, so the base
-    // and delta regions cannot change underneath these two reads.
-    let base_records = unsafe { read_hnsw_vector_records(index_relation) };
-    // SAFETY: `delta_start_block` was read from the metapage above.
-    let delta_records = unsafe { read_hnsw_delta_records(index_relation, meta.delta_start_block) };
-
-    // One ordered stream, oldest first: the base graph, then the delta in
-    // append order. `fold_compaction_live_rows` applies last-write-wins over
-    // the whole stream, so a delta write supersedes its base row and a delta
-    // tombstone removes it.
-    let base_entries = base_records.iter().map(|record| {
-        let heap_tid = hnsw_record_heap_tid(record);
-        if hnsw_record_is_tombstoned(record) {
-            DeltaScanEntry::Tombstone { heap_tid }
+    let mutation_count = meta
+        .segments()
+        .iter()
+        .fold(meta.delta_record_count, |total, segment| {
+            total.saturating_add(segment.mutation_record_count)
+        });
+    enforce_bounded_compaction_budget(
+        meta.graph_nodes,
+        usize::try_from(mutation_count).unwrap_or(usize::MAX),
+        meta.dimensions,
+        config,
+    );
+    // Preserve publication chronology: each segment graph is followed by its
+    // own mutation log, then the next segment may resurrect a reused heap TID.
+    let mut segment_records = Vec::with_capacity(meta.segments().len());
+    for segment in meta.segments() {
+        let base = unsafe { read_hnsw_segment_records(index_relation, *segment) };
+        let mutations = if segment.mutation_start_block == u64::MAX {
+            Vec::new()
         } else {
-            DeltaScanEntry::Live {
-                heap_tid,
-                vector: record.vector.as_slice(),
+            unsafe {
+                read_hnsw_delta_records_range(
+                    index_relation,
+                    segment.mutation_start_block,
+                    segment.mutation_end_block,
+                    segment.mutation_generation,
+                    GraphPageKind::FrozenDelta,
+                    segment.mutation_record_count,
+                )
             }
-        }
-    });
-    let delta_entries = delta_records.iter().map(|record| match record.kind {
-        DeltaRecordKind::Live => DeltaScanEntry::Live {
-            heap_tid: record.heap_tid,
-            vector: record.vector.as_slice(),
-        },
-        DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
-            heap_tid: record.heap_tid,
-        },
-    });
-    let live_rows = context_index::fold_compaction_live_rows(base_entries.chain(delta_entries));
+        };
+        segment_records.push((base, mutations));
+    }
+    let active_records = unsafe { read_hnsw_delta_records(index_relation, meta) };
+    let chronological = segment_records
+        .iter()
+        .flat_map(|(base, mutations)| {
+            base.iter()
+                .map(|record| {
+                    let heap_tid = hnsw_record_heap_tid(record);
+                    if hnsw_record_is_tombstoned(record) {
+                        DeltaScanEntry::Tombstone { heap_tid }
+                    } else {
+                        DeltaScanEntry::Live {
+                            heap_tid,
+                            vector: record.vector.as_slice(),
+                        }
+                    }
+                })
+                .chain(mutations.iter().map(|record| match record.kind {
+                    DeltaRecordKind::Live => DeltaScanEntry::Live {
+                        heap_tid: record.heap_tid,
+                        vector: record.vector.as_slice(),
+                    },
+                    DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
+                        heap_tid: record.heap_tid,
+                    },
+                }))
+        })
+        .chain(active_records.iter().map(|record| match record.kind {
+            DeltaRecordKind::Live => DeltaScanEntry::Live {
+                heap_tid: record.heap_tid,
+                vector: record.vector.as_slice(),
+            },
+            DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
+                heap_tid: record.heap_tid,
+            },
+        }));
+    let live_rows = context_index::fold_compaction_live_rows(chronological);
 
     let row_count = live_rows.len();
     let builder =
@@ -128,13 +651,6 @@ unsafe fn hnsw_compact_relation(
     let estimated_bytes = graph.memory_estimate().total_bytes();
     let budget_bytes = maintenance_work_mem_budget_bytes();
     if estimated_bytes > budget_bytes {
-        // A threshold-triggered compaction is a background optimization inside
-        // somebody's INSERT, so it declines instead of failing that INSERT: the
-        // caller falls back to the inline path, which is slower but correct.
-        // An explicit `pgcontext.compact()` call is a request, so it reports.
-        if budget == HnswCompactionBudget::Decline {
-            return None;
-        }
         let suggested_mib = estimated_bytes.div_ceil(1024 * 1024).max(1);
         raise_sql_error_with_hint(
             PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
@@ -150,7 +666,8 @@ unsafe fn hnsw_compact_relation(
         );
     }
 
-    let snapshots = graph.node_snapshots();
+    let entry_point = graph.entry_point();
+    let snapshots = graph.into_node_snapshots();
 
     // Everything from here is durable-then-publish: capture where the fresh
     // base begins before writing it, so the metapage can name that block.
@@ -202,30 +719,23 @@ unsafe fn hnsw_compact_relation(
     unsafe {
         update_hnsw_metapage(index_relation, |meta| {
             meta.open_base_generation();
-            meta.open_base_region(fresh_base_start);
-            meta.record_build(dimensions, graph_node_count(&snapshots), graph.entry_point());
+            meta.record_build(dimensions, graph_node_count(&snapshots), entry_point);
+            meta.publish_single_segment(
+                fresh_base_start,
+                post_write_block_count,
+                graph_node_count(&snapshots),
+                entry_point,
+            );
             meta.open_delta_region(post_write_block_count);
         });
     }
     hnsw_physical_failpoint(15, "after_compaction_publish");
 
-    Some(HnswCompactionOutcome {
+    HnswCompactionOutcome {
         live_rows: snapshots.len(),
-        base_records: base_records.len(),
-        delta_records: delta_records.len(),
-    })
-}
-
-/// Whether a compaction that does not fit `maintenance_work_mem` should fail
-/// the caller or quietly decline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HnswCompactionBudget {
-    /// Raise, with a hint naming the budget to set. For `pgcontext.compact()`,
-    /// where the caller asked for a compaction and deserves to hear why not.
-    Enforce,
-    /// Return `None` and leave the index untouched. For the threshold trigger,
-    /// where a raise would turn an optimization into a failed INSERT.
-    Decline,
+        base_records: usize::try_from(meta.graph_nodes).unwrap_or(usize::MAX),
+        delta_records: usize::try_from(mutation_count).unwrap_or(usize::MAX),
+    }
 }
 
 /// What one compaction folded away, for the SQL-visible report.
@@ -268,6 +778,7 @@ fn hnsw_compact(
 > {
     let index_relation = index.as_ptr();
     let score_metric = ensure_compactable_hnsw_relation(index_relation);
+    ensure_hnsw_maintenance_privilege(index_relation);
 
     // Two locks, excluding the two ways pages reach this index.
     //
@@ -288,12 +799,7 @@ fn hnsw_compact(
 
     // SAFETY: the relation was validated as a pgcontext_hnsw index above,
     // `PgRelation` holds it open, and the append lock is held.
-    // `Enforce`: this caller asked for a compaction, so an oversized graph is
-    // reported rather than silently skipped. Never `None` under `Enforce`.
-    let outcome = unsafe {
-        hnsw_compact_relation(index_relation, score_metric, HnswCompactionBudget::Enforce)
-            .unwrap_or_else(|| unreachable!("Enforce always raises instead of declining"))
-    };
+    let outcome = unsafe { hnsw_compact_relation(index_relation, score_metric) };
 
     TableIterator::once((
         usize_to_i64_report(outcome.live_rows),
@@ -302,96 +808,123 @@ fn hnsw_compact(
     ))
 }
 
-/// Compacts an index whose delta segment just filled up, from inside the
-/// INSERT that found it full. Returns whether the graph was republished.
+/// Compacts at most one adjacent immutable HNSW segment pair.
 ///
-/// This runs on a user's write path, so it declines rather than blocking or
-/// failing in every case where an explicit `pgcontext.compact()` would wait or
-/// raise:
-///
-/// * the parent-table lock is taken *conditionally*. Compaction needs the same
-///   `ShareUpdateExclusiveLock` that excludes VACUUM, but this backend already
-///   holds the per-index advisory lock (taken at insert entry), whereas
-///   `pgcontext.compact()` takes the table lock first. Waiting here with the
-///   locks held in the opposite order is exactly the shape of a deadlock, so
-///   it never waits: unavailable means decline.
-/// * a graph too large for `maintenance_work_mem` declines instead of raising,
-///   so the INSERT proceeds on the inline path rather than failing.
-///
-/// Declining is never a correctness problem: the caller falls back to splicing
-/// the row into the base graph inline, which is slower but produces the same
-/// index.
-///
-/// # Safety
-///
-/// `index_relation` must be a live `pgcontext_hnsw` index relation held open
-/// for the complete call, with this index's append advisory lock already held.
-unsafe fn hnsw_compact_on_threshold(
-    index_relation: pg_sys::Relation,
-    score_metric: HnswScoreMetric,
-) -> bool {
-    // Project the cost before doing any of it.
-    //
-    // The authoritative budget check inside `hnsw_compact_relation` runs after
-    // the graph is built, because only the delta merge knows the final row
-    // count. On this path that ordering is pathological: the delta stays full,
-    // so *every* subsequent insert would read every base and delta record,
-    // rebuild the whole graph, discover it does not fit, and throw it away.
-    // Measured on a 100k-row 384-dimension index with the default 64MB
-    // maintenance_work_mem, that is a full rebuild discarded per row.
-    //
-    // The projection is an upper bound (it cannot know what a later VACUUM
-    // tombstoned), so an index whose live set has shrunk well below its
-    // recorded size can be skipped here even though it would have fit.
-    // `pgcontext.compact()` is unaffected -- it takes the accurate path and
-    // reports -- so the escape hatch is explicit and documented.
-    // SAFETY: the caller owns a live index relation for this call.
-    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
-    let projected = projected_compaction_bytes(meta);
-    if projected > maintenance_work_mem_budget_bytes() {
-        return false;
-    }
-    // Bound the stall, not just the memory.
-    //
-    // Compaction time grows with the graph, and this one runs inside somebody's
-    // INSERT: on the reference 100,000-row 384-dimension index it takes about a
-    // minute, which is a long time for a single statement to block. Past this
-    // ceiling the insert declines and takes the inline path, leaving the
-    // rebuild to `pgcontext.compact()` or REINDEX where the cost is expected.
-    //
-    // A background worker is the right home for this work -- it would decouple
-    // the rebuild from any statement's latency -- but that is a separate
-    // subsystem (shared-memory queue, per-database workers, its own restart
-    // semantics), so the bound is the interim answer rather than the intended
-    // end state.
-    if let Some(max_bytes) = crate::settings::hnsw_compact_on_threshold_max_bytes_from_guc()
-        && projected > max_bytes
+/// This is the bounded execution seam used by the supervised build worker.
+/// Publication remains durable-write-then-metapage-flip, and an index with
+/// fewer than two immutable segments is a successful no-op.
+#[pg_extern(name = "_compact_hnsw_segment_pair")]
+#[search_path(pg_catalog, pgcontext, public)]
+fn hnsw_compact_segment_pair(index: PgRelation, expected_directory_epoch: i64) -> bool {
+    let index_relation = index.as_ptr();
+    let score_metric = ensure_compactable_hnsw_relation(index_relation);
+    ensure_hnsw_maintenance_privilege(index_relation);
+    // SAFETY: PgRelation owns the validated relation; the table lock excludes
+    // VACUUM and the advisory lock excludes delta append/publication.
+    unsafe { lock_hnsw_compaction_table(index_relation) };
+    // SAFETY: as above.
+    unsafe { serialize_hnsw_insert(index_relation) };
+    let expected_directory_epoch = u64::try_from(expected_directory_epoch).unwrap_or(u64::MAX);
+    // A retry after publication, or a job made stale by any intervening
+    // rotation/VACUUM, is a successful no-op. It must never select a new pair.
+    if unsafe { PgHnswGraphRead::new(index_relation).meta() }.directory_epoch
+        != expected_directory_epoch
     {
         return false;
     }
-    // SAFETY: the caller owns a live index relation for this call.
-    if !unsafe { try_lock_hnsw_compaction_table(index_relation) } {
-        return false;
-    }
-    // SAFETY: the caller owns the relation and the advisory lock, and the
-    // table lock above now excludes VACUUM for the rest of this transaction.
-    unsafe { hnsw_compact_relation(index_relation, score_metric, HnswCompactionBudget::Decline) }
-        .is_some()
+    // SAFETY: the complete bounded build and publication occur under both
+    // required locks. Re-taking the table lock conditionally is reentrant.
+    unsafe { hnsw_compact_smallest_pair(index_relation, score_metric) }
 }
 
-/// Upper bound on the backend memory a compaction of this index would need,
-/// derived from the metapage alone so it costs one buffer read.
-///
-/// Counts the vectors only. Link storage is real but small beside them and
-/// depends on the built graph's layer assignment, so leaving it out keeps this
-/// an honest bound on the dominant term rather than a guess at the total.
-fn projected_compaction_bytes(meta: HnswMetaPage) -> usize {
-    let rows = meta.graph_nodes.saturating_add(meta.delta_record_count);
-    let dimensions = u64::from(meta.dimensions);
-    let bytes = rows
-        .saturating_mul(dimensions)
-        .saturating_mul(size_of::<f32>() as u64);
-    usize::try_from(bytes).unwrap_or(usize::MAX)
+pub(crate) fn hnsw_directory_epoch(index_relation: pg_sys::Relation) -> i64 {
+    // SAFETY: callers hold a PgRelation or AM callback reference for the
+    // immediate metapage copy.
+    let epoch = unsafe { PgHnswGraphRead::new(index_relation).meta() }.directory_epoch;
+    i64::try_from(epoch).unwrap_or_else(|_| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+            "HNSW directory epoch exceeds supervised job storage",
+        )
+    })
+}
+
+/// Reports the current bounded segmented-HNSW publication and compaction
+/// advice for one index.
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx SQL generation requires the explicit table row tuple"
+)]
+#[pg_extern(name = "hnsw_segment_stats")]
+#[search_path(pg_catalog, pgcontext, public)]
+fn hnsw_segment_stats(
+    index: PgRelation,
+) -> TableIterator<
+    'static,
+    (
+        name!(segment_count, i32),
+        name!(active_delta_records, i64),
+        name!(immutable_rows, i64),
+        name!(smallest_pair_rows, Option<i64>),
+        name!(compaction_debt, bool),
+        name!(parallel_eligible, bool),
+        name!(serving_mode, String),
+        name!(frozen_mutation_records, i64),
+        name!(active_delta_blocks, i64),
+        name!(directory_epoch, i64),
+    ),
+> {
+    let index_relation = index.as_ptr();
+    let _metric = ensure_compactable_hnsw_relation(index_relation);
+    // SAFETY: PgRelation owns the validated HNSW relation for this call.
+    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+    let segment_count = meta.segments().len();
+    let immutable_rows = meta
+        .segments()
+        .iter()
+        .fold(0_u64, |rows, segment| rows.saturating_add(segment.graph_nodes));
+    let smallest_pair = meta
+        .segments()
+        .windows(2)
+        .map(|pair| pair[0].graph_nodes.saturating_add(pair[1].graph_nodes))
+        .min();
+    let parallel_workers = crate::settings::hnsw_segment_parallel_workers_from_guc();
+    let parallel_eligible = segment_count >= 3 && parallel_workers >= 2;
+    let frozen_mutation_records = meta.segments().iter().fold(0_usize, |total, segment| {
+        if segment.mutation_start_block == u64::MAX {
+            total
+        } else {
+            total.saturating_add(unsafe {
+                read_hnsw_delta_records_range(
+                    index_relation,
+                    segment.mutation_start_block,
+                    segment.mutation_end_block,
+                    segment.mutation_generation,
+                    GraphPageKind::FrozenDelta,
+                    segment.mutation_record_count,
+                )
+                .len()
+            })
+        }
+    });
+    TableIterator::once((
+        i32::try_from(segment_count).unwrap_or(i32::MAX),
+        i64::try_from(meta.delta_record_count).unwrap_or(i64::MAX),
+        i64::try_from(immutable_rows).unwrap_or(i64::MAX),
+        smallest_pair.map(|rows| i64::try_from(rows).unwrap_or(i64::MAX)),
+        segment_count >= HNSW_MAX_SEGMENTS.saturating_sub(1),
+        parallel_eligible,
+        if parallel_eligible {
+            "parallel_owned_pack_when_admitted"
+        } else {
+            "serial_backend_affine"
+        }
+        .to_owned(),
+        i64::try_from(frozen_mutation_records).unwrap_or(i64::MAX),
+        i64::try_from(meta.delta_end_block.saturating_sub(meta.delta_start_block))
+            .unwrap_or(i64::MAX),
+        i64::try_from(meta.directory_epoch).unwrap_or(i64::MAX),
+    ))
 }
 
 /// Takes `ShareUpdateExclusiveLock` on the table this index belongs to, the
@@ -418,9 +951,8 @@ unsafe fn lock_hnsw_compaction_table(index_relation: pg_sys::Relation) {
 /// Non-blocking `lock_hnsw_compaction_table`: reports whether the lock was
 /// free, and never waits for it.
 ///
-/// Used by the threshold trigger, which holds the per-index advisory lock and
-/// so must not wait on a lock that `pgcontext.compact()` acquires *before* that
-/// advisory lock — waiting would close a deadlock cycle between the two.
+/// Used by bounded rotation/compaction paths that already hold the per-index
+/// advisory lock and therefore must not wait behind table-first maintenance.
 ///
 /// # Safety
 ///
@@ -464,6 +996,32 @@ unsafe fn hnsw_compaction_table_oid(index_relation: pg_sys::Relation) -> pg_sys:
 /// preferable to failing a compaction that already succeeded.
 fn usize_to_i64_report(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
+}
+
+/// Requires the session user to own the index (directly or through role
+/// membership) before a SQL-callable maintenance function mutates it.
+fn ensure_hnsw_maintenance_privilege(index_relation: pg_sys::Relation) {
+    // SAFETY: PgRelation keeps the relcache entry live for this SQL call.
+    let index_oid = unsafe { (*index_relation).rd_id };
+    let allowed = Spi::get_one_with_args::<bool>(
+        "SELECT pg_catalog.pg_has_role(SESSION_USER, class.relowner, 'MEMBER')
+           FROM pg_catalog.pg_class AS class
+          WHERE class.oid = $1",
+        &[index_oid.into()],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("HNSW maintenance ownership check failed: {error}"),
+        )
+    })
+    .unwrap_or(false);
+    if !allowed {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            "permission denied for HNSW index maintenance",
+        );
+    }
 }
 
 /// Validates that a SQL caller passed a `pgcontext_hnsw` index whose metric

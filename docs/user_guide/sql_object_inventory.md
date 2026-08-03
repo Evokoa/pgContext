@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `6ac8ce941ba8260ebc0673643b3e36090cbd7a9e38829b74ff3cb628f1c5b981`
+Full SQL artifact SHA-256: `9ebc6765dbe87fbbcd6d20640c30062a532ac29476ffb873849bd3512e9250d5`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,10 +16,10 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 18 |
 | Schemas | 0 |
-| Functions | 272 |
-| Tables | 16 |
+| Functions | 281 |
+| Tables | 22 |
 | Views | 12 |
-| Triggers | 4 |
+| Triggers | 5 |
 | Casts | 23 |
 | Operators | 42 |
 | Operator classes | 18 |
@@ -58,10 +58,16 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._collection_late_interaction`
 - table `pgcontext._collection_payload_columns`
 - table `pgcontext._collection_points`
+- table `pgcontext._collection_source_revisions`
 - table `pgcontext._collection_sparse_vectors`
 - table `pgcontext._collection_vectors`
 - table `pgcontext._collections`
 - table `pgcontext._embedding_migrations`
+- table `pgcontext._generation_aliases`
+- table `pgcontext._generation_artifacts`
+- table `pgcontext._generation_build_rows`
+- table `pgcontext._generation_manifests`
+- table `pgcontext._generation_reader_pins`
 - table `pgcontext._model_versions`
 - table `pgcontext._pgvector_ownership_conversions`
 - table `pgcontext._query_stats`
@@ -69,6 +75,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 - trigger `pgcontext_build_jobs_terminal_state`
 - trigger `pgcontext_capture_build_point_delta`
 - trigger `pgcontext_cleanup_late_interaction_registration`
+- trigger `pgcontext_initialize_collection_source_revision`
 - view `pgcontext._collection_acl`
 - view `pgcontext._visible_artifact_segments`
 - view `pgcontext._visible_build_jobs`
@@ -87,6 +94,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 Overload argument and result identities are pinned by the artifact fingerprint and bidirectional `contract_registry` test.
 
 - `"_begin_pgvector_ownership_conversion"`
+- `"_compact_hnsw_segment_pair"`
 - `"_hnsw_candidates"`
 - `"_hnsw_masked_candidates"`
 - `"_hnsw_sparse_candidates"`
@@ -155,6 +163,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"embedding_migrations"`
 - `"enable_pgvector_binding"`
 - `"encode_artifact_segment"`
+- `"enqueue_build_job"`
+- `"enqueue_hnsw_compaction"`
 - `"estimate_index_memory"`
 - `"execute_query"`
 - `"explain"`
@@ -195,6 +205,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"hnsw_build_stats"`
 - `"hnsw_l2_distance"`
 - `"hnsw_last_scan_work"`
+- `"hnsw_segment_stats"`
 - `"hnsw_serving_stats"`
 - `"index_advisor"`
 - `"index_diagnostics"`
@@ -312,6 +323,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"vector_to_real_array"`
 - `"vector_typmod_in"`
 - `"vector_typmod_out"`
+- `"wake_build_jobs"`
 - `pgcontext._begin_late_interaction_registration`
 - `pgcontext._capture_build_point_delta`
 - `pgcontext._capture_late_interaction_tokens`
@@ -319,19 +331,23 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext._cosine_distance_fast`
 - `pgcontext._enforce_build_job_terminal_state`
 - `pgcontext._finish_late_interaction_registration`
+- `pgcontext._initialize_collection_source_revision`
 - `pgcontext._l1_distance_fast`
 - `pgcontext._l2_distance_fast8`
 - `pgcontext._l2_distance_fast`
 - `pgcontext._late_interaction_ann_candidate_points`
 - `pgcontext._mapped_hnsw_sql_drop`
 - `pgcontext._negative_inner_product_fast`
+- `pgcontext._pin_generation`
 - `pgcontext._prepare_late_interaction_repair`
+- `pgcontext._publish_generation`
 - `pgcontext._refresh_collection_source_table`
 - `pgcontext._refresh_payload_source_bindings`
 - `pgcontext._refresh_sparse_vector_source_binding`
 - `pgcontext._refresh_vector_source_binding`
 - `pgcontext._reject_build_job_progress_regression`
 - `pgcontext._store_late_interaction_tokens`
+- `pgcontext._unpin_generation`
 - `pgcontext.current_vector_config_revision`
 - `pgcontext.hamming_distance`
 - `pgcontext.hnsw_handler`

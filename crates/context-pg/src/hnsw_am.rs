@@ -10,8 +10,8 @@ use context_index::{
     CandidateMask, ConcurrentHnswBuilder, DeltaHit, DeltaScanEntry, GraphDirectoryKeyKind,
     GraphMetadata, GraphNeighbors, GraphNodeRecord, GraphNodeView, GraphPageId, GraphPageKind,
     GraphRead, GraphRecordId, HnswCancellation, HnswConfig, HnswError, HnswGraph,
-    HnswGraphNodeSnapshot, HnswNodeId, HnswPointId, HnswSearchOutcome, LayerIndex, merge_topk,
-    scan_delta_topk, search_graph_read, search_graph_read_with_mask_budgeted,
+    HnswGraphNodeSnapshot, HnswNodeId, HnswPointId, LayerIndex, search_graph_read,
+    search_graph_read_with_mask_budgeted,
 };
 use context_storage::{
     DeltaRecordKind, MappedGraphIdentity, MappedPackedGraphImage, PackedGraphImageError,
@@ -32,7 +32,13 @@ use std::ptr;
 use std::rc::Rc;
 use std::slice;
 #[cfg(any(test, feature = "pg_test"))]
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::AtomicU8;
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    atomic::{AtomicBool, Ordering},
+    mpsc::{self, SyncSender, TrySendError},
+};
+use std::time::Duration;
 
 use crate::Vector;
 use crate::error::{raise_core_error, raise_sql_error, raise_sql_error_with_hint};
@@ -66,12 +72,16 @@ use ffi_boundary::{
     PgCallbackMut, PgCallbackRef, PgCallbackScope, PgCallbackSlice, PgMemoryContextDropSlot,
 };
 use page_codec::{PageHeaderV2, decode_page_header, encode_page_header};
+#[cfg(any(test, feature = "pg_test"))]
+use storage::hnsw_graph_snapshot_from_record;
+#[cfg(test)]
+use storage::hnsw_tombstone_record;
 use storage::{
     HnswAdjacencyRecord, HnswDirectoryRecord, HnswVectorRecord, decode_hnsw_adjacency_record,
     decode_hnsw_directory_record, decode_hnsw_vector_record, encode_hnsw_adjacency_record,
-    encode_hnsw_directory_record, encode_hnsw_vector_record, hnsw_graph_snapshot_from_record,
-    hnsw_point_id_is_tombstoned, hnsw_record_heap_tid, hnsw_record_is_tombstoned,
-    hnsw_tombstone_record, hnsw_vector_record_from_snapshot, hnsw_vector_record_view,
+    encode_hnsw_directory_record, encode_hnsw_vector_record, hnsw_point_id_is_tombstoned,
+    hnsw_record_heap_tid, hnsw_record_is_tombstoned, hnsw_vector_record_from_snapshot,
+    hnsw_vector_record_view,
 };
 
 const MAX_HNSW_SCAN_KEYS: usize = 1;
@@ -135,12 +145,11 @@ include!("hnsw_am/mapped_lifecycle.rs");
 
 static HNSW_HANDLER_FINFO: pg_sys::Pg_finfo_record = pg_sys::Pg_finfo_record { api_version: 1 };
 const HNSW_META_MAGIC: u32 = 0x4853_4e57;
-// Version five makes directory locators authoritative and generation-tagged
-// for backend-local cache reuse. Version seven adds the segmented-write
-// delta region (delta_start_block/delta_record_count). Version eight adds
-// base_start_block so compaction can publish a base written past the old
-// one. Earlier experimental indexes must be rebuilt.
-const HNSW_META_VERSION: u16 = 9;
+// Version twelve adds an exact active-delta extent and removes the unsafe
+// multi-segment splice fallback. Earlier experimental indexes are rebuild-only.
+const HNSW_META_VERSION: u16 = 13;
+pub(crate) const HNSW_MAX_SEGMENTS: usize = 16;
+const HNSW_TARGET_SEGMENT_ROWS: usize = 100_000;
 const HNSW_FIRST_VECTOR_BLOCK: pg_sys::BlockNumber = 1;
 const HNSW_INVALID_OFFSET: pg_sys::OffsetNumber = 0;
 const HNSW_FIRST_OFFSET: pg_sys::OffsetNumber = 1;
@@ -368,14 +377,19 @@ impl HnswBuildState {
             rows.len(),
         );
         let workers = self.parallel_workers.min(rows.len()).max(1);
+        let mut tasks: Vec<Vec<(HnswPointId, DenseVector)>> =
+            (0..workers).map(|_| Vec::new()).collect();
+        for (index, row) in rows.into_iter().enumerate() {
+            tasks[index % workers].push(row);
+        }
         let first_error = std::thread::scope(|scope| {
-            let handles = rows
-                .chunks(rows.len().div_ceil(workers))
-                .map(|chunk| {
+            let handles = tasks
+                .into_iter()
+                .map(|task| {
                     let builder = &builder;
                     scope.spawn(move || {
-                        for (point_id, vector) in chunk {
-                            builder.insert(*point_id, vector.clone())?;
+                        for (point_id, vector) in task {
+                            builder.insert(point_id, vector)?;
                         }
                         Ok::<(), HnswError>(())
                     })

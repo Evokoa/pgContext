@@ -50,20 +50,80 @@ fn hnsw_build_safe(
             );
         })
     };
-    let snapshots = state.graph.node_snapshots();
-    // A build's output is the published base, so it stamps the live
-    // generation rather than a pending one: unlike compaction, an interrupted
-    // CREATE INDEX discards the whole relation, so there is no window in which
-    // these pages could be read alongside an older base.
-    // SAFETY: PostgreSQL passes a valid index relation whose metapage was
-    // written immediately above.
-    let build_generation =
-        unsafe { PgHnswGraphRead::new(index_relation.as_ptr()).meta().page_generation() };
-    // SAFETY: PostgreSQL passes a valid index relation for the build callback,
-    // and snapshots own finalized graph payloads copied from the heap scan.
-    unsafe {
-        write_hnsw_node_revisions_bulk(index_relation.as_ptr(), &snapshots, build_generation)
+    let source_rows = usize::try_from(state.index_tuples).unwrap_or(usize::MAX);
+    let minimum_rows = source_rows.div_ceil(HNSW_MAX_SEGMENTS);
+    let segment_rows = HNSW_TARGET_SEGMENT_ROWS.max(minimum_rows).max(1);
+    let original_entry = state.graph.entry_point();
+    let source_snapshots = state.graph.into_node_snapshots();
+    let build_generation = unsafe {
+        PgHnswGraphRead::new(index_relation.as_ptr())
+            .meta()
+            .page_generation()
     };
+    let mut published_segments = Vec::with_capacity(source_rows.div_ceil(segment_rows));
+    let mut rows = source_snapshots.into_iter();
+    for index in 0..HNSW_MAX_SEGMENTS {
+        let chunk = rows.by_ref().take(segment_rows).collect::<Vec<_>>();
+        if chunk.is_empty() {
+            break;
+        }
+        let (snapshots, entry_point) = if source_rows <= segment_rows {
+            (chunk, original_entry)
+        } else {
+            let builder = ConcurrentHnswBuilder::new(
+                score_metric.navigation_metric(),
+                config,
+                chunk.len(),
+            );
+            for row in chunk {
+                let (point_id, vector) = row.into_point();
+                builder
+                    .insert(point_id, vector)
+                    .unwrap_or_else(|error| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                            format!("failed to build independent HNSW segment: {error}"),
+                        )
+                    });
+            }
+            let graph = builder.finish().unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                    format!("failed to finalize independent HNSW segment: {error}"),
+                )
+            });
+            let entry_point = graph.entry_point();
+            (graph.into_node_snapshots(), entry_point)
+        };
+        let generation =
+            build_generation.saturating_add(u64::try_from(index).unwrap_or(u64::MAX));
+        let start_block = u64::from(unsafe {
+            pg_sys::RelationGetNumberOfBlocksInFork(
+                index_relation.as_ptr(),
+                pg_sys::ForkNumber::MAIN_FORKNUM,
+            )
+        });
+        if !snapshots.is_empty() {
+            // SAFETY: the build owns the live relation and every independent
+            // graph snapshot until the synchronous append completes.
+            unsafe {
+                write_hnsw_node_revisions_bulk(index_relation.as_ptr(), &snapshots, generation)
+            };
+        }
+        let end_block = u64::from(unsafe {
+            pg_sys::RelationGetNumberOfBlocksInFork(
+                index_relation.as_ptr(),
+                pg_sys::ForkNumber::MAIN_FORKNUM,
+            )
+        });
+        published_segments.push((
+            generation,
+            start_block,
+            end_block,
+            graph_node_count(&snapshots),
+            entry_point,
+        ));
+    }
     // SAFETY: PostgreSQL passes a valid index relation for the build callback;
     // the base graph is fully written above, so the current block count marks
     // where the segmented-write delta region begins.
@@ -73,6 +133,23 @@ fn hnsw_build_safe(
     // SAFETY: PostgreSQL passes a valid index relation for the build callback.
     unsafe {
         update_hnsw_metapage(index_relation.as_ptr(), |meta| {
+            if let Some((_, start, end, nodes, entry)) = published_segments.first().copied() {
+                meta.publish_single_segment(start, end, nodes, entry);
+                for (generation, start, end, nodes, entry) in
+                    published_segments.iter().copied().skip(1)
+                {
+                    meta.publish_additional_segment(
+                        generation,
+                        start,
+                        end,
+                        nodes,
+                        entry,
+                        u64::MAX,
+                        u64::MAX,
+                        0,
+                    );
+                }
+            }
             meta.open_delta_region(post_build_block_count);
         })
     };
@@ -216,31 +293,16 @@ fn hnsw_insert_safe(
         };
     }
 
-    // The delta segment is full. Compacting here drains it and reopens an
-    // empty one, so this insert and the ones after it stay on the fast append
-    // path; the alternative is that every later insert splices the graph
-    // inline at O(graph size). This insert pays for the rebuild — a
-    // predictable stall, documented on the GUC — instead of spreading an
-    // unbounded cost across all its successors.
+    // The delta segment is full. Freeze it into an immutable graph segment
+    // first; this cost is bounded by the delta limit rather than by the whole
+    // index. A full segment directory falls through to compaction below.
     //
-    // Deliberately not attempted when the delta region was never opened
-    // (`delta_start_block == u64::MAX`, an index built before the segmented
-    // path) or when the limit is 0, which means the operator asked for the
-    // legacy inline path: in both cases there is nothing to drain and
-    // compacting would be a surprise.
-    if meta.delta_start_block != u64::MAX
-        && delta_limit > 0
-        && crate::settings::hnsw_compact_on_threshold_from_guc()
-    {
-        // SAFETY: the callback owns the live index relation, and the advisory
-        // lock taken at entry is the same one compaction requires.
-        let compacted = unsafe { hnsw_compact_on_threshold(index_relation.as_ptr(), score_metric) };
-        if compacted {
-            // SAFETY: compaction republished the metapage; re-read it so the
-            // reopened delta region is visible to this insert.
+    if meta.delta_start_block != u64::MAX {
+        // SAFETY: the callback owns the live relation and append lock.
+        let rotated = unsafe { hnsw_rotate_delta_relation(index_relation.as_ptr(), score_metric) };
+        if rotated {
             let meta = unsafe { PgHnswGraphRead::new(index_relation.as_ptr()).meta() };
             if meta.delta_accepts_insert(delta_limit) {
-                // SAFETY: as the delta append above.
                 return unsafe {
                     hnsw_insert_via_delta_safe(
                         index_relation.as_ptr(),
@@ -251,101 +313,38 @@ fn hnsw_insert_safe(
                 };
             }
         }
+        if usize::from(meta.segment_count) >= HNSW_MAX_SEGMENTS {
+            // SAFETY: the callback owns the live relation and append lock.
+            let compacted = unsafe {
+                hnsw_compact_smallest_pair(index_relation.as_ptr(), score_metric)
+            };
+            if compacted {
+                // SAFETY: bounded compaction republished the directory.
+                let rotated = unsafe {
+                    hnsw_rotate_delta_relation(index_relation.as_ptr(), score_metric)
+                };
+                if rotated {
+                    let meta = unsafe { PgHnswGraphRead::new(index_relation.as_ptr()).meta() };
+                    if meta.delta_accepts_insert(delta_limit) {
+                        return unsafe {
+                            hnsw_insert_via_delta_safe(
+                                index_relation.as_ptr(),
+                                dimensions,
+                                heap_tid,
+                                vector,
+                            )
+                        };
+                    }
+                }
+            }
+        }
     }
 
-    // SAFETY: The callback owns a live index relation whose metapage was
-    // initialized by build or build-empty.
-    let config = unsafe { hnsw_stored_config(index_relation.as_ptr(), score_metric) };
-    // SAFETY: The same live metapage publishes the authoritative traversal
-    // entry point needed to reconstruct the mutable graph faithfully.
-    let entry_point = unsafe { hnsw_stored_entry_point(index_relation.as_ptr()) };
-    // SAFETY: The AM owns the relation for this callback and the decoder returns
-    // owned records before releasing every shared page buffer.
-    let existing = unsafe { read_hnsw_vector_records(index_relation.as_ptr()) };
-    let structural_node_count = existing.len() as u64;
-    let node_id = checked_hnsw_node_id_from_graph_count(structural_node_count).unwrap_or_else(
-        |count| {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
-                format!("HNSW graph node count exceeds page-record storage: {count}"),
-            )
-        },
-    );
-    let persisted_heap_tids = existing
-        .iter()
-        .map(|record| record.heap_tid)
-        .collect::<Vec<_>>();
-    let mut graph = if existing.is_empty() {
-        if entry_point.is_some() {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
-                "empty HNSW graph publishes a non-empty entry point",
-            );
-        }
-        HnswGraph::new(score_metric.navigation_metric(), config)
-    } else {
-        hnsw_graph_from_records_with_config(
-            existing,
-            score_metric.navigation_metric(),
-            config,
-            entry_point,
-        )
-    };
-    let prior_snapshots = graph.node_snapshots();
-    if let Err(error) = graph.insert(HnswPointId::new(heap_tid), vector) {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
-            format!("failed to insert HNSW graph node: {error}"),
-        );
-    }
-    let current_snapshots = graph.node_snapshots();
-    let inserted = current_snapshots
-        .iter()
-        .find(|snapshot| snapshot.node_id() == node_id)
-        .unwrap_or_else(|| {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                "HNSW insert did not produce its reserved node",
-            )
-        });
-    hnsw_physical_failpoint(9, "before_rewiring");
-    for snapshot in current_snapshots.iter().filter(|snapshot| {
-        prior_snapshots
-            .get(snapshot.node_id().get())
-            .is_none_or(|prior| prior.layers() != snapshot.layers())
-    }) {
-        let mut record = hnsw_vector_record_from_snapshot(snapshot);
-        if let Some(persisted_heap_tid) = persisted_heap_tids.get(snapshot.node_id().get()) {
-            // Mutable reconstruction gives traversal-only tombstones synthetic
-            // point IDs. Preserve their exact durable heap binding when a
-            // neighboring insert rewires and republishes the structural node.
-            record.heap_tid = *persisted_heap_tid;
-        }
-        // SAFETY: The insert callback owns the live index relation and record
-        // payload for the duration of this append.
-        let _ = unsafe { append_hnsw_node_revision(index_relation.as_ptr(), &record) };
-    }
-    hnsw_physical_failpoint(10, "after_rewiring");
-    // Publish the metapage count only after every complete replacement record
-    // has reached Generic WAL.
-    let mut published_node_id = Some(node_id);
-    // SAFETY: The insert callback owns the live relation and this closure only
-    // mutates the locked metapage before publication. Tombstones remain
-    // structural traversal nodes, so inserts always append a fresh node ID.
-    unsafe {
-        update_hnsw_metapage(index_relation.as_ptr(), |meta| {
-            published_node_id = Some(meta.record_insert(dimensions, graph.entry_point()));
-        })
-    };
-    if published_node_id != Some(node_id) {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
-            "HNSW metapage allocator disagrees with the staged graph node",
-        );
-    }
-    debug_assert_eq!(inserted.node_id(), node_id);
-
-    false
+    raise_sql_error_with_hint(
+        PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+        "HNSW segmented insert could not make bounded delta capacity",
+        "Retry after concurrent VACUUM/maintenance completes, enqueue bounded compaction, or raise maintenance_work_mem. The index remains unchanged.",
+    )
 }
 
 /// Appends one row to the segmented-write delta instead of splicing it into
@@ -394,18 +393,8 @@ unsafe fn hnsw_insert_via_delta_safe(
     hnsw_physical_failpoint(11, "before_delta_append");
     // SAFETY: the caller holds the live index relation and owns `record` for
     // the complete append.
-    let _location = unsafe { append_hnsw_delta_record(index_relation, &record) };
+    let _location = unsafe { append_hnsw_delta_record(index_relation, &record, Some(dimensions)) };
     hnsw_physical_failpoint(12, "after_delta_append");
-    // SAFETY: the caller owns the live relation; this closure only mutates
-    // the locked metapage before publication.
-    unsafe {
-        update_hnsw_metapage(index_relation, |meta| {
-            if meta.dimensions == 0 {
-                meta.dimensions = dimensions;
-            }
-            meta.record_delta_append();
-        });
-    }
     record_hnsw_delta_segment_record();
     false
 }
@@ -489,89 +478,137 @@ fn hnsw_bulk_delete_safe(
     callback: pg_sys::IndexBulkDeleteCallback,
     callback_state: *mut c_void,
 ) -> *mut pg_sys::IndexBulkDeleteResult {
-    // SAFETY: The VACUUM callback owns a live index relation for this call.
-    let records = unsafe { read_hnsw_vector_records(info.as_ref().index) };
-    let mut removed = 0_u64;
+    // VACUUM already holds ShareUpdateExclusive on the parent table. Take the
+    // same per-index lock as INSERT/rotation second, preserving the global
+    // table -> advisory order and closing the append/publication race.
+    unsafe { serialize_hnsw_insert(info.as_ref().index) };
+    let meta = unsafe { PgHnswGraphRead::new(info.as_ref().index).meta() };
+    let score_metric = unsafe { hnsw_score_metric(info.as_ref().index) };
+    let config = meta.stored_config(score_metric, hnsw_config_from_gucs().ef_search());
+    let mutation_count = meta
+        .segments()
+        .iter()
+        .fold(meta.delta_record_count, |total, segment| {
+            total.saturating_add(segment.mutation_record_count)
+        });
+    enforce_bounded_compaction_budget(
+        meta.graph_nodes,
+        usize::try_from(mutation_count).unwrap_or(usize::MAX),
+        meta.dimensions,
+        config,
+    );
+    let mut segment_records = Vec::with_capacity(meta.segments().len());
+    for segment in meta.segments() {
+        let base = unsafe { read_hnsw_segment_records(info.as_ref().index, *segment) };
+        let mutations = if segment.mutation_start_block == u64::MAX {
+            Vec::new()
+        } else {
+            unsafe {
+                read_hnsw_delta_records_range(
+                    info.as_ref().index,
+                    segment.mutation_start_block,
+                    segment.mutation_end_block,
+                    segment.mutation_generation,
+                    GraphPageKind::FrozenDelta,
+                    segment.mutation_record_count,
+                )
+            }
+        };
+        segment_records.push((base, mutations));
+    }
+    let active = unsafe { read_hnsw_delta_records(info.as_ref().index, meta) };
+    let chronological = segment_records
+        .iter()
+        .flat_map(|(base, mutations)| {
+            base.iter()
+                .map(|record| {
+                    let heap_tid = hnsw_record_heap_tid(record);
+                    if hnsw_record_is_tombstoned(record) {
+                        DeltaScanEntry::Tombstone { heap_tid }
+                    } else {
+                        DeltaScanEntry::Live {
+                            heap_tid,
+                            vector: record.vector.as_slice(),
+                        }
+                    }
+                })
+                .chain(mutations.iter().map(|record| match record.kind {
+                    DeltaRecordKind::Live => DeltaScanEntry::Live {
+                        heap_tid: record.heap_tid,
+                        vector: record.vector.as_slice(),
+                    },
+                    DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
+                        heap_tid: record.heap_tid,
+                    },
+                }))
+        })
+        .chain(active.iter().map(|record| match record.kind {
+            DeltaRecordKind::Live => DeltaScanEntry::Live {
+                heap_tid: record.heap_tid,
+                vector: record.vector.as_slice(),
+            },
+            DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
+                heap_tid: record.heap_tid,
+            },
+        }));
+    let live_rows = context_index::fold_compaction_live_rows(chronological);
+    let mut dead_tids = Vec::new();
     if let Some(callback) = callback {
-        for record in records
-            .iter()
-            .filter(|record| !hnsw_record_is_tombstoned(record))
-        {
-            let (block, offset) = u64_to_item_pointer_parts(hnsw_record_heap_tid(record));
+        for row in live_rows {
+            let (block, offset) = u64_to_item_pointer_parts(row.heap_tid);
             let mut tid = pg_sys::ItemPointerData::default();
-            // SAFETY: The stack TID is initialized from validated block/offset
-            // parts before being passed to PostgreSQL's callback.
             item_pointer_set_all(&mut tid, block, offset);
-            // SAFETY: PostgreSQL supplied the callback and state for the
-            // duration of this ambulkdelete invocation.
             if unsafe { callback(&mut tid, callback_state) } {
-                // SAFETY: The callback confirmed this live relation record is
-                // dead; append writes its bounded tombstone representation.
-                unsafe {
-                    append_hnsw_node_revision(
-                        info.as_ref().index,
-                        &hnsw_tombstone_record(record),
-                    )
-                };
-                removed = removed.saturating_add(1);
+                dead_tids.push(row.heap_tid);
             }
         }
     }
-    // Rows absorbed by the segmented-write delta never got a base-graph
-    // node record, so the walk above never sees them; tombstone dead delta
-    // rows separately by folding the delta to its last-write-wins live set.
-    // SAFETY: VACUUM owns the index relation for the duration of this call.
-    let meta = unsafe { PgHnswGraphRead::new(info.as_ref().index).meta() };
-    let mut removed_delta = 0_u64;
-    if meta.delta_start_block != u64::MAX {
-        // SAFETY: `delta_start_block` came from the metapage read above.
-        let delta_records =
-            unsafe { read_hnsw_delta_records(info.as_ref().index, meta.delta_start_block) };
-        let mut live_delta_tids: BTreeSet<u64> = BTreeSet::new();
-        for record in &delta_records {
-            match record.kind {
-                DeltaRecordKind::Live => {
-                    live_delta_tids.insert(record.heap_tid);
-                }
-                DeltaRecordKind::Tombstone => {
-                    live_delta_tids.remove(&record.heap_tid);
-                }
-            }
-        }
-        if let Some(callback) = callback {
-            for heap_tid in live_delta_tids {
-                let (block, offset) = u64_to_item_pointer_parts(heap_tid);
-                let mut tid = pg_sys::ItemPointerData::default();
-                // SAFETY: The stack TID is initialized from validated
-                // block/offset parts before being passed to PostgreSQL.
-                item_pointer_set_all(&mut tid, block, offset);
-                // SAFETY: PostgreSQL supplied the callback and state for
-                // the duration of this ambulkdelete invocation.
-                if unsafe { callback(&mut tid, callback_state) } {
-                    // SAFETY: The callback confirmed this delta-live row is
-                    // dead; append its bounded tombstone representation.
-                    unsafe {
-                        append_hnsw_delta_record(
-                            info.as_ref().index,
-                            &context_storage::DeltaRecord::tombstone(heap_tid),
-                        )
-                    };
-                    record_hnsw_delta_segment_record();
-                    removed_delta = removed_delta.saturating_add(1);
-                    removed = removed.saturating_add(1);
-                }
-            }
-        }
-        if removed_delta > 0 {
-            // SAFETY: VACUUM owns the index relation and the appended
-            // tombstone delta records are durable before this publish.
-            unsafe {
-                update_hnsw_metapage(info.as_ref().index, |meta| {
-                    for _ in 0..removed_delta {
-                        meta.record_delta_append();
+    let removed = dead_tids.len() as u64;
+    if !dead_tids.is_empty() {
+        let delta_limit = crate::settings::hnsw_delta_segment_limit_from_guc();
+        for heap_tid in dead_tids {
+            let current = unsafe { PgHnswGraphRead::new(info.as_ref().index).meta() };
+            if !current.delta_accepts_insert(delta_limit) {
+                if usize::from(current.segment_count) >= HNSW_MAX_SEGMENTS
+                    && !unsafe {
+                        hnsw_compact_smallest_pair(info.as_ref().index, score_metric)
                     }
-                });
+                {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                        "VACUUM could not compact the bounded HNSW directory",
+                    );
+                }
+                if !unsafe { hnsw_rotate_delta_relation(info.as_ref().index, score_metric) } {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                        "VACUUM could not rotate a bounded HNSW tombstone chunk",
+                    );
+                }
             }
+            let _location = unsafe {
+                append_hnsw_delta_record(
+                    info.as_ref().index,
+                    &context_storage::DeltaRecord::tombstone(heap_tid),
+                    None,
+                )
+            };
+            record_hnsw_delta_segment_record();
+        }
+        let current = unsafe { PgHnswGraphRead::new(info.as_ref().index).meta() };
+        if usize::from(current.segment_count) >= HNSW_MAX_SEGMENTS
+            && !unsafe { hnsw_compact_smallest_pair(info.as_ref().index, score_metric) }
+        {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                "VACUUM could not compact before final HNSW tombstone rotation",
+            );
+        }
+        if !unsafe { hnsw_rotate_delta_relation(info.as_ref().index, score_metric) } {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
+                "VACUUM could not publish the HNSW tombstone segment",
+            );
         }
     }
     // SAFETY: The VACUUM info and optional prior stats are live for this
@@ -590,11 +627,7 @@ fn hnsw_bulk_delete_safe(
     let removed = removed as f64;
     snapshot.tuples_removed += removed;
     if removed > 0.0 {
-        // SAFETY: VACUUM owns the index relation and all appended tombstone
-        // locator revisions are durable before this cache-generation publish.
-        unsafe {
-            update_hnsw_metapage(info.as_ref().index, HnswMetaPage::record_directory_mutation)
-        };
+        // Rotation already published the directory mutation and cache epoch.
     }
     vacuum::write_hnsw_vacuum_stats(stats.as_mut(), snapshot);
     stats.as_ptr()

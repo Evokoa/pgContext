@@ -2,18 +2,117 @@
 // impl over `PgHnswGraphRead` and the persisted-page HNSW scan entry
 // points used by the AM callbacks and the masked SQL path.
 
+impl GraphRead for ParallelPackedGraphRead {
+    fn metadata(&mut self) -> context_index::GraphResult<GraphMetadata> {
+        Ok(self.metadata)
+    }
+
+    fn read_node(
+        &mut self,
+        node_id: HnswNodeId,
+    ) -> context_index::GraphResult<Option<GraphNodeRecord>> {
+        let Some((node, vector)) = self.graph.node(node_id) else {
+            return Ok(None);
+        };
+        let vector = DenseVector::new(vector.to_vec()).map_err(|error| {
+            context_index::GraphError::CorruptGraph {
+                message: format!("parallel packed HNSW vector is invalid: {error}"),
+            }
+        })?;
+        GraphNodeRecord::new(
+            self.metadata.node_count(),
+            node_id,
+            GraphRecordId::new(node_id.get() as u64),
+            node.point_id,
+            vector,
+            node.layer_count,
+        )
+        .map(Some)
+    }
+
+    fn with_node<R>(
+        &mut self,
+        node_id: HnswNodeId,
+        visitor: impl FnOnce(GraphNodeView<'_>) -> R,
+    ) -> context_index::GraphResult<Option<R>> {
+        let Some((node, vector)) = self.graph.node(node_id) else {
+            return Ok(None);
+        };
+        self.node_reads = self.node_reads.saturating_add(1);
+        GraphNodeView::new(
+            self.metadata.node_count(),
+            node_id,
+            node.point_id,
+            vector,
+            node.layer_count,
+        )
+        .map(|view| Some(visitor(view)))
+    }
+
+    fn read_neighbors(
+        &mut self,
+        node_id: HnswNodeId,
+        layer: LayerIndex,
+    ) -> context_index::GraphResult<Option<GraphNeighbors>> {
+        let Some((node, _)) = self.graph.node(node_id) else {
+            return Ok(None);
+        };
+        let Some(neighbors) = self.graph.neighbors(node, layer) else {
+            return Err(context_index::GraphError::LayerNotFound { node_id, layer });
+        };
+        GraphNeighbors::new(
+            self.metadata.node_count(),
+            node_id,
+            layer,
+            neighbors
+                .iter()
+                .copied()
+                .filter(|neighbor| neighbor.get() < self.metadata.node_count())
+                .collect(),
+        )
+        .map(Some)
+    }
+
+    fn read_neighbors_into(
+        &mut self,
+        node_id: HnswNodeId,
+        layer: LayerIndex,
+        output: &mut Vec<HnswNodeId>,
+    ) -> context_index::GraphResult<bool> {
+        let Some((node, _)) = self.graph.node(node_id) else {
+            output.clear();
+            return Ok(false);
+        };
+        let Some(neighbors) = self.graph.neighbors(node, layer) else {
+            return Err(context_index::GraphError::LayerNotFound { node_id, layer });
+        };
+        output.clear();
+        output.extend(
+            neighbors
+                .iter()
+                .copied()
+                .filter(|neighbor| neighbor.get() < self.metadata.node_count()),
+        );
+        Ok(true)
+    }
+}
+
 impl GraphRead for PgHnswGraphRead {
     fn metadata(&mut self) -> context_index::GraphResult<GraphMetadata> {
         // SAFETY: this adapter exists only for the active AM callback.
         let meta = unsafe { self.meta() };
-        let node_count = usize::try_from(meta.graph_nodes).map_err(|_| context_index::GraphError::CapacityExceeded {
+        // SAFETY: the descriptor is copied from the validated publication.
+        let segment = unsafe { self.selected_segment() };
+        let graph_nodes = segment.map_or(0, |segment| segment.graph_nodes);
+        let entry_node_id = segment.map_or(u64::MAX, |segment| segment.entry_node_id);
+        let node_count = usize::try_from(graph_nodes).map_err(|_| context_index::GraphError::CapacityExceeded {
             operation: "HNSW metapage node count",
         })?;
-        let entry = if meta.entry_node_id == u64::MAX {
+        let entry = if entry_node_id == u64::MAX {
             None
         } else {
             Some(HnswNodeId::new(
-                usize::try_from(meta.entry_node_id).map_err(|_| {
+                usize::try_from(entry_node_id).map_err(|_| {
                     context_index::GraphError::CapacityExceeded {
                         operation: "HNSW metapage entry node",
                     }
@@ -133,6 +232,412 @@ impl GraphRead for PgHnswGraphRead {
     }
 }
 
+struct ParallelSegmentCancellation {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl HnswCancellation for ParallelSegmentCancellation {
+    fn check(&mut self) -> context_index::Result<()> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            Err(HnswError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[derive(Default)]
+struct ParallelSegmentOutcome {
+    hits: Vec<SegmentDeltaHit>,
+    node_reads: usize,
+}
+
+#[derive(Clone, Copy)]
+struct SegmentDeltaHit {
+    segment_index: usize,
+    hit: DeltaHit,
+}
+
+struct PublishedMutationOverlay {
+    frozen: Vec<Vec<context_storage::DeltaRecord>>,
+    active: Vec<context_storage::DeltaRecord>,
+}
+
+impl PublishedMutationOverlay {
+    fn record_count(&self) -> usize {
+        self.frozen
+            .iter()
+            .fold(self.active.len(), |total, records| {
+                total.saturating_add(records.len())
+            })
+    }
+
+
+    fn retirement_points_after_segment(&self, segment_index: usize) -> Vec<HnswPointId> {
+        self.frozen[segment_index..]
+            .iter()
+            .flat_map(|records| records.iter())
+            .chain(self.active.iter())
+            .map(|record| HnswPointId::new(record.heap_tid))
+            .collect()
+    }
+}
+
+unsafe fn read_published_mutation_overlay(
+    index_relation: pg_sys::Relation,
+    meta: HnswMetaPage,
+) -> Option<PublishedMutationOverlay> {
+    let mut frozen = Vec::with_capacity(meta.segments().len());
+    for segment in meta.segments() {
+        let records = if segment.mutation_start_block == u64::MAX {
+            Vec::new()
+        } else {
+            unsafe {
+                read_hnsw_delta_records_range(
+                    index_relation,
+                    segment.mutation_start_block,
+                    segment.mutation_end_block,
+                    segment.mutation_generation,
+                    GraphPageKind::FrozenDelta,
+                    segment.mutation_record_count,
+                )
+            }
+        };
+        frozen.push(records);
+    }
+    let active = unsafe { try_read_hnsw_delta_records(index_relation, meta) }?;
+    Some(PublishedMutationOverlay { frozen, active })
+}
+
+unsafe fn read_consistent_hnsw_publication(
+    index_relation: pg_sys::Relation,
+) -> (HnswMetaPage, PublishedMutationOverlay) {
+    for _ in 0..16 {
+        let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
+        if let Some(overlay) = unsafe { read_published_mutation_overlay(index_relation, meta) } {
+            return (meta, overlay);
+        }
+        pg_sys::check_for_interrupts!();
+    }
+    raise_sql_error(
+        PgSqlErrorCode::ERRCODE_T_R_SERIALIZATION_FAILURE,
+        "HNSW publication changed repeatedly while starting a scan; retry the statement",
+    )
+}
+
+type SegmentPoolJob = Box<dyn FnOnce() + Send + 'static>;
+
+struct SegmentSearchPool {
+    sender: SyncSender<SegmentPoolJob>,
+}
+
+impl SegmentSearchPool {
+    fn start() -> Option<Self> {
+        let (sender, receiver) = mpsc::sync_channel::<SegmentPoolJob>(HNSW_MAX_SEGMENTS * 2);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for worker in 0..HNSW_MAX_SEGMENTS {
+            let receiver = Arc::clone(&receiver);
+            if std::thread::Builder::new()
+                .name(format!("pgcontext-hnsw-{worker}"))
+                .spawn(move || loop {
+                    let job = receiver.lock().ok().and_then(|locked| locked.recv().ok());
+                    let Some(job) = job else { break };
+                    job();
+                })
+                .is_err()
+            {
+                return None;
+            }
+        }
+        Some(Self { sender })
+    }
+
+    fn try_submit(&self, job: SegmentPoolJob) -> bool {
+        match self.sender.try_send(job) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => false,
+        }
+    }
+}
+
+static SEGMENT_SEARCH_POOL: OnceLock<Option<SegmentSearchPool>> = OnceLock::new();
+
+thread_local! {
+    static PARALLEL_SEGMENT_ADMISSION_HELD: Cell<bool> = const { Cell::new(false) };
+}
+
+struct ParallelSegmentAdmission {
+    keys: Vec<i32>,
+}
+
+impl ParallelSegmentAdmission {
+    fn try_acquire(requested: usize) -> Option<Self> {
+        const NAMESPACE: i32 = 0x5047_5053;
+        let nested = PARALLEL_SEGMENT_ADMISSION_HELD.with(|held| held.replace(true));
+        if nested {
+            return None;
+        }
+        let mut keys = Vec::with_capacity(requested);
+        for key in 0..i32::try_from(HNSW_MAX_SEGMENTS).unwrap_or(i32::MAX) {
+            let acquired = unsafe {
+                pgrx::direct_function_call::<bool>(
+                    pg_sys::pg_try_advisory_lock_int4,
+                    &[Some(pg_sys::Datum::from(NAMESPACE)), Some(pg_sys::Datum::from(key))],
+                )
+            }
+            .unwrap_or(false);
+            if acquired {
+                keys.push(key);
+                if keys.len() == requested {
+                    break;
+                }
+            }
+        }
+        if keys.len() < 2 {
+            let guard = Self { keys };
+            drop(guard);
+            return None;
+        }
+        Some(Self { keys })
+    }
+}
+
+impl Drop for ParallelSegmentAdmission {
+    fn drop(&mut self) {
+        const NAMESPACE: i32 = 0x5047_5053;
+        for key in self.keys.drain(..) {
+            let _ = unsafe {
+                pgrx::direct_function_call::<bool>(
+                    pg_sys::pg_advisory_unlock_int4,
+                    &[Some(pg_sys::Datum::from(NAMESPACE)), Some(pg_sys::Datum::from(key))],
+                )
+            };
+        }
+        PARALLEL_SEGMENT_ADMISSION_HELD.with(|held| held.set(false));
+    }
+}
+
+fn projected_parallel_segment_bytes(meta: HnswMetaPage) -> Option<u64> {
+    let dimensions = u64::from(meta.dimensions);
+    let vector_bytes = dimensions.checked_mul(size_of::<f32>() as u64)?;
+    let layer_zero_links = u64::from(meta.hnsw_m)
+        .checked_mul(2)?
+        .checked_mul(size_of::<HnswNodeId>() as u64)?;
+    let per_node_floor = vector_bytes
+        .checked_add(size_of::<PackedHnswNode>() as u64)?
+        .checked_add(size_of::<PackedHnswLayer>() as u64)?
+        .checked_add(layer_zero_links)?;
+
+    meta.segments().iter().try_fold(0_u64, |total, segment| {
+        let packed_floor = segment.graph_nodes.checked_mul(per_node_floor)?;
+        let extent_blocks = segment.end_block.checked_sub(segment.start_block)?;
+        let extent_bytes = extent_blocks.checked_mul(pg_sys::BLCKSZ as u64)?;
+        total.checked_add(packed_floor.max(extent_bytes))
+    })
+}
+
+fn parallel_segment_memory_admitted(meta: HnswMetaPage) -> bool {
+    if meta.segments().len() < 3
+        || crate::settings::hnsw_segment_parallel_workers_from_guc() < 2
+    {
+        return true;
+    }
+    let serving_budget = crate::settings::hnsw_shared_serving_budget_bytes_from_guc();
+    let admitted = projected_parallel_segment_bytes(meta)
+        .is_some_and(|projected_bytes| projected_bytes <= serving_budget);
+    if !admitted {
+        record_hnsw_parallel_admission_denial();
+    }
+    admitted
+}
+
+unsafe fn try_parallel_segment_search(
+    index_relation: pg_sys::Relation,
+    meta: HnswMetaPage,
+    metric: HnswScoreMetric,
+    query: &DenseVector,
+    config: HnswConfig,
+    limit: SearchLimit,
+    mask: Option<&CandidateMask>,
+    mask_budget: usize,
+) -> context_index::Result<Option<ParallelSegmentOutcome>> {
+    let worker_limit = crate::settings::hnsw_segment_parallel_workers_from_guc();
+    if meta.segments().len() < 3 || worker_limit < 2 {
+        return Ok(None);
+    }
+    let serving_budget = crate::settings::hnsw_shared_serving_budget_bytes_from_guc();
+    let mut graphs = Vec::with_capacity(meta.segments().len());
+    let mut packed_bytes = 0_u64;
+    for segment in meta.segments() {
+        let mut backend_read = PgHnswGraphRead::for_segment(index_relation, *segment);
+        // SAFETY: all PostgreSQL-backed loading completes in this backend
+        // before the returned pure owned adapter is placed in a worker task.
+        let Some(graph) = (unsafe { backend_read.parallel_local_read()? }) else {
+            record_hnsw_parallel_admission_denial();
+            return Ok(None);
+        };
+        let Some(next_packed_bytes) = packed_bytes.checked_add(graph.graph.byte_size()) else {
+            record_hnsw_parallel_admission_denial();
+            return Ok(None);
+        };
+        if next_packed_bytes > serving_budget {
+            record_hnsw_parallel_admission_denial();
+            return Ok(None);
+        }
+        packed_bytes = next_packed_bytes;
+        graphs.push(graph);
+    }
+
+    let requested_workers = worker_limit.min(graphs.len());
+    let Some(admission) = ParallelSegmentAdmission::try_acquire(requested_workers) else {
+        record_hnsw_parallel_admission_denial();
+        return Ok(None);
+    };
+    let worker_count = admission.keys.len();
+    let Some(pool) = SEGMENT_SEARCH_POOL.get_or_init(SegmentSearchPool::start) else {
+        record_hnsw_parallel_admission_denial();
+        return Ok(None);
+    };
+    let mut tasks: Vec<Vec<(usize, ParallelPackedGraphRead)>> =
+        (0..worker_count).map(|_| Vec::new()).collect();
+    for (index, graph) in graphs.into_iter().enumerate() {
+        tasks[index % worker_count].push((index, graph));
+    }
+    let query = Arc::new(query.clone());
+    let mask = mask.cloned().map(Arc::new);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let (result_sender, result_receiver) = mpsc::channel();
+    for task in tasks {
+        let query = Arc::clone(&query);
+        let mask = mask.as_ref().map(Arc::clone);
+        let task_cancelled = Arc::clone(&cancelled);
+        let result_sender = result_sender.clone();
+        let submitted = pool.try_submit(Box::new(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut combined = ParallelSegmentOutcome::default();
+                    for (segment_index, mut graph) in task {
+                        let mut cancellation = ParallelSegmentCancellation {
+                            cancelled: Arc::clone(&task_cancelled),
+                        };
+                        let outcome = if let Some(mask) = mask.as_deref() {
+                            search_graph_read_with_mask_budgeted(
+                                &mut graph,
+                                metric.navigation_metric(),
+                                &query,
+                                config,
+                                limit,
+                                mask,
+                                mask_budget,
+                                &mut cancellation,
+                            )
+                        } else {
+                            search_graph_read(
+                                &mut graph,
+                                metric.navigation_metric(),
+                                &query,
+                                config,
+                                limit,
+                                &mut cancellation,
+                            )
+                        };
+                        let outcome = match outcome {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                task_cancelled.store(true, Ordering::Relaxed);
+                                return Err(error);
+                            }
+                        };
+                        combined.hits.extend(
+                            outcome
+                                .results()
+                                .iter()
+                                .filter(|result| {
+                                    !hnsw_point_id_is_tombstoned(result.point_id())
+                                })
+                                .map(|result| SegmentDeltaHit {
+                                    segment_index,
+                                    hit: DeltaHit {
+                                        heap_tid: result.point_id().get(),
+                                        score: result.score(),
+                                    },
+                                }),
+                        );
+                        combined.node_reads =
+                            combined.node_reads.saturating_add(graph.node_reads);
+                    }
+                    Ok(combined)
+            }))
+            .unwrap_or_else(|_| {
+                task_cancelled.store(true, Ordering::Relaxed);
+                Err(HnswError::GraphRead(
+                    context_index::GraphError::AdapterFailure {
+                        operation: "parallel segment search",
+                        message: "backend-local worker panicked".to_owned(),
+                    },
+                ))
+            });
+            let _ = result_sender.send(result);
+        }));
+        if !submitted {
+            cancelled.store(true, Ordering::Relaxed);
+            record_hnsw_parallel_admission_denial();
+            return Ok(None);
+        }
+    }
+    drop(result_sender);
+    let mut combined = ParallelSegmentOutcome::default();
+    let mut completed = 0;
+    let mut first_error = None;
+    let mut interrupted = false;
+    while completed < worker_count {
+        let result = match result_receiver.recv_timeout(Duration::from_millis(5)) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if unsafe { pg_sys::InterruptPending != 0 } {
+                    cancelled.store(true, Ordering::Relaxed);
+                    interrupted = true;
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                cancelled.store(true, Ordering::Relaxed);
+                return Err(HnswError::GraphRead(
+                    context_index::GraphError::AdapterFailure {
+                        operation: "parallel segment search",
+                        message: "backend-local worker pool disconnected".to_owned(),
+                    },
+                ));
+            }
+        };
+        match result {
+            Ok(result) if first_error.is_none() => {
+                combined.hits.extend(result.hits);
+                combined.node_reads = combined.node_reads.saturating_add(result.node_reads);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                cancelled.store(true, Ordering::Relaxed);
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+        completed += 1;
+    }
+    drop(admission);
+    // PostgreSQL interrupt processing may longjmp across Rust frames. Every
+    // pure worker result is therefore drained and every session-level
+    // admission lock explicitly released before entering ProcessInterrupts.
+    if interrupted {
+        pg_sys::check_for_interrupts!();
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    record_hnsw_parallel_segment_scan();
+    Ok(Some(combined))
+}
+
 unsafe fn hnsw_page_graph_scan_candidates(
     index_relation: pg_sys::Relation,
     metric: HnswScoreMetric,
@@ -140,10 +645,14 @@ unsafe fn hnsw_page_graph_scan_candidates(
     config: HnswConfig,
     requested_limit: usize,
 ) -> HnswScanCandidates {
+    // Read the retirement overlay before ANN traversal. Each mutation may
+    // invalidate one returned base hit, so this conservative expansion keeps
+    // enough successors for the final chronological replay.
+    let (meta, overlay) = unsafe { read_consistent_hnsw_publication(index_relation) };
     let limit = SearchLimit::new(requested_limit).unwrap_or_else(|error| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("invalid persisted HNSW ef_search policy: {error}"),
+            format!("invalid persisted HNSW search policy: {error}"),
         )
     });
     let normalized_query;
@@ -174,29 +683,84 @@ unsafe fn hnsw_page_graph_scan_candidates(
     } else {
         query
     };
-    let mut graph = PgHnswGraphRead::new(index_relation);
-    let mut cancellation = PgHnswCancellation;
-    let outcome = search_graph_read(
-        &mut graph,
-        metric.navigation_metric(),
-        query,
-        config,
-        limit,
-        &mut cancellation,
-    )
-    .unwrap_or_else(|error| raise_hnsw_scan_error(error));
+    // SAFETY: the metapage snapshot owns the immutable segment descriptors.
+    record_hnsw_multi_segment_scan(meta.segments().len());
+    let mut base_hits = Vec::new();
+    let mut page_visits = 0_usize;
+    let mut node_reads = 0_usize;
+    // SAFETY: parallel admission copies every segment into an owned pure
+    // adapter before any worker starts and returns None without publication.
+    let parallel_memory_admitted = parallel_segment_memory_admitted(meta);
+    let parallel = if overlay.record_count() == 0 && parallel_memory_admitted {
+        unsafe {
+            try_parallel_segment_search(
+                index_relation,
+                meta,
+                metric,
+                query,
+                config,
+                limit,
+                None,
+                0,
+            )
+        }
+        .unwrap_or_else(|error| raise_hnsw_scan_error(error))
+    } else {
+        None
+    };
+    if let Some(parallel) = parallel {
+        base_hits = parallel.hits;
+        node_reads = parallel.node_reads;
+    } else {
+        if meta.segments().len() > 1 {
+            record_hnsw_serial_segment_degradation();
+        }
+        let mut cancellation = PgHnswCancellation;
+        for (segment_index, segment) in meta.segments().iter().enumerate() {
+            let mut graph = PgHnswGraphRead::for_segment(index_relation, *segment);
+            let retirement = CandidateMask::all()
+                .excluding(overlay.retirement_points_after_segment(segment_index));
+            let outcome = search_graph_read_with_mask_budgeted(
+                &mut graph,
+                metric.navigation_metric(),
+                query,
+                config,
+                limit,
+                &retirement,
+                usize::MAX,
+                &mut cancellation,
+            )
+            .unwrap_or_else(|error| raise_hnsw_scan_error(error));
+            base_hits.extend(
+                outcome
+                    .results()
+                    .iter()
+                    .filter(|result| !hnsw_point_id_is_tombstoned(result.point_id()))
+                    .map(|result| SegmentDeltaHit {
+                        segment_index,
+                        hit: DeltaHit {
+                            heap_tid: result.point_id().get(),
+                            score: result.score(),
+                        },
+                    }),
+            );
+            page_visits = page_visits.saturating_add(graph.page_visits);
+            node_reads = node_reads.saturating_add(graph.node_reads);
+        }
+    }
     // SAFETY: this adapter exists only for the active AM callback, which
     // owns a live `index_relation` for the duration of this scan.
     unsafe {
-        hnsw_scan_candidates_with_delta_merge(
+        hnsw_segment_candidates_with_delta_merge(
             index_relation,
             metric,
             query,
-            outcome,
-            graph.page_visits,
-            graph.node_reads,
+            base_hits,
+            page_visits,
+            node_reads,
             limit.get(),
             None,
+            overlay,
         )
     }
 }
@@ -212,24 +776,20 @@ unsafe fn hnsw_page_graph_scan_candidates(
 unsafe fn hnsw_unordered_scan_candidates_with_delta(
     index_relation: pg_sys::Relation,
 ) -> Vec<HnswScanCandidate> {
-    // SAFETY: The caller owns the live relation for this AM callback.
-    let records = unsafe { read_hnsw_vector_records(index_relation) };
-    let mut candidates = hnsw_unordered_scan_candidates(records)
-        .into_iter()
-        .map(|candidate| (candidate.heap_tid, candidate))
-        .collect::<BTreeMap<_, _>>();
-
     // SAFETY: The metapage and its published delta boundary belong to the
     // same live relation held by the caller.
-    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
-    if meta.delta_start_block != u64::MAX {
-        // SAFETY: `delta_start_block` was validated by the delta reader.
-        let delta_records =
-            unsafe { read_hnsw_delta_records(index_relation, meta.delta_start_block) };
-        if !delta_records.is_empty() {
-            record_hnsw_delta_segment_scan();
+    let (meta, overlay) = unsafe { read_consistent_hnsw_publication(index_relation) };
+    record_hnsw_multi_segment_scan(meta.segments().len());
+    if meta.segments().len() > 1 {
+        record_hnsw_serial_segment_degradation();
+    }
+    let mut candidates = BTreeMap::new();
+    for (segment_index, segment) in meta.segments().iter().enumerate() {
+        let records = unsafe { read_hnsw_segment_records(index_relation, *segment) };
+        for candidate in hnsw_unordered_scan_candidates(records) {
+            candidates.insert(candidate.heap_tid, candidate);
         }
-        for record in delta_records {
+        for record in &overlay.frozen[segment_index] {
             match record.kind {
                 DeltaRecordKind::Live => {
                     candidates.insert(
@@ -245,6 +805,25 @@ unsafe fn hnsw_unordered_scan_candidates_with_delta(
                 }
             }
         }
+    }
+    for record in &overlay.active {
+        match record.kind {
+            DeltaRecordKind::Live => {
+                candidates.insert(
+                    record.heap_tid,
+                    HnswScanCandidate {
+                        heap_tid: record.heap_tid,
+                        score: 0.0,
+                    },
+                );
+            }
+            DeltaRecordKind::Tombstone => {
+                candidates.remove(&record.heap_tid);
+            }
+        }
+    }
+    if overlay.record_count() > 0 {
+        record_hnsw_delta_segment_scan();
     }
 
     candidates.into_values().collect()
@@ -283,32 +862,89 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
     } else {
         query
     };
-    let mut graph = PgHnswGraphRead::new(index_relation);
-    let mut cancellation = PgHnswCancellation;
+    // SAFETY: the metapage snapshot owns the immutable segment descriptors.
+    let (meta, overlay) = unsafe { read_consistent_hnsw_publication(index_relation) };
     let mask_budget = crate::settings::hnsw_mask_candidate_limit_from_guc();
-    let outcome = search_graph_read_with_mask_budgeted(
-        &mut graph,
-        metric.navigation_metric(),
-        query,
-        config,
-        limit,
-        mask,
-        mask_budget,
-        &mut cancellation,
-    )
-    .unwrap_or_else(|error| raise_hnsw_scan_error(error));
+    mask.validate_budget_with_limit(mask_budget)
+        .unwrap_or_else(|error| raise_hnsw_scan_error(error));
+    record_hnsw_multi_segment_scan(meta.segments().len());
+    let mut base_hits = Vec::new();
+    let mut page_visits = 0_usize;
+    let mut node_reads = 0_usize;
+    // SAFETY: as the unmasked path; the mask is cloned into immutable owned
+    // state before the scoped workers start.
+    let parallel_memory_admitted = parallel_segment_memory_admitted(meta);
+    let parallel = if overlay.record_count() == 0 && parallel_memory_admitted {
+        unsafe {
+            try_parallel_segment_search(
+                index_relation,
+                meta,
+                metric,
+                query,
+                config,
+                limit,
+                Some(mask),
+                mask_budget,
+            )
+        }
+        .unwrap_or_else(|error| raise_hnsw_scan_error(error))
+    } else {
+        None
+    };
+    if let Some(parallel) = parallel {
+        base_hits = parallel.hits;
+        node_reads = parallel.node_reads;
+    } else {
+        if meta.segments().len() > 1 {
+            record_hnsw_serial_segment_degradation();
+        }
+        let mut cancellation = PgHnswCancellation;
+        for (segment_index, segment) in meta.segments().iter().enumerate() {
+            let mut graph = PgHnswGraphRead::for_segment(index_relation, *segment);
+            let retirement = mask
+                .clone()
+                .excluding(overlay.retirement_points_after_segment(segment_index));
+            let outcome = search_graph_read_with_mask_budgeted(
+                &mut graph,
+                metric.navigation_metric(),
+                query,
+                config,
+                limit,
+                &retirement,
+                usize::MAX,
+                &mut cancellation,
+            )
+            .unwrap_or_else(|error| raise_hnsw_scan_error(error));
+            base_hits.extend(
+                outcome
+                    .results()
+                    .iter()
+                    .filter(|result| !hnsw_point_id_is_tombstoned(result.point_id()))
+                    .map(|result| SegmentDeltaHit {
+                        segment_index,
+                        hit: DeltaHit {
+                            heap_tid: result.point_id().get(),
+                            score: result.score(),
+                        },
+                    }),
+            );
+            page_visits = page_visits.saturating_add(graph.page_visits);
+            node_reads = node_reads.saturating_add(graph.node_reads);
+        }
+    }
     // SAFETY: this adapter exists only for the active AM callback, which
     // owns a live `index_relation` for the duration of this scan.
     unsafe {
-        hnsw_scan_candidates_with_delta_merge(
+        hnsw_segment_candidates_with_delta_merge(
             index_relation,
             metric,
             query,
-            outcome,
-            graph.page_visits,
-            graph.node_reads,
+            base_hits,
+            page_visits,
+            node_reads,
             limit.get(),
             Some(mask),
+            overlay,
         )
     }
 }
@@ -317,71 +953,68 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
 /// delta region, applying delta-based retirement of stale/deleted base
 /// candidates. Falls back to the base-only outcome when no delta region is
 /// open or the delta is empty, avoiding the decode pass entirely.
-unsafe fn hnsw_scan_candidates_with_delta_merge(
+unsafe fn hnsw_segment_candidates_with_delta_merge(
     index_relation: pg_sys::Relation,
     metric: HnswScoreMetric,
     query: &DenseVector,
-    outcome: HnswSearchOutcome,
+    base_hits: Vec<SegmentDeltaHit>,
     page_visits: usize,
     node_reads: usize,
     requested_limit: usize,
     delta_mask: Option<&CandidateMask>,
+    overlay: PublishedMutationOverlay,
 ) -> HnswScanCandidates {
     // SAFETY: this adapter exists only for the active AM callback.
     let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
-    if meta.delta_start_block == u64::MAX {
-        return hnsw_scan_candidates_from_outcome(
-            outcome,
-            metric,
-            page_visits,
-            node_reads,
-            requested_limit,
-        );
+    if meta.segments().len() > 1 {
+        record_hnsw_segment_merge(base_hits.len(), 0);
     }
-    // SAFETY: `delta_start_block` came from the metapage read above and the
-    // caller holds whatever lock the active AM callback requires.
-    let delta_records = unsafe { read_hnsw_delta_records(index_relation, meta.delta_start_block) };
-    if delta_records.is_empty() {
-        return hnsw_scan_candidates_from_outcome(
-            outcome,
-            metric,
-            page_visits,
-            node_reads,
-            requested_limit,
+    if overlay.record_count() == 0 {
+        return hnsw_scan_candidates_from_segment_hits(
+            base_hits.into_iter().map(|hit| hit.hit).collect(), metric, page_visits, node_reads, requested_limit,
         );
     }
     record_hnsw_delta_segment_scan();
-    let entries = delta_records
-        .iter()
-        .filter(|record| {
-            delta_mask.is_none_or(|mask| mask.allows(HnswPointId::new(record.heap_tid)))
-        })
-        .map(|record| match record.kind {
-            DeltaRecordKind::Live => DeltaScanEntry::Live {
-                heap_tid: record.heap_tid,
-                vector: record.vector.as_slice(),
-            },
-            DeltaRecordKind::Tombstone => DeltaScanEntry::Tombstone {
-                heap_tid: record.heap_tid,
-            },
-        });
-    let delta_outcome = scan_delta_topk(
-        entries,
-        metric.navigation_metric(),
-        query.as_slice(),
-        requested_limit,
-    )
-    .unwrap_or_else(|error| raise_hnsw_scan_error(error));
-    let scored_delta_vectors = delta_outcome.scored_count;
-    let base_hits = outcome
-        .results()
-        .iter()
-        .filter(|result| !hnsw_point_id_is_tombstoned(result.point_id()))
-        .map(|result| DeltaHit {
-            heap_tid: result.point_id().get(),
-            score: result.score(),
-        });
-    let merged = merge_topk(base_hits, &delta_outcome, requested_limit);
+    record_hnsw_segment_merge(
+        0,
+        overlay.frozen.iter().map(Vec::len).sum(),
+    );
+    let mut by_segment = vec![Vec::new(); meta.segments().len()];
+    for candidate in base_hits {
+        if let Some(segment) = by_segment.get_mut(candidate.segment_index) {
+            segment.push(candidate.hit);
+        }
+    }
+    let mut live = BTreeMap::<u64, f32>::new();
+    let mut scored_delta_vectors = 0_usize;
+    for (segment_index, mutations) in overlay.frozen.iter().enumerate() {
+        for hit in &by_segment[segment_index] {
+            live.insert(hit.heap_tid, hit.score);
+        }
+        for record in mutations {
+            apply_hnsw_overlay_record(
+                &mut live,
+                &mut scored_delta_vectors,
+                record,
+                metric,
+                query,
+                delta_mask,
+            );
+        }
+    }
+    for record in &overlay.active {
+        apply_hnsw_overlay_record(
+            &mut live,
+            &mut scored_delta_vectors,
+            record,
+            metric,
+            query,
+            delta_mask,
+        );
+    }
+    let mut merged = live.into_iter().map(|(heap_tid, score)| DeltaHit { heap_tid, score }).collect::<Vec<_>>();
+    merged.sort_by(|left, right| left.score.total_cmp(&right.score).then_with(|| left.heap_tid.cmp(&right.heap_tid)));
+    merged.truncate(requested_limit);
     let candidates = merged
         .into_iter()
         .map(|hit| HnswScanCandidate {
@@ -402,6 +1035,33 @@ unsafe fn hnsw_scan_candidates_with_delta_merge(
     }
 }
 
+fn apply_hnsw_overlay_record(
+    live: &mut BTreeMap<u64, f32>,
+    scored: &mut usize,
+    record: &context_storage::DeltaRecord,
+    metric: HnswScoreMetric,
+    query: &DenseVector,
+    mask: Option<&CandidateMask>,
+) {
+    if mask.is_some_and(|mask| !mask.allows(HnswPointId::new(record.heap_tid))) {
+        return;
+    }
+    match record.kind {
+        DeltaRecordKind::Live => {
+            let score = metric
+                .navigation_metric()
+                .distance_slices(query.as_slice(), record.vector.as_slice())
+                .unwrap_or_else(|error| raise_core_error(error));
+            live.insert(record.heap_tid, score);
+            *scored = scored.saturating_add(1);
+        }
+        DeltaRecordKind::Tombstone => {
+            live.remove(&record.heap_tid);
+        }
+    }
+}
+
+
 fn raise_hnsw_scan_error(error: HnswError) -> ! {
     let code = match error {
         HnswError::DimensionMismatch { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
@@ -413,20 +1073,36 @@ fn raise_hnsw_scan_error(error: HnswError) -> ! {
     )
 }
 
-fn hnsw_scan_candidates_from_outcome(
-    outcome: HnswSearchOutcome,
+fn hnsw_scan_candidates_from_segment_hits(
+    hits: Vec<DeltaHit>,
     metric: HnswScoreMetric,
     page_visits: usize,
     node_reads: usize,
     requested_limit: usize,
 ) -> HnswScanCandidates {
-    let candidates = outcome
-        .results()
-        .iter()
-        .filter(|result| !hnsw_point_id_is_tombstoned(result.point_id()))
-        .map(|result| HnswScanCandidate {
-            heap_tid: result.point_id().get(),
-            score: metric.output_score(result.score()),
+    let mut best_by_tid = BTreeMap::<u64, f32>::new();
+    for hit in hits {
+        best_by_tid
+            .entry(hit.heap_tid)
+            .and_modify(|score| {
+                if hit.score.total_cmp(score).is_lt() {
+                    *score = hit.score;
+                }
+            })
+            .or_insert(hit.score);
+    }
+    let mut ranked = best_by_tid.into_iter().collect::<Vec<_>>();
+    ranked.sort_by(|left, right| {
+        left.1
+            .total_cmp(&right.1)
+            .then_with(|| left.0.cmp(&right.0))
+    });
+    ranked.truncate(requested_limit);
+    let candidates = ranked
+        .into_iter()
+        .map(|(heap_tid, score)| HnswScanCandidate {
+            heap_tid,
+            score: metric.output_score(score),
         })
         .collect::<Vec<_>>();
     HnswScanCandidates {
@@ -452,6 +1128,7 @@ unsafe fn hnsw_stored_config(
     meta.stored_config(metric, runtime.ef_search())
 }
 
+#[cfg(any(test, feature = "pg_test"))]
 unsafe fn hnsw_stored_entry_point(
     index_relation: pg_sys::Relation,
 ) -> Option<HnswNodeId> {
@@ -630,7 +1307,7 @@ where
 
 unsafe fn read_hnsw_meta_page(
     page: pg_sys::Page,
-) -> Result<Option<HnswMetaPage>, &'static str> {
+) -> Result<Option<HnswMetaPage>, String> {
     // SAFETY: `page` is a valid PostgreSQL page pointer from a pinned buffer.
     if unsafe { pg_sys::PageIsNew(page) } {
         return Ok(None);
@@ -644,13 +1321,23 @@ unsafe fn read_hnsw_meta_page(
     // line pointer and item span before copying it into Rust-owned bytes.
     let item = unsafe { copy_hnsw_page_item(page, HNSW_FIRST_OFFSET)? };
     if item.len() != size_of::<HnswMetaPage>() {
-        return Err("HNSW metapage item has an unexpected length");
+        if item.len() >= 6 {
+            let magic = u32::from_ne_bytes(item[0..4].try_into().unwrap_or([0; 4]));
+            let version = u16::from_ne_bytes(item[4..6].try_into().unwrap_or([0; 2]));
+            if magic == HNSW_META_MAGIC && version != HNSW_META_VERSION {
+                return Err(format!(
+                    "HNSW metapage format {version} requires REINDEX for format {}",
+                    HNSW_META_VERSION
+                ));
+            }
+        }
+        return Err("HNSW metapage item has an unexpected length".to_owned());
     }
     // SAFETY: the owned item has exactly the size of `HnswMetaPage`; unaligned
     // reads avoid assuming item payload alignment.
     let meta = unsafe { ptr::read_unaligned(item.as_ptr().cast::<HnswMetaPage>()) };
     if !meta.is_valid() {
-        return Err("HNSW metapage metadata is invalid");
+        return Err("HNSW metapage metadata is invalid".to_owned());
     }
     Ok(Some(meta))
 }

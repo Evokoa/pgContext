@@ -320,10 +320,11 @@ Index maintenance:
   If it nonetheless observes a concurrent index mutation it raises
   `serialization_failure` and changes nothing.
 
-  By default an insert that fills the delta segment runs this same compaction
-  itself, so calling it explicitly is only needed when
-  `pgcontext.hnsw_compact_on_threshold` is off — see
-  [index configuration](indexes.md).
+  Normal inserts rotate a full active delta into an immutable graph segment
+  and compact only one adjacent pair when the 16-entry directory is full.
+  Call this full compaction explicitly to collapse all segments or reclaim
+  logical mutation history; use `REINDEX` when physical file shrinkage is
+  required. See [index configuration](indexes.md).
 
 `pgcontext_hnsw`, its handler function, and four dense-vector operator classes
 are SQL-visible for ongoing access-method work:

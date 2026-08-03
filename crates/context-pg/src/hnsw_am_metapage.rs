@@ -3,6 +3,41 @@
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HnswSegmentMeta {
+    segment_id: u64,
+    generation: u64,
+    start_block: u64,
+    end_block: u64,
+    graph_nodes: u64,
+    entry_node_id: u64,
+    mutation_generation: u64,
+    mutation_start_block: u64,
+    mutation_end_block: u64,
+    mutation_record_count: u64,
+}
+
+impl HnswSegmentMeta {
+    const EMPTY: Self = Self {
+        segment_id: 0,
+        generation: 0,
+        start_block: 0,
+        end_block: 0,
+        graph_nodes: 0,
+        entry_node_id: u64::MAX,
+        mutation_generation: u64::MAX,
+        mutation_start_block: u64::MAX,
+        mutation_end_block: u64::MAX,
+        mutation_record_count: 0,
+    };
+
+    const fn is_empty(self) -> bool {
+        self.segment_id == 0
+    }
+
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HnswMetaPage {
     magic: u32,
     version: u16,
@@ -36,10 +71,14 @@ struct HnswMetaPage {
     /// field existed, or one whose delta region a compaction has not yet
     /// re-opened).
     delta_start_block: u64,
+    /// Exclusive end block of the active delta extent.
+    delta_end_block: u64,
+    /// Generation stamp accepted for active delta pages.
+    delta_generation: u64,
     /// Delta records appended since `delta_start_block` was last set,
     /// including tombstones. Compared against
     /// `pgcontext.hnsw_delta_segment_limit` to decide whether an insert may
-    /// still append to the delta or must fall back to the legacy inline path.
+    /// still append to the delta or must rotate a bounded segment.
     delta_record_count: u64,
     /// Identity of the base graph generation the published node pages belong
     /// to, stamped into every node and adjacency page header as it is written.
@@ -58,6 +97,14 @@ struct HnswMetaPage {
     /// compaction), never by ordinary mutation: `directory_epoch` counts every
     /// insert and so cannot serve as this identity.
     base_generation: u64,
+    /// Number of initialized entries in `segments`.
+    segment_count: u16,
+    segment_reserved16: u16,
+    segment_reserved32: u32,
+    /// Next stable segment identity. Zero is permanently reserved.
+    next_segment_id: u64,
+    /// Immutable graph extents published atomically with this metapage.
+    segments: [HnswSegmentMeta; HNSW_MAX_SEGMENTS],
 }
 
 impl HnswMetaPage {
@@ -81,9 +128,204 @@ impl HnswMetaPage {
             directory_epoch: 0,
             base_start_block: HNSW_FIRST_VECTOR_BLOCK as u64,
             delta_start_block: u64::MAX,
+            delta_end_block: u64::MAX,
+            delta_generation: HNSW_INITIAL_PAGE_GENERATION,
             delta_record_count: 0,
             base_generation: HNSW_INITIAL_PAGE_GENERATION,
+            segment_count: 0,
+            segment_reserved16: 0,
+            segment_reserved32: 0,
+            next_segment_id: 1,
+            segments: [HnswSegmentMeta::EMPTY; HNSW_MAX_SEGMENTS],
         }
+    }
+
+    fn segments(&self) -> &[HnswSegmentMeta] {
+        &self.segments[..usize::from(self.segment_count)]
+    }
+
+    fn primary_segment(self) -> Option<HnswSegmentMeta> {
+        self.segments().first().copied()
+    }
+
+    fn next_segment_generation(self) -> u64 {
+        self.segments()
+            .iter()
+            .map(|segment| segment.generation)
+            .max()
+            .unwrap_or(HNSW_INITIAL_PAGE_GENERATION)
+            .saturating_add(1)
+    }
+
+    fn publish_single_segment(
+        &mut self,
+        start_block: u64,
+        end_block: u64,
+        graph_nodes: u64,
+        entry_point: Option<HnswNodeId>,
+    ) {
+        if graph_nodes == 0 {
+            self.segment_count = 0;
+            self.segments = [HnswSegmentMeta::EMPTY; HNSW_MAX_SEGMENTS];
+            self.next_segment_id = self.next_segment_id.saturating_add(1).max(1);
+            return;
+        }
+        if start_block >= end_block {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "cannot publish a non-empty HNSW segment with an empty block extent",
+            );
+        }
+        let segment_id = self.next_segment_id.max(1);
+        let generation = self.base_generation;
+        self.segments = [HnswSegmentMeta::EMPTY; HNSW_MAX_SEGMENTS];
+        self.segments[0] = HnswSegmentMeta {
+            segment_id,
+            generation,
+            start_block,
+            end_block,
+            graph_nodes,
+            entry_node_id: entry_point.map_or(u64::MAX, |node| node.get() as u64),
+            mutation_generation: u64::MAX,
+            mutation_start_block: u64::MAX,
+            mutation_end_block: u64::MAX,
+            mutation_record_count: 0,
+        };
+        self.segment_count = 1;
+        self.next_segment_id = segment_id.saturating_add(1);
+        self.base_start_block = start_block;
+        self.graph_nodes = graph_nodes;
+        self.entry_node_id = entry_point.map_or(u64::MAX, |node| node.get() as u64);
+    }
+
+    fn publish_additional_segment(
+        &mut self,
+        generation: u64,
+        start_block: u64,
+        end_block: u64,
+        graph_nodes: u64,
+        entry_point: Option<HnswNodeId>,
+        mutation_start_block: u64,
+        mutation_end_block: u64,
+        mutation_record_count: u64,
+    ) {
+        let index = usize::from(self.segment_count);
+        if index >= HNSW_MAX_SEGMENTS {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
+                "HNSW immutable segment directory is full; compaction is required",
+            );
+        }
+        let mutation_absent = mutation_start_block == u64::MAX && mutation_end_block == u64::MAX;
+        let mutation_present = mutation_start_block < mutation_end_block;
+        if !mutation_absent && !mutation_present {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "cannot publish an HNSW segment with an invalid mutation extent",
+            );
+        }
+        if graph_nodes > 0 && start_block >= end_block {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "cannot publish a non-empty HNSW segment with an empty graph extent",
+            );
+        }
+        let segment_id = self.next_segment_id.max(1);
+        self.segments[index] = HnswSegmentMeta {
+            segment_id,
+            generation,
+            start_block,
+            end_block,
+            graph_nodes,
+            entry_node_id: entry_point.map_or(u64::MAX, |node| node.get() as u64),
+            mutation_generation: if mutation_present {
+                generation
+            } else {
+                u64::MAX
+            },
+            mutation_start_block,
+            mutation_end_block,
+            mutation_record_count,
+        };
+        self.segment_count = self.segment_count.saturating_add(1);
+        self.next_segment_id = segment_id.saturating_add(1);
+        self.graph_nodes = self.graph_nodes.saturating_add(graph_nodes);
+        self.record_directory_mutation();
+    }
+
+    fn replace_segment_pair(
+        &mut self,
+        first: usize,
+        generation: u64,
+        start_block: u64,
+        end_block: u64,
+        graph_nodes: u64,
+        entry_point: Option<HnswNodeId>,
+        mutation_start_block: u64,
+        mutation_end_block: u64,
+        mutation_record_count: u64,
+    ) {
+        let count = usize::from(self.segment_count);
+        if first + 1 >= count {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "bounded HNSW compaction pair is outside the directory",
+            );
+        }
+        let retained_id = self.segments[first].segment_id;
+        self.segments[first] = HnswSegmentMeta {
+            segment_id: retained_id,
+            generation,
+            start_block,
+            end_block,
+            graph_nodes,
+            entry_node_id: entry_point.map_or(u64::MAX, |node| node.get() as u64),
+            mutation_generation: if mutation_start_block == u64::MAX {
+                u64::MAX
+            } else {
+                generation
+            },
+            mutation_start_block,
+            mutation_end_block,
+            mutation_record_count,
+        };
+        let mut index = first + 1;
+        while index + 1 < count {
+            self.segments[index] = self.segments[index + 1];
+            index += 1;
+        }
+        self.segments[count - 1] = HnswSegmentMeta::EMPTY;
+        self.segment_count = self.segment_count.saturating_sub(1);
+        self.graph_nodes = self
+            .segments()
+            .iter()
+            .fold(0_u64, |total, segment| {
+                total.saturating_add(segment.graph_nodes)
+            });
+        self.record_directory_mutation();
+    }
+
+    /// Relocates the unchanged active delta as part of an already-counted
+    /// directory publication. Pair compaction uses this after writing graph
+    /// pages beyond the old delta so future appends cannot create a logical
+    /// delta extent that spans immutable graph pages.
+    fn relocate_active_delta(
+        &mut self,
+        start_block: u64,
+        end_block: u64,
+        generation: u64,
+        record_count: u64,
+    ) {
+        if start_block > end_block || generation == 0 {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "cannot publish an invalid relocated HNSW active delta extent",
+            );
+        }
+        self.delta_start_block = start_block;
+        self.delta_end_block = end_block;
+        self.delta_generation = generation;
+        self.delta_record_count = record_count;
     }
 
     /// Returns the generation stamp a page being written now must carry to be
@@ -111,6 +353,116 @@ impl HnswMetaPage {
         self.magic == HNSW_META_MAGIC
             && self.version == HNSW_META_VERSION
             && self.quantization_metadata_version <= options::HNSW_QUANTIZATION_METADATA_VERSION
+            && self.segment_count as usize <= HNSW_MAX_SEGMENTS
+            && self.segment_reserved16 == 0
+            && self.segment_reserved32 == 0
+            && self.next_segment_id != 0
+            && ((self.delta_start_block == u64::MAX
+                && self.delta_end_block == u64::MAX
+                && self.delta_record_count == 0)
+                || (self.delta_start_block != u64::MAX
+                    && self.delta_start_block <= self.delta_end_block
+                    && self.delta_generation != 0
+                    && (self.delta_record_count == 0
+                        || self.delta_start_block < self.delta_end_block)))
+            && self.segment_directory_is_valid()
+    }
+
+    const fn segment_directory_is_valid(self) -> bool {
+        let mut index = 0;
+        let mut prior_id = 0;
+        while index < HNSW_MAX_SEGMENTS {
+            let segment = self.segments[index];
+            if index < self.segment_count as usize {
+                if segment.is_empty()
+                    || segment.segment_id <= prior_id
+                    || segment.generation == 0
+                    || segment.start_block < HNSW_FIRST_VECTOR_BLOCK as u64
+                    || (segment.graph_nodes > 0 && segment.start_block >= segment.end_block)
+                    || (segment.graph_nodes == 0 && segment.start_block != segment.end_block)
+                    || (segment.graph_nodes == 0 && segment.entry_node_id != u64::MAX)
+                    || (segment.graph_nodes > 0 && segment.entry_node_id >= segment.graph_nodes)
+                    || ((segment.mutation_start_block == u64::MAX)
+                        != (segment.mutation_end_block == u64::MAX))
+                    || ((segment.mutation_start_block == u64::MAX)
+                        != (segment.mutation_generation == u64::MAX))
+                    || ((segment.mutation_start_block == u64::MAX)
+                        != (segment.mutation_record_count == 0))
+                    || (segment.mutation_start_block != u64::MAX
+                        && (segment.mutation_start_block >= segment.mutation_end_block
+                            || segment.mutation_generation == 0))
+                    || Self::ranges_overlap(
+                        segment.start_block,
+                        segment.end_block,
+                        segment.mutation_start_block,
+                        segment.mutation_end_block,
+                    )
+                    || Self::ranges_overlap(
+                        segment.start_block,
+                        segment.end_block,
+                        self.delta_start_block,
+                        self.delta_end_block,
+                    )
+                    || Self::ranges_overlap(
+                        segment.mutation_start_block,
+                        segment.mutation_end_block,
+                        self.delta_start_block,
+                        self.delta_end_block,
+                    )
+                {
+                    return false;
+                }
+                prior_id = segment.segment_id;
+            } else if !segment.is_empty() {
+                return false;
+            }
+            index += 1;
+        }
+        let mut left = 0;
+        while left < self.segment_count as usize {
+            let mut right = left + 1;
+            while right < self.segment_count as usize {
+                let a = self.segments[left];
+                let b = self.segments[right];
+                if a.start_block < a.end_block
+                    && b.start_block < b.end_block
+                    && a.start_block < b.end_block
+                    && b.start_block < a.end_block
+                {
+                    return false;
+                }
+                if Self::ranges_overlap(
+                    a.start_block,
+                    a.end_block,
+                    b.mutation_start_block,
+                    b.mutation_end_block,
+                ) || Self::ranges_overlap(
+                    a.mutation_start_block,
+                    a.mutation_end_block,
+                    b.start_block,
+                    b.end_block,
+                ) || Self::ranges_overlap(
+                    a.mutation_start_block,
+                    a.mutation_end_block,
+                    b.mutation_start_block,
+                    b.mutation_end_block,
+                ) {
+                    return false;
+                }
+                right += 1;
+            }
+            left += 1;
+        }
+        true
+    }
+
+    const fn ranges_overlap(a_start: u64, a_end: u64, b_start: u64, b_end: u64) -> bool {
+        a_start != u64::MAX
+            && b_start != u64::MAX
+            && a_start < a_end
+            && b_start < b_end
+            && a_start < b_end
+            && b_start < a_end
     }
 
     fn record_build(
@@ -164,6 +516,7 @@ impl HnswMetaPage {
         })
     }
 
+    #[cfg(any(test, feature = "pg_test"))]
     fn record_insert(&mut self, dimensions: u32, entry_point: Option<HnswNodeId>) -> HnswNodeId {
         let node_id = hnsw_node_id_from_graph_count(self.graph_nodes);
         if self.dimensions == 0 {
@@ -187,24 +540,12 @@ impl HnswMetaPage {
         self.directory_epoch = self.directory_epoch.saturating_add(1);
     }
 
-    /// Points the live base graph at a region starting at `start_block`,
-    /// superseding whatever base preceded it.
-    ///
-    /// Compaction calls this only after every fresh base page is durable, so
-    /// a crash before the flip leaves the previous base authoritative.
-    fn open_base_region(&mut self, start_block: u64) {
-        self.base_start_block = start_block;
-    }
-
     /// Returns the first block a base-graph read may visit.
     ///
-    /// Only the start is published, never an end. Node records appended
-    /// after the build — the legacy inline-insert path — are placed by
-    /// [`find_last_hnsw_page`], which puts them at the relation's end, past
-    /// the delta region. Ending the base at `delta_start_block` would
-    /// silently drop exactly those rows.
-    ///
-    /// Because there is no upper bound, this range can contain pages that are
+    /// Only the start is published here because historical full-compaction
+    /// generations may leave inert pages beyond the selected base. The
+    /// immutable segment directory provides exact graph extents to current
+    /// serving paths. This broad bound can contain pages that are
     /// not part of the live graph — an unpublished or crash-orphaned base
     /// written by compaction. Those are excluded by generation stamp, not by
     /// block range; see [`Self::base_generation`]. A reader that filters on
@@ -226,20 +567,29 @@ impl HnswMetaPage {
     /// target `block_count` or later.
     fn open_delta_region(&mut self, block_count: u64) {
         self.delta_start_block = block_count;
+        self.delta_end_block = block_count;
+        self.delta_generation = self
+            .next_segment_generation()
+            .max(self.delta_generation.saturating_add(1));
         self.delta_record_count = 0;
     }
 
     /// Records one appended delta record (live or tombstone).
-    fn record_delta_append(&mut self) {
+    fn record_delta_append(&mut self, end_block: u64) {
+        if end_block < self.delta_start_block {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                "HNSW active delta end precedes its start",
+            );
+        }
+        self.delta_end_block = end_block;
         self.delta_record_count = self.delta_record_count.saturating_add(1);
     }
 
     /// Returns `true` when the delta region is open and has not yet reached
-    /// `limit` records. A `limit` of `0` always returns `false` (the legacy
-    /// inline-splice path), matching `pgcontext.hnsw_delta_segment_limit`'s
-    /// documented `0 = disabled` convention.
+    /// `limit` records.
     const fn delta_accepts_insert(self, limit: u64) -> bool {
-        self.delta_start_block != u64::MAX && limit > 0 && self.delta_record_count < limit
+        self.delta_start_block != u64::MAX && self.delta_record_count < limit
     }
 
     fn record_quantization(&mut self, metadata: options::HnswQuantizationMetadata) {
@@ -282,4 +632,3 @@ pub unsafe extern "C-unwind" fn pgcontext_hnsw_handler(
     let _fcinfo = unsafe { scope.borrow(fcinfo, "FunctionCallInfo") };
     self::hnsw_handler_safe()
 }
-

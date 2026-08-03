@@ -179,6 +179,16 @@ fn hnsw_search_candidate_mask_accepts_a_caller_supplied_budget_above_the_default
     Ok(())
 }
 
+#[test]
+fn retirement_exclusion_at_the_ten_thousand_point_ceiling_keeps_successors_eligible() {
+    let retired = (0..10_000).map(|point| HnswPointId::new(point as u64));
+    let mask = CandidateMask::all().excluding(retired);
+    mask.validate_budget_with_limit(10_000)
+        .expect("the configured retirement ceiling must be admissible");
+    assert!(!mask.allows(HnswPointId::new(9_999)));
+    assert!(mask.allows(HnswPointId::new(10_000)));
+}
+
 fn fixture_graph() -> context_index::Result<HnswGraph> {
     let mut graph = HnswGraph::new(DistanceMetric::L2, HnswConfig::new(4, 16, 16)?);
     for (point_id, values) in [

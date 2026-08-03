@@ -168,17 +168,21 @@ pub enum GraphPageKind {
     /// One appended segmented-write-path delta record (live insert or
     /// tombstone), absorbing writes without a full graph splice.
     Delta,
+    /// Immutable mutation log retained by a compacted graph segment. Active
+    /// delta readers skip this page kind until its directory publication.
+    FrozenDelta,
 }
 
 impl GraphPageKind {
     /// Every page role in stable declaration order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Meta,
         Self::Directory,
         Self::Node,
         Self::Adjacency,
         Self::MutationDescriptor,
         Self::Delta,
+        Self::FrozenDelta,
     ];
 
     /// Returns the stable version-two page-kind code.
@@ -191,6 +195,7 @@ impl GraphPageKind {
             Self::Adjacency => 4,
             Self::MutationDescriptor => 5,
             Self::Delta => 6,
+            Self::FrozenDelta => 7,
         }
     }
 

@@ -33,7 +33,8 @@ hnsw_am.rs|fn|hnsw_compact_relation|rebuilds a live PostgreSQL index relation's 
 hnsw_am.rs|fn|lock_hnsw_compaction_table|reads a live index relation's catalog form and locks its parent table against concurrent maintenance
 hnsw_am.rs|fn|try_lock_hnsw_compaction_table|locks a live index relation's parent table without waiting, so the write path never blocks
 hnsw_am.rs|fn|hnsw_compaction_table_oid|reads a live index relation's catalog form for its parent table OID
-hnsw_am.rs|fn|hnsw_compact_on_threshold|compacts a live index relation from the insert path once its delta segment fills
+hnsw_am.rs|fn|hnsw_compact_smallest_pair|compacts one locked adjacent immutable segment pair
+hnsw_am.rs|fn|hnsw_rotate_delta_relation|publishes one locked active delta as an immutable segment
 hnsw_am.rs|fn|hnsw_named_type_oid|resolves a schema-qualified type through PostgreSQL syscache metadata
 hnsw_am.rs|fn|hnsw_object_owned_by_extension|checks exact extension membership for a PostgreSQL catalog object
 hnsw_am.rs|fn|hnsw_operator_oid_matches|certifies an operator owner namespace name and signature from syscache metadata
@@ -91,7 +92,10 @@ hnsw_am_page_storage.rs|fn|ensure_hnsw_metapage|reads and initializes PostgreSQL
 hnsw_am_graph_scan.rs|fn|find_last_hnsw_page|searches live PostgreSQL index pages for a typed append target
 hnsw_am_graph_scan.rs|fn|hnsw_page_graph_scan_candidates|traverses persisted PostgreSQL HNSW pages
 hnsw_am_graph_scan.rs|fn|hnsw_page_graph_scan_candidates_with_mask|traverses persisted PostgreSQL HNSW pages with a candidate mask
-hnsw_am_graph_scan.rs|fn|hnsw_scan_candidates_with_delta_merge|reads a live index relation's metapage and delta pages to merge with base-graph scan results
+hnsw_am_graph_scan.rs|fn|hnsw_segment_candidates_with_delta_merge|reads live mutation extents and chronologically merges segment candidates
+hnsw_am_graph_scan.rs|fn|read_published_mutation_overlay|reads exact frozen and active mutation extents from a live relation
+hnsw_am_graph_scan.rs|fn|read_consistent_hnsw_publication|retries a live metapage and overlay snapshot until their publication agrees
+hnsw_am_graph_scan.rs|fn|try_parallel_segment_search|loads PostgreSQL-backed segments before pure parallel traversal
 hnsw_am_graph_scan.rs|fn|hnsw_stored_config|reads persisted HNSW configuration from a live relation
 hnsw_am_graph_scan.rs|fn|hnsw_stored_entry_point|reads the published graph entry point from a live relation
 hnsw_am_graph_scan.rs|fn|initialize_hnsw_data_page|initializes a typed writable PostgreSQL page
@@ -103,7 +107,18 @@ hnsw_am_graph_read.rs|fn|PgHnswGraphRead::with_node_item|visits a validated node
 hnsw_am_graph_scan.rs|fn|read_hnsw_meta_page|reads typed metadata from a live PostgreSQL page
 hnsw_am_graph_scan.rs|fn|hnsw_unordered_scan_candidates_with_delta|reads base and delta records from a live PostgreSQL index relation
 hnsw_am_page_storage.rs|fn|read_hnsw_delta_records|reads delta records from a live PostgreSQL relation's delta block range
-hnsw_am_page_storage.rs|fn|read_hnsw_vector_records|reads records from a live PostgreSQL relation
+hnsw_am_page_storage.rs|fn|append_hnsw_typed_record_from|appends a typed item to a locked PostgreSQL index page
+hnsw_am_page_storage.rs|fn|read_hnsw_delta_records_range|reads and validates one exact mutation extent
+hnsw_am_page_storage.rs|fn|try_read_hnsw_delta_records|copies active delta pages while holding the metapage shared against atomic append
+hnsw_am_page_storage.rs|fn|read_hnsw_segment_records|reads one immutable graph extent
+hnsw_am_page_storage.rs|fn|try_append_hnsw_delta_record_atomic|atomically WAL-publishes a delta item and metapage cursor
+hnsw_am_page_storage.rs|fn|write_hnsw_active_delta_records|writes a fresh contiguous active delta extent
+hnsw_am_page_storage.rs|fn|write_hnsw_delta_records_bulk|writes a typed contiguous delta extent
+hnsw_am_page_storage.rs|fn|write_hnsw_frozen_delta_records|writes an immutable mutation extent
+hnsw_am/wal_contract/critical_section.rs|fn|HnswWalRegisteredTwoPages::register|registers two locked PostgreSQL buffers in one WAL record
+hnsw_am/wal_contract/critical_section.rs|fn|register_generic_wal_buffer|sole direct Generic-WAL buffer registration boundary
+hnsw_am_graph_read.rs|fn|PgHnswGraphRead::parallel_local_read|materializes a pure owned segment adapter in the PostgreSQL backend
+hnsw_am_graph_read.rs|fn|PgHnswGraphRead::selected_segment|returns the validated selected segment descriptor
 hnsw_am_page_storage.rs|fn|try_append_hnsw_typed_record|appends a typed payload into a locked PostgreSQL page
 hnsw_am_graph_scan.rs|fn|update_hnsw_metapage|locks and updates PostgreSQL block zero
 hnsw_am_graph_scan.rs|fn|write_hnsw_meta_page|writes typed metadata to a live PostgreSQL page

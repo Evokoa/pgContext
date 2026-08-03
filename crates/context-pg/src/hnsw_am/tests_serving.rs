@@ -503,6 +503,12 @@ fn serving_stats_saturate_instead_of_overflowing() {
             page_native_fallbacks: 0,
             delta_segment_records: 0,
             delta_segment_scans: 0,
+            segment_rotations: 0,
+            multi_segment_scans: 0,
+            parallel_segment_scans: 0,
+            serial_segment_degradations: 0,
+            max_segments_observed: 0,
+            ..HnswServingStats::default()
         });
     });
     record_hnsw_pack_build(1, 1);
@@ -553,4 +559,133 @@ fn directory_index_keeps_the_latest_revision_per_node() {
             .map(|record| record.revision),
         Some(9)
     );
+}
+
+#[test]
+fn rotated_residuals_drop_live_history_and_delta_owned_tombstones() {
+    let records = vec![
+        context_storage::DeltaRecord::live(10, vec![1.0, 2.0]).unwrap(),
+        context_storage::DeltaRecord::tombstone(10),
+        context_storage::DeltaRecord::tombstone(20),
+        context_storage::DeltaRecord::live(30, vec![3.0, 4.0]).unwrap(),
+    ];
+    let delta_owned = BTreeSet::from([10_u64, 30_u64]);
+    let residual = residual_tombstones(&records, Some(&delta_owned));
+    assert_eq!(
+        residual
+            .iter()
+            .map(|record| record.heap_tid)
+            .collect::<Vec<_>>(),
+        vec![20]
+    );
+    assert!(
+        residual
+            .iter()
+            .all(|record| record.kind == DeltaRecordKind::Tombstone)
+    );
+}
+
+#[test]
+fn bounded_compaction_projection_counts_overlapping_working_sets() {
+    let config = HnswConfig::new(16, 64, 40).unwrap();
+    let one = bounded_compaction_working_set_bytes(1, 0, 384, config).unwrap();
+    let many = bounded_compaction_working_set_bytes(1_000_000, 500, 384, config).unwrap();
+    assert!(one >= 384 * size_of::<f32>() * 3);
+    assert!(many > 4 * 1024 * 1024 * 1024);
+}
+
+#[test]
+fn parallel_segment_projection_accounts_for_every_extent_before_loading() {
+    let mut meta = HnswMetaPage::empty();
+    meta.dimensions = 8;
+    meta.hnsw_m = 16;
+    for (index, start_block) in [1_u64, 4, 7].into_iter().enumerate() {
+        meta.segments[index] = HnswSegmentMeta {
+            segment_id: index as u64 + 1,
+            generation: 1,
+            start_block,
+            end_block: start_block + 2,
+            graph_nodes: 1,
+            entry_node_id: 0,
+            mutation_generation: u64::MAX,
+            mutation_start_block: u64::MAX,
+            mutation_end_block: u64::MAX,
+            mutation_record_count: 0,
+        };
+    }
+    meta.segment_count = 3;
+
+    assert_eq!(
+        projected_parallel_segment_bytes(meta),
+        Some(3 * 2 * pg_sys::BLCKSZ as u64),
+        "the physical graph extents are a conservative floor for materializing every pack"
+    );
+
+    meta.segments[2].end_block = u64::MAX;
+    assert_eq!(
+        projected_parallel_segment_bytes(meta),
+        None,
+        "projection overflow must deny parallel admission"
+    );
+}
+
+#[test]
+fn metapage_rejects_graph_mutation_and_active_extent_overlap() {
+    let mut meta = HnswMetaPage::empty();
+    meta.open_delta_region(10);
+    meta.delta_end_block = 12;
+    meta.delta_record_count = 1;
+    meta.segments[0] = HnswSegmentMeta {
+        segment_id: 1,
+        generation: 1,
+        start_block: 1,
+        end_block: 11,
+        graph_nodes: 1,
+        entry_node_id: 0,
+        mutation_generation: u64::MAX,
+        mutation_start_block: u64::MAX,
+        mutation_end_block: u64::MAX,
+        mutation_record_count: 0,
+    };
+    meta.segment_count = 1;
+    assert!(!meta.is_valid());
+
+    meta.delta_start_block = 20;
+    meta.delta_end_block = 21;
+    meta.segments[0].mutation_generation = 1;
+    meta.segments[0].mutation_start_block = 10;
+    meta.segments[0].mutation_end_block = 12;
+    meta.segments[0].mutation_record_count = 1;
+    meta.segments[0].end_block = 11;
+    assert!(!meta.is_valid());
+}
+
+#[test]
+fn metapage_requires_exact_frozen_mutation_record_metadata() {
+    let mut meta = HnswMetaPage::empty();
+    meta.open_delta_region(20);
+    meta.segments[0] = HnswSegmentMeta {
+        segment_id: 1,
+        generation: 1,
+        start_block: 1,
+        end_block: 10,
+        graph_nodes: 1,
+        entry_node_id: 0,
+        mutation_generation: 1,
+        mutation_start_block: 10,
+        mutation_end_block: 11,
+        mutation_record_count: 1,
+    };
+    meta.segment_count = 1;
+    assert!(meta.is_valid());
+    meta.segments[0].mutation_record_count = 0;
+    assert!(!meta.is_valid());
+}
+
+#[test]
+fn metapage_rejects_nonempty_active_delta_with_empty_extent() {
+    let mut meta = HnswMetaPage::empty();
+    meta.open_delta_region(20);
+    meta.delta_record_count = 1;
+    assert!(!meta.is_valid());
 }

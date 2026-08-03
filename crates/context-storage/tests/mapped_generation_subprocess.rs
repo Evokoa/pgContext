@@ -26,8 +26,10 @@ const IDENTITY: MappedGraphIdentity = MappedGraphIdentity {
     database_oid: 11,
     index_oid: 22,
     rel_file_number: 33,
-    directory_epoch: 44,
-    meta_lsn: 55,
+    segment_id: 44,
+    segment_generation: 55,
+    directory_epoch: 66,
+    meta_lsn: 77,
 };
 
 struct TestDirectory(std::path::PathBuf);

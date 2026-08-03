@@ -361,9 +361,9 @@ fn hnsw_stale_generation_repacks_and_still_matches_the_oracle() {
     )
     .expect("stale probe index should build");
     Spi::run("SET enable_seqscan = off").expect("seqscan off should apply");
-    // Inline inserts are what stale a cached pack; delta-absorbed inserts do
-    // not. Force the inline path so the staleness this test is about occurs.
-    Spi::run("SET pgcontext.hnsw_delta_segment_limit = 0")
+    // Force each appended row to rotate so the immutable directory and its
+    // segment-keyed packs repeatedly change generation.
+    Spi::run("SET pgcontext.hnsw_delta_segment_limit = 1")
         .expect("delta segment limit GUC should be settable");
     // Pinned, not inherited. pg_tests share one backend and plain SET outlives
     // the transaction, so a value left behind by another test decides which
@@ -386,7 +386,7 @@ fn hnsw_stale_generation_repacks_and_still_matches_the_oracle() {
     )
     .expect("stale probe follow-up rows should insert");
 
-    // Every inline-spliced row must appear in the served generation.
+    // Every rotated row must appear in the served directory.
     //
     // Asserted as membership in a full ordered scan, not as "is its own
     // nearest neighbour at LIMIT 1". The candidate budget is sized from the
@@ -406,7 +406,7 @@ fn hnsw_stale_generation_repacks_and_still_matches_the_oracle() {
     .expect("served rows should not be null");
     assert_eq!(
         served, "201,202,203,204,205,206,207,208,209,210",
-        "the rebuilt generation must serve every inline-spliced row"
+        "the rebuilt segmented generation must serve every rotated row"
     );
 
     let builds_after = read_stat("pack_builds");

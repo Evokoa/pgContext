@@ -4,6 +4,8 @@ fn hnsw_mapped_identity(
     database_oid: u32,
     index_oid: u32,
     rel_file_number: u32,
+    segment_id: u64,
+    segment_generation: u64,
     directory_epoch: u64,
     meta_lsn: u64,
 ) -> MappedGraphIdentity {
@@ -11,6 +13,8 @@ fn hnsw_mapped_identity(
         database_oid,
         index_oid,
         rel_file_number,
+        segment_id,
+        segment_generation,
         directory_epoch,
         meta_lsn,
     }
@@ -19,10 +23,12 @@ fn hnsw_mapped_identity(
 fn hnsw_mapped_generation_path(identity: MappedGraphIdentity) -> Option<std::path::PathBuf> {
     let directory = hnsw_mapped_index_directory(identity.database_oid, identity.index_oid)?;
     Some(directory.join(format!(
-        "{}_{}_{}_{}_{}.pgctxseg",
+        "{}_{}_{}_{}_{}_{}_{}.pgctxseg",
         identity.database_oid,
         identity.index_oid,
         identity.rel_file_number,
+        identity.segment_id,
+        identity.segment_generation,
         identity.directory_epoch,
         identity.meta_lsn
     )))
@@ -80,6 +86,8 @@ fn parse_hnsw_mapped_generation_name(name: &str) -> Option<MappedGraphIdentity> 
         database_oid: fields.next()?.parse().ok()?,
         index_oid: fields.next()?.parse().ok()?,
         rel_file_number: fields.next()?.parse().ok()?,
+        segment_id: fields.next()?.parse().ok()?,
+        segment_generation: fields.next()?.parse().ok()?,
         directory_epoch: fields.next()?.parse().ok()?,
         meta_lsn: fields.next()?.parse().ok()?,
     };
@@ -113,8 +121,18 @@ fn retire_stale_mapped_generations(
         let Some(candidate) = parse_hnsw_mapped_generation_name(name) else {
             continue;
         };
-        if candidate.database_oid != current.database_oid || candidate.index_oid != current.index_oid
+        if candidate.database_oid != current.database_oid
+            || candidate.index_oid != current.index_oid
         {
+            continue;
+        }
+        // REINDEX keeps the logical index OID but replaces its relfilenode.
+        // Such artifacts are never comparable by LSN and are always stale.
+        if candidate.rel_file_number != current.rel_file_number {
+            older_paths.push(path);
+            continue;
+        }
+        if candidate.segment_id != current.segment_id {
             continue;
         }
         if candidate.meta_lsn > current.meta_lsn {
@@ -136,6 +154,40 @@ fn retire_stale_mapped_generations(
         }
     }
     true
+}
+
+/// Unlinks every mapped generation for retired immutable segment identities.
+/// Existing readers keep their open mappings; later lookups cannot attach the
+/// retired files.
+fn retire_mapped_segments(
+    database_oid: u32,
+    index_oid: u32,
+    rel_file_number: u32,
+    segment_ids: &[u64],
+) {
+    let Some(directory) = hnsw_mapped_index_directory(database_oid, index_oid) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(identity) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(parse_hnsw_mapped_generation_name)
+        else {
+            continue;
+        };
+        if identity.database_oid == database_oid
+            && identity.index_oid == index_oid
+            && identity.rel_file_number == rel_file_number
+            && segment_ids.contains(&identity.segment_id)
+        {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 fn attach_mapped_packed_image(

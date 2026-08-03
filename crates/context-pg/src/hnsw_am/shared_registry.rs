@@ -20,7 +20,7 @@
 /// is negligible next to a graph pack/attach; this is not a hot per-query
 /// path (attaches are cached in the existing backend-local packed cache).
 const HNSW_SHARED_REGISTRY_SLOTS: usize = 64;
-const HNSW_SHARED_REGISTRY_NAME: &CStr = c"pgcontext_hnsw_shared_registry";
+const HNSW_SHARED_REGISTRY_NAME: &CStr = c"pgcontext_hnsw_shared_registry_v2";
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -28,6 +28,9 @@ struct HnswSharedRegistrySlot {
     /// `0` marks an empty slot; PostgreSQL never assigns database oid `0`.
     database_oid: u32,
     index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
+    segment_generation: u64,
     epoch: u64,
     meta_lsn: u64,
     dsm_handle: pg_sys::dsm_handle,
@@ -37,6 +40,9 @@ struct HnswSharedRegistrySlot {
 const EMPTY_SLOT: HnswSharedRegistrySlot = HnswSharedRegistrySlot {
     database_oid: 0,
     index_oid: 0,
+    rel_file_number: 0,
+    segment_id: 0,
+    segment_generation: 0,
     epoch: 0,
     meta_lsn: 0,
     dsm_handle: 0,
@@ -132,6 +138,9 @@ unsafe fn lookup_shared_slot(
     header: *mut HnswSharedRegistryHeader,
     database_oid: u32,
     index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
+    segment_generation: u64,
     epoch: u64,
     meta_lsn: u64,
 ) -> Option<HnswSharedRegistrySlot> {
@@ -154,6 +163,9 @@ unsafe fn lookup_shared_slot(
             .find(|slot| {
                 slot.database_oid == database_oid
                     && slot.index_oid == index_oid
+                    && slot.rel_file_number == rel_file_number
+                    && slot.segment_id == segment_id
+                    && slot.segment_generation == segment_generation
                     && slot.epoch == epoch
                     && slot.meta_lsn == meta_lsn
             })
@@ -181,6 +193,9 @@ unsafe fn commit_shared_slot(
     header: *mut HnswSharedRegistryHeader,
     database_oid: u32,
     index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
+    segment_generation: u64,
     epoch: u64,
     meta_lsn: u64,
     dsm_handle: pg_sys::dsm_handle,
@@ -200,7 +215,10 @@ unsafe fn commit_shared_slot(
         let slots = core::ptr::addr_of_mut!((*header).slots);
         let existing_index = (0..HNSW_SHARED_REGISTRY_SLOTS).find(|&index| {
             let slot = (*slots)[index];
-            slot.database_oid == database_oid && slot.index_oid == index_oid
+            slot.database_oid == database_oid
+                && slot.index_oid == index_oid
+                && slot.rel_file_number == rel_file_number
+                && slot.segment_id == segment_id
         });
         let empty_index = existing_index.or_else(|| {
             (0..HNSW_SHARED_REGISTRY_SLOTS).find(|&index| (*slots)[index].database_oid == 0)
@@ -216,6 +234,9 @@ unsafe fn commit_shared_slot(
                 (*slots)[index] = HnswSharedRegistrySlot {
                     database_oid,
                     index_oid,
+                    rel_file_number,
+                    segment_id,
+                    segment_generation,
                     epoch,
                     meta_lsn,
                     dsm_handle,
@@ -245,6 +266,8 @@ unsafe fn evict_shared_slot(
     header: *mut HnswSharedRegistryHeader,
     database_oid: u32,
     index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
 ) -> Option<pg_sys::dsm_handle> {
     // SAFETY: see `lookup_shared_slot`.
     unsafe {
@@ -258,7 +281,11 @@ unsafe fn evict_shared_slot(
         let slots = core::ptr::addr_of_mut!((*header).slots);
         (0..HNSW_SHARED_REGISTRY_SLOTS).find_map(|index| {
             let slot = (*slots)[index];
-            if slot.database_oid == database_oid && slot.index_oid == index_oid {
+            if slot.database_oid == database_oid
+                && slot.index_oid == index_oid
+                && slot.rel_file_number == rel_file_number
+                && slot.segment_id == segment_id
+            {
                 let total = core::ptr::addr_of_mut!((*header).total_bytes);
                 *total = (*total).saturating_sub(slot.byte_len);
                 (*slots)[index] = EMPTY_SLOT;
@@ -369,6 +396,9 @@ impl Drop for AttachedSharedImage {
 pub(crate) fn attach_shared_image(
     database_oid: u32,
     index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
+    segment_generation: u64,
     epoch: u64,
     meta_lsn: u64,
 ) -> Option<AttachedSharedImage> {
@@ -376,7 +406,16 @@ pub(crate) fn attach_shared_image(
     // backend's lifetime; `lookup_shared_slot` requires exactly that.
     let slot = unsafe {
         let header = shared_registry_ptr();
-        lookup_shared_slot(header, database_oid, index_oid, epoch, meta_lsn)
+        lookup_shared_slot(
+            header,
+            database_oid,
+            index_oid,
+            rel_file_number,
+            segment_id,
+            segment_generation,
+            epoch,
+            meta_lsn,
+        )
     }?;
     if slot.dsm_handle == 0 {
         return None;
@@ -393,7 +432,7 @@ pub(crate) fn attach_shared_image(
             // A stale or corrupt entry would otherwise fail every future
             // backend's attach attempt until the next publish; evict it so
             // the registry self-heals instead of staying poisoned.
-            evict_shared_image(database_oid, index_oid);
+            evict_shared_image(database_oid, index_oid, rel_file_number, segment_id);
             None
         }
     }
@@ -407,6 +446,9 @@ pub(crate) fn attach_shared_image(
 pub(crate) fn publish_packed_image(
     database_oid: u32,
     index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
+    segment_generation: u64,
     epoch: u64,
     meta_lsn: u64,
     bytes: &[u8],
@@ -455,6 +497,9 @@ pub(crate) fn publish_packed_image(
             header,
             database_oid,
             index_oid,
+            rel_file_number,
+            segment_id,
+            segment_generation,
             epoch,
             meta_lsn,
             handle,
@@ -491,11 +536,22 @@ pub(crate) fn publish_packed_image(
 /// index_oid)`, unpinning its segment. Used defensively when an attach
 /// fails validation after a lookup hit, so a poisoned entry does not keep
 /// failing every subsequent backend's attach attempt.
-pub(crate) fn evict_shared_image(database_oid: u32, index_oid: u32) {
+pub(crate) fn evict_shared_image(
+    database_oid: u32,
+    index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
+) {
     // SAFETY: see `attach_shared_image`.
     let evicted = unsafe {
         let header = shared_registry_ptr();
-        evict_shared_slot(header, database_oid, index_oid)
+        evict_shared_slot(
+            header,
+            database_oid,
+            index_oid,
+            rel_file_number,
+            segment_id,
+        )
     };
     if let Some(handle) = evicted {
         // SAFETY: `handle` was just removed from the only registry slot
