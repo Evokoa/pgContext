@@ -175,10 +175,18 @@ Provider-native integer and packed-binary source contracts are experimental:
   contain exactly `representation`, `dimensions`, `normalization`, `metric`,
   `provider`, `model`, `revision`, `input_template`, `output_template`,
   `bit_order`, `byte_order`, `scale`, `zero_point`, and
-  `configuration_hash`. Binary profiles require Hamming or Jaccard plus both
+  `configuration_hash`, and may additionally carry `matryoshka_prefixes`. Binary profiles require Hamming or Jaccard plus both
   orders; integer profiles may declare a positive scale and in-range zero
   point. The configuration hash is 16 lowercase hexadecimal digits and cannot
-  be zero.
+  be zero. `matryoshka_prefixes` is an optional array of 1..=8 strictly
+  ascending positive prefix dimensions, each strictly below `dimensions`. It
+  declares that the model certifies its leading coordinates as usable
+  lower-dimension embeddings, and is accepted only for a `dense` or `half`
+  representation under the `l2`, `inner_product`, or `cosine` metric — the
+  representations and metrics whose coordinates stay independently
+  interpretable at a cut point. pgContext never truncates or rewrites the
+  stored vector; a declared prefix only makes candidate generation cheaper,
+  and final ranking always uses the full authoritative dimensions.
 - `pgcontext.embedding_profiles()` lists source-column and HNSW bindings for
   collections owned by the session role.
   `pgcontext.embedding_profile_explain(collection text, profile_name text)`

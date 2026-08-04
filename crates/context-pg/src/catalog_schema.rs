@@ -197,8 +197,22 @@ CREATE TABLE pgcontext._embedding_profiles (
     scale double precision CHECK (scale IS NULL OR (scale > 0 AND scale < 'Infinity'::double precision)),
     zero_point int4,
     configuration_hash text NOT NULL CHECK (configuration_hash ~ '^[0-9a-f]{16}$' AND configuration_hash <> '0000000000000000'),
+    matryoshka_prefixes int4[],
     created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
     UNIQUE (collection_id, profile_name),
+    -- A declared Matryoshka policy must certify 1..=8 prefixes below the full
+    -- dimension, and only for a representation and metric whose coordinates
+    -- stay interpretable at a cut point. Strict ascent is enforced by the typed
+    -- `MatryoshkaPolicy` constructor: a CHECK cannot contain the subquery that
+    -- a pairwise comparison would need, and adding an extension-owned function
+    -- to a CHECK would entangle dump/restore ordering.
+    CHECK (matryoshka_prefixes IS NULL OR (
+        pg_catalog.cardinality(matryoshka_prefixes) BETWEEN 1 AND 8
+        AND representation IN ('dense', 'half')
+        AND metric IN ('l2', 'inner_product', 'cosine')
+        AND matryoshka_prefixes[1] > 0
+        AND matryoshka_prefixes[pg_catalog.cardinality(matryoshka_prefixes)] < dimensions
+    )),
     UNIQUE (collection_id, source_column_name, revision),
     CHECK (source_type_name = CASE representation
         WHEN 'dense' THEN 'vector'

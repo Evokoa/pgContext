@@ -3,8 +3,9 @@
 use std::collections::BTreeSet;
 
 use context_core::{
-    EmbeddingProfile, IntegerScale, ProfileId, ProviderBinaryLayout, ProviderBitOrder,
-    ProviderByteOrder, VectorNormalization, VectorRepresentation,
+    EmbeddingProfile, IntegerScale, MatryoshkaPolicy, PrefixDimensions, ProfileId,
+    ProviderBinaryLayout, ProviderBitOrder, ProviderByteOrder, VectorNormalization,
+    VectorRepresentation,
 };
 use pgrx::JsonB;
 use pgrx::prelude::*;
@@ -13,7 +14,7 @@ use serde_json::{Map, Value, json};
 use crate::domain_types::{distance_metric_label, parse_distance_metric};
 use crate::error::raise_sql_error;
 
-const PROFILE_KEYS: [&str; 14] = [
+const PROFILE_KEYS: [&str; 15] = [
     "representation",
     "dimensions",
     "normalization",
@@ -28,6 +29,7 @@ const PROFILE_KEYS: [&str; 14] = [
     "scale",
     "zero_point",
     "configuration_hash",
+    "matryoshka_prefixes",
 ];
 
 #[derive(Clone, Copy)]
@@ -123,7 +125,8 @@ pub fn embedding_profiles() -> TableIterator<
                         'byte_order', profiles.byte_order,
                         'scale', profiles.scale,
                         'zero_point', profiles.zero_point,
-                        'configuration_hash', profiles.configuration_hash
+                        'configuration_hash', profiles.configuration_hash,
+                        'matryoshka_prefixes', profiles.matryoshka_prefixes
                     )
                FROM pgcontext._embedding_profiles AS profiles
                JOIN pgcontext._collections AS collections USING (collection_id)
@@ -173,7 +176,8 @@ pub fn embedding_profile_explain(collection: String, profile_name: String) -> Js
                         'byte_order', profiles.byte_order,
                         'scale', profiles.scale,
                         'zero_point', profiles.zero_point,
-                        'configuration_hash', profiles.configuration_hash
+                        'configuration_hash', profiles.configuration_hash,
+                        'matryoshka_prefixes', profiles.matryoshka_prefixes
                     ),
                     'source_column', pg_catalog.format(
                         '%I.%I.%I',
@@ -391,6 +395,7 @@ struct ParsedProfile {
     bit_order: Option<&'static str>,
     byte_order: Option<&'static str>,
     configuration_hash: String,
+    matryoshka_prefixes: Option<Vec<i32>>,
 }
 
 impl ParsedProfile {
@@ -410,6 +415,7 @@ impl ParsedProfile {
             "scale": self.profile.integer_scale().map(|scale| scale.scale),
             "zero_point": self.profile.integer_scale().map(|scale| scale.zero_point),
             "configuration_hash": self.configuration_hash,
+            "matryoshka_prefixes": self.matryoshka_prefixes,
         })
     }
 }
@@ -495,6 +501,28 @@ fn parse_profile(profile: &JsonB) -> ParsedProfile {
         hash,
     )
     .unwrap_or_else(|error| invalid_profile(error.to_string()));
+    let matryoshka_prefixes = optional_prefixes(object);
+    let parsed = match &matryoshka_prefixes {
+        None => parsed,
+        Some(prefixes) => {
+            let declared = prefixes
+                .iter()
+                .map(|prefix| {
+                    usize::try_from(*prefix)
+                        .ok()
+                        .and_then(|prefix| PrefixDimensions::new(prefix).ok())
+                        .unwrap_or_else(|| {
+                            invalid_profile(format!("invalid Matryoshka prefix: {prefix}"))
+                        })
+                })
+                .collect::<Vec<_>>();
+            let policy = MatryoshkaPolicy::new(dimensions, declared, normalization)
+                .unwrap_or_else(|error| invalid_profile(error.to_string()));
+            parsed
+                .with_matryoshka(policy)
+                .unwrap_or_else(|error| invalid_profile(error.to_string()))
+        }
+    };
     ParsedProfile {
         profile: parsed,
         representation: representation_label,
@@ -502,7 +530,42 @@ fn parse_profile(profile: &JsonB) -> ParsedProfile {
         bit_order: bit_order.map(|(_, label)| label),
         byte_order: byte_order.map(|(_, label)| label),
         configuration_hash,
+        matryoshka_prefixes,
     }
+}
+
+/// Reads the optional `matryoshka_prefixes` array of positive integers.
+///
+/// An explicit JSON `null` and an absent key both mean "no policy"; an empty
+/// array is rejected, because a declared policy must certify at least one
+/// prefix.
+fn optional_prefixes(object: &Map<String, Value>) -> Option<Vec<i32>> {
+    let value = object.get("matryoshka_prefixes")?;
+    if value.is_null() {
+        return None;
+    }
+    let values = value.as_array().unwrap_or_else(|| {
+        invalid_profile("matryoshka_prefixes must be an array of positive integers".to_owned())
+    });
+    if values.is_empty() {
+        invalid_profile("matryoshka_prefixes must not be empty".to_owned());
+    }
+    Some(
+        values
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_i64()
+                    .and_then(|prefix| i32::try_from(prefix).ok())
+                    .filter(|prefix| *prefix > 0)
+                    .unwrap_or_else(|| {
+                        invalid_profile(
+                            "matryoshka_prefixes must contain positive integers".to_owned(),
+                        )
+                    })
+            })
+            .collect(),
+    )
 }
 
 fn insert_profile(
@@ -521,10 +584,10 @@ fn insert_profile(
              source_type_name, source_typmod, hnsw_schema_name, hnsw_index_name, hnsw_opclass,
              representation, dimensions, normalization, metric,
              provider, model, revision, input_template, output_template, bit_order, byte_order,
-             scale, zero_point, configuration_hash
+             scale, zero_point, configuration_hash, matryoshka_prefixes
          ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-             $21,$22,$23,$24,$25
+             $21,$22,$23,$24,$25,$26
          )",
         &[
             collection_id.into(),
@@ -552,6 +615,7 @@ fn insert_profile(
             scale.map(|value| value.scale).into(),
             scale.map(|value| value.zero_point).into(),
             parsed.configuration_hash.as_str().into(),
+            parsed.matryoshka_prefixes.clone().into(),
         ],
     )
     .unwrap_or_else(|error| {
