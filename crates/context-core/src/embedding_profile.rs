@@ -1,8 +1,9 @@
 //! Immutable authoritative embedding-profile contracts.
 
 use crate::{
-    DistanceMetric, Error, ProfileId, ProviderBitOrder, ProviderByteOrder, Result, SourceAuthority,
-    VectorRepresentation, policy::MAX_VECTOR_DIMENSIONS,
+    DistanceMetric, Error, MatryoshkaPolicy, PrefixDimensions, ProfileId, ProviderBitOrder,
+    ProviderByteOrder, Result, SourceAuthority, VectorRepresentation,
+    policy::MAX_VECTOR_DIMENSIONS,
 };
 
 /// Normalization promised by a provider profile.
@@ -48,6 +49,7 @@ pub struct EmbeddingProfile {
     binary_layout: Option<ProviderBinaryLayout>,
     integer_scale: Option<IntegerScale>,
     configuration_hash: u64,
+    matryoshka: Option<MatryoshkaPolicy>,
 }
 
 impl EmbeddingProfile {
@@ -152,7 +154,51 @@ impl EmbeddingProfile {
             binary_layout,
             integer_scale,
             configuration_hash,
+            matryoshka: None,
         })
+    }
+
+    /// Attaches a validated Matryoshka prefix declaration.
+    ///
+    /// The policy is only accepted when this profile's representation and
+    /// metric make a truncated prefix metric-meaningful, and when the policy's
+    /// full dimension and normalization match the profile's own.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidVector`] for an ineligible representation or
+    /// metric, or a policy whose full dimension or normalization disagrees with
+    /// the profile.
+    pub fn with_matryoshka(mut self, policy: MatryoshkaPolicy) -> Result<Self> {
+        MatryoshkaPolicy::require_eligible(self.representation, self.metric)?;
+        if policy.full_dimensions() != self.dimensions {
+            return Err(Error::InvalidVector(format!(
+                "Matryoshka full dimension {} does not match the profile dimension {}",
+                policy.full_dimensions(),
+                self.dimensions
+            )));
+        }
+        if policy.normalization() != self.normalization {
+            return Err(Error::InvalidVector(
+                "Matryoshka normalization must match the profile normalization".to_owned(),
+            ));
+        }
+        self.matryoshka = Some(policy);
+        Ok(self)
+    }
+
+    /// Returns the Matryoshka prefix declaration, when the model certifies one.
+    #[must_use]
+    pub const fn matryoshka(&self) -> Option<&MatryoshkaPolicy> {
+        self.matryoshka.as_ref()
+    }
+
+    /// Reports whether this profile certifies a specific prefix dimension.
+    #[must_use]
+    pub fn declares_prefix(&self, prefix: PrefixDimensions) -> bool {
+        self.matryoshka
+            .as_ref()
+            .is_some_and(|policy| policy.declares(prefix))
     }
 
     /// Returns whether the stored value, rather than a codec artifact, is authoritative.

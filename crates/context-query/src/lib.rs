@@ -7,6 +7,7 @@
 #![warn(rustdoc::bare_urls)]
 #![warn(rustdoc::broken_intra_doc_links)]
 
+mod adaptive;
 mod budget;
 mod error;
 mod executor;
@@ -20,6 +21,11 @@ mod strategy;
 mod types;
 mod validation;
 
+pub use adaptive::{
+    ADAPTIVE_PREFIX_OVERSAMPLE, AdaptivePrefixControl, AdaptivePrefixReason,
+    AdaptivePrefixStrategy, AdaptivePrefixStrategyInput, AdaptivePrefixStrategyKind,
+    AdaptiveWideningDecision, adaptive_widening_decision, select_adaptive_prefix_strategy,
+};
 pub use budget::{
     BudgetUsage, DEFAULT_QUERY_COMPARISONS, DEFAULT_QUERY_ELAPSED_MICROS,
     DEFAULT_QUERY_HYDRATION_BYTES, DEFAULT_QUERY_MEMORY_BYTES, ExecutionBudget,

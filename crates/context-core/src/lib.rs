@@ -12,6 +12,7 @@ mod error;
 mod exact;
 mod identity;
 mod integer_metric_kernels;
+mod matryoshka;
 mod metric;
 mod metric_kernels;
 mod retrieval;
@@ -27,6 +28,7 @@ pub use embedding_profile::{
 pub use error::{ContextError, Error, Result};
 pub use exact::{ExactSearchItem, ScoredPoint, SearchLimit, exact_top_k};
 pub use identity::PointId;
+pub use matryoshka::{MAX_MATRYOSHKA_PREFIXES, MatryoshkaPolicy, PrefixDimensions};
 pub use metric::DistanceMetric;
 pub use retrieval::{
     Completion, ConfigurationRevision, GenerationId, IndexKind, OccurrenceId, ProfileId,
