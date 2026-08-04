@@ -341,7 +341,12 @@ FROM pgcontext.execute_query(
     pgcontext.query_prefetch(ARRAY[
       pgcontext.query_nearest('[0,0,0]'::pgcontext.vector, 50),
       pgcontext.query_sparse_nearest('keywords', '{1:1}/3'::pgcontext.sparsevec, 50),
-      pgcontext.query_full_text('postgres retrieval', 'body', 50)
+      pgcontext.query_lexical(
+        'article',
+        jsonb_build_object('form', 'plain', 'text', 'postgres retrieval'),
+        NULL,
+        50
+      )
     ]),
     10
   )

@@ -247,6 +247,9 @@ fn execute_query_non_dense_leaves_do_not_require_a_dense_registration() {
              'stage_g_non_dense_only',
              'public.stage_g_non_dense_only',
              'token_vectors'
+         );
+         SELECT pgcontext.register_lexical_source(
+             'stage_g_non_dense_only', 'body', ARRAY['body'], 'pg_catalog.simple'
          );",
     )
     .expect("non-dense-only fixture should be created");
@@ -263,15 +266,17 @@ fn execute_query_non_dense_leaves_do_not_require_a_dense_registration() {
     assert_eq!(sparse.len(), 2);
     assert_eq!(sparse[0].1, "1");
 
-    let full_text = table_search_rows(
+    let lexical = table_search_rows(
         "SELECT point_id, source_key, score
            FROM pgcontext.execute_query(
                'stage_g_non_dense_only',
-               pgcontext.query_full_text('postgres', 'body', 2)
+               pgcontext.query_lexical(
+                   'body', jsonb_build_object('form', 'plain', 'text', 'postgres'), NULL, 2
+               )
            )",
     );
-    assert_eq!(full_text.len(), 1);
-    assert_eq!(full_text[0].1, "1");
+    assert_eq!(lexical.len(), 1);
+    assert_eq!(lexical[0].1, "1");
 
     let point_id = Spi::get_one::<i64>(
         "SELECT point_id
@@ -584,7 +589,9 @@ fn execute_query_composes_all_named_postgres_sources() {
                        pgcontext.query_sparse_nearest(
                            'keywords', '{1:1}/2'::sparsevec, 3
                        ),
-                       pgcontext.query_full_text('postgres', 'body', 3),
+                       pgcontext.query_lexical(
+                           'body', jsonb_build_object('form', 'plain', 'text', 'postgres'), NULL, 3
+                       ),
                        pgcontext.query_late_interaction(
                            ARRAY['[1,0]'::vector], 3, 3
                        )

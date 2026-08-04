@@ -15,6 +15,7 @@ mod certification;
 mod late_interaction;
 mod p5_codec;
 mod p8_composite;
+mod p9_lexical;
 
 pub use certification::{
     CertificationArtifactKind, CertificationArtifactManifest, CertificationDatasetManifest,
@@ -35,6 +36,12 @@ pub use p8_composite::{
     P8_DEFAULT_MEMORY_BYTES, P8_MAX_CANDIDATES, P8_MAX_COMPARISONS, P8_MAX_ELAPSED_MICROS,
     P8_MAX_EXPANSIONS, P8_MAX_HYDRATION_BYTES, P8_MAX_MEMORY_BYTES, P8_MAX_QUERY_DEPTH,
     P8_MAX_QUERY_NODES, P8_MAX_RESULTS, P8_MAX_STAGES, P8_STAGE_KINDS, p8_composite_manifest_hash,
+};
+pub use p9_lexical::{
+    P9_INDEX_STRATEGIES, P9_LEXICAL_GATES, P9_MAX_FIELDS, P9_MAX_HEADLINE_OPTIONS_BYTES,
+    P9_MAX_HEADLINE_OUTPUT_BYTES, P9_MAX_HEADLINE_POINTS, P9_MAX_HEADLINE_SOURCE_BYTES,
+    P9_MAX_JSON_PATH_DEPTH, P9_MAX_QUERY_BYTES, P9_MAX_QUERY_NODES, P9_QUERY_FORMS, P9_RANKERS,
+    P9LexicalGate, p9_lexical_manifest_hash,
 };
 
 /// Maximum accepted latency regression before explicit review is required.
@@ -421,7 +428,7 @@ impl HybridBaselineWorkload {
             ),
             HybridBenchmarkCase::new(
                 "text_only",
-                vec![CandidateBranch::FullText],
+                vec![CandidateBranch::Lexical],
                 vec![self.text.clone()],
             ),
             HybridBenchmarkCase::new(
@@ -431,7 +438,7 @@ impl HybridBaselineWorkload {
             ),
             HybridBenchmarkCase::new(
                 "fused_dense_text",
-                vec![CandidateBranch::DenseExact, CandidateBranch::FullText],
+                vec![CandidateBranch::DenseExact, CandidateBranch::Lexical],
                 vec![self.dense.clone(), self.text.clone()],
             ),
             HybridBenchmarkCase::new(

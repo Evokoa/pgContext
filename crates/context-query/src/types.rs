@@ -16,8 +16,10 @@ pub enum CandidateBranch {
     DenseExact,
     /// Approximate dense candidate generation.
     DenseAnn,
-    /// PostgreSQL full-text candidate generation.
-    FullText,
+    /// PostgreSQL-native lexical candidate generation.
+    Lexical,
+    /// PostgreSQL `pg_trgm` fuzzy candidate generation.
+    Fuzzy,
     /// Sparse candidate generation.
     Sparse,
     /// Multi-vector token candidate generation.
@@ -43,7 +45,7 @@ impl CandidateBranch {
         match self {
             Self::DenseExact => 0,
             Self::DenseAnn => 1,
-            Self::FullText => 2,
+            Self::Lexical => 2,
             Self::Sparse => 3,
             Self::MultiVector => 4,
             Self::Quantized => 5,
@@ -52,6 +54,7 @@ impl CandidateBranch {
             Self::Lookup => 8,
             Self::Topology => 9,
             Self::UserProvided => 10,
+            Self::Fuzzy => 11,
         }
     }
 
@@ -61,7 +64,7 @@ impl CandidateBranch {
         match self {
             Self::DenseExact => "dense_exact",
             Self::DenseAnn => "dense_ann",
-            Self::FullText => "full_text",
+            Self::Lexical => "lexical",
             Self::Sparse => "sparse",
             Self::MultiVector => "multi_vector",
             Self::Quantized => "quantized",
@@ -70,6 +73,7 @@ impl CandidateBranch {
             Self::Lookup => "lookup",
             Self::Topology => "topology",
             Self::UserProvided => "user_provided",
+            Self::Fuzzy => "fuzzy",
         }
     }
 }
@@ -83,8 +87,10 @@ pub enum CandidateSourceKind {
     Hnsw,
     /// IVFFlat candidate source.
     IvfFlat,
-    /// PostgreSQL full-text candidate source.
-    FullText,
+    /// PostgreSQL-native lexical candidate source.
+    Lexical,
+    /// PostgreSQL `pg_trgm` fuzzy candidate source.
+    Fuzzy,
     /// Sparse exact or sparse-index candidate source.
     Sparse,
     /// Multi-vector token candidate source.
@@ -111,7 +117,7 @@ impl CandidateSourceKind {
             Self::Exact => 0,
             Self::Hnsw => 1,
             Self::IvfFlat => 2,
-            Self::FullText => 3,
+            Self::Lexical => 3,
             Self::Sparse => 4,
             Self::MultiVector => 5,
             Self::Quantized => 6,
@@ -120,6 +126,7 @@ impl CandidateSourceKind {
             Self::Lookup => 9,
             Self::UserProvided => 10,
             Self::Topology => 11,
+            Self::Fuzzy => 12,
         }
     }
 
@@ -130,7 +137,7 @@ impl CandidateSourceKind {
             Self::Exact => "exact",
             Self::Hnsw => "hnsw",
             Self::IvfFlat => "ivf_flat",
-            Self::FullText => "full_text",
+            Self::Lexical => "lexical",
             Self::Sparse => "sparse",
             Self::MultiVector => "multi_vector",
             Self::Quantized => "quantized",
@@ -139,6 +146,7 @@ impl CandidateSourceKind {
             Self::Lookup => "lookup",
             Self::UserProvided => "user_provided",
             Self::Topology => "topology",
+            Self::Fuzzy => "fuzzy",
         }
     }
 }

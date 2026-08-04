@@ -212,19 +212,14 @@ pub(super) fn validate_query_vector_drift(collection_id: i64, registered_vector:
     });
 }
 
-pub(super) fn validate_query_drift(
-    collection_id: i64,
-    registered_vector: &mut QueryVector,
-    text_column: &str,
-) {
+pub(super) fn validate_query_drift(collection_id: i64, registered_vector: &mut QueryVector) {
     Spi::connect(|client| {
         let rows = match client.select(
             "SELECT class.oid,
                     vector_attribute.attnum,
                     vector_attribute.attname::text,
                     vector_attribute.atttypid = 'pgcontext.vector'::regtype AS vector_is_valid,
-                    id_attribute.attname IS NOT NULL AS id_exists,
-                    text_attribute.attname IS NOT NULL AS text_exists
+                    id_attribute.attname IS NOT NULL AS id_exists
                FROM pg_catalog.pg_class AS class
                JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = class.relnamespace
                LEFT JOIN pg_catalog.pg_attribute AS vector_attribute
@@ -237,11 +232,6 @@ pub(super) fn validate_query_drift(
                 AND id_attribute.attname = 'id'
                 AND id_attribute.attnum > 0
                 AND NOT id_attribute.attisdropped
-               LEFT JOIN pg_catalog.pg_attribute AS text_attribute
-                 ON text_attribute.attrelid = class.oid
-                AND text_attribute.attname = $4
-                AND text_attribute.attnum > 0
-                AND NOT text_attribute.attisdropped
               WHERE namespace.nspname = $1
                 AND class.relname = $2
                 AND class.relkind IN ('r', 'p')",
@@ -250,7 +240,6 @@ pub(super) fn validate_query_drift(
                 registered_vector.schema_name.as_str().into(),
                 registered_vector.table_name.as_str().into(),
                 registered_vector.vector_column_name.as_str().into(),
-                text_column.into(),
             ],
         ) {
             Ok(rows) => rows,
@@ -305,17 +294,6 @@ pub(super) fn validate_query_drift(
                 format!(
                     "source key column does not exist on {}.{}: id",
                     registered_vector.schema_name, registered_vector.table_name
-                ),
-            );
-        }
-
-        let text_exists = spi_required_column::<bool>(&row, 6, "text_exists");
-        if !text_exists {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_UNDEFINED_COLUMN,
-                format!(
-                    "query text column does not exist on {}.{}: {}",
-                    registered_vector.schema_name, registered_vector.table_name, text_column
                 ),
             );
         }

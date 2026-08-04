@@ -99,6 +99,10 @@
           "path": "user_guide/hybrid_retrieval.md"
         },
         {
+          "title": "Lexical retrieval",
+          "path": "user_guide/lexical_retrieval.md"
+        },
+        {
           "title": "Retrieval methods overview",
           "path": "user_guide/retrieval_methods.md"
         },

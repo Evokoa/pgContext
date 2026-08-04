@@ -8,8 +8,9 @@ use context_filter::{Filter, parse_filter_json};
 use serde_json::Value as JsonValue;
 
 use crate::{
-    Formula, LateInteractionWork, MAX_LATE_INTERACTION_COMPARISONS,
-    MAX_LATE_INTERACTION_SCALAR_CELLS, QueryError, Result, ScoreOrder,
+    Formula, FuzzyQuery, FuzzySourceName, LateInteractionWork, LexicalQuery, LexicalSourceName,
+    MAX_LATE_INTERACTION_COMPARISONS, MAX_LATE_INTERACTION_SCALAR_CELLS, QueryError, Result,
+    ScoreOrder,
 };
 
 /// Maximum nesting depth accepted by a typed query plan.
@@ -63,12 +64,19 @@ pub enum QueryKind {
         /// Validated sparse query vector.
         vector: SparseVector,
     },
-    /// PostgreSQL full-text retrieval over a source column.
-    FullText {
-        /// Validated source-column name.
-        text_column: String,
-        /// Nonempty bounded text query.
-        query: String,
+    /// PostgreSQL-native lexical retrieval over a registered lexical source.
+    Lexical {
+        /// Registered lexical source identifier.
+        source: LexicalSourceName,
+        /// Validated typed lexical query.
+        query: LexicalQuery,
+    },
+    /// PostgreSQL `pg_trgm` retrieval over a registered fuzzy source.
+    Fuzzy {
+        /// Registered fuzzy source identifier.
+        source: FuzzySourceName,
+        /// Validated typed trigram query.
+        query: FuzzyQuery,
     },
     /// Owned late-interaction retrieval over query token vectors.
     LateInteraction {
@@ -207,26 +215,43 @@ impl QueryIr {
         Ok(query)
     }
 
-    /// Creates a validated full-text leaf request.
-    pub fn full_text(text_column: String, query: String, limit: usize) -> Result<Self> {
-        if text_column.is_empty() || text_column.len() > 63 {
-            return Err(invalid("text_column", "must contain 1..=63 bytes"));
-        }
-        if !text_column
-            .bytes()
-            .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
-        {
-            return Err(invalid(
-                "text_column",
-                "must contain only identifier characters",
-            ));
-        }
-        if query.is_empty() || query.len() > 4096 {
-            return Err(invalid("text_query", "must contain 1..=4096 bytes"));
-        }
+    /// Creates a validated registered lexical leaf request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] for an invalid lexical query tree,
+    /// filter shape, or zero limit.
+    pub fn lexical(
+        source: LexicalSourceName,
+        query: LexicalQuery,
+        filter: Option<JsonValue>,
+        limit: usize,
+    ) -> Result<Self> {
         let query = Self {
-            kind: QueryKind::FullText { text_column, query },
-            filter: None,
+            kind: QueryKind::Lexical { source, query },
+            filter: parse_filter(filter)?,
+            limit: SearchLimit::new(limit)?,
+            score_order: ScoreOrder::HigherIsBetter,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
+    /// Creates a validated registered fuzzy leaf request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] for an invalid filter shape or
+    /// zero limit.
+    pub fn fuzzy(
+        source: FuzzySourceName,
+        query: FuzzyQuery,
+        filter: Option<JsonValue>,
+        limit: usize,
+    ) -> Result<Self> {
+        let query = Self {
+            kind: QueryKind::Fuzzy { source, query },
+            filter: parse_filter(filter)?,
             limit: SearchLimit::new(limit)?,
             score_order: ScoreOrder::HigherIsBetter,
         };
@@ -333,7 +358,8 @@ impl QueryIr {
                 | QueryKind::TopologyExpand { query, .. } => query.has_filter_in_subtree(),
                 QueryKind::Nearest { .. }
                 | QueryKind::SparseNearest { .. }
-                | QueryKind::FullText { .. }
+                | QueryKind::Lexical { .. }
+                | QueryKind::Fuzzy { .. }
                 | QueryKind::LateInteraction { .. }
                 | QueryKind::Recommend { .. }
                 | QueryKind::Discover { .. }
@@ -358,7 +384,8 @@ impl QueryIr {
             | QueryKind::TopologyExpand { query, .. } => query.max_node_limit(),
             QueryKind::Nearest { .. }
             | QueryKind::SparseNearest { .. }
-            | QueryKind::FullText { .. }
+            | QueryKind::Lexical { .. }
+            | QueryKind::Fuzzy { .. }
             | QueryKind::LateInteraction { .. }
             | QueryKind::Recommend { .. }
             | QueryKind::Discover { .. }
@@ -399,7 +426,8 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
         ));
     }
     let expected_order = match &query.kind {
-        QueryKind::FullText { .. }
+        QueryKind::Lexical { .. }
+        | QueryKind::Fuzzy { .. }
         | QueryKind::LateInteraction { .. }
         | QueryKind::Discover { .. }
         | QueryKind::Lookup { .. }
@@ -424,9 +452,9 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
 
 fn validate_kind(kind: &QueryKind, depth: usize, nodes: &mut usize) -> Result<()> {
     match kind {
-        QueryKind::Nearest { .. }
-        | QueryKind::SparseNearest { .. }
-        | QueryKind::FullText { .. } => {}
+        QueryKind::Nearest { .. } | QueryKind::SparseNearest { .. } => {}
+        QueryKind::Lexical { query, .. } => query.validate()?,
+        QueryKind::Fuzzy { .. } => {}
         QueryKind::LateInteraction {
             vectors,
             candidates_per_query,

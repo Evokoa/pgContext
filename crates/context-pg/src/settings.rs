@@ -7,7 +7,7 @@ use context_core::policy::{
     DEFAULT_IVFFLAT_CANDIDATE_BUDGET, DEFAULT_IVFFLAT_PROBES, MAX_HNSW_BUILD_PARALLEL_WORKERS,
     MAX_HNSW_CANDIDATE_BUDGET, MAX_HNSW_CANDIDATE_MASK_POINTS, MAX_HNSW_EF_CONSTRUCTION,
     MAX_HNSW_EF_SEARCH, MAX_HNSW_ITERATIVE_EXPANSION_LIMIT, MAX_HNSW_M,
-    MAX_IVFFLAT_CANDIDATE_BUDGET, MAX_IVFFLAT_LISTS, MIN_HNSW_M,
+    MAX_IVFFLAT_CANDIDATE_BUDGET, MAX_IVFFLAT_LISTS, MAX_RECALL_CHECK_POINT_IDS, MIN_HNSW_M,
 };
 use context_index::HnswConfig;
 use pgrx::guc::{GucContext, GucFlags, GucRegistry, GucSetting, PostgresGucEnum};
@@ -28,6 +28,9 @@ const MAX_HNSW_EF_SEARCH_I32: i32 = policy_usize_to_i32(MAX_HNSW_EF_SEARCH);
 const MAX_HNSW_CANDIDATE_BUDGET_I32: i32 = policy_usize_to_i32(MAX_HNSW_CANDIDATE_BUDGET);
 const MAX_HNSW_ITERATIVE_EXPANSION_LIMIT_I32: i32 =
     policy_usize_to_i32(MAX_HNSW_ITERATIVE_EXPANSION_LIMIT);
+const DEFAULT_LEXICAL_CANDIDATE_BUDGET_I32: i32 = 1_000;
+/// Frozen Phase 9 per-query lexical candidate admission cap.
+const MAX_LEXICAL_CANDIDATE_BUDGET_I32: i32 = policy_usize_to_i32(MAX_RECALL_CHECK_POINT_IDS);
 const DEFAULT_HNSW_CANDIDATE_MASK_POINTS_I32: i32 =
     policy_usize_to_i32(DEFAULT_HNSW_CANDIDATE_MASK_POINTS);
 const MAX_HNSW_CANDIDATE_MASK_POINTS_I32: i32 = policy_usize_to_i32(MAX_HNSW_CANDIDATE_MASK_POINTS);
@@ -49,6 +52,8 @@ static HNSW_CANDIDATE_BUDGET: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_CANDIDATE_BUDGET_I32);
 static HNSW_ITERATIVE_EXPANSION_LIMIT: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_ITERATIVE_EXPANSION_LIMIT_I32);
+static LEXICAL_CANDIDATE_BUDGET: GucSetting<i32> =
+    GucSetting::<i32>::new(DEFAULT_LEXICAL_CANDIDATE_BUDGET_I32);
 static HNSW_RECALL_THRESHOLD: GucSetting<f64> =
     GucSetting::<f64>::new(DEFAULT_HNSW_RECALL_THRESHOLD);
 static HNSW_SHARED_SERVING: GucSetting<bool> = GucSetting::<bool>::new(true);
@@ -220,6 +225,16 @@ pub(crate) fn init_gucs() {
         &HNSW_CANDIDATE_BUDGET,
         1,
         MAX_HNSW_CANDIDATE_BUDGET_I32,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+    GucRegistry::define_int_guc(
+        c"pgcontext.lexical_candidate_budget",
+        c"Default lexical and fuzzy candidate budget.",
+        c"Maximum candidates one registered lexical or fuzzy source may admit from an attached GIN or GiST index before pgContext marks the page incomplete.",
+        &LEXICAL_CANDIDATE_BUDGET,
+        1,
+        MAX_LEXICAL_CANDIDATE_BUDGET_I32,
         GucContext::Userset,
         GucFlags::default(),
     );
@@ -419,6 +434,14 @@ fn hnsw_config_from_values(m: i32, ef_construction: i32, ef_search: i32) -> Hnsw
 
 pub(crate) fn hnsw_candidate_budget_from_guc() -> usize {
     hnsw_candidate_budget_from_value(HNSW_CANDIDATE_BUDGET.get())
+}
+
+/// Returns the per-query lexical and fuzzy candidate admission budget.
+pub(crate) fn lexical_candidate_budget_from_guc() -> usize {
+    positive_setting_to_usize(
+        "pgcontext.lexical_candidate_budget",
+        LEXICAL_CANDIDATE_BUDGET.get(),
+    )
 }
 
 pub(crate) fn hnsw_iterative_expansion_limit_from_guc() -> usize {

@@ -1,5 +1,5 @@
 #[pg_test]
-fn hybrid_query_fuses_dense_and_full_text_branches() {
+fn hybrid_query_fuses_dense_and_lexical_branches() {
     create_hybrid_collection("m5_hybrid_docs");
     upsert_search_points("m5_hybrid_docs", &["10", "20", "30", "40"]);
 
@@ -54,7 +54,7 @@ fn hybrid_query_excludes_deleted_points_from_both_branches() {
 }
 
 #[pg_test]
-fn hybrid_query_returns_dense_results_when_full_text_branch_is_empty() {
+fn hybrid_query_returns_dense_results_when_lexical_branch_is_empty() {
     create_hybrid_collection("m5_hybrid_dense_only");
     upsert_search_points("m5_hybrid_dense_only", &["10", "20"]);
 
@@ -227,7 +227,10 @@ fn hybrid_explain_returns_query_stage_diagnostics() {
                 "source_table=public.m5_hybrid_explain".to_owned()
             ),
             ("dense".to_owned(), "vector_column=embedding metric=l2".to_owned()),
-            ("full_text".to_owned(), "text_column=body config=simple".to_owned()),
+            (
+                "lexical".to_owned(),
+                "source=body config=pg_catalog.simple ranker=ts_rank_cd".to_owned()
+            ),
             (
                 "fusion".to_owned(),
                 "algorithm=rrf k=60 tie_break=point_id".to_owned()
@@ -277,9 +280,9 @@ fn hybrid_explain_returns_structured_stage_diagnostics() {
                 Some(10_000),
             ),
             (
-                "full_text".to_owned(),
-                Some("full_text".to_owned()),
-                "postgres_full_text".to_owned(),
+                "lexical".to_owned(),
+                Some("lexical".to_owned()),
+                "lexical_exact".to_owned(),
                 "Ready".to_owned(),
                 Some(2),
                 Some(10_000),
@@ -790,6 +793,15 @@ fn hybrid_query_rejects_missing_text_column() {
     .expect("missing text column should be rejected");
 }
 
+fn register_hybrid_lexical_source(collection_name: &str) {
+    Spi::run(&format!(
+        "SELECT pgcontext.register_lexical_source(
+             '{collection_name}', 'body', ARRAY['body'], 'pg_catalog.simple'
+         )"
+    ))
+    .expect("hybrid lexical source should be registered");
+}
+
 fn create_hybrid_collection(collection_name: &str) {
     Spi::run(&format!(
         "CREATE TABLE public.{collection_name} (
@@ -815,6 +827,7 @@ fn create_hybrid_collection(collection_name: &str) {
         "SELECT pgcontext.register_vector('{collection_name}', 'embedding', 'embedding', 2, 'l2')"
     ))
     .expect("hybrid vector should be registered");
+    register_hybrid_lexical_source(collection_name);
 }
 
 fn create_hybrid_tie_collection(collection_name: &str) {
@@ -840,6 +853,7 @@ fn create_hybrid_tie_collection(collection_name: &str) {
         "SELECT pgcontext.register_vector('{collection_name}', 'embedding', 'embedding', 2, 'l2')"
     ))
     .expect("hybrid tie vector should be registered");
+    register_hybrid_lexical_source(collection_name);
 }
 
 fn create_dense_sparse_collection(collection_name: &str) {

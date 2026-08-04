@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 360;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 388;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -521,7 +521,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function(
         "explain",
-        "collection text, text_column text",
+        "collection text, lexical_source text",
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
@@ -721,7 +721,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function(
         "query",
-        "collection text, vector vector, text_query text, text_column text, \"limit\" integer",
+        "collection text, vector vector, text_query text, lexical_source text, \"limit\" integer",
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
@@ -740,8 +740,13 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
-        "query_full_text",
-        "text_query text, text_column text, \"limit\" integer",
+        "query_fuzzy",
+        "source text, query text, mode text, threshold double precision, filter jsonb, \"limit\" integer",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "query_lexical",
+        "source text, query jsonb, filter jsonb, \"limit\" integer",
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
@@ -1215,6 +1220,141 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "_initialize_collection_source_revision",
         "",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "attach_fuzzy_index",
+        "collection text, source_name text, index_name text",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "attach_lexical_index",
+        "collection text, source_name text, index_name text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "create_fuzzy_index",
+        "collection text, source_name text, method text",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "create_lexical_index",
+        "collection text, source_name text, method text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "detach_fuzzy_index",
+        "collection text, source_name text",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "detach_lexical_index",
+        "collection text, source_name text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "drop_fuzzy_source",
+        "collection text, source_name text",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "drop_lexical_source",
+        "collection text, source_name text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "fuzzy_sources",
+        "collection text",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "lexical_headline",
+        "collection text, source_name text, point_ids bigint[], query jsonb, options text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "lexical_sources",
+        "collection text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "refresh_lexical_catalog",
+        "collection text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "register_fuzzy_source",
+        "collection text, source_name text, text_column text",
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "register_lexical_document_source",
+        "collection text, source_name text, document_column text, text_configuration text, ranker text, normalization integer, rank_weights real[]",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "register_lexical_source",
+        "collection text, source_name text, text_columns text[], text_configuration text, field_weights text[], json_paths text[], ranker text, normalization integer, rank_weights real[]",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "register_lexical_tsquery",
+        "collection text, source_name text, tsquery_name text, tsquery_column text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "_require_collection_owner",
+        "p_collection_id bigint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_register_lexical_source",
+        "p_collection_id bigint, p_source_name text, p_document_mode text, p_stored_vector_column text, p_configuration_schema text, p_configuration_name text, p_ranker text, p_normalization integer, p_rank_weights real[], p_columns text[], p_weights text[], p_json_paths text[]",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_register_lexical_tsquery",
+        "p_collection_id bigint, p_source_name text, p_tsquery_name text, p_column_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_attach_lexical_index",
+        "p_collection_id bigint, p_source_name text, p_index_schema text, p_index_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_detach_lexical_index",
+        "p_collection_id bigint, p_source_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_drop_lexical_source",
+        "p_collection_id bigint, p_source_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_register_fuzzy_source",
+        "p_collection_id bigint, p_source_name text, p_column_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_attach_fuzzy_index",
+        "p_collection_id bigint, p_source_name text, p_index_schema text, p_index_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_detach_fuzzy_index",
+        "p_collection_id bigint, p_source_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_drop_fuzzy_source",
+        "p_collection_id bigint, p_source_name text",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_refresh_lexical_catalog_oids",
+        "p_collection_id bigint",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(

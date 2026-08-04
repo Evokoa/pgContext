@@ -148,6 +148,11 @@ operator_count() {
   printf '%s\n' '| `pgcontext.ivfflat_candidate_budget` | `100000` | Hard posting/delta work ceiling |'
   printf '%s\n' '| `pgcontext.ivfflat_iterative_scan` | `off` | `off`, `strict_order`, or `relaxed_order` |'
   printf '%s\n' '| `pgcontext.ivfflat_build_parallel_workers` | `1` | Native PostgreSQL parallel assignment workers, maximum 16 |'
+
+  printf '\n%s\n\n' '## Lexical GUCs'
+  printf '%s\n' '| Setting | Default | Lifecycle |'
+  printf '%s\n' '|---|---:|---|'
+  printf '%s\n' '| `pgcontext.lexical_candidate_budget` | `1000` | Stable bounded lexical/fuzzy index probe allowance, maximum 10000 |'
 } >"${tmp}"
 
 for option in quantization scalar_min scalar_max scalar_levels pq_subvector_dimensions; do
@@ -230,6 +235,22 @@ for fragment in \
   'DEFAULT_IVFFLAT_CANDIDATE_BUDGET: usize = 100_000;'; do
   if ! grep -Fq "${fragment}" "${POLICY_SOURCE}"; then
     echo "documented IVFFlat GUC default is not source-backed: ${fragment}" >&2
+    exit 1
+  fi
+done
+
+for guc in pgcontext.lexical_candidate_budget; do
+  if ! grep -Fq "c\"${guc}\"" "${SETTINGS_SOURCE}"; then
+    echo "documented lexical GUC is not registered: ${guc}" >&2
+    exit 1
+  fi
+done
+
+for fragment in \
+  'DEFAULT_LEXICAL_CANDIDATE_BUDGET_I32: i32 = 1_000;' \
+  'MAX_LEXICAL_CANDIDATE_BUDGET_I32: i32 = policy_usize_to_i32(MAX_RECALL_CHECK_POINT_IDS);'; do
+  if ! grep -Fq "${fragment}" "${SETTINGS_SOURCE}"; then
+    echo "documented lexical GUC default is not source-backed: ${fragment}" >&2
     exit 1
   fi
 done

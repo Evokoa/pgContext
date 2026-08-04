@@ -2,7 +2,9 @@
 
 use context_core::{CollectionName, DistanceMetric, SearchLimit};
 use context_hybrid::RrfK;
-use context_query::{Fusion, QueryIr, QueryKind, ScoreOrder};
+use context_query::{
+    Fusion, LexicalQuery, LexicalSourceName, LexicalText, QueryIr, QueryKind, ScoreOrder,
+};
 use pgrx::prelude::*;
 
 use crate::domain_types::distance_metric_label;
@@ -50,27 +52,28 @@ struct SparseQueryVector {
     vector_attnum: i16,
 }
 
-/// Queries a table-backed collection with dense vector and full-text branches.
+/// Queries a table-backed collection with dense vector and lexical branches.
 ///
-/// The dense branch uses the collection's registered vector. The full-text
-/// branch uses PostgreSQL `simple` text search over the requested source-table
-/// column. Branches are fused with reciprocal rank fusion and returned in
-/// deterministic fused-score order.
+/// The dense branch uses the collection's registered vector. The lexical
+/// branch evaluates a plain PostgreSQL text-search query against a registered
+/// lexical source, so its configuration, ranker, weights, and any attached
+/// GIN/GiST index are the registered ones. Branches are fused with reciprocal
+/// rank fusion and returned in deterministic fused-score order.
 ///
 /// # Errors
 ///
-/// Raises `undefined_object` when the collection or vector registration is
-/// missing, `undefined_column` when the vector or text column has drifted,
-/// `insufficient_privilege` when the caller does not own the collection or
-/// lacks source-table `SELECT`, and `invalid_parameter_value` when `limit` is
-/// invalid.
+/// Raises `undefined_object` when the collection, vector registration, or
+/// lexical source is missing, `insufficient_privilege` when the caller does not
+/// own the collection or lacks source-table `SELECT`, and
+/// `invalid_parameter_value` when `text_query`, `lexical_source`, or `limit`
+/// is invalid.
 #[pg_extern(name = "query")]
 #[search_path(pg_catalog, pgcontext, public)]
 pub fn query_collection(
     collection: String,
     vector: Vector,
     text_query: String,
-    text_column: String,
+    lexical_source: String,
     limit: i32,
 ) -> TableIterator<
     'static,
@@ -93,11 +96,20 @@ pub fn query_collection(
         limit.get(),
     )
     .unwrap_or_else(|error| crate::error::raise_query_error(error));
-    let full_text = QueryIr::full_text(text_column, text_query, limit.get())
-        .unwrap_or_else(|error| crate::error::raise_query_error(error));
+    let lexical = QueryIr::lexical(
+        LexicalSourceName::new(lexical_source)
+            .unwrap_or_else(|error| crate::error::raise_query_error(error)),
+        LexicalQuery::Plain(
+            LexicalText::new(text_query)
+                .unwrap_or_else(|error| crate::error::raise_query_error(error)),
+        ),
+        None,
+        limit.get(),
+    )
+    .unwrap_or_else(|error| crate::error::raise_query_error(error));
     let plan = QueryIr::new(
         QueryKind::Prefetch {
-            branches: vec![dense, full_text],
+            branches: vec![dense, lexical],
             fusion: Fusion::STANDARD_RRF,
         },
         ScoreOrder::HigherIsBetter,
@@ -185,7 +197,7 @@ pub fn query_collection_dense_sparse(
     )
 }
 
-/// Explains the current dense plus full-text query plan for a collection.
+/// Explains the current dense plus lexical query plan for a collection.
 ///
 /// # Errors
 ///
@@ -199,7 +211,7 @@ pub fn query_collection_dense_sparse(
 )]
 pub fn explain_collection_query(
     collection: String,
-    text_column: String,
+    lexical_source: String,
 ) -> TableIterator<
     'static,
     (
@@ -217,12 +229,15 @@ pub fn explain_collection_query(
     require_collection_owner(&collection, &collection_name);
     let mut registered_vector =
         resolve_registered_vector(&collection_name, collection.collection_id);
-    validate_query_drift(
-        collection.collection_id,
-        &mut registered_vector,
-        &text_column,
-    );
+    validate_query_drift(collection.collection_id, &mut registered_vector);
     require_table_select_privilege(&registered_vector);
+    let lexical = crate::lexical_catalog::prepare_lexical_source(
+        collection.collection_id,
+        LexicalSourceName::new(lexical_source)
+            .unwrap_or_else(|error| crate::error::raise_query_error(error))
+            .as_str(),
+    )
+    .unwrap_or_else(|error| crate::error::raise_query_error(error));
 
     TableIterator::new(vec![
         (
@@ -254,10 +269,18 @@ pub fn explain_collection_query(
             )),
         ),
         (
-            "full_text".to_owned(),
-            format!("text_column={text_column} config=simple"),
-            Some("full_text".to_owned()),
-            "postgres_full_text".to_owned(),
+            "lexical".to_owned(),
+            format!(
+                "source={} config={}.{} ranker={}",
+                lexical.source_name,
+                lexical.configuration_schema_name,
+                lexical.configuration_name,
+                lexical.ranker.stable_name()
+            ),
+            Some("lexical".to_owned()),
+            crate::retrieval::LexicalStrategy::attached(lexical.index.as_ref())
+                .lexical_label()
+                .to_owned(),
             QueryExplainStatus::Ready,
             Some(collection.active_points),
             Some(policy_to_i64(

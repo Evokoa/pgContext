@@ -457,6 +457,9 @@ fn automatic_observability_reports_actual_named_source_visits() {
          SELECT pgcontext.register_vector(
              'stage_i_named_visits', 'embedding', 'embedding', 2, 'l2'
          );
+         SELECT pgcontext.register_lexical_source(
+             'stage_i_named_visits', 'body', ARRAY['body'], 'pg_catalog.simple'
+         );
          SELECT pgcontext.backfill_points('stage_i_named_visits', 100);",
     )
     .expect("named source telemetry fixture should be created");
@@ -482,14 +485,16 @@ fn automatic_observability_reports_actual_named_source_visits() {
         table_search_rows(
             "SELECT * FROM pgcontext.execute_query(
                  'stage_i_named_visits',
-                 pgcontext.query_full_text('postgres telemetry', 'body', 1)
+                 pgcontext.query_lexical(
+                     'body', jsonb_build_object('form', 'plain', 'text', 'postgres telemetry'), NULL, 1
+                 )
              )"
         )
         .len(),
         1
     );
     let events = crate::query_stats_async::test_events(collection_id);
-    assert_eq!(events.last().map(|event| event.strategy.as_str()), Some("postgres_full_text"));
+    assert_eq!(events.last().map(|event| event.strategy.as_str()), Some("lexical_exact"));
     assert_eq!(events.last().map(|event| event.visits), Some(4));
 
     assert_eq!(
@@ -560,6 +565,9 @@ fn automatic_observability_persists_executor_budget_exhaustion() {
          SELECT pgcontext.create_collection(
              'stage_i_executor_budget', 'public.stage_i_executor_budget'
          );
+         SELECT pgcontext.register_lexical_source(
+             'stage_i_executor_budget', 'body', ARRAY['body'], 'pg_catalog.simple'
+         );
          SELECT pgcontext.backfill_points('stage_i_executor_budget', 500);",
     )
     .expect("executor budget telemetry fixture should be created");
@@ -575,7 +583,9 @@ fn automatic_observability_persists_executor_budget_exhaustion() {
             "SELECT * FROM pgcontext.execute_query(
                  'stage_i_executor_budget',
                  pgcontext.query_formula(
-                     pgcontext.query_full_text('budget telemetry', 'body', 200),
+                     pgcontext.query_lexical(
+                         'body', jsonb_build_object('form', 'plain', 'text', 'budget telemetry'), NULL, 200
+                     ),
                      '{formula}'
                  )
              )"
@@ -586,7 +596,7 @@ fn automatic_observability_persists_executor_budget_exhaustion() {
     let events = crate::query_stats_async::test_events(collection_id);
     let event = events.last().expect("executor budget event should be captured");
     assert_eq!(event.completion, "budget_exhausted");
-    assert_eq!(event.strategy, "postgres_full_text");
+    assert_eq!(event.strategy, "lexical_exact");
     assert_eq!(event.visits, 200);
 }
 

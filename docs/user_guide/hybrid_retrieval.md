@@ -15,7 +15,7 @@ first rank.
 
 Use `pgcontext.query` when retrieval needs multiple stages or multiple branches.
 The current stable shape combines a registered dense-vector branch with one
-PostgreSQL full-text branch and returns a fused score. An experimental overload
+registered lexical branch and returns a fused score. An experimental overload
 also fuses dense vector retrieval with a registered sparse vector branch.
 Single-vector exact, filtered, candidate-recheck, or ANN-style nearest-neighbor
 retrieval should use `pgcontext.search` instead.
@@ -23,7 +23,7 @@ retrieval should use `pgcontext.search` instead.
 ## Query a Table-Backed Collection
 
 Use `pgcontext.query` to combine the registered dense vector branch with a
-full-text branch over one source-table column:
+lexical branch over a registered lexical source:
 
 ```sql
 SELECT point_id, source_key, score
@@ -31,22 +31,25 @@ FROM pgcontext.query(
   'docs',
   '[0,0]'::pgcontext.vector,
   'database internals',
-  'body',
+  'article',
   10
 );
 ```
 
-The source table must have a registered dense vector column. The text column is
-validated at execution time and is read with PostgreSQL `simple` text search.
-Logically deleted point mappings are excluded from both branches.
+The source table must have a registered dense vector column and the named
+lexical source must be registered — see
+[Lexical retrieval](lexical_retrieval.md). The lexical branch uses that
+source's registered text-search configuration, weights, ranker, normalization,
+and any attached GIN/GiST index; its registration is revalidated at execution
+time. Logically deleted point mappings are excluded from both branches.
 
-The returned `score` is the fused RRF score, not the dense distance or full-text
+The returned `score` is the fused RRF score, not the dense distance or lexical
 rank. Results are ordered by fused score and then by point ID for stable ties.
 
 ## Explain a Hybrid Query
 
 Use `pgcontext.explain` to inspect the SQL-visible stages that `pgcontext.query`
-will use for a collection and text column:
+will use for a collection and registered lexical source:
 
 ```sql
 SELECT stage,
@@ -56,16 +59,18 @@ SELECT stage,
        status,
        estimated_candidates,
        candidate_budget
-FROM pgcontext.explain('docs', 'body');
+FROM pgcontext.explain('docs', 'article');
 ```
 
-The output includes the source table, dense vector branch, full-text branch, and
-fusion stage. `status` is the typed enum `pgcontext."QueryExplainStatus"` with `Ready`,
+The output includes the source table, dense vector branch, lexical branch, and
+fusion stage. The lexical stage reports the registered configuration and ranker,
+and its `strategy` is `lexical_exact`, `lexical_gin`, or `lexical_gist`. `status` is the typed enum `pgcontext."QueryExplainStatus"` with `Ready`,
 `Fallback`, and `Policy`. `estimated_candidates` reports active collection point
 counts where they are meaningful before query literals are known, and
 `candidate_budget` reports policy budgets such as the search limit or recall
 check limit. The function validates the same collection ownership, source-table
-privilege, registered vector, and text-column drift checks as `pgcontext.query`.
+privilege, registered vector, and lexical registration drift checks as
+`pgcontext.query`.
 
 ## Optimization Status
 

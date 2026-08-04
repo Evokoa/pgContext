@@ -11,8 +11,8 @@ use context_core::{
 };
 use context_query::{
     Candidate, CandidateBranch, CandidateDiagnostics, CandidateProvenance, CandidateSourceKind,
-    ExecutionBudget, Formula, Fusion, MAX_LATE_INTERACTION_SCALAR_CELLS, QueryError, QueryIr,
-    QueryKind, ScoreOrder,
+    ExecutionBudget, Formula, Fusion, LexicalQuery, LexicalSourceName, LexicalText,
+    MAX_LATE_INTERACTION_SCALAR_CELLS, QueryError, QueryIr, QueryKind, ScoreOrder,
 };
 
 #[test]
@@ -59,17 +59,17 @@ fn direct_late_interaction_ir_rejects_oversized_scalar_cells() {
 
 #[test]
 fn direct_ir_rejects_contradictory_fixed_score_orders() {
-    let full_text = QueryIr::new(
-        QueryKind::FullText {
-            text_column: "body".to_owned(),
-            query: "rust".to_owned(),
+    let lexical = QueryIr::new(
+        QueryKind::Lexical {
+            source: LexicalSourceName::new("body").expect("lexical source"),
+            query: LexicalQuery::Plain(LexicalText::new("rust").expect("lexical text")),
         },
         ScoreOrder::LowerIsBetter,
         None,
         1,
     );
     assert!(matches!(
-        full_text,
+        lexical,
         Err(QueryError::InvalidInput {
             field: "score_order",
             ..
@@ -212,15 +212,20 @@ fn composite_tree_reports_the_largest_descendant_limit() {
 }
 
 #[test]
-fn named_source_leaves_validate_full_text_and_late_interaction_inputs() {
-    let full_text = QueryIr::full_text("body".to_owned(), "rust postgres".to_owned(), 5)
-        .expect("full-text leaf should be valid");
-    assert!(matches!(full_text.kind(), QueryKind::FullText { .. }));
+fn named_source_leaves_validate_lexical_and_late_interaction_inputs() {
+    let lexical = QueryIr::lexical(
+        LexicalSourceName::new("body").expect("lexical source"),
+        LexicalQuery::Plain(LexicalText::new("rust postgres").expect("lexical text")),
+        None,
+        5,
+    )
+    .expect("lexical leaf should be valid");
+    assert!(matches!(lexical.kind(), QueryKind::Lexical { .. }));
 
     let late = QueryIr::late_interaction(vec![vec![1.0, 0.0], vec![0.0, 1.0]], 8, 3)
         .expect("late-interaction leaf should be valid");
     assert!(matches!(late.kind(), QueryKind::LateInteraction { .. }));
-    assert!(QueryIr::full_text("body;drop".to_owned(), "query".to_owned(), 1).is_err());
+    assert!(LexicalSourceName::new("body;drop").is_err());
     assert!(QueryIr::late_interaction(vec![vec![1.0], vec![1.0, 2.0]], 2, 1).is_err());
 }
 
@@ -250,7 +255,7 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
     let branches = [
         CandidateBranch::DenseExact,
         CandidateBranch::DenseAnn,
-        CandidateBranch::FullText,
+        CandidateBranch::Lexical,
         CandidateBranch::Sparse,
         CandidateBranch::MultiVector,
         CandidateBranch::Quantized,
@@ -259,12 +264,13 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
         CandidateBranch::Lookup,
         CandidateBranch::Topology,
         CandidateBranch::UserProvided,
+        CandidateBranch::Fuzzy,
     ];
     let sources = [
         CandidateSourceKind::Exact,
         CandidateSourceKind::Hnsw,
         CandidateSourceKind::IvfFlat,
-        CandidateSourceKind::FullText,
+        CandidateSourceKind::Lexical,
         CandidateSourceKind::Sparse,
         CandidateSourceKind::MultiVector,
         CandidateSourceKind::Quantized,
@@ -273,6 +279,7 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
         CandidateSourceKind::Lookup,
         CandidateSourceKind::UserProvided,
         CandidateSourceKind::Topology,
+        CandidateSourceKind::Fuzzy,
     ];
 
     assert_eq!(
@@ -280,7 +287,7 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
         [
             "dense_exact",
             "dense_ann",
-            "full_text",
+            "lexical",
             "sparse",
             "multi_vector",
             "quantized",
@@ -289,11 +296,12 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
             "lookup",
             "topology",
             "user_provided",
+            "fuzzy",
         ]
     );
     assert_eq!(
         branches.map(CandidateBranch::stable_code),
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
     );
     assert_eq!(
         sources.map(CandidateSourceKind::stable_name),
@@ -301,7 +309,7 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
             "exact",
             "hnsw",
             "ivf_flat",
-            "full_text",
+            "lexical",
             "sparse",
             "multi_vector",
             "quantized",
@@ -310,11 +318,12 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
             "lookup",
             "user_provided",
             "topology",
+            "fuzzy",
         ]
     );
     assert_eq!(
         sources.map(CandidateSourceKind::stable_code),
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     );
 }
 

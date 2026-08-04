@@ -114,6 +114,13 @@ failure.
 - `corrupt_artifact_detection.sh`: runs the storage segment-format gate covering
   malformed headers, checksum mismatches, truncated payloads, atomic replacement,
   and import/export rejection for corrupted rebuildable artifacts.
+- `indexed_lexical_hybrid.sh`: registers weighted field and JSON-path lexical
+  sources, compares the exact path against a direct PostgreSQL `ts_rank_cd`
+  oracle, proves GIN and GiST candidate paths return the same ranked answer,
+  checks that the canonical index expression is planner-matchable, exercises
+  bounded headline hydration and dense+lexical fusion, verifies dump/restore OID
+  refresh across a table rewrite, and confirms the complete exact fallback
+  survives an index drop. Set `ROW_COUNT` to scale the corpus.
 - `sqlstate_contract.sh`: runs the pgrx SQLSTATE contract module against the
   configured PostgreSQL version.
 
@@ -140,5 +147,6 @@ tests/heavy/large_exact_search.sh
 tests/heavy/partitioned_collections.sh
 tests/heavy/low_memory_build.sh
 tests/heavy/corrupt_artifact_detection.sh
+tests/heavy/indexed_lexical_hybrid.sh
 tests/heavy/sqlstate_contract.sh
 ```

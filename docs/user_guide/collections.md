@@ -515,18 +515,20 @@ FROM pgcontext.search(
 );
 ```
 
-## Query with Dense and Full-Text Fusion
+## Query with Dense and Lexical Fusion
 
 Hybrid query combines the collection's registered dense vector branch with a
-full-text branch over a source-table text column:
+lexical branch over a registered lexical source:
 
 ```sql
+SELECT pgcontext.register_lexical_source('docs', 'article', ARRAY['body']);
+
 SELECT point_id, source_key, score
-FROM pgcontext.query('docs', '[0,0]'::pgcontext.vector, 'database internals', 'body', 10);
+FROM pgcontext.query('docs', '[0,0]'::pgcontext.vector, 'database internals', 'article', 10);
 ```
 
-The text column is passed by name and validated against the registered source
-table at execution time. Results use reciprocal rank fusion and skip logically
+The lexical source is passed by name and its registration is revalidated
+against the source table at execution time. Results use reciprocal rank fusion and skip logically
 deleted point mappings in both branches.
 
 Inspect the retrieval stages with:

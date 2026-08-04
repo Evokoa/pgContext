@@ -1,6 +1,9 @@
 //! SQL constructors for client-side query plans.
 
-use context_query::{Formula, QueryIr, QueryKind, QueryPlanValidator, parse_query_plan};
+use context_query::{
+    Formula, FuzzyMode, FuzzyQuery, FuzzySourceName, FuzzyThreshold, LexicalQuery,
+    LexicalSourceName, LexicalText, QueryIr, QueryKind, QueryPlanValidator, parse_query_plan,
+};
 use pgrx::JsonB;
 use pgrx::prelude::*;
 use serde_json::{Value, json};
@@ -91,18 +94,68 @@ pub fn query_sparse_nearest_filtered(
     }))
 }
 
+/// Builds a validated lexical query-plan node for a registered lexical source.
+///
+/// `query` is the canonical typed lexical form, for example
+/// `{"form": "plain", "text": "postgres"}`.
 #[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
-pub fn query_full_text(text_query: String, text_column: String, limit: i32) -> JsonB {
-    let node = QueryIr::full_text(text_column, text_query, query_limit_usize(limit))
-        .unwrap_or_else(|error| raise_query_error(error));
-    let QueryKind::FullText { text_column, query } = node.kind() else {
-        unreachable!("full-text constructor must produce a full-text node")
-    };
+pub fn query_lexical(
+    source: String,
+    query: JsonB,
+    filter: default!(Option<JsonB>, "NULL"),
+    limit: default!(i32, 10),
+) -> JsonB {
+    let filter = filter.map(|filter| filter.0);
+    let lexical =
+        LexicalQuery::from_json(&query.0).unwrap_or_else(|error| raise_query_error(error));
+    let node = QueryIr::lexical(
+        LexicalSourceName::new(source.clone()).unwrap_or_else(|error| raise_query_error(error)),
+        lexical.clone(),
+        filter.clone(),
+        query_limit_usize(limit),
+    )
+    .unwrap_or_else(|error| raise_query_error(error));
     JsonB(json!({
-        "kind": "full_text",
-        "text_query": query,
-        "text_column": text_column,
+        "kind": "lexical",
+        "source": source,
+        "query": lexical.to_json(),
+        "filter": filter,
+        "limit": node.limit(),
+    }))
+}
+
+/// Builds a validated trigram query-plan node for a registered fuzzy source.
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn query_fuzzy(
+    source: String,
+    query: String,
+    mode: default!(String, "'similarity'"),
+    threshold: default!(f64, 0.3),
+    filter: default!(Option<JsonB>, "NULL"),
+    limit: default!(i32, 10),
+) -> JsonB {
+    let filter = filter.map(|filter| filter.0);
+    let fuzzy = FuzzyQuery::new(
+        LexicalText::new(query.clone()).unwrap_or_else(|error| raise_query_error(error)),
+        FuzzyMode::parse(&mode).unwrap_or_else(|error| raise_query_error(error)),
+        FuzzyThreshold::new(threshold).unwrap_or_else(|error| raise_query_error(error)),
+    );
+    let node = QueryIr::fuzzy(
+        FuzzySourceName::new(source.clone()).unwrap_or_else(|error| raise_query_error(error)),
+        fuzzy.clone(),
+        filter.clone(),
+        query_limit_usize(limit),
+    )
+    .unwrap_or_else(|error| raise_query_error(error));
+    JsonB(json!({
+        "kind": "fuzzy",
+        "source": source,
+        "query": fuzzy.text().as_str(),
+        "mode": fuzzy.mode().stable_name(),
+        "threshold": fuzzy.threshold().get(),
+        "filter": filter,
         "limit": node.limit(),
     }))
 }

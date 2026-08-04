@@ -96,19 +96,31 @@ method, with pgContext maintaining the late-interaction tokens internally.
 
 ## Lexical (Full-Text) Retrieval
 
-Keyword and phrase matching through PostgreSQL full-text search. Today the
-full-text branch computes `to_tsvector` on the fly with the `simple`
-configuration and matches `plainto_tsquery`; it is the deterministic keyword
-branch fused inside `pgcontext.query`.
+Keyword, phrase, and fuzzy matching through PostgreSQL text search. You
+register a **lexical source** — ordered weighted text or JSON-path fields, or a
+stored `tsvector` column — with its own text-search configuration, ranker,
+normalization, and rank weights. PostgreSQL owns parsing, dictionaries,
+matching, ranking, and collation; pgContext owns validated metadata, bounded
+orchestration, an exact fallback, and authoritative source recheck.
 
-- As a fused branch: the text-column argument to `pgcontext.query`; as a typed
-  branch: `pgcontext.query_full_text`. **Stable** (dense + full-text RRF).
-- **Planned:** configurable text-search configuration (language/stemming/
-  stopwords), `websearch_to_tsquery`/`phraseto_tsquery` forms, a stored
-  `tsvector` column served by a GIN/GiST index, and trigram (`pg_trgm`) fuzzy
-  matching as a fusible candidate source. See *Lexical Retrieval Enhancements*
-  in the [roadmap](roadmap.md).
-- Guide: [Hybrid retrieval](hybrid_retrieval.md).
+- Registration: `pgcontext.register_lexical_source`,
+  `pgcontext.register_lexical_document_source`,
+  `pgcontext.register_lexical_tsquery`.
+- Indexes: `pgcontext.create_lexical_index` / `pgcontext.attach_lexical_index`
+  (GIN or GiST). Without one, the exact path evaluates the complete
+  invoker-visible corpus or reports budget exhaustion.
+- Typed branch: `pgcontext.query_lexical` with the `plain`, `structured`,
+  `phrase`, `web_search`, `prefix`, `distance`, `boolean`, `weight_restricted`,
+  and `registered_tsquery` forms. As a fused branch: the lexical-source argument
+  to `pgcontext.query`. **Stable.**
+- Fuzzy: `pgcontext.register_fuzzy_source` plus `pgcontext.query_fuzzy` over
+  optional `pg_trgm`, in `similarity`, `word_similarity`, or
+  `strict_word_similarity` mode. **Experimental**; `pg_trgm` is not an install
+  requirement.
+- Highlighting: `pgcontext.lexical_headline` returns bounded `ts_headline`
+  fragments that the caller must sanitize for its output context.
+- Guide: [Lexical retrieval](lexical_retrieval.md),
+  [Hybrid retrieval](hybrid_retrieval.md).
 
 ## Example-Based Retrieval
 
@@ -190,20 +202,21 @@ deterministically.
 
 For multi-stage or multi-branch retrieval, build a typed query IR and run it
 with `pgcontext.execute_query`. The IR builders (`pgcontext.query_nearest`,
-`pgcontext.query_full_text`, `pgcontext.query_sparse_nearest`,
+`pgcontext.query_lexical`, `pgcontext.query_fuzzy`,
+`pgcontext.query_sparse_nearest`,
 `pgcontext.query_prefetch`, `pgcontext.query_rerank`,
 `pgcontext.query_score_threshold`, `pgcontext.query_weight`,
 `pgcontext.query_formula`, `pgcontext.query_recommend`,
 `pgcontext.query_discover`, `pgcontext.query_lookup`,
 `pgcontext.query_external_rerank`, `pgcontext.query_topology_expand`) compose into one plan
 whose stages you can inspect with `pgcontext.explain`. Constructors validate
-the entire child tree immediately. Bundled dense, sparse, full-text,
+the entire child tree immediately. Bundled dense, sparse, lexical, fuzzy,
 quantized, late-interaction, recommendation, discovery, lookup, fusion, and
 score-transform execution is **Stable**. External-rerank and topology
 constructors currently provide stable transport-neutral contracts only; their
 bundled SQL providers remain unavailable.
 
-The simpler `pgcontext.query` entry point covers the common dense + full-text
+The simpler `pgcontext.query` entry point covers the common dense + lexical
 case without assembling an IR; reach for `execute_query` when you need explicit
 stages, weighting, or reranking. Guide: [Hybrid retrieval](hybrid_retrieval.md).
 
@@ -215,7 +228,8 @@ stages, weighting, or reranking. Guide: [Hybrid retrieval](hybrid_retrieval.md).
 | Variant types (half/sparse/bit) | typed cores + metric HNSW opclasses | [vector_search.md](vector_search.md) |
 | Sparse (learned) | `pgcontext.search_sparse` | [vector_search.md](vector_search.md) |
 | Late-interaction | `pgcontext.rerank_late_interaction`, `pgcontext.search_late_interaction` | [vector_search.md](vector_search.md) |
-| Lexical (full-text) | `pgcontext.query` text branch, `pgcontext.query_full_text` | [hybrid_retrieval.md](hybrid_retrieval.md) |
+| Lexical (full-text) | `pgcontext.query` lexical branch, `pgcontext.query_lexical` | [lexical_retrieval.md](lexical_retrieval.md) |
+| Fuzzy (trigram) | `pgcontext.query_fuzzy` | [lexical_retrieval.md](lexical_retrieval.md) |
 | Example-based | `pgcontext.recommend`, `pgcontext.discover` | [vector_search.md](vector_search.md) |
 | Filtered | filter JSON on any method | [filters.md](filters.md), [multi_tenancy.md](multi_tenancy.md) |
 | Hybrid / fusion | `pgcontext.query`, `pgcontext.execute_query` | [hybrid_retrieval.md](hybrid_retrieval.md) |

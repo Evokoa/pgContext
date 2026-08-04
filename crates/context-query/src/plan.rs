@@ -7,7 +7,8 @@ use context_core::{
 use serde_json::{Map, Value};
 
 use crate::{
-    Formula, Fusion, LateInteractionWork, MAX_LATE_INTERACTION_COMPARISONS,
+    Formula, Fusion, FuzzyMode, FuzzyQuery, FuzzySourceName, FuzzyThreshold, LateInteractionWork,
+    LexicalQuery, LexicalSourceName, LexicalText, MAX_LATE_INTERACTION_COMPARISONS,
     MAX_LATE_INTERACTION_SCALAR_CELLS, MAX_QUERY_DEPTH, MAX_QUERY_NODES, QueryError, QueryIr,
     QueryKind, Result, ScoreOrder,
 };
@@ -40,14 +41,8 @@ fn parse_query_node(plan: &Value, depth: usize, nodes: &mut usize) -> Result<Que
     match string_field(object, "kind")? {
         "nearest" => parse_nearest(object),
         "sparse_nearest" => parse_sparse_nearest(object),
-        "full_text" => {
-            require_keys(object, &["kind", "text_query", "text_column", "limit"])?;
-            QueryIr::full_text(
-                string_field(object, "text_column")?.to_owned(),
-                string_field(object, "text_query")?.to_owned(),
-                limit_field(object)?,
-            )
-        }
+        "lexical" => parse_lexical(object),
+        "fuzzy" => parse_fuzzy(object),
         "late_interaction" => parse_late_interaction(object),
         "recommend" => {
             require_keys(
@@ -202,6 +197,45 @@ fn parse_sparse_nearest(object: &Map<String, Value>) -> Result<QueryIr> {
         string_field(object, "vector_name")?.to_owned(),
         vector,
         ScoreOrder::LowerIsBetter,
+        optional_value(object, "filter"),
+        limit_field(object)?,
+    )
+}
+
+fn parse_lexical(object: &Map<String, Value>) -> Result<QueryIr> {
+    require_keys(object, &["kind", "source", "query", "filter", "limit"])?;
+    let query = object
+        .get("query")
+        .ok_or_else(|| invalid_field("query", "is required"))?;
+    QueryIr::lexical(
+        LexicalSourceName::new(string_field(object, "source")?)?,
+        LexicalQuery::from_json(query)?,
+        optional_value(object, "filter"),
+        limit_field(object)?,
+    )
+}
+
+fn parse_fuzzy(object: &Map<String, Value>) -> Result<QueryIr> {
+    require_keys(
+        object,
+        &[
+            "kind",
+            "source",
+            "query",
+            "mode",
+            "threshold",
+            "filter",
+            "limit",
+        ],
+    )?;
+    let query = FuzzyQuery::new(
+        LexicalText::new(string_field(object, "query")?)?,
+        FuzzyMode::parse(string_field(object, "mode")?)?,
+        FuzzyThreshold::new(finite_number(object, "threshold")?)?,
+    );
+    QueryIr::fuzzy(
+        FuzzySourceName::new(string_field(object, "source")?)?,
+        query,
         optional_value(object, "filter"),
         limit_field(object)?,
     )

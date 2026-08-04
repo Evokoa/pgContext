@@ -1422,20 +1422,22 @@ full-corpus re-embedding.
 
 ## PostgreSQL-Native Lexical Retrieval
 
-Status: planned after composite query execution.
+Status: shipped. See [Lexical retrieval](lexical_retrieval.md).
 
 Depends on: composite query execution, the shared fusion layer, registered
 field/type metadata, and bounded candidate-source execution.
 
-Today the full-text branch computes `to_tsvector('simple', column)` on the fly
-and matches `plainto_tsquery('simple', ...)`. That is correct but minimal: a
-fixed `simple` configuration (no stemming, stopwords, or language selection), no
-stored `tsvector` column, no GIN/GiST full-text index in the fused path, and no
-typo tolerance. This track makes PostgreSQL's existing `tsvector`/`tsquery`
-system a first-class, configurable, indexable retrieval branch instead of
-inventing a parallel text-index format.
+Registered lexical sources bind ordered weighted text or JSON-path fields, or a
+stored/generated `tsvector` column, to a resolved text-search configuration,
+ranker, normalization, rank weights, and optional per-row `tsquery`. The typed
+`plain`, `structured`, `phrase`, `web_search`, `prefix`, `distance`, `boolean`,
+`weight_restricted`, and `registered_tsquery` forms compile to native
+constructors with bound values, attached GIN/GiST indexes serve bounded
+candidate probes that are authoritatively rechecked, and optional `pg_trgm`
+sources add typo tolerance. The legacy arbitrary-column `simple` full-text
+branch has been replaced.
 
-Scope:
+Delivered scope:
 
 - register raw text, stored or generated `tsvector`, and caller-provided
   `tsquery` fields without copying them; validate type OIDs, ownership,
@@ -1458,10 +1460,11 @@ Scope:
   proximity, and typed rank output for fusion; add bounded `ts_headline`
   generation as optional result hydration and document that callers must still
   HTML-sanitize untrusted output;
-- evaluate corpus-statistics-aware BM25/BM25F-style ranking as an optional
-  PostgreSQL-native ranker with explicit statistics/version semantics, without
-  replacing `tsvector` or maintaining a second source of document truth;
-- accept learned sparse outputs such as
+- **still open:** corpus-statistics-aware BM25/BM25F-style ranking as an
+  optional PostgreSQL-native ranker with explicit statistics/version semantics,
+  deferred because it did not beat the native `ts_rank`/`ts_rank_cd` suite
+  without adding an unproven statistics/storage contract;
+- **still open:** accept learned sparse outputs such as
   [SPLADE](https://arxiv.org/abs/2109.10086) through the first-class
   `sparsevec` path and fuse them with `tsvector`; model inference remains in the
   external worker and learned sparse scoring is benchmarked separately from

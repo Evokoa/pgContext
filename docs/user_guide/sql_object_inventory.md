@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `7dc77c5b1ed17cf98e30d24db6e0f671bf7620e29cc1a57e33a1055b1ce8bbe1`
+Full SQL artifact SHA-256: `45cce828dfa611b8bc2116032ec942eea6ec796b422419ea952ca19c4d635dd7`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,9 +16,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 359 |
-| Tables | 23 |
-| Views | 12 |
+| Functions | 387 |
+| Tables | 26 |
+| Views | 15 |
 | Triggers | 6 |
 | Casts | 35 |
 | Operators | 62 |
@@ -56,8 +56,11 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._build_deltas`
 - table `pgcontext._build_jobs`
 - table `pgcontext._collection_aliases`
+- table `pgcontext._collection_fuzzy_sources`
 - table `pgcontext._collection_late_interaction_tokens`
 - table `pgcontext._collection_late_interaction`
+- table `pgcontext._collection_lexical_fields`
+- table `pgcontext._collection_lexical_sources`
 - table `pgcontext._collection_payload_columns`
 - table `pgcontext._collection_points`
 - table `pgcontext._collection_source_revisions`
@@ -83,7 +86,10 @@ The artifact fingerprint covers every object declaration, function result shape,
 - view `pgcontext._collection_acl`
 - view `pgcontext._visible_artifact_segments`
 - view `pgcontext._visible_build_jobs`
+- view `pgcontext._visible_collection_fuzzy_sources`
 - view `pgcontext._visible_collection_late_interaction`
+- view `pgcontext._visible_collection_lexical_fields`
+- view `pgcontext._visible_collection_lexical_sources`
 - view `pgcontext._visible_collection_limits`
 - view `pgcontext._visible_collection_payload_columns`
 - view `pgcontext._visible_collection_points`
@@ -113,7 +119,9 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"artifact_segment_mmap_payload"`
 - `"artifact_segment_serving_readiness"`
 - `"artifact_segments"`
+- `"attach_fuzzy_index"`
 - `"attach_hnsw_index"`
+- `"attach_lexical_index"`
 - `"attach_sparse_hnsw_index"`
 - `"backfill_points"`
 - `"binary_quantize"`
@@ -159,14 +167,20 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"create_collection"`
 - `"create_collection_alias"`
 - `"create_embedding_migration"`
+- `"create_fuzzy_index"`
+- `"create_lexical_index"`
 - `"cutover_pgvector_ownership_conversion"`
 - `"delete_payload"`
 - `"delete_points"`
+- `"detach_fuzzy_index"`
+- `"detach_lexical_index"`
 - `"disable_pgvector_binding"`
 - `"disable_pgvector_name_facade"`
 - `"discover"`
 - `"drop_collection"`
 - `"drop_collection_alias"`
+- `"drop_fuzzy_source"`
+- `"drop_lexical_source"`
 - `"embedding_migrations"`
 - `"embedding_profile_explain"`
 - `"embedding_profiles"`
@@ -185,6 +199,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"explore"`
 - `"facet"`
 - `"finalize_pgvector_ownership_conversion"`
+- `"fuzzy_sources"`
 - `"grouped_search"`
 - `"halfvec"`
 - `"halfvec_avg_final"`
@@ -252,6 +267,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"ivfflat_last_scan_work"`
 - `"l1_distance"`
 - `"l2_distance"`
+- `"lexical_headline"`
+- `"lexical_sources"`
 - `"migration_report"`
 - `"model_versions"`
 - `"negative_inner_product"`
@@ -268,8 +285,9 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"query_execution_stats"`
 - `"query_external_rerank"`
 - `"query_formula"`
-- `"query_full_text"`
+- `"query_fuzzy"`
 - `"query_late_interaction"`
+- `"query_lexical"`
 - `"query_lookup"`
 - `"query_nearest"`
 - `"query_prefetch"`
@@ -283,10 +301,15 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"recall_check"`
 - `"recommend"`
 - `"record_query_stat"`
+- `"refresh_lexical_catalog"`
 - `"register_embedding_profile"`
 - `"register_filter_column"`
+- `"register_fuzzy_source"`
 - `"register_jsonb_path"`
 - `"register_late_interaction"`
+- `"register_lexical_document_source"`
+- `"register_lexical_source"`
+- `"register_lexical_tsquery"`
 - `"register_model_version"`
 - `"register_sparse_vector"`
 - `"register_vector"`
@@ -391,11 +414,17 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"vector_typmod_in"`
 - `"vector_typmod_out"`
 - `"wake_build_jobs"`
+- `pgcontext._attach_fuzzy_index`
+- `pgcontext._attach_lexical_index`
 - `pgcontext._begin_late_interaction_registration`
 - `pgcontext._capture_build_point_delta`
 - `pgcontext._capture_late_interaction_tokens`
 - `pgcontext._cleanup_late_interaction_registration`
 - `pgcontext._cosine_distance_fast`
+- `pgcontext._detach_fuzzy_index`
+- `pgcontext._detach_lexical_index`
+- `pgcontext._drop_fuzzy_source`
+- `pgcontext._drop_lexical_source`
 - `pgcontext._enforce_build_job_terminal_state`
 - `pgcontext._finish_late_interaction_registration`
 - `pgcontext._initialize_collection_source_revision`
@@ -409,11 +438,16 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext._prepare_late_interaction_repair`
 - `pgcontext._publish_generation`
 - `pgcontext._refresh_collection_source_table`
+- `pgcontext._refresh_lexical_catalog_oids`
 - `pgcontext._refresh_payload_source_bindings`
 - `pgcontext._refresh_sparse_vector_source_binding`
 - `pgcontext._refresh_vector_source_binding`
+- `pgcontext._register_fuzzy_source`
+- `pgcontext._register_lexical_source`
+- `pgcontext._register_lexical_tsquery`
 - `pgcontext._reject_build_job_progress_regression`
 - `pgcontext._reject_embedding_profile_mutation`
+- `pgcontext._require_collection_owner`
 - `pgcontext._store_late_interaction_tokens`
 - `pgcontext._unpin_generation`
 - `pgcontext.bitvec_out`
@@ -727,3 +761,9 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 | `pgcontext.ivfflat_candidate_budget` | `100000` | Hard posting/delta work ceiling |
 | `pgcontext.ivfflat_iterative_scan` | `off` | `off`, `strict_order`, or `relaxed_order` |
 | `pgcontext.ivfflat_build_parallel_workers` | `1` | Native PostgreSQL parallel assignment workers, maximum 16 |
+
+## Lexical GUCs
+
+| Setting | Default | Lifecycle |
+|---|---:|---|
+| `pgcontext.lexical_candidate_budget` | `1000` | Stable bounded lexical/fuzzy index probe allowance, maximum 10000 |

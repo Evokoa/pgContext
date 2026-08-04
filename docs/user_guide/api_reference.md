@@ -74,12 +74,13 @@ Search and query:
 - `pgcontext.recommend(collection text, positive_vectors vector[], negative_vectors vector[], limit integer)`
 - `pgcontext.discover(collection text, context_point_ids bigint[], limit integer)`
 - `pgcontext.explore(collection text, context_point_ids bigint[], limit integer)`
-- `pgcontext.query(collection text, vector vector, text_query text, text_column text, limit integer)`
+- `pgcontext.query(collection text, vector vector, text_query text, lexical_source text, limit integer)`
 - `pgcontext.query_nearest(vector vector, limit integer)`
 - `pgcontext.query_nearest(vector_name text, vector vector, filter jsonb, limit integer)`
 - `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, filter jsonb, limit integer)`
 - `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, limit integer)`
-- `pgcontext.query_full_text(text_query text, text_column text, limit integer)`
+- `pgcontext.query_lexical(source text, query jsonb, filter jsonb, limit integer)`
+- `pgcontext.query_fuzzy(source text, query text, mode text, threshold double precision, filter jsonb, limit integer)`
 - `pgcontext.query_late_interaction(query_vectors vector[], candidates_per_query integer, limit integer)`
 - `pgcontext.query_recommend(positive_point_ids bigint[], negative_point_ids bigint[], limit integer)`
 - `pgcontext.query_discover(context_point_ids bigint[], limit integer)`
@@ -93,7 +94,7 @@ Search and query:
 - `pgcontext.query_external_rerank(branch jsonb, model_revision bigint, limit integer)`
 - `pgcontext.query_topology_expand(branch jsonb, max_depth integer, limit integer)`
 - `pgcontext.execute_query(collection text, plan jsonb)`
-- `pgcontext.explain(collection text, text_column text)`
+- `pgcontext.explain(collection text, lexical_source text)`
 - `pgcontext.scroll(collection text, cursor text, limit integer)`
 - `pgcontext.count(collection text)`
 - `pgcontext.count(collection text, filter text)`
@@ -636,6 +637,51 @@ source columns and stores per-vector sparse storage/index/status metadata:
   partitions candidate token vectors by point, scores each point with exact
   MaxSim inner product, enforces a comparison budget, and returns final rerank
   order with deterministic tie breaks.
+- `pgcontext.register_lexical_source(collection text, source_name text, text_columns text[], text_configuration text, field_weights text[], json_paths text[], ranker text, normalization integer, rank_weights real[])`
+  registers an ordered weighted lexical document over 1..=16 source-table text
+  or JSON-path columns, resolving the text-search configuration, column type,
+  and collation identity from `pg_catalog` under collection ownership and
+  source-relation `SELECT`.
+- `pgcontext.register_lexical_document_source(collection text, source_name text, document_column text, text_configuration text, ranker text, normalization integer, rank_weights real[])`
+  registers a stored, generated, or trigger-maintained `tsvector` column as the
+  lexical document. pgContext never writes that column.
+- `pgcontext.register_lexical_tsquery(collection text, source_name text, tsquery_name text, tsquery_column text)`
+  binds a per-row `tsquery` column that the `registered_tsquery` query form
+  references by name.
+- `pgcontext.create_lexical_index(collection text, source_name text, method text)`
+  creates and attaches the canonical GIN or GiST index for a registered lexical
+  source and returns the index name. The index expression is the same canonical
+  document expression the query paths render.
+- `pgcontext.attach_lexical_index(collection text, source_name text, index_name text)`
+  attaches an existing valid, live, non-partial GIN or GiST index on the
+  registered source relation and records its full definition for drift
+  detection.
+- `pgcontext.detach_lexical_index(collection text, source_name text)` removes the
+  index binding and restores the complete exact fallback.
+- `pgcontext.drop_lexical_source(collection text, source_name text)` removes a
+  registration and its field bindings.
+- `pgcontext.lexical_sources(collection text)` lists registered lexical sources
+  visible to the caller.
+- `pgcontext.register_fuzzy_source(collection text, source_name text, text_column text)`
+  registers a `pg_trgm` trigram source, resolving the extension through its
+  catalog entry rather than `search_path`.
+- `pgcontext.create_fuzzy_index(collection text, source_name text, method text)`
+  creates and attaches the canonical `gin_trgm_ops` or `gist_trgm_ops` index.
+- `pgcontext.attach_fuzzy_index(collection text, source_name text, index_name text)`,
+  `pgcontext.detach_fuzzy_index(collection text, source_name text)`, and
+  `pgcontext.drop_fuzzy_source(collection text, source_name text)` manage fuzzy
+  bindings.
+- `pgcontext.fuzzy_sources(collection text)` lists registered fuzzy sources
+  visible to the caller.
+- `pgcontext.refresh_lexical_catalog(collection text)` re-derives lexical and
+  fuzzy catalog OIDs from their stable names after a dump/restore or source
+  table rewrite and returns the number of refreshed source rows.
+- `pgcontext.lexical_headline(collection text, source_name text, point_ids bigint[], query jsonb, options text)`
+  returns bounded `ts_headline` fragments for already-retrieved points. Point
+  count, option bytes, and source-document bytes are admitted before PostgreSQL
+  builds any markup; total output bytes are a hard cap enforced while reading
+  the response. The returned text carries PostgreSQL's own markup and **must**
+  be sanitized by the caller for its output context.
 - `pgcontext.register_late_interaction(collection text, source_table text, token_source text)`
   binds a collection's source-table `vector[]` column, materializes one private
   pgContext token row per array element under invoker ACL/RLS, installs a

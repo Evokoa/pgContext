@@ -167,11 +167,11 @@ fn hybrid_baseline_workload_pins_release_gate_cases() -> context_core::Result<()
             .collect::<Vec<_>>(),
         vec![
             ("dense_only", vec![CandidateBranch::DenseExact], vec![100]),
-            ("text_only", vec![CandidateBranch::FullText], vec![100]),
+            ("text_only", vec![CandidateBranch::Lexical], vec![100]),
             ("sparse_planned", vec![CandidateBranch::Sparse], vec![0]),
             (
                 "fused_dense_text",
-                vec![CandidateBranch::DenseExact, CandidateBranch::FullText],
+                vec![CandidateBranch::DenseExact, CandidateBranch::Lexical],
                 vec![100, 100]
             ),
             ("fully_empty", vec![CandidateBranch::UserProvided], vec![0]),

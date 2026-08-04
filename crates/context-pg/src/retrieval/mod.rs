@@ -1,6 +1,8 @@
 //! PostgreSQL adapters for the transport-neutral query executor.
 
+mod lexical;
 mod sparse;
+pub(crate) use lexical::{LexicalStrategy, lexical_headline_rows};
 pub(crate) use sparse::{SparseCandidateStrategy, run_sparse_query};
 
 use context_core::{
@@ -172,6 +174,8 @@ type DenseVectorMap = BTreeMap<Option<String>, SearchVector>;
 type SparseSourceCache = Rc<RefCell<BTreeMap<String, sparse::CompositeSparseSource>>>;
 type LateInteractionCache =
     Rc<RefCell<Option<crate::hybrid_query::late_interaction_ann::CompositeLateInteractionSource>>>;
+type LexicalSourceCache = Rc<RefCell<BTreeMap<String, lexical::CompositeLexicalSource>>>;
+type FuzzySourceCache = Rc<RefCell<BTreeMap<String, lexical::CompositeFuzzySource>>>;
 type QuantizedArtifactCache = Rc<RefCell<BTreeMap<Option<String>, QuantizedArtifactIdentity>>>;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -213,6 +217,8 @@ struct PgCandidateRouter<'a> {
     cache: RecheckCache,
     sparse_sources: SparseSourceCache,
     late_interaction: LateInteractionCache,
+    lexical_sources: LexicalSourceCache,
+    fuzzy_sources: FuzzySourceCache,
     quantized_artifacts: QuantizedArtifactCache,
 }
 
@@ -276,10 +282,25 @@ impl CandidateSource for PgCandidateRouter<'_> {
                 self.late_interaction.replace(Some(source));
                 Ok(readiness)
             }
-            QueryKind::FullText { .. }
-            | QueryKind::Recommend { .. }
-            | QueryKind::Discover { .. }
-            | QueryKind::Lookup { .. } => Ok(SourceReadiness::Exact),
+            QueryKind::Lexical { source, .. } => {
+                let prepared = lexical::CompositeLexicalSource::prepare(self.collection_id, query)?;
+                let readiness = prepared.readiness();
+                self.lexical_sources
+                    .borrow_mut()
+                    .insert(source.as_str().to_owned(), prepared);
+                Ok(readiness)
+            }
+            QueryKind::Fuzzy { source, .. } => {
+                let prepared = lexical::CompositeFuzzySource::prepare(self.collection_id, query)?;
+                let readiness = prepared.readiness();
+                self.fuzzy_sources
+                    .borrow_mut()
+                    .insert(source.as_str().to_owned(), prepared);
+                Ok(readiness)
+            }
+            QueryKind::Recommend { .. } | QueryKind::Discover { .. } | QueryKind::Lookup { .. } => {
+                Ok(SourceReadiness::Exact)
+            }
             _ => Err(QueryError::PortFailure {
                 stage: "candidate_router",
                 message: "composite node reached a leaf candidate adapter".to_owned(),
@@ -314,6 +335,22 @@ impl CandidateSource for PgCandidateRouter<'_> {
                     stage: "late_interaction_candidate_source",
                     message: "late-interaction source was not prepared during readiness".to_owned(),
                 });
+        }
+        if let QueryKind::Lexical { source, .. } = query.kind() {
+            return self
+                .lexical_sources
+                .borrow()
+                .get(source.as_str())
+                .map(|prepared| prepared.candidate_limit(query, remaining))
+                .ok_or_else(|| lexical_not_prepared("lexical_candidate_source"));
+        }
+        if let QueryKind::Fuzzy { source, .. } = query.kind() {
+            return self
+                .fuzzy_sources
+                .borrow()
+                .get(source.as_str())
+                .map(|prepared| prepared.candidate_limit(query, remaining))
+                .ok_or_else(|| lexical_not_prepared("fuzzy_candidate_source"));
         }
         Ok(leaf_candidate_limit(query, self.adapter)?.min(remaining))
     }
@@ -389,6 +426,22 @@ impl CandidateSource for PgCandidateRouter<'_> {
                 })?
                 .candidates(limit, budget);
         }
+        if let QueryKind::Lexical { source, .. } = query.kind() {
+            return self
+                .lexical_sources
+                .borrow()
+                .get(source.as_str())
+                .ok_or_else(|| lexical_not_prepared("lexical_candidate_source"))?
+                .candidates(query, limit, budget);
+        }
+        if let QueryKind::Fuzzy { source, .. } = query.kind() {
+            return self
+                .fuzzy_sources
+                .borrow()
+                .get(source.as_str())
+                .ok_or_else(|| lexical_not_prepared("fuzzy_candidate_source"))?
+                .candidates(query, limit, budget);
+        }
         if filter.is_some() {
             return Err(QueryError::PortFailure {
                 stage: "candidate_router",
@@ -404,7 +457,6 @@ impl CandidateSource for PgCandidateRouter<'_> {
             budget,
         )?;
         let branch = match query.kind() {
-            QueryKind::FullText { .. } => CandidateBranch::FullText,
             QueryKind::Recommend { .. } => CandidateBranch::Recommend,
             QueryKind::Discover { .. } => CandidateBranch::Discover,
             QueryKind::Lookup { .. } => CandidateBranch::Lookup,
@@ -415,12 +467,13 @@ impl CandidateSource for PgCandidateRouter<'_> {
         let mut candidates = Vec::with_capacity(rows.len());
         for (rank, row) in rows.into_iter().enumerate() {
             let source = match branch {
-                CandidateBranch::FullText => CandidateSourceKind::FullText,
                 CandidateBranch::Recommend => CandidateSourceKind::Recommendation,
                 CandidateBranch::Discover => CandidateSourceKind::Discovery,
                 CandidateBranch::Lookup => CandidateSourceKind::Lookup,
                 CandidateBranch::DenseAnn
                 | CandidateBranch::DenseExact
+                | CandidateBranch::Lexical
+                | CandidateBranch::Fuzzy
                 | CandidateBranch::Sparse
                 | CandidateBranch::MultiVector
                 | CandidateBranch::Quantized
@@ -447,7 +500,6 @@ impl CandidateSource for PgCandidateRouter<'_> {
             cache.insert(row.point_id(), row);
         }
         let strategy = match query.kind() {
-            QueryKind::FullText { .. } => "postgres_full_text",
             QueryKind::Recommend { .. } => "exact_recommend",
             QueryKind::Discover { .. } => "exact_discover",
             QueryKind::Lookup { .. } => "exact_lookup",
@@ -468,6 +520,8 @@ struct PgRecheckerRouter<'a> {
     cache: RecheckCache,
     sparse_sources: SparseSourceCache,
     late_interaction: LateInteractionCache,
+    lexical_sources: LexicalSourceCache,
+    fuzzy_sources: FuzzySourceCache,
 }
 
 impl SourceRechecker for PgRecheckerRouter<'_> {
@@ -515,6 +569,34 @@ impl SourceRechecker for PgRecheckerRouter<'_> {
                     message: "late-interaction source was not prepared during readiness".to_owned(),
                 })?
                 .recheck(candidates, limit, budget);
+        }
+        if let QueryKind::Lexical { source, .. } = query.kind() {
+            require_port_hydration(
+                candidates.len().min(limit),
+                budget,
+                "lexical_recheck_hydration",
+            )?;
+            let rows = self
+                .lexical_sources
+                .borrow()
+                .get(source.as_str())
+                .ok_or_else(|| lexical_not_prepared("lexical_source_recheck"))?
+                .recheck(query, candidates, limit)?;
+            return Ok(RecheckPage::new(rows, candidates.len()));
+        }
+        if let QueryKind::Fuzzy { source, .. } = query.kind() {
+            require_port_hydration(
+                candidates.len().min(limit),
+                budget,
+                "fuzzy_recheck_hydration",
+            )?;
+            let rows = self
+                .fuzzy_sources
+                .borrow()
+                .get(source.as_str())
+                .ok_or_else(|| lexical_not_prepared("fuzzy_source_recheck"))?
+                .recheck(query, candidates, limit)?;
+            return Ok(RecheckPage::new(rows, candidates.len()));
         }
         let output_count = candidates.len().min(limit);
         let cache_entries = self.cache.borrow().len();
@@ -1089,6 +1171,8 @@ fn execute_prepared_query_with_vectors_and_deadline(
     let cache = Rc::new(RefCell::new(BTreeMap::new()));
     let sparse_sources = Rc::new(RefCell::new(BTreeMap::new()));
     let late_interaction = Rc::new(RefCell::new(None));
+    let lexical_sources = Rc::new(RefCell::new(BTreeMap::new()));
+    let fuzzy_sources = Rc::new(RefCell::new(BTreeMap::new()));
     let quantized_artifacts = Rc::new(RefCell::new(BTreeMap::new()));
     let mut candidates = PgCandidateRouter {
         collection_name,
@@ -1099,6 +1183,8 @@ fn execute_prepared_query_with_vectors_and_deadline(
         cache: Rc::clone(&cache),
         sparse_sources: Rc::clone(&sparse_sources),
         late_interaction: Rc::clone(&late_interaction),
+        lexical_sources: Rc::clone(&lexical_sources),
+        fuzzy_sources: Rc::clone(&fuzzy_sources),
         quantized_artifacts,
     };
     let mut filter = SpiFilterCandidateSource {
@@ -1117,6 +1203,8 @@ fn execute_prepared_query_with_vectors_and_deadline(
         cache,
         sparse_sources,
         late_interaction,
+        lexical_sources,
+        fuzzy_sources,
     };
     let cancellation = PgCancellation;
     QueryExecutor::new(
@@ -1632,6 +1720,13 @@ mod candidate_budget_tests {
     }
 }
 
+fn lexical_not_prepared(stage: &'static str) -> QueryError {
+    QueryError::PortFailure {
+        stage,
+        message: "registered lexical source was not prepared during readiness".to_owned(),
+    }
+}
+
 fn resolve_source_table(collection_id: i64) -> Result<SourceTable> {
     Spi::connect(|client| {
         let rows = client
@@ -1749,7 +1844,8 @@ fn collect_dense_vector_names(query: &QueryIr, names: &mut BTreeSet<Option<Strin
         | QueryKind::ExternalRerank { query, .. }
         | QueryKind::TopologyExpand { query, .. } => collect_dense_vector_names(query, names),
         QueryKind::SparseNearest { .. }
-        | QueryKind::FullText { .. }
+        | QueryKind::Lexical { .. }
+        | QueryKind::Fuzzy { .. }
         | QueryKind::LateInteraction { .. }
         | QueryKind::Recommend { .. }
         | QueryKind::Discover { .. }
@@ -2044,7 +2140,6 @@ fn quantized_post_traversal_peak_bytes(
 }
 
 type HydratedSourceRows = (Vec<HydratedCandidate>, usize);
-type SqlScoredSourceRows = (Vec<(i64, String, f64)>, usize);
 
 fn advanced_source_rows(
     collection_name: &str,
@@ -2085,14 +2180,6 @@ fn advanced_source_rows_within_budget(
     budget: PortBudget,
 ) -> Result<HydratedSourceRows> {
     let (rows, scored_count) = match query.kind() {
-        QueryKind::FullText { text_column, query } => full_text_source_rows(
-            collection_id,
-            source_table,
-            text_column,
-            query,
-            limit,
-            budget.max_comparisons(),
-        )?,
         QueryKind::Recommend { positive, negative } => {
             let example_count = positive.len().checked_add(negative.len()).ok_or(
                 QueryError::ArithmeticOverflow {
@@ -2188,118 +2275,6 @@ fn advanced_source_rows_within_budget(
         )?);
     }
     Ok((hydrated, scored_count))
-}
-
-fn full_text_source_rows(
-    collection_id: i64,
-    source_table: &SourceTable,
-    text_column: &str,
-    text_query: &str,
-    limit: usize,
-    max_comparisons: usize,
-) -> Result<SqlScoredSourceRows> {
-    let table_name =
-        quote_qualified_identifier(&source_table.schema_name, &source_table.table_name);
-    let text_column = quote_identifier(text_column);
-    let sql_limit = sql_limit(limit, "full_text_candidate_source")?;
-    let max_visible = max_comparisons / 2;
-    let probe_limit = max_visible.saturating_add(1);
-    let sql_probe_limit = i64::try_from(probe_limit).map_err(|_| QueryError::PortFailure {
-        stage: "full_text_candidate_source",
-        message: "full-text comparison budget exceeds PostgreSQL bigint".to_owned(),
-    })?;
-    let sql_max_visible = i64::try_from(max_visible).map_err(|_| QueryError::PortFailure {
-        stage: "full_text_candidate_source",
-        message: "full-text comparison budget exceeds PostgreSQL bigint".to_owned(),
-    })?;
-    let sql = format!(
-        "WITH query AS (SELECT pg_catalog.plainto_tsquery('simple', $2) AS tsquery),
-              visible AS MATERIALIZED (
-                  SELECT points.point_id,
-                         points.source_key,
-                         pg_catalog.to_tsvector(
-                             'simple', coalesce(source.{text_column}::text, '')
-                         ) AS document
-                    FROM pgcontext._visible_collection_points AS points
-                    JOIN {table_name} AS source ON source.id::text = points.source_key
-                   WHERE points.collection_id = $1
-                     AND points.deleted_at IS NULL
-                   LIMIT $4
-              ),
-              admission AS (
-                  SELECT count(*)::bigint AS visible_count FROM visible
-              ),
-              ranked AS MATERIALIZED (
-                  SELECT visible.point_id,
-                         visible.source_key,
-                         pg_catalog.ts_rank_cd(visible.document, query.tsquery)::double precision AS score
-                    FROM visible
-                    CROSS JOIN query
-                    CROSS JOIN admission
-                   WHERE admission.visible_count <= $5
-                     AND visible.document @@ query.tsquery
-                   ORDER BY score DESC, visible.point_id ASC
-                   LIMIT $3
-              )
-         SELECT ranked.point_id,
-                CASE WHEN pg_catalog.octet_length(ranked.source_key) <= {max_source_key_bytes}
-                     THEN ranked.source_key
-                END AS source_key,
-                ranked.score,
-                admission.visible_count
-           FROM admission
-           LEFT JOIN ranked ON true
-          ORDER BY ranked.score DESC NULLS LAST, ranked.point_id ASC"
-    , max_source_key_bytes = context_core::policy::MAX_SOURCE_KEY_BYTES);
-    Spi::connect(|client| {
-        let spi_rows = client
-            .select(
-                &sql,
-                Some(sql_limit.max(1)),
-                &[
-                    collection_id.into(),
-                    text_query.into(),
-                    sql_limit.into(),
-                    sql_probe_limit.into(),
-                    sql_max_visible.into(),
-                ],
-            )
-            .map_err(|error| port_failure("full_text_candidate_source", error))?;
-        let mut rows = Vec::with_capacity(limit.max(1));
-        for row in spi_rows {
-            rows.push((
-                spi_optional_result_column::<i64>(&row, 1, "full_text_candidate_source")?,
-                spi_optional_result_column::<String>(&row, 2, "full_text_candidate_source")?,
-                spi_optional_result_column::<f64>(&row, 3, "full_text_candidate_source")?,
-                spi_column::<i64>(&row, 4, "full_text_candidate_source")?,
-            ));
-        }
-        let visible_count = rows.first().map(|row| row.3).unwrap_or_default();
-        let visible_count =
-            usize::try_from(visible_count).map_err(|_| QueryError::PortFailure {
-                stage: "full_text_candidate_source",
-                message: "visible full-text row count exceeds usize".to_owned(),
-            })?;
-        let scored_count = visible_count
-            .checked_mul(2)
-            .ok_or(QueryError::ArithmeticOverflow {
-                operation: "full_text_comparison_accounting",
-            })?;
-        if scored_count > max_comparisons {
-            return Err(QueryError::WorkBudgetExceeded {
-                budget: "candidate_comparisons",
-                actual: scored_count,
-                maximum: max_comparisons,
-            });
-        }
-        let mut scored = Vec::with_capacity(limit);
-        for (point_id, source_key, score, _) in rows {
-            if let (Some(point_id), Some(source_key), Some(score)) = (point_id, source_key, score) {
-                scored.push((point_id, source_key, score));
-            }
-        }
-        Ok((scored, scored_count))
-    })
 }
 
 fn lookup_source_rows(
@@ -2421,6 +2396,15 @@ fn leaf_candidate_limit(query: &QueryIr, adapter: CandidateAdapter) -> Result<us
             if adapter == CandidateAdapter::Hnsw =>
         {
             crate::settings::hnsw_candidate_budget_from_guc().max(query.limit().saturating_add(1))
+        }
+        QueryKind::Lexical { .. } | QueryKind::Fuzzy { .. } => {
+            // An attached GIN/GiST source probes beyond the requested result
+            // limit so the bounded candidate page can still report whether it
+            // crossed its allowance. Projecting only `limit` here would leave a
+            // registered index no headroom and force a fail-closed budget
+            // exhaustion on every indexed query.
+            crate::settings::lexical_candidate_budget_from_guc()
+                .max(query.limit().saturating_add(1))
         }
         QueryKind::LateInteraction {
             vectors,
