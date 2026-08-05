@@ -27,6 +27,8 @@ code-backed capability contract. Planned-only work remains in the
 - [Client-facing examples](client_examples.md)
 - [Filters](filters.md)
 - [Hybrid retrieval](hybrid_retrieval.md)
+- [Lexical and fuzzy retrieval](lexical_retrieval.md)
+- [Adaptive-dimension retrieval](adaptive_dimension.md)
 - [Retrieval methods overview](retrieval_methods.md)
 - [Indexes](indexes.md)
 - [Rebuildable storage artifacts](storage.md)

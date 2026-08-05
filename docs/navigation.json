@@ -103,6 +103,10 @@
           "path": "user_guide/lexical_retrieval.md"
         },
         {
+          "title": "Adaptive-dimension retrieval",
+          "path": "user_guide/adaptive_dimension.md"
+        },
+        {
           "title": "Retrieval methods overview",
           "path": "user_guide/retrieval_methods.md"
         },

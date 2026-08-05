@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "c04e6a97bf9d2c63a33147b8caab03538a1e95bffbf4221b25f24e9499c69ab7",
+  "navigation_sha256": "455bb5bf8a6fe81f35537396ad33f8bb47359c51b01a3c38c062e136cc71e1f2",
   "pages": [
     {
       "links": [],
@@ -343,6 +343,7 @@
     },
     {
       "links": [
+        "adaptive_dimension.md",
         "api_reference.md",
         "client_examples.md",
         "collections.md",
@@ -352,6 +353,7 @@
         "hybrid_retrieval.md",
         "indexes.md",
         "installation.md",
+        "lexical_retrieval.md",
         "limitations.md",
         "metric_operator_matrix.md",
         "metric_semantics.md",
@@ -376,10 +378,19 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "4b1aa8d7aec556dfd9745693195c4fc5d98632abafbae13642f3795219da9233"
+      "sha256": "e5e34a10495f0a16292c644eadb38600ef91244a28a3aeeeb41f3e6cfcdddea8"
     },
     {
       "links": [
+        "api_reference.md",
+        "vector_search.md"
+      ],
+      "path": "user_guide/adaptive_dimension.md",
+      "sha256": "2763db9a67c9ec0ee162421e61f950f40aac732cf139dd79c18e438fc8bb6207"
+    },
+    {
+      "links": [
+        "adaptive_dimension.md",
         "indexes.md",
         "indexes.md",
         "pgvector_coexist.md",
@@ -387,7 +398,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "4b94cb2295fad8e53df06d0ffb9e1c3c228656c8357523e7bd5ff22dc388bab6"
+      "sha256": "5341475bafd253d62baf9c6b7ca93420db5a26e93704bb5937a749c527aa5a5d"
     },
     {
       "links": [],
@@ -494,7 +505,7 @@
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "cdb1791fccb377fc49fb5b629e25e574023c7366f320c95805c973e4da4041cb"
+      "sha256": "4c86db61db3a1fcd050e183a4212c53f9bd9039c1070cd159c520b34ea0638e5"
     },
     {
       "links": [
@@ -690,7 +701,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "1c4df04e562daf434c34d8c6f3beda870044989dd3f533d3d4ed708a4f1ebf29"
+      "sha256": "4f89e1669af16292285eb8eb91637874d02f346a4d3fdd0506dcc5398cf98483"
     },
     {
       "links": [],
@@ -724,7 +735,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "05cd8e3cab88c47a8a29cf756c5cb83414c6124862e4c8d2ddf72a9626303ab0"
+      "sha256": "7b0bb5f1c2e6b6251b71ac9297ec351244a8f98209d0c23af0a10bb2bb0f547d"
     },
     {
       "links": [],
@@ -813,7 +824,7 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "80fcc62e7712552b8c923e64b74b3a38274e0df8604e439fcc0fc8d92b36e50d"
+      "sha256": "58d73e5d8612c52c25bdbea86991541d80e0b6473dc463957e4e31938e6072ed"
     },
     {
       "links": [],
