@@ -17,6 +17,7 @@ mod lexical;
 mod plan;
 mod policy;
 mod ports;
+mod rerank_envelope;
 mod strategy;
 mod types;
 mod validation;
@@ -55,6 +56,12 @@ pub use policy::{
 pub use ports::{
     Cancellation, CandidateSource, ExternalReranker, FilterCandidateSource, PortBudget, QueryClock,
     SourceRechecker, TelemetrySink, TopologyExpander,
+};
+pub use rerank_envelope::{
+    MAX_RERANK_CANDIDATES, MAX_RERANK_METADATA_BYTES, MAX_RERANK_METADATA_ENTRIES,
+    MAX_RERANK_REQUEST_BYTES, MAX_RERANK_TEXT_BYTES, RERANK_ENVELOPE_VERSION, RerankCandidate,
+    RerankFallbackPolicy, RerankMetadata, RerankRejection, RerankRequest, RerankRequestId,
+    RerankResponse, RerankScore, validate_rerank_response,
 };
 pub use strategy::{
     FilteredAnnReason, FilteredAnnStrategy, FilteredAnnStrategyInput, FilteredAnnStrategyKind,
