@@ -213,10 +213,13 @@ retrieval pipeline. It now includes:
   your data (the pattern behind GraphRAG), without leaving Postgres or copying
   data between systems.
 
-The remaining work includes IVFFlat, measured x86 performance claims, broader
-PostgreSQL-major certification, and full unqualified pgvector-name
+Still to come: full-lifecycle IVFFlat, PostgreSQL-native `tsvector`/`tsquery`
+indexing and fusion, complete quantized HNSW and IVF serving including a
+TurboQuant evaluation, certification at 10M vectors, measured x86 performance
+numbers, support for more PostgreSQL majors, and full pgvector name
 compatibility. See the [known limitations](docs/user_guide/limitations.md),
-[product roadmap](docs/user_guide/roadmap.md), and full [roadmap](docs/roadmap.md).
+[product roadmap](docs/user_guide/roadmap.md), and full
+[roadmap](docs/roadmap.md).
 
 ## Quickstart
 
@@ -405,8 +408,10 @@ the [parity matrix](docs/user_guide/parity_matrix.md), and the full
 V1 builds and verifies PostgreSQL 17 and 18 release images on amd64 and arm64, with exact retrieval,
 page-native dense HNSW, filtered ANN, and backend-local packed generations.
 Additional vector types are available for evaluation and controlled rollout.
-The roadmap grows that foundation with deeper lifecycle certification, quantized
-navigation, broader non-dense ANN, and more packaging options. See
+The roadmap grows that foundation with full IVFFlat, native PostgreSQL lexical
+retrieval, complete quantized serving including TurboQuant evaluation,
+10M-vector performance/correctness certification, deeper lifecycle
+certification, broader non-dense ANN, and more packaging options. See
 [Known Issues](docs/known_issues.md) and the [roadmap](docs/roadmap.md) for
 precise adoption guidance.
 

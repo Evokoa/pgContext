@@ -6,6 +6,7 @@ SOURCE="${REPO_ROOT}/docs/user_guide/capability_contract.data"
 PARITY="${REPO_ROOT}/docs/user_guide/parity_matrix.data"
 FLOOR="${REPO_ROOT}/docs/user_guide/capability_product_floor.data"
 PGVECTOR_FLOOR="${REPO_ROOT}/docs/user_guide/pgvector_v1_floor.data"
+SUPPORTED_FEATURES="${REPO_ROOT}/docs/user_guide/supported_features.md"
 
 if [[ ! -f "${SOURCE}" ]]; then
   echo "missing capability contract: ${SOURCE}" >&2
@@ -17,6 +18,10 @@ if [[ ! -f "${FLOOR}" ]]; then
 fi
 if [[ ! -f "${PGVECTOR_FLOOR}" ]]; then
   echo "missing pgvector v1 floor: ${PGVECTOR_FLOOR}" >&2
+  exit 1
+fi
+if [[ ! -f "${SUPPORTED_FEATURES}" ]]; then
+  echo "missing supported-features inventory: ${SUPPORTED_FEATURES}" >&2
   exit 1
 fi
 
@@ -81,6 +86,40 @@ awk -F'|' -v root="${REPO_ROOT}" '
 ' "${SOURCE}" | sort >"${actual}"
 
 diff -u "${expected}" "${actual}"
+
+while IFS='|' read -r id capability maturity source_owner consumer focused_test lifecycle_test user_doc trace; do
+  if [[ "${id}" == "Capability ID" ]]; then
+    continue
+  fi
+
+  case "${maturity}" in
+    stable)
+      supported_maturity="Stable"
+      ;;
+    experimental)
+      supported_maturity="Experimental"
+      ;;
+    intentionally\ different)
+      if [[ "${id}" == "CAP-POSTGRES-NATIVE" ]]; then
+        supported_maturity="PostgreSQL-native"
+      elif [[ "${id}" == "CAP-REBUILDABLE-ARTIFACTS" ]]; then
+        supported_maturity="Experimental"
+      else
+        echo "supported-features inventory needs an explicit maturity mapping for ${id}" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      echo "supported-features inventory cannot list non-implemented capability ${id} (${maturity})" >&2
+      exit 1
+      ;;
+  esac
+
+  if ! grep -Fq -- "<!-- capability:${id} --> | ${supported_maturity} |" "${SUPPORTED_FEATURES}"; then
+    echo "supported-features inventory is missing ${id} with maturity ${supported_maturity}" >&2
+    exit 1
+  fi
+done <"${SOURCE}"
 
 require_contract() {
   local id="$1"

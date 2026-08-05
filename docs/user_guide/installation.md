@@ -15,8 +15,8 @@ do not need superuser privileges to use granted pgContext APIs.
 | GHCR image | Docker on Linux, macOS, or Windows | No | With the v0.2.0 release |
 | Manual source | Linux/macOS, or Windows through WSL2 | Yes | From the checkout or source archive |
 | Local Compose playground | Docker on Linux, macOS, or Windows | Yes | From the checkout |
-| PGXN | Linux/macOS source hosts | Yes | Future update |
-| Homebrew | macOS with Homebrew PostgreSQL 17 | Yes | Future update |
+| PGXN | Linux/macOS source hosts | Yes | Available for 0.2.0 |
+| Homebrew | macOS with Homebrew PostgreSQL 17 | Yes | Available from the Evokoa tap |
 
 Shell scripts target Bash. On Windows, use Docker Desktop with WSL2 and run
 them inside WSL2; native PowerShell and Command Prompt are not supported build
@@ -60,9 +60,8 @@ docker stop pgcontext
 
 ## PGXN source installation
 
-> **Coming soon.** PGXN publication is a future update. Until it is available,
-> use the Docker image, the manual source build below, or the local Compose
-> playground.
+pgContext 0.2.0 is available from
+[PGXN](https://pgxn.org/dist/pgcontext/0.2.0/).
 
 Prerequisites:
 
@@ -79,12 +78,26 @@ pgxn install pgContext
 psql -d postgres -c 'CREATE EXTENSION pgcontext;'
 ```
 
-`pgContext` is the distribution name; `pgcontext` is the extension name.
+Replace `--pg17` with `--pg18` when the selected `pg_config` belongs to
+PostgreSQL 18. `pgContext` is the distribution name; `pgcontext` is the
+extension name.
 
-## Homebrew (coming soon)
+## Homebrew
 
-> **Coming soon.** A Homebrew formula — `brew install pgcontext` from the Evokoa
-> tap, building against `postgresql@17` — will be added in a future update.
+The [Evokoa Homebrew tap](https://github.com/Evokoa/homebrew-tap) builds
+pgContext 0.2.0 against Homebrew `postgresql@17` and installs the PostgreSQL
+extension files:
+
+```sh
+brew update
+brew install Evokoa/tap/pgcontext
+brew services start postgresql@17
+psql -X -v ON_ERROR_STOP=1 -d postgres \
+  -c 'CREATE EXTENSION IF NOT EXISTS pgcontext;'
+```
+
+The formula does not install a standalone `pgcontext` shell command. Run
+`CREATE EXTENSION` in each database that should use pgContext.
 
 ## Manual source build
 

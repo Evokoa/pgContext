@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "8bccf93cd9904d14c8787e85832ef1cc6b393f65c12c7f7e600306b235090740",
+  "navigation_sha256": "c04e6a97bf9d2c63a33147b8caab03538a1e95bffbf4221b25f24e9499c69ab7",
   "pages": [
     {
       "links": [],
@@ -113,7 +113,7 @@
         "./hnsw_storage_contract.md"
       ],
       "path": "contributor_guide/hnsw_callback_contract.md",
-      "sha256": "120f89e6dbd1765529e5292ad3b4b5f722bd91b7f1ce3588a9e9bbce2c749855"
+      "sha256": "444de7340f421d35a940f20222f891bd2c09c4cf9e05ef3b0a53518d3291ad52"
     },
     {
       "links": [
@@ -243,7 +243,7 @@
         "user_guide/troubleshooting.md"
       ],
       "path": "known_issues.md",
-      "sha256": "8a340c591b714ad10aa1d594f929da39eeb9ba23f2523da962130642f30393c8"
+      "sha256": "48527c1f2968435acfd7a16bc75385c3f58a74cd5691737ffdec73b068011003"
     },
     {
       "links": [
@@ -370,11 +370,13 @@
         "sql_object_inventory.md",
         "storage.md",
         "support_policy.md",
+        "supported_features.md",
+        "supported_features.md",
         "troubleshooting.md",
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "b9fd0d02a06dbae7f4ba40aa144e018230db0943ce2ee98fd0db3c5c71012018"
+      "sha256": "4b1aa8d7aec556dfd9745693195c4fc5d98632abafbae13642f3795219da9233"
     },
     {
       "links": [
@@ -385,7 +387,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "592c367e1f63cc3320bc9f06059bff04c4cb83f8a15eaa1dddf62ec94daaaaf0"
+      "sha256": "4b94cb2295fad8e53df06d0ffb9e1c3c228656c8357523e7bd5ff22dc388bab6"
     },
     {
       "links": [],
@@ -397,7 +399,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/collections.md",
-      "sha256": "7a4c2fa3b93c83bf1419bc9544b6395160be8e8729562d90f93d6d4ce90d4206"
+      "sha256": "5ad1e8f5575aae79d844b80f03aa1bd096dc48cf857913b7933c505811ef0c35"
     },
     {
       "links": [
@@ -418,9 +420,11 @@
       "sha256": "b203189e75047e7260d2ed523a04095a47126511688b15cea3fb9cdd0e2dea8d"
     },
     {
-      "links": [],
+      "links": [
+        "lexical_retrieval.md"
+      ],
       "path": "user_guide/hybrid_retrieval.md",
-      "sha256": "57608702e3a075ddf0e1625b6c8290b9e0e5ec3ef3dfbee0d3de7098280f3efb"
+      "sha256": "2bd885a4099355016fc20d057670aa0547d613ea5f89eb01ec079be441daa7fb"
     },
     {
       "links": [
@@ -428,15 +432,26 @@
         "pgvector_coexist.md"
       ],
       "path": "user_guide/indexes.md",
-      "sha256": "7fcc8513023215072b156655294e7df39b2f8539e199da141316e6bae1f336d9"
+      "sha256": "61d34ad0e546b0bbf692ffcc09f96f302b5f66e27534f28ffaba077643870fd7"
     },
     {
       "links": [
+        "https://github.com/Evokoa/homebrew-tap",
+        "https://pgxn.org/dist/pgcontext/0.2.0/",
         "operations.md",
         "troubleshooting.md"
       ],
       "path": "user_guide/installation.md",
-      "sha256": "6ceefa1e8dbb5f212c2b8b1347793bc14c7250794d456349c2fa6eacc7559b56"
+      "sha256": "f95375d4cb6af48a903349425b38d3c61aad56937fafbf8a88a74b542c2b8dca"
+    },
+    {
+      "links": [
+        "api_reference.md",
+        "hybrid_retrieval.md",
+        "retrieval_methods.md"
+      ],
+      "path": "user_guide/lexical_retrieval.md",
+      "sha256": "7060763ca7820ad212b31be36cf529028cce9e1924f9a8bc037cb1fa86744794"
     },
     {
       "links": [
@@ -479,21 +494,21 @@
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "cd1ba381d8b32ec5a1d4f1eebdc61c583d124d6a083e6487b03e1cd56b3b2c1c"
+      "sha256": "cdb1791fccb377fc49fb5b629e25e574023c7366f320c95805c973e4da4041cb"
     },
     {
       "links": [
         "pgvector_migration.md#converting-column-ownership"
       ],
       "path": "user_guide/pgvector_coexist.md",
-      "sha256": "ea2ee1cc0ad00d3b85401ce1af6bb74a79c59cbc1c2afef78e7087ec1fa7e2b3"
+      "sha256": "6e184ccf02fe61b2ab9117f1ebdad89b8f69aedcee41bca8a33ac172e5327392"
     },
     {
       "links": [
         "pgvector_coexist.md"
       ],
       "path": "user_guide/pgvector_migration.md",
-      "sha256": "60ee78f48f5cb38e5e05cc748d3744509963c318f2bb11d042582fdacdb8e3f2"
+      "sha256": "e71f8444863e04856a6a5a4805c86023a66e3d85cdb33d0a49550b6530d41409"
     },
     {
       "links": [
@@ -508,7 +523,7 @@
         "playground.md"
       ],
       "path": "user_guide/quickstart.md",
-      "sha256": "76d54d7ef25081103660a79c233be8cadd9eb9c00362ea58ad78f06fe97e4bd2"
+      "sha256": "1284be783735c47fc8583f290be35eb065dcf09d90750bedfd743692501bc61c"
     },
     {
       "links": [
@@ -551,12 +566,13 @@
         "hybrid_retrieval.md",
         "hybrid_retrieval.md",
         "hybrid_retrieval.md",
-        "hybrid_retrieval.md",
         "indexes.md",
         "indexes.md",
+        "lexical_retrieval.md",
+        "lexical_retrieval.md",
+        "lexical_retrieval.md",
         "multi_tenancy.md",
         "multi_tenancy.md",
-        "roadmap.md",
         "roadmap.md",
         "roadmap.md",
         "sql_object_inventory.md",
@@ -572,7 +588,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/retrieval_methods.md",
-      "sha256": "bf9a6b8afdd7cd5aa4114fe30634b90b45cad4e472ae12428a268ac873d3460c"
+      "sha256": "c102244fbf6954a657237dc5e4db281072368be5c7d0f41f601f68cd8e85b59c"
     },
     {
       "links": [
@@ -655,10 +671,11 @@
         "https://www.postgresql.org/docs/current/datatype-textsearch.html",
         "https://www.postgresql.org/docs/current/routine-vacuuming.html",
         "https://www.postgresql.org/docs/current/textsearch-controls.html",
-        "https://www.postgresql.org/docs/current/textsearch-indexes.html"
+        "https://www.postgresql.org/docs/current/textsearch-indexes.html",
+        "lexical_retrieval.md"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "ffbb3e2ccfced3989a350f96a215b09ec56fcb9902902f63cc552f54f5fe6817"
+      "sha256": "090f92a3d9f3fab952e7fe8ddb20af80acc6f03ea64b0d5cbc1d3803009fa62d"
     },
     {
       "links": [],
@@ -673,7 +690,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "8c886b3de29a15631cde82386efebcdbd34c098cf1a41dc56056bb8db18ca15c"
+      "sha256": "1c4df04e562daf434c34d8c6f3beda870044989dd3f533d3d4ed708a4f1ebf29"
     },
     {
       "links": [],
@@ -693,6 +710,7 @@
         "filters.md",
         "hybrid_retrieval.md",
         "indexes.md",
+        "lexical_retrieval.md",
         "metric_operator_matrix.md",
         "multi_tenancy.md",
         "operations.md",
@@ -706,7 +724,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "cf20a6d23e92be6a3f8fbbacabe4510f960e214635a7a4c9c109d1ed323055e8"
+      "sha256": "05cd8e3cab88c47a8a29cf756c5cb83414c6124862e4c8d2ddf72a9626303ab0"
     },
     {
       "links": [],
@@ -720,7 +738,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/vector_search.md",
-      "sha256": "0e673b38a93442dbee0c5ac0663983e810282403a6effff34fee89f4d1020bfb"
+      "sha256": "13bda582a53a1a8c51d39ecef9b278f839f8cdc831c6b9b80b34f530d352b286"
     }
   ],
   "public_files": [
@@ -795,7 +813,7 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "ee194a7499d9530822f172019cba0174ba6c7cac4f07946b097b1bbfab1969c6"
+      "sha256": "80fcc62e7712552b8c923e64b74b3a38274e0df8604e439fcc0fc8d92b36e50d"
     },
     {
       "links": [],

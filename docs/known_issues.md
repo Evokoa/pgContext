@@ -36,9 +36,6 @@
   and that cost grows with the segment size. Bulk-load-then-query workloads do
   not reach this; continuous-ingest workloads will. See the update-churn lane
   in the [benchmark](benchmarks/pgvector.md).
-- The official GHCR image is published with the v0.1.0 release; PGXN and
-  Homebrew follow in a future update. Until the image is available, use a local
-  Compose or manual source build.
 - pgContext is not a drop-in pgvector replacement. IVFFlat and several pgvector
   helper, subvector, iterative-scan, parallel-build, and GUC contracts are not
   implemented.
