@@ -10,10 +10,14 @@ use std::fmt::{Display, Formatter};
 
 pub use context_core::{ConfigurationRevision, GenerationId, PointId, SourceVersion};
 
+mod chunking;
 mod external;
 mod findings;
 mod rowset;
 
+pub use chunking::{
+    Chunk, ChunkError, ChunkProfile, MAX_CHUNK_CHARS, MAX_CHUNK_SOURCE_CHARS, chunk_document,
+};
 pub use external::{
     KmeansResult, MemoryBudget, SpillError, SpillRun, TrainingError, deterministic_kmeans,
     deterministic_metric_clusters, deterministic_metric_clusters_with_workers,
