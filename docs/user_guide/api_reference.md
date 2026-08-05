@@ -195,6 +195,18 @@ Provider-native integer and packed-binary source contracts are experimental:
   interpretable at a cut point. pgContext never truncates or rewrites the
   stored vector; a declared prefix only makes candidate generation cheaper,
   and final ranking always uses the full authoritative dimensions.
+- `pgcontext.set_embedding_profile_lifecycle(collection text, profile_name text, lifecycle text)`
+  moves a registered profile to a new lifecycle state. The transition is
+  validated before any catalog write: `shadow` promotes to `active`,
+  `active` begins a cutover into `draining`, `draining` completes into
+  `retired` or rolls back to `active`, and a `failed` profile must re-backfill
+  through `shadow` before it can serve again. `retired` is terminal and no
+  state may be re-declared as itself. Requires collection ownership.
+- `pgcontext.embedding_profile_coverage(collection text)` reports, per profile,
+  its lifecycle, whether it serves queries, its source column, how many active
+  visible points carry a value in that column, and the collection's total
+  active points — so an incomplete backfill is visible before a cutover rather
+  than discovered as a thin branch at query time.
 - `pgcontext.embedding_profiles()` lists source-column and HNSW bindings for
   collections owned by the session role.
   `pgcontext.embedding_profile_explain(collection text, profile_name text)`

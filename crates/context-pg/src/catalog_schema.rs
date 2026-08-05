@@ -198,6 +198,10 @@ CREATE TABLE pgcontext._embedding_profiles (
     zero_point int4,
     configuration_hash text NOT NULL CHECK (configuration_hash ~ '^[0-9a-f]{16}$' AND configuration_hash <> '0000000000000000'),
     matryoshka_prefixes int4[],
+    -- Only `active` and `draining` serve queries. A profile registers into
+    -- `shadow` or `active`; every later move is a validated transition.
+    lifecycle text NOT NULL DEFAULT 'active'
+        CHECK (lifecycle IN ('shadow', 'active', 'draining', 'retired', 'failed')),
     created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
     UNIQUE (collection_id, profile_name),
     -- A declared Matryoshka policy must certify 1..=8 prefixes below the full
@@ -251,15 +255,94 @@ CREATE TABLE pgcontext._embedding_profiles (
     )
 );
 
+-- An embedding profile's *contract* is immutable: representation, dimensions,
+-- metric, templates, bindings, and hash describe a model that already produced
+-- stored vectors, so changing one would silently reinterpret existing data.
+-- `lifecycle` is different in kind -- it records whether that fixed contract is
+-- currently serving -- so it is the one column an update may touch, and only
+-- along a legal transition.
+--
+-- The contract comparison neutralizes `lifecycle` in both row images and then
+-- compares the rows as text. Comparing whole rows rather than listing protected
+-- columns means a column added later is protected by default; comparing text
+-- rather than jsonb also catches changes jsonb normalizes away, such as an
+-- array rewritten with different dimension bounds.
+--
+-- The transition table is duplicated from `context-core::ProfileLifecycle` on
+-- purpose: the Rust table governs the SQL-facing API, and this one governs
+-- direct catalog writes, so the invariant survives a superuser bypassing the
+-- API.
 CREATE FUNCTION pgcontext._reject_embedding_profile_mutation()
 RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pgcontext
 AS $$
+DECLARE
+    frozen_old pgcontext._embedding_profiles := OLD;
+    frozen_new pgcontext._embedding_profiles := NEW;
 BEGIN
-    RAISE EXCEPTION USING
-        ERRCODE = '55000',
-        MESSAGE = 'embedding profiles are immutable; register a new profile revision';
+    frozen_old.lifecycle := '';
+    frozen_new.lifecycle := '';
+    IF frozen_new::text IS DISTINCT FROM frozen_old::text THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '55000',
+            MESSAGE = 'embedding profiles are immutable; register a new profile revision';
+    END IF;
+
+    IF NEW.lifecycle = OLD.lifecycle THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = pg_catalog.format(
+                'embedding profile cannot move from %s to %s', OLD.lifecycle, NEW.lifecycle
+            );
+    END IF;
+
+    IF NOT (
+        (OLD.lifecycle = 'shadow' AND NEW.lifecycle IN ('active', 'failed', 'retired'))
+        OR (OLD.lifecycle = 'active' AND NEW.lifecycle IN ('draining', 'failed'))
+        OR (OLD.lifecycle = 'draining' AND NEW.lifecycle IN ('retired', 'active', 'failed'))
+        OR (OLD.lifecycle = 'failed' AND NEW.lifecycle IN ('shadow', 'retired'))
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = pg_catalog.format(
+                'embedding profile cannot move from %s to %s', OLD.lifecycle, NEW.lifecycle
+            );
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+-- Catalog write for the one mutable column. Retrieval and registration run
+-- SECURITY INVOKER, so a non-superuser collection member holds no privilege on
+-- this private table; the write is performed as the extension owner after an
+-- explicit owner-role check, exactly like the other catalog writers here.
+CREATE FUNCTION pgcontext._set_embedding_profile_lifecycle(
+    p_collection_id bigint,
+    p_profile_name text,
+    p_lifecycle text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pgcontext._collections
+         WHERE collection_id = p_collection_id
+           AND pg_catalog.pg_has_role(SESSION_USER, owner_role, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION 'permission denied for collection %', p_collection_id
+            USING ERRCODE = '42501';
+    END IF;
+
+    UPDATE pgcontext._embedding_profiles
+       SET lifecycle = p_lifecycle
+     WHERE collection_id = p_collection_id
+       AND profile_name = p_profile_name;
 END;
 $$;
 

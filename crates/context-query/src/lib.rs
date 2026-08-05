@@ -14,7 +14,6 @@ mod executor;
 mod formula;
 mod ir;
 mod lexical;
-mod multi_profile;
 mod plan;
 mod policy;
 mod ports;
@@ -47,10 +46,6 @@ pub use lexical::{
     MAX_LEXICAL_NAME_BYTES, MAX_LEXICAL_NORMALIZATION, MAX_LEXICAL_PHRASE_DISTANCE,
     MAX_LEXICAL_QUERY_DEPTH, MAX_LEXICAL_QUERY_NODES, MAX_LEXICAL_TEXT_BYTES,
     RegisteredTsQueryName,
-};
-pub use multi_profile::{
-    MAX_MULTI_PROFILE_BRANCHES, MissingProfile, MultiProfileCoverage, MultiProfileDecision,
-    MultiProfileRequest, ProfileBranch, ProfileUnavailability, plan_multi_profile,
 };
 pub use plan::parse_query_plan;
 pub use policy::{

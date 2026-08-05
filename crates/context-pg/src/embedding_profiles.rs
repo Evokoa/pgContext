@@ -4,8 +4,8 @@ use std::collections::BTreeSet;
 
 use context_core::{
     EmbeddingProfile, IntegerScale, MatryoshkaPolicy, PrefixDimensions, ProfileId,
-    ProviderBinaryLayout, ProviderBitOrder, ProviderByteOrder, VectorNormalization,
-    VectorRepresentation,
+    ProfileLifecycle, ProviderBinaryLayout, ProviderBitOrder, ProviderByteOrder,
+    VectorNormalization, VectorRepresentation,
 };
 use pgrx::JsonB;
 use pgrx::prelude::*;
@@ -13,6 +13,7 @@ use serde_json::{Map, Value, json};
 
 use crate::domain_types::{distance_metric_label, parse_distance_metric};
 use crate::error::raise_sql_error;
+use crate::table_search::{quote_identifier, quote_qualified_identifier};
 
 const PROFILE_KEYS: [&str; 15] = [
     "representation",
@@ -66,8 +67,10 @@ pub fn register_embedding_profile(
     source_column: String,
     hnsw_index: String,
     profile: JsonB,
+    lifecycle: default!(String, "'active'"),
 ) -> JsonB {
     validate_profile_name(&profile_name);
+    let lifecycle = registration_lifecycle(&lifecycle);
     let collection_row = resolve_collection(&collection);
     require_collection_owner(collection_row, &collection);
     let normalized = parse_profile(&profile);
@@ -84,6 +87,7 @@ pub fn register_embedding_profile(
         &profile_name,
         &binding,
         &normalized,
+        lifecycle,
     );
     JsonB(normalized.json())
 }
@@ -568,11 +572,30 @@ fn optional_prefixes(object: &Map<String, Value>) -> Option<Vec<i32>> {
     )
 }
 
+/// Validates the lifecycle a profile may be registered into.
+///
+/// A profile registers into `shadow` (backfilling, not yet answering) or
+/// `active` (answering immediately). `draining`, `retired`, and `failed`
+/// describe a profile that already served, so they are reachable only through
+/// a validated transition, never as an initial state.
+fn registration_lifecycle(lifecycle: &str) -> ProfileLifecycle {
+    let parsed = ProfileLifecycle::parse(lifecycle)
+        .unwrap_or_else(|error| invalid_profile(error.to_string()));
+    if matches!(parsed, ProfileLifecycle::Shadow | ProfileLifecycle::Active) {
+        return parsed;
+    }
+    invalid_profile(format!(
+        "embedding profiles register into shadow or active, not {}",
+        parsed.stable_name()
+    ))
+}
+
 fn insert_profile(
     collection_id: i64,
     profile_name: &str,
     binding: &ProfileBinding,
     parsed: &ParsedProfile,
+    lifecycle: ProfileLifecycle,
 ) {
     let dimensions = i32::try_from(parsed.profile.dimensions())
         .unwrap_or_else(|_| invalid_profile("dimensions exceed int4".to_owned()));
@@ -584,10 +607,10 @@ fn insert_profile(
              source_type_name, source_typmod, hnsw_schema_name, hnsw_index_name, hnsw_opclass,
              representation, dimensions, normalization, metric,
              provider, model, revision, input_template, output_template, bit_order, byte_order,
-             scale, zero_point, configuration_hash, matryoshka_prefixes
+             scale, zero_point, configuration_hash, matryoshka_prefixes, lifecycle
          ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-             $21,$22,$23,$24,$25,$26
+             $21,$22,$23,$24,$25,$26,$27
          )",
         &[
             collection_id.into(),
@@ -616,6 +639,7 @@ fn insert_profile(
             scale.map(|value| value.zero_point).into(),
             parsed.configuration_hash.as_str().into(),
             parsed.matryoshka_prefixes.clone().into(),
+            lifecycle.stable_name().into(),
         ],
     )
     .unwrap_or_else(|error| {
@@ -1013,6 +1037,7 @@ pub(crate) fn matryoshka_policy_for_column(
                   WHERE collection_id = $1
                     AND source_column_name = $2
                     AND matryoshka_prefixes IS NOT NULL
+                    AND lifecycle IN ('active', 'draining')
                   ORDER BY embedding_profile_id DESC",
                 Some(1),
                 &[collection_id.into(), vector_column_name.into()],
@@ -1039,4 +1064,168 @@ pub(crate) fn matryoshka_policy_for_column(
         })
         .collect::<Option<Vec<_>>>()?;
     MatryoshkaPolicy::new(usize::try_from(dimensions).ok()?, declared, normalization).ok()
+}
+
+/// Moves a registered embedding profile to a new lifecycle state.
+///
+/// The transition is validated by the typed lifecycle table before any catalog
+/// write, so a profile cannot skip backfill, be resurrected from `retired`, or
+/// be re-declared into the state it already holds.
+///
+/// # Panics
+///
+/// Raises `invalid_parameter_value` for an unknown state or an illegal
+/// transition, `undefined_object` when the profile is not registered, and
+/// `insufficient_privilege` when the caller does not own the collection.
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext, public)]
+pub fn set_embedding_profile_lifecycle(
+    collection: String,
+    profile_name: String,
+    lifecycle: String,
+) -> String {
+    let requested = ProfileLifecycle::parse(&lifecycle)
+        .unwrap_or_else(|error| invalid_profile(error.to_string()));
+    let collection_id = crate::lexical_catalog::require_collection_owner_id(&collection);
+
+    // An unregistered profile yields an empty result set, and reading a scalar
+    // from one is an SPI cursor error rather than a null, so emptiness is
+    // checked before any column is read.
+    let current = Spi::connect(|client| {
+        let rows = client
+            .select(
+                "SELECT lifecycle
+                   FROM pgcontext._visible_embedding_profiles
+                  WHERE collection_id = $1 AND profile_name = $2",
+                Some(1),
+                &[collection_id.into(), profile_name.as_str().into()],
+            )
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    format!("failed to read embedding profile lifecycle: {error}"),
+                )
+            });
+        rows.into_iter()
+            .next()
+            .and_then(|row| row.get::<String>(1).ok().flatten())
+    })
+    .unwrap_or_else(|| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
+            format!("embedding profile is not registered: {profile_name}"),
+        )
+    });
+    let current = ProfileLifecycle::parse(&current)
+        .unwrap_or_else(|error| invalid_profile(error.to_string()));
+    let next = current
+        .transition_to(requested)
+        .unwrap_or_else(|error| invalid_profile(error.to_string()));
+
+    Spi::run_with_args(
+        "SELECT pgcontext._set_embedding_profile_lifecycle($1, $2, $3)",
+        &[
+            collection_id.into(),
+            profile_name.as_str().into(),
+            next.stable_name().into(),
+        ],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to update embedding profile lifecycle: {error}"),
+        )
+    });
+    next.stable_name().to_owned()
+}
+
+/// Reports per-profile lifecycle, coverage, and staleness for a collection.
+///
+/// `covered_points` counts active visible points whose registered source column
+/// carries a value, so an incomplete backfill is visible as a gap rather than
+/// discovered as a silently thin branch at query time.
+#[pg_extern]
+#[search_path(pg_catalog, pgcontext, public)]
+#[allow(
+    clippy::type_complexity,
+    reason = "pgrx requires inline name!() table shapes for SQL generation"
+)]
+pub fn embedding_profile_coverage(
+    collection: String,
+) -> TableIterator<
+    'static,
+    (
+        name!(profile_name, String),
+        name!(lifecycle, String),
+        name!(serves_queries, bool),
+        name!(source_column, String),
+        name!(covered_points, i64),
+        name!(active_points, i64),
+    ),
+> {
+    let collection_id = crate::lexical_catalog::require_collection_owner_id(&collection);
+    let active_points = Spi::get_one_with_args::<i64>(
+        "SELECT count(*)
+           FROM pgcontext._visible_collection_points
+          WHERE collection_id = $1 AND deleted_at IS NULL",
+        &[collection_id.into()],
+    )
+    .unwrap_or(Some(0))
+    .unwrap_or(0);
+
+    let profiles = Spi::connect(|client| {
+        let rows = client
+            .select(
+                "SELECT profile_name, lifecycle, source_schema_name, source_table_name,
+                        source_column_name
+                   FROM pgcontext._visible_embedding_profiles
+                  WHERE collection_id = $1
+                  ORDER BY profile_name",
+                None,
+                &[collection_id.into()],
+            )
+            .unwrap_or_else(|error| {
+                raise_sql_error(
+                    PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                    format!("failed to list embedding profiles: {error}"),
+                )
+            });
+        let mut profiles = Vec::new();
+        for row in rows {
+            let read = |index: usize| row.get::<String>(index).ok().flatten().unwrap_or_default();
+            profiles.push((read(1), read(2), read(3), read(4), read(5)));
+        }
+        profiles
+    });
+
+    let mut output = Vec::with_capacity(profiles.len());
+    for (profile_name, lifecycle, schema_name, table_name, column_name) in profiles {
+        let serves = ProfileLifecycle::parse(&lifecycle)
+            .map(ProfileLifecycle::serves_queries)
+            .unwrap_or(false);
+        let covered = Spi::get_one_with_args::<i64>(
+            &format!(
+                "SELECT count(*)
+                   FROM pgcontext._visible_collection_points AS points
+                   JOIN {table} AS source ON source.id::text = points.source_key
+                  WHERE points.collection_id = $1
+                    AND points.deleted_at IS NULL
+                    AND source.{column} IS NOT NULL",
+                table = quote_qualified_identifier(&schema_name, &table_name),
+                column = quote_identifier(&column_name),
+            ),
+            &[collection_id.into()],
+        )
+        .unwrap_or(Some(0))
+        .unwrap_or(0);
+        output.push((
+            profile_name,
+            lifecycle,
+            serves,
+            column_name,
+            covered,
+            active_points,
+        ));
+    }
+    TableIterator::new(output)
 }

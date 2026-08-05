@@ -398,7 +398,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "5341475bafd253d62baf9c6b7ca93420db5a26e93704bb5937a749c527aa5a5d"
+      "sha256": "7ef260d08a23987b7acdf26cfb94d16d4444fd9beb42b2751e544010b2f410c3"
     },
     {
       "links": [],
@@ -505,7 +505,7 @@
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "4c86db61db3a1fcd050e183a4212c53f9bd9039c1070cd159c520b34ea0638e5"
+      "sha256": "b9319a7d9f738f5b23955664b48ae8295a8ba257fd1eb7c459ad76131d92a08b"
     },
     {
       "links": [
@@ -701,7 +701,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "4f89e1669af16292285eb8eb91637874d02f346a4d3fdd0506dcc5398cf98483"
+      "sha256": "0cbcc95e3598781205d943f3b2adf877e684efd7812de70c4ca981ef64054e2f"
     },
     {
       "links": [],
@@ -735,7 +735,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "7b0bb5f1c2e6b6251b71ac9297ec351244a8f98209d0c23af0a10bb2bb0f547d"
+      "sha256": "30753d59c9330fd1fe3096a225eec8433fc45d2a3fc484c211df9873ba5a7a4a"
     },
     {
       "links": [],

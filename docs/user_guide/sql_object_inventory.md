@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `1f542858192324e6594a15f384dbcbfe065c603e8a0171148629216cb43742df`
+Full SQL artifact SHA-256: `1814e08044f344330bd89dbc560827cd68a8f67adf011968a1491224eea63b34`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,7 +16,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 388 |
+| Functions | 391 |
 | Tables | 26 |
 | Views | 16 |
 | Triggers | 6 |
@@ -183,6 +183,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"drop_fuzzy_source"`
 - `"drop_lexical_source"`
 - `"embedding_migrations"`
+- `"embedding_profile_coverage"`
 - `"embedding_profile_explain"`
 - `"embedding_profiles"`
 - `"enable_pgvector_binding"`
@@ -331,6 +332,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"search_late_interaction_ann"`
 - `"search_mmap_hnsw_artifact"`
 - `"search_sparse"`
+- `"set_embedding_profile_lifecycle"`
 - `"set_payload"`
 - `"sparsevec"`
 - `"sparsevec_avg_final"`
@@ -450,6 +452,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext._reject_build_job_progress_regression`
 - `pgcontext._reject_embedding_profile_mutation`
 - `pgcontext._require_collection_owner`
+- `pgcontext._set_embedding_profile_lifecycle`
 - `pgcontext._store_late_interaction_tokens`
 - `pgcontext._unpin_generation`
 - `pgcontext.bitvec_out`

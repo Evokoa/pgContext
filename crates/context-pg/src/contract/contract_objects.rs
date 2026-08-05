@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 389;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 392;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -89,7 +89,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function("embedding_profiles", "", SqlLifecycle::Experimental),
     SqlContractObject::function(
         "register_embedding_profile",
-        "collection text, profile_name text, source_column text, hnsw_index text, profile jsonb",
+        "collection text, profile_name text, source_column text, hnsw_index text, profile jsonb, lifecycle text",
         SqlLifecycle::Experimental,
     ),
     SqlContractObject::function("int8vec", "input text", SqlLifecycle::Experimental),
@@ -740,6 +740,16 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
+        "set_embedding_profile_lifecycle",
+        "collection text, profile_name text, lifecycle text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "embedding_profile_coverage",
+        "collection text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
         "vector_prefix",
         "vector vector, dimensions integer",
         SqlLifecycle::Stable,
@@ -1360,6 +1370,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "_refresh_lexical_catalog_oids",
         "p_collection_id bigint",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "_set_embedding_profile_lifecycle",
+        "p_collection_id bigint, p_profile_name text, p_lifecycle text",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::function(
