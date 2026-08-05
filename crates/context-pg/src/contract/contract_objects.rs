@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 388;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 389;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -737,6 +737,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "query_formula",
         "branch jsonb, formula text",
+        SqlLifecycle::Stable,
+    ),
+    SqlContractObject::function(
+        "vector_prefix",
+        "vector vector, dimensions integer",
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(

@@ -190,6 +190,7 @@ mod tests {
     include!("pg_tests/ivfflat_am.rs");
     include!("pg_tests/hybrid_query.rs");
     include!("pg_tests/hybrid_sparse_cosine.rs");
+    include!("pg_tests/adaptive_dimension.rs");
     include!("pg_tests/lexical_catalog.rs");
     include!("pg_tests/lexical_query.rs");
     include!("pg_tests/lexical_index.rs");

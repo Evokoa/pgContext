@@ -43,8 +43,6 @@ pub enum AdaptivePrefixReason {
     BudgetTooSmall,
     /// A declared prefix was selected automatically.
     Selected,
-    /// Widening reached the full authoritative dimensions.
-    WidenedToFull,
 }
 
 impl AdaptivePrefixReason {
@@ -58,7 +56,6 @@ impl AdaptivePrefixReason {
             Self::PinRejected => "pin_rejected",
             Self::BudgetTooSmall => "budget_too_small",
             Self::Selected => "selected",
-            Self::WidenedToFull => "widened_to_full",
         }
     }
 }
@@ -211,52 +208,6 @@ pub fn select_adaptive_prefix_strategy(
     }
 }
 
-/// Next step after an adaptive-dimension probe returned too few results.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AdaptiveWideningDecision {
-    /// The probe satisfied the request; stop widening.
-    Stop,
-    /// Retry at a wider declared prefix.
-    Widen {
-        /// Strictly wider declared prefix.
-        dimensions: PrefixDimensions,
-        /// Candidates admitted by the wider probe.
-        candidates: usize,
-    },
-    /// Retry against the full authoritative dimensions.
-    FullVector {
-        /// Candidates admitted by the full-dimension probe.
-        candidates: usize,
-    },
-}
-
-/// Decides whether to widen after an adaptive-dimension probe.
-///
-/// Widening is strictly monotonic — each step reads a wider prefix than the
-/// last and the sequence terminates at the full authoritative dimensions — and
-/// every step is capped by the remaining candidate budget, so the loop cannot
-/// run unbounded.
-#[must_use]
-pub fn adaptive_widening_decision(
-    policy: &MatryoshkaPolicy,
-    current: PrefixDimensions,
-    rechecked_results: usize,
-    limit: SearchLimit,
-    remaining_candidate_budget: usize,
-) -> AdaptiveWideningDecision {
-    if rechecked_results >= limit.get() || remaining_candidate_budget == 0 {
-        return AdaptiveWideningDecision::Stop;
-    }
-    let candidates = oversampled_probe(limit, remaining_candidate_budget);
-    policy.next_prefix_after(current).map_or(
-        AdaptiveWideningDecision::FullVector { candidates },
-        |dimensions| AdaptiveWideningDecision::Widen {
-            dimensions,
-            candidates,
-        },
-    )
-}
-
 fn oversampled_probe(limit: SearchLimit, candidate_budget: usize) -> usize {
     limit
         .get()
@@ -367,45 +318,5 @@ mod tests {
         let policy = policy();
         let strategy = select(Some(&policy), AdaptivePrefixControl::Automatic, 100, 150);
         assert!(strategy.candidates() <= 150);
-    }
-
-    #[test]
-    fn widening_stops_once_the_request_is_satisfied_or_the_budget_is_gone() {
-        let policy = policy();
-        let prefix = PrefixDimensions::new(128).expect("prefix");
-        assert_eq!(
-            adaptive_widening_decision(&policy, prefix, 10, limit(10), 1000),
-            AdaptiveWideningDecision::Stop
-        );
-        assert_eq!(
-            adaptive_widening_decision(&policy, prefix, 0, limit(10), 0),
-            AdaptiveWideningDecision::Stop
-        );
-    }
-
-    #[test]
-    fn widening_is_strictly_monotonic_and_terminates_at_the_full_dimensions() {
-        let policy = policy();
-        let mut current = PrefixDimensions::new(128).expect("prefix");
-        let mut widths = vec![current.get()];
-        loop {
-            match adaptive_widening_decision(&policy, current, 0, limit(10), 1000) {
-                AdaptiveWideningDecision::Widen { dimensions, .. } => {
-                    assert!(
-                        dimensions.get() > current.get(),
-                        "widening must be strictly monotonic"
-                    );
-                    current = dimensions;
-                    widths.push(current.get());
-                }
-                AdaptiveWideningDecision::FullVector { .. } => break,
-                AdaptiveWideningDecision::Stop => unreachable!("an unsatisfied probe must widen"),
-            }
-            assert!(
-                widths.len() <= policy.prefixes().len(),
-                "widening must terminate"
-            );
-        }
-        assert_eq!(widths, vec![128, 256, 512]);
     }
 }

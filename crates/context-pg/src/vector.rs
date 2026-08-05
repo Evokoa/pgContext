@@ -519,6 +519,52 @@ fn vector_from_aggregate_state(mut state: Vec<f32>, aggregate: AggregateFinal) -
     }
 }
 
+/// Returns the leading `dimensions` coordinates of a dense vector.
+///
+/// This is the read-only prefix view that adaptive-dimension candidate
+/// generation scores against. It never rewrites the stored value: callers
+/// project a prefix at query time while the row keeps its full vector, and
+/// final ranking still uses the full authoritative dimensions.
+///
+/// The function is immutable and parallel-safe so it can appear in an
+/// expression index.
+///
+/// # Panics
+///
+/// Raises `invalid_parameter_value` when `dimensions` is not within
+/// `1..=vector_dims(vector)`.
+#[pg_extern(immutable, parallel_safe)]
+#[must_use]
+pub fn vector_prefix(vector: Vector, dimensions: i32) -> Vector {
+    let dense = vector.to_dense().unwrap_or_else(|error| raise_core_error(error));
+    let requested = usize::try_from(dimensions)
+        .ok()
+        .filter(|requested| (1..=dense.dimension()).contains(requested))
+        .unwrap_or_else(|| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+                format!(
+                    "vector prefix dimensions must be between 1 and {}: {dimensions}",
+                    dense.dimension()
+                ),
+            )
+        });
+    let prefix = dense
+        .as_slice()
+        .get(..requested)
+        .unwrap_or_else(|| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                "validated vector prefix exceeded its own vector",
+            )
+        })
+        .to_vec();
+    match DenseVector::new(prefix) {
+        Ok(vector) => Vector::from_dense(vector),
+        Err(error) => raise_core_error(error),
+    }
+}
+
 /// Returns the number of dimensions in a dense vector.
 #[pg_extern(immutable, parallel_safe)]
 #[must_use]

@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `d44ae0c43739063f9302e297cb0487c3f4d08841cc8247fd6097d39ad867bc25`
+Full SQL artifact SHA-256: `1f542858192324e6594a15f384dbcbfe065c603e8a0171148629216cb43742df`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,9 +16,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 387 |
+| Functions | 388 |
 | Tables | 26 |
-| Views | 15 |
+| Views | 16 |
 | Triggers | 6 |
 | Casts | 35 |
 | Operators | 62 |
@@ -96,6 +96,7 @@ The artifact fingerprint covers every object declaration, function result shape,
 - view `pgcontext._visible_collection_sparse_vectors`
 - view `pgcontext._visible_collection_vectors`
 - view `pgcontext._visible_collections`
+- view `pgcontext._visible_embedding_profiles`
 - view `pgcontext._visible_pgvector_ownership_conversions`
 - view `pgcontext._visible_query_stats`
 
@@ -408,6 +409,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"vector_lt"`
 - `"vector_ne"`
 - `"vector_out"`
+- `"vector_prefix"`
 - `"vector_sum_final"`
 - `"vector_sum_transition"`
 - `"vector_to_real_array"`

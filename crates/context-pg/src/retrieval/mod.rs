@@ -11,11 +11,12 @@ use context_core::{
 };
 use context_index::HnswComparisonBudget;
 use context_query::{
-    Cancellation, Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage,
-    CandidateProvenance, CandidateSource, CandidateSourceKind, Completion, ExecutionBudget,
-    ExecutionOutcome, ExecutionState, FilterCandidateBatch, FilterCandidateSource,
-    HydratedCandidate, PortBudget, QueryClock, QueryError, QueryExecutor, QueryIr, QueryKind,
-    RecheckPage, Result, SourceReadiness, SourceRechecker, StageDiagnostic, TelemetrySink,
+    AdaptivePrefixStrategy, AdaptivePrefixStrategyInput, AdaptivePrefixStrategyKind, Cancellation,
+    Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage, CandidateProvenance,
+    CandidateSource, CandidateSourceKind, Completion, ExecutionBudget, ExecutionOutcome,
+    ExecutionState, FilterCandidateBatch, FilterCandidateSource, HydratedCandidate, PortBudget,
+    QueryClock, QueryError, QueryExecutor, QueryIr, QueryKind, RecheckPage, Result,
+    SourceReadiness, SourceRechecker, StageDiagnostic, TelemetrySink,
 };
 use core::mem::size_of;
 use pgrx::datum::DatumWithOid;
@@ -177,6 +178,14 @@ type LateInteractionCache =
 type LexicalSourceCache = Rc<RefCell<BTreeMap<String, lexical::CompositeLexicalSource>>>;
 type FuzzySourceCache = Rc<RefCell<BTreeMap<String, lexical::CompositeFuzzySource>>>;
 type QuantizedArtifactCache = Rc<RefCell<BTreeMap<Option<String>, QuantizedArtifactIdentity>>>;
+type AdaptivePrefixCache = Rc<RefCell<BTreeMap<Option<String>, AdaptivePrefixPlan>>>;
+
+/// Selected adaptive-dimension plan plus the query prefix it scores against.
+#[derive(Clone, Debug)]
+struct AdaptivePrefixPlan {
+    strategy: AdaptivePrefixStrategy,
+    query_prefix: Option<Vec<f32>>,
+}
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct QuantizedArtifactIdentity {
@@ -219,6 +228,7 @@ struct PgCandidateRouter<'a> {
     late_interaction: LateInteractionCache,
     lexical_sources: LexicalSourceCache,
     fuzzy_sources: FuzzySourceCache,
+    adaptive_prefixes: AdaptivePrefixCache,
     quantized_artifacts: QuantizedArtifactCache,
 }
 
@@ -226,11 +236,21 @@ impl CandidateSource for PgCandidateRouter<'_> {
     fn readiness(&mut self, query: &QueryIr, budget: PortBudget) -> Result<SourceReadiness> {
         match query.kind() {
             QueryKind::Nearest { .. } => match self.adapter {
-                CandidateAdapter::Exact => SpiExactCandidateSource::new(
-                    self.collection_id,
-                    registered_vector_for_query(self.registered_vectors, query)?,
-                )
-                .readiness(query, budget),
+                CandidateAdapter::Exact => {
+                    let registered_vector =
+                        registered_vector_for_query(self.registered_vectors, query)?;
+                    let plan = prepare_adaptive_prefix_plan(
+                        self.collection_id,
+                        registered_vector,
+                        query,
+                        leaf_candidate_limit(query, CandidateAdapter::Exact)?,
+                    )?;
+                    self.adaptive_prefixes
+                        .borrow_mut()
+                        .insert(dense_vector_key(query)?, plan);
+                    SpiExactCandidateSource::new(self.collection_id, registered_vector)
+                        .readiness(query, budget)
+                }
                 CandidateAdapter::Hnsw => {
                     let registered_vector =
                         registered_vector_for_query(self.registered_vectors, query)?;
@@ -352,6 +372,22 @@ impl CandidateSource for PgCandidateRouter<'_> {
                 .map(|prepared| prepared.candidate_limit(query, remaining))
                 .ok_or_else(|| lexical_not_prepared("fuzzy_candidate_source"));
         }
+        if matches!(query.kind(), QueryKind::Nearest { .. })
+            && self.adapter == CandidateAdapter::Exact
+        {
+            // `leaf_candidate_limit` raises the shared budget ceiling so a
+            // certified prefix has oversampling room. Only a plan that actually
+            // selected a prefix may spend it; every other exact dense leaf
+            // requests exactly the caller's limit, as it did before adaptive
+            // dimensions existed.
+            let requested = self
+                .adaptive_prefixes
+                .borrow()
+                .get(&dense_vector_key(query)?)
+                .filter(|plan| plan.query_prefix.is_some())
+                .map_or_else(|| query.limit(), |plan| plan.strategy.candidates());
+            return Ok(requested.min(remaining));
+        }
         Ok(leaf_candidate_limit(query, self.adapter)?.min(remaining))
     }
 
@@ -366,9 +402,28 @@ impl CandidateSource for PgCandidateRouter<'_> {
             let registered_vector = registered_vector_for_query(self.registered_vectors, query)?;
             return match self.adapter {
                 CandidateAdapter::Exact => {
-                    SpiExactCandidateSource::new(self.collection_id, registered_vector)
-                        .candidates(query, filter, limit, budget)
-                        .map(|page| page.with_strategy("dense_exact"))
+                    let plan = self
+                        .adaptive_prefixes
+                        .borrow()
+                        .get(&dense_vector_key(query)?)
+                        .cloned();
+                    match plan
+                        .and_then(|plan| plan.query_prefix.map(|prefix| (plan.strategy, prefix)))
+                    {
+                        Some((strategy, query_prefix)) => adaptive_prefix_candidates(
+                            self.collection_id,
+                            registered_vector,
+                            query,
+                            filter,
+                            limit,
+                            budget,
+                            strategy,
+                            &query_prefix,
+                        ),
+                        None => SpiExactCandidateSource::new(self.collection_id, registered_vector)
+                            .candidates(query, filter, limit, budget)
+                            .map(|page| page.with_strategy("dense_exact")),
+                    }
                 }
                 CandidateAdapter::Hnsw => {
                     if uses_quantized_mmap(query, registered_vector) {
@@ -1173,6 +1228,7 @@ fn execute_prepared_query_with_vectors_and_deadline(
     let late_interaction = Rc::new(RefCell::new(None));
     let lexical_sources = Rc::new(RefCell::new(BTreeMap::new()));
     let fuzzy_sources = Rc::new(RefCell::new(BTreeMap::new()));
+    let adaptive_prefixes = Rc::new(RefCell::new(BTreeMap::new()));
     let quantized_artifacts = Rc::new(RefCell::new(BTreeMap::new()));
     let mut candidates = PgCandidateRouter {
         collection_name,
@@ -1185,6 +1241,7 @@ fn execute_prepared_query_with_vectors_and_deadline(
         late_interaction: Rc::clone(&late_interaction),
         lexical_sources: Rc::clone(&lexical_sources),
         fuzzy_sources: Rc::clone(&fuzzy_sources),
+        adaptive_prefixes,
         quantized_artifacts,
     };
     let mut filter = SpiFilterCandidateSource {
@@ -2397,6 +2454,23 @@ fn leaf_candidate_limit(query: &QueryIr, adapter: CandidateAdapter) -> Result<us
         {
             crate::settings::hnsw_candidate_budget_from_guc().max(query.limit().saturating_add(1))
         }
+        QueryKind::Nearest { .. }
+            if adapter == CandidateAdapter::Exact
+                && !matches!(
+                    crate::settings::adaptive_prefix_control_from_guc(),
+                    context_query::AdaptivePrefixControl::Disabled
+                ) =>
+        {
+            // A certified Matryoshka prefix must oversample: a prefix distance
+            // only approximates the full-dimension distance, so the recheck
+            // needs more candidates than the caller asked for or it can only
+            // reorder a set that already omits the true answer. This raises the
+            // budget *ceiling* only; a leaf without a certified policy still
+            // requests exactly `query.limit()` candidates.
+            query
+                .limit()
+                .saturating_mul(context_query::ADAPTIVE_PREFIX_OVERSAMPLE)
+        }
         QueryKind::Lexical { .. } | QueryKind::Fuzzy { .. } => {
             // An attached GIN/GiST source probes beyond the requested result
             // limit so the bounded candidate page can still report whether it
@@ -3096,3 +3170,228 @@ pub(crate) fn run_hnsw_for_test(collection: String) -> Vec<(i64, String, f32)> {
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
+
+/// Chooses the candidate-stage read width for one exact dense execution.
+///
+/// A profile without a certified Matryoshka policy, an ineligible one, or a
+/// caller who disabled the feature all resolve to the full authoritative
+/// dimensions, so serving is unchanged for every collection that does not opt
+/// in.
+fn prepare_adaptive_prefix_plan(
+    collection_id: i64,
+    registered_vector: &SearchVector,
+    query: &QueryIr,
+    candidate_budget: usize,
+) -> Result<AdaptivePrefixPlan> {
+    let policy = crate::embedding_profiles::matryoshka_policy_for_column(
+        collection_id,
+        &registered_vector.vector_column_name,
+    );
+    let control = crate::settings::adaptive_prefix_control_from_guc();
+    let limit = SearchLimit::new(query.limit())?;
+    // The probe is bounded by the candidate budget, not the comparison budget:
+    // passing the latter would make the "no oversampling room" guard compare
+    // against a number the probe is never limited by, so it could never fire.
+    let strategy = context_query::select_adaptive_prefix_strategy(
+        AdaptivePrefixStrategyInput::new(policy.as_ref(), control, limit, candidate_budget)?,
+    );
+    let AdaptivePrefixStrategyKind::Prefix { dimensions, .. } = strategy.kind() else {
+        return Ok(AdaptivePrefixPlan {
+            strategy,
+            query_prefix: None,
+        });
+    };
+    let Some(policy) = policy else {
+        return Ok(AdaptivePrefixPlan {
+            strategy,
+            query_prefix: None,
+        });
+    };
+    let vector = nearest_vector(query)?;
+    // A query whose dimension disagrees with the certified profile is not a
+    // prefix problem: fall back to the full-dimension path and let the existing
+    // dimension checks report it.
+    let query_prefix = policy
+        .query_prefix(vector.as_slice(), dimensions, registered_vector.metric)
+        .ok();
+    Ok(AdaptivePrefixPlan {
+        strategy,
+        query_prefix,
+    })
+}
+
+/// Generates candidates from a certified Matryoshka prefix.
+///
+/// The probe orders by the prefix distance only. Nothing downstream trusts that
+/// score: the executor's source recheck recomputes the exact full-dimension
+/// distance for every admitted candidate, so an oversampled prefix probe
+/// returns the same answer as a full-dimension scan at a sufficient budget.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the prefix probe threads the same adapter inputs as its full-dimension sibling"
+)]
+fn adaptive_prefix_candidates(
+    collection_id: i64,
+    registered_vector: &SearchVector,
+    query: &QueryIr,
+    filter: Option<&FilterCandidateBatch>,
+    limit: usize,
+    budget: PortBudget,
+    strategy: AdaptivePrefixStrategy,
+    query_prefix: &[f32],
+) -> Result<CandidatePage> {
+    let AdaptivePrefixStrategyKind::Prefix { dimensions, .. } = strategy.kind() else {
+        return SpiExactCandidateSource::new(collection_id, registered_vector)
+            .candidates(query, filter, limit, budget)
+            .map(|page| page.with_strategy("dense_exact"));
+    };
+    let prefix_dimensions =
+        i32::try_from(dimensions.get()).map_err(|_| QueryError::PortFailure {
+            stage: "adaptive_prefix_candidate_source",
+            message: "prefix dimensions exceed PostgreSQL integer".to_owned(),
+        })?;
+    let filter_ids = filter.map_or(0, |batch| batch.point_ids().len());
+    let query_bytes = dense_vector_copy_bytes(
+        query_prefix.len(),
+        1,
+        "adaptive_prefix_query_vector_memory_projection",
+    )?;
+    require_port_memory_bytes(
+        candidate_response_peak_bytes(limit, filter_ids, query_bytes)?,
+        budget,
+        "candidate_memory",
+    )?;
+    let prefix_vector = Vector::from_dense(DenseVector::new(query_prefix.to_vec())?);
+    prefix_candidate_rows(
+        collection_id,
+        registered_vector,
+        query,
+        filter,
+        limit,
+        budget.max_comparisons(),
+        prefix_dimensions,
+        prefix_vector,
+    )
+    .map(|page| page.with_strategy("dense_adaptive_prefix"))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the prefix probe threads the same adapter inputs as its full-dimension sibling"
+)]
+fn prefix_candidate_rows(
+    collection_id: i64,
+    registered_vector: &SearchVector,
+    query: &QueryIr,
+    filter: Option<&FilterCandidateBatch>,
+    limit: usize,
+    max_comparisons: usize,
+    prefix_dimensions: i32,
+    prefix_vector: Vector,
+) -> Result<CandidatePage> {
+    let table_name = quote_qualified_identifier(
+        &registered_vector.schema_name,
+        &registered_vector.table_name,
+    );
+    let vector_column = quote_identifier(&registered_vector.vector_column_name);
+    let score_expression = format!(
+        "pgcontext.{}(pgcontext.vector_prefix(source.{vector_column}, $7), $1)",
+        distance_function(registered_vector.metric)
+    );
+    let sql_result_limit = sql_limit(limit, "adaptive_prefix_candidate_source")?;
+    let (filter_sql, point_ids) = match filter {
+        Some(filter) => (
+            " AND points.point_id = ANY($3::bigint[])",
+            Some(sql_point_ids(filter.point_ids().iter().copied())?),
+        ),
+        None => ("", None),
+    };
+    let probe_limit = max_comparisons.saturating_add(1);
+    let sql_probe_limit = sql_limit(probe_limit, "adaptive_prefix_candidate_source")?;
+    let sql_max_comparisons = sql_limit(max_comparisons, "adaptive_prefix_candidate_source")?;
+    let sql = format!(
+        "WITH eligible AS MATERIALIZED (
+             SELECT points.point_id, source.ctid AS heap_tid
+               FROM pgcontext._visible_collection_points AS points
+               JOIN {table_name} AS source ON source.id::text = points.source_key
+              WHERE points.collection_id = $2
+                AND points.deleted_at IS NULL
+                {filter_sql}
+              LIMIT $5
+         ),
+         admission AS (
+             SELECT count(*)::bigint AS scored_count FROM eligible
+         ),
+         ranked AS MATERIALIZED (
+             SELECT eligible.point_id, {score_expression} AS score
+               FROM eligible
+               JOIN {table_name} AS source ON source.ctid = eligible.heap_tid
+               CROSS JOIN admission
+              WHERE admission.scored_count <= $6
+              ORDER BY score ASC, eligible.point_id ASC
+              LIMIT $4
+         )
+         SELECT ranked.point_id, ranked.score, admission.scored_count
+           FROM admission
+           LEFT JOIN ranked ON true
+          ORDER BY ranked.score ASC NULLS LAST, ranked.point_id ASC"
+    );
+    let point_ids = point_ids.unwrap_or_default();
+    let args: [DatumWithOid<'_>; 7] = [
+        prefix_vector.into(),
+        collection_id.into(),
+        point_ids.as_slice().into(),
+        sql_result_limit.into(),
+        sql_probe_limit.into(),
+        sql_max_comparisons.into(),
+        prefix_dimensions.into(),
+    ];
+    Spi::connect(|client| {
+        let rows = client
+            .select(&sql, Some(sql_result_limit.max(1)), &args)
+            .map_err(|error| port_failure("adaptive_prefix_candidate_source", error))?;
+        let mut candidates = Vec::with_capacity(limit);
+        let mut scored_count = 0_usize;
+        for row in rows {
+            let observed = spi_column::<i64>(&row, 3, "adaptive_prefix_candidate_source")?;
+            scored_count = usize::try_from(observed).map_err(|_| QueryError::PortFailure {
+                stage: "adaptive_prefix_candidate_source",
+                message: "scored row count exceeds usize".to_owned(),
+            })?;
+            if spi_optional_result_column::<i64>(&row, 1, "adaptive_prefix_candidate_source")?
+                .is_none()
+            {
+                continue;
+            }
+            let point_id = spi_point_id(&row, 1, "adaptive_prefix_candidate_source")?;
+            let score = spi_column::<f32>(&row, 2, "adaptive_prefix_candidate_source")?;
+            let rank = u32::try_from(candidates.len()).unwrap_or(u32::MAX);
+            candidates.push(
+                Candidate::new(
+                    point_id,
+                    f64::from(score),
+                    candidate_provenance(
+                        point_id,
+                        CandidateBranch::DenseExact,
+                        CandidateSourceKind::Exact,
+                        query.score_order(),
+                        SourceAuthority::PostgreSqlRow,
+                    )?,
+                )?
+                .with_diagnostics(CandidateDiagnostics::new(rank, 1)),
+            );
+        }
+        if scored_count > max_comparisons {
+            return Err(QueryError::WorkBudgetExceeded {
+                budget: "candidate_comparisons",
+                actual: scored_count,
+                maximum: max_comparisons,
+            });
+        }
+        Ok(CandidatePage::with_scored_count(
+            candidates,
+            scored_count,
+            true,
+        ))
+    })
+}

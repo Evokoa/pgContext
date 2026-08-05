@@ -995,3 +995,48 @@ fn required<T>(value: Option<T>, label: &str) -> T {
         )
     })
 }
+
+/// Loads the certified Matryoshka policy bound to one registered vector column.
+///
+/// Returns `None` when the collection has no profile for that column or the
+/// profile certifies no prefix. Reads go through the membership-filtered view,
+/// so a non-member observes no policy and simply serves full-dimension search.
+pub(crate) fn matryoshka_policy_for_column(
+    collection_id: i64,
+    vector_column_name: &str,
+) -> Option<MatryoshkaPolicy> {
+    let row = Spi::connect(|client| {
+        let rows = client
+            .select(
+                "SELECT dimensions, normalization, matryoshka_prefixes
+                   FROM pgcontext._visible_embedding_profiles
+                  WHERE collection_id = $1
+                    AND source_column_name = $2
+                    AND matryoshka_prefixes IS NOT NULL
+                  ORDER BY embedding_profile_id DESC",
+                Some(1),
+                &[collection_id.into(), vector_column_name.into()],
+            )
+            .ok()?
+            .first();
+        let dimensions = rows.get::<i32>(1).ok().flatten()?;
+        let normalization = rows.get::<String>(2).ok().flatten()?;
+        let prefixes = rows.get::<Vec<Option<i32>>>(3).ok().flatten()?;
+        Some((dimensions, normalization, prefixes))
+    })?;
+    let (dimensions, normalization, prefixes) = row;
+    let normalization = match normalization.as_str() {
+        "unit_l2" => VectorNormalization::UnitL2,
+        _ => VectorNormalization::None,
+    };
+    let declared = prefixes
+        .into_iter()
+        .flatten()
+        .map(|prefix| {
+            usize::try_from(prefix)
+                .ok()
+                .and_then(|prefix| PrefixDimensions::new(prefix).ok())
+        })
+        .collect::<Option<Vec<_>>>()?;
+    MatryoshkaPolicy::new(usize::try_from(dimensions).ok()?, declared, normalization).ok()
+}

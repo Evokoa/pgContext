@@ -31,6 +31,8 @@ const MAX_HNSW_ITERATIVE_EXPANSION_LIMIT_I32: i32 =
 const DEFAULT_LEXICAL_CANDIDATE_BUDGET_I32: i32 = 1_000;
 /// Frozen Phase 9 per-query lexical candidate admission cap.
 const MAX_LEXICAL_CANDIDATE_BUDGET_I32: i32 = policy_usize_to_i32(MAX_RECALL_CHECK_POINT_IDS);
+const MAX_ADAPTIVE_PREFIX_DIMENSIONS_I32: i32 =
+    policy_usize_to_i32(context_core::policy::MAX_VECTOR_DIMENSIONS);
 const DEFAULT_HNSW_CANDIDATE_MASK_POINTS_I32: i32 =
     policy_usize_to_i32(DEFAULT_HNSW_CANDIDATE_MASK_POINTS);
 const MAX_HNSW_CANDIDATE_MASK_POINTS_I32: i32 = policy_usize_to_i32(MAX_HNSW_CANDIDATE_MASK_POINTS);
@@ -54,6 +56,7 @@ static HNSW_ITERATIVE_EXPANSION_LIMIT: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_HNSW_ITERATIVE_EXPANSION_LIMIT_I32);
 static LEXICAL_CANDIDATE_BUDGET: GucSetting<i32> =
     GucSetting::<i32>::new(DEFAULT_LEXICAL_CANDIDATE_BUDGET_I32);
+static ADAPTIVE_PREFIX_DIMENSIONS: GucSetting<i32> = GucSetting::<i32>::new(0);
 static HNSW_RECALL_THRESHOLD: GucSetting<f64> =
     GucSetting::<f64>::new(DEFAULT_HNSW_RECALL_THRESHOLD);
 static HNSW_SHARED_SERVING: GucSetting<bool> = GucSetting::<bool>::new(true);
@@ -235,6 +238,16 @@ pub(crate) fn init_gucs() {
         &LEXICAL_CANDIDATE_BUDGET,
         1,
         MAX_LEXICAL_CANDIDATE_BUDGET_I32,
+        GucContext::Userset,
+        GucFlags::default(),
+    );
+    GucRegistry::define_int_guc(
+        c"pgcontext.adaptive_prefix_dimensions",
+        c"Matryoshka prefix width used for candidate generation.",
+        c"0 selects a certified prefix automatically, -1 reads the full authoritative dimensions, and a positive value pins that declared prefix. Final ranking always uses the full dimensions.",
+        &ADAPTIVE_PREFIX_DIMENSIONS,
+        -1,
+        MAX_ADAPTIVE_PREFIX_DIMENSIONS_I32,
         GucContext::Userset,
         GucFlags::default(),
     );
@@ -434,6 +447,26 @@ fn hnsw_config_from_values(m: i32, ef_construction: i32, ef_search: i32) -> Hnsw
 
 pub(crate) fn hnsw_candidate_budget_from_guc() -> usize {
     hnsw_candidate_budget_from_value(HNSW_CANDIDATE_BUDGET.get())
+}
+
+/// Returns the caller's adaptive-dimension control for candidate generation.
+///
+/// `-1` disables prefix candidate generation, `0` selects a certified prefix
+/// automatically, and a positive value pins that prefix. An out-of-range or
+/// unrepresentable prefix falls back to automatic selection, which in turn
+/// falls back to the full dimensions when no policy is certified.
+pub(crate) fn adaptive_prefix_control_from_guc() -> context_query::AdaptivePrefixControl {
+    match ADAPTIVE_PREFIX_DIMENSIONS.get() {
+        value if value < 0 => context_query::AdaptivePrefixControl::Disabled,
+        0 => context_query::AdaptivePrefixControl::Automatic,
+        value => usize::try_from(value)
+            .ok()
+            .and_then(|value| context_core::PrefixDimensions::new(value).ok())
+            .map_or(
+                context_query::AdaptivePrefixControl::Automatic,
+                context_query::AdaptivePrefixControl::Pinned,
+            ),
+    }
 }
 
 /// Returns the per-query lexical and fuzzy candidate admission budget.

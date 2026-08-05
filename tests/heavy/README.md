@@ -121,6 +121,13 @@ failure.
   bounded headline hydration and dense+lexical fusion, verifies dump/restore OID
   refresh across a table rewrite, and confirms the complete exact fallback
   survives an index drop. Set `ROW_COUNT` to scale the corpus.
+- `adaptive_prefix_recall.sh`: registers a Matryoshka-certified profile and
+  proves that every declared prefix reproduces the full-vector ordered answer,
+  that the adaptive candidate path is actually selected rather than silently
+  skipped, that a disabled setting reads the full dimensions, and that an
+  uncertified collection never reads a prefix. Reports candidate and latency
+  evidence for the promotion decision. Set `ROW_COUNT` and `QUERY_COUNT` to
+  scale it.
 - `sqlstate_contract.sh`: runs the pgrx SQLSTATE contract module against the
   configured PostgreSQL version.
 
@@ -148,5 +155,6 @@ tests/heavy/partitioned_collections.sh
 tests/heavy/low_memory_build.sh
 tests/heavy/corrupt_artifact_detection.sh
 tests/heavy/indexed_lexical_hybrid.sh
+tests/heavy/adaptive_prefix_recall.sh
 tests/heavy/sqlstate_contract.sh
 ```

@@ -166,6 +166,14 @@ Provider-native integer and packed-binary source contracts are experimental:
   payload bytea)` resolves logical dimensions and both byte/bit orders from the
   registered profile, requires the exact byte length, and rejects nonzero
   padding bits. Callers cannot override the stored layout.
+- `pgcontext.vector_prefix(vector vector, dimensions integer)` returns the
+  leading `dimensions` coordinates of a dense vector. It is immutable and
+  parallel-safe. pgContext's own prefix probe binds the width as a parameter,
+  so an expression index over a literal width will not be matched by it. It
+  never rewrites the stored value: adaptive-dimension candidate generation projects a prefix at
+  query time while the row keeps its full vector. Raises
+  `invalid_parameter_value` outside `1..=vector_dims(vector)`. See
+  [Adaptive-dimension retrieval](adaptive_dimension.md).
 - `pgcontext.register_embedding_profile(collection text, profile_name text,
   source_column text, hnsw_index text, profile jsonb)` stores an immutable
   provider contract. `hnsw_index` must be schema-qualified and must be a live,

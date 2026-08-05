@@ -24,7 +24,7 @@ mod validation;
 pub use adaptive::{
     ADAPTIVE_PREFIX_OVERSAMPLE, AdaptivePrefixControl, AdaptivePrefixReason,
     AdaptivePrefixStrategy, AdaptivePrefixStrategyInput, AdaptivePrefixStrategyKind,
-    AdaptiveWideningDecision, adaptive_widening_decision, select_adaptive_prefix_strategy,
+    select_adaptive_prefix_strategy,
 };
 pub use budget::{
     BudgetUsage, DEFAULT_QUERY_COMPARISONS, DEFAULT_QUERY_ELAPSED_MICROS,

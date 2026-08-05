@@ -749,6 +749,13 @@ SELECT vectors.*
   JOIN pgcontext._collections AS collections USING (collection_id)
  WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
 
+CREATE VIEW pgcontext._visible_embedding_profiles
+WITH (security_barrier = true) AS
+SELECT profiles.*
+  FROM pgcontext._embedding_profiles AS profiles
+  JOIN pgcontext._collections AS collections USING (collection_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
+
 CREATE VIEW pgcontext._visible_collection_sparse_vectors
 WITH (security_barrier = true) AS
 SELECT vectors.*
@@ -820,6 +827,7 @@ SELECT collection_id,
 
 GRANT SELECT ON pgcontext._collection_acl TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_vectors TO PUBLIC;
+GRANT SELECT ON pgcontext._visible_embedding_profiles TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_sparse_vectors TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_collection_points TO PUBLIC;
 GRANT SELECT ON pgcontext._visible_query_stats TO PUBLIC;

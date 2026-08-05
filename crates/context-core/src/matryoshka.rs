@@ -194,21 +194,53 @@ impl MatryoshkaPolicy {
         })
     }
 
+    /// Reports whether renormalizing only the query prefix preserves rank order.
+    ///
+    /// pgContext renormalizes the query prefix but scores it against a plain
+    /// truncation of the stored vector, because rewriting stored values is not
+    /// on the table. That asymmetry is only safe where a positive rescale of
+    /// one side cannot reorder results:
+    ///
+    /// - `cosine` normalizes both sides itself, so the rescale is inert;
+    /// - `inner_product` is linear in the query, so a positive scale applies a
+    ///   uniform positive factor to every candidate score;
+    /// - `l2` is **not** safe. `|q - s|^2 = |q|^2 - 2 q.s + |s|^2` reweights the
+    ///   dot-product term against a per-row `|s|^2`, so scaling one side alone
+    ///   yields an order that is neither "truncate both" nor "renormalize
+    ///   both".
+    ///
+    /// Under `l2` the prefix is therefore truncated plainly on both sides,
+    /// which is the symmetric comparison the model certifies.
+    #[must_use]
+    pub const fn renormalizes_query_prefix(metric: DistanceMetric) -> bool {
+        matches!(
+            metric,
+            DistanceMetric::Cosine | DistanceMetric::InnerProduct
+        )
+    }
+
     /// Returns an owned, query-side prefix ready for prefix scoring.
     ///
-    /// When the profile promises unit-L2 coordinates the prefix is
-    /// renormalized, because truncating a unit vector does not preserve its
-    /// norm. This allocates a **query** vector only; no stored value is ever
-    /// rewritten.
+    /// When the profile promises unit-L2 coordinates *and* the metric makes a
+    /// one-sided rescale order-preserving, the prefix is renormalized, because
+    /// truncating a unit vector does not preserve its norm. This allocates a
+    /// **query** vector only; no stored value is ever rewritten.
     ///
     /// # Errors
     ///
     /// Returns the same errors as [`MatryoshkaPolicy::prefix_view`], and
-    /// [`Error::InvalidVector`] when a unit-L2 prefix has zero norm and
+    /// [`Error::InvalidVector`] when a renormalized prefix has zero norm and
     /// therefore has no direction to preserve.
-    pub fn query_prefix(&self, coordinates: &[f32], prefix: PrefixDimensions) -> Result<Vec<f32>> {
+    pub fn query_prefix(
+        &self,
+        coordinates: &[f32],
+        prefix: PrefixDimensions,
+        metric: DistanceMetric,
+    ) -> Result<Vec<f32>> {
         let view = self.prefix_view(coordinates, prefix)?;
-        if self.normalization == VectorNormalization::None {
+        if self.normalization == VectorNormalization::None
+            || !Self::renormalizes_query_prefix(metric)
+        {
             return Ok(view.to_vec());
         }
         let norm = view
@@ -356,13 +388,13 @@ mod tests {
 
         let plain = MatryoshkaPolicy::new(4, prefixes(&[2]), VectorNormalization::None)
             .expect("policy")
-            .query_prefix(&coordinates, prefix)
+            .query_prefix(&coordinates, prefix, DistanceMetric::Cosine)
             .expect("prefix");
         assert_eq!(plain, vec![3.0, 4.0]);
 
         let unit = MatryoshkaPolicy::new(4, prefixes(&[2]), VectorNormalization::UnitL2)
             .expect("policy")
-            .query_prefix(&coordinates, prefix)
+            .query_prefix(&coordinates, prefix, DistanceMetric::Cosine)
             .expect("prefix");
         let norm = unit
             .iter()
@@ -374,9 +406,37 @@ mod tests {
         assert!(
             MatryoshkaPolicy::new(4, prefixes(&[2]), VectorNormalization::UnitL2)
                 .expect("policy")
-                .query_prefix(&[0.0, 0.0, 1.0, 0.0], prefix)
+                .query_prefix(&[0.0, 0.0, 1.0, 0.0], prefix, DistanceMetric::Cosine)
                 .is_err(),
             "a zero-norm unit prefix has no direction to preserve"
+        );
+    }
+
+    #[test]
+    fn l2_prefixes_are_never_renormalized_on_one_side_only() {
+        // Renormalizing only the query prefix reweights the dot-product term
+        // against a per-row |s|^2 under l2, so the resulting order is neither
+        // "truncate both" nor "renormalize both". Truncate plainly instead.
+        assert!(!MatryoshkaPolicy::renormalizes_query_prefix(
+            DistanceMetric::L2
+        ));
+        assert!(MatryoshkaPolicy::renormalizes_query_prefix(
+            DistanceMetric::Cosine
+        ));
+        assert!(MatryoshkaPolicy::renormalizes_query_prefix(
+            DistanceMetric::InnerProduct
+        ));
+
+        let prefix = PrefixDimensions::new(2).expect("prefix");
+        let coordinates = [3.0_f32, 4.0, 0.0, 0.0];
+        let policy =
+            MatryoshkaPolicy::new(4, prefixes(&[2]), VectorNormalization::UnitL2).expect("policy");
+        assert_eq!(
+            policy
+                .query_prefix(&coordinates, prefix, DistanceMetric::L2)
+                .expect("prefix"),
+            vec![3.0, 4.0],
+            "an l2 prefix must be truncated plainly on both sides"
         );
     }
 
