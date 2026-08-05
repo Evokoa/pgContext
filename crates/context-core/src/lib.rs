@@ -15,6 +15,7 @@ mod integer_metric_kernels;
 mod matryoshka;
 mod metric;
 mod metric_kernels;
+mod profile_lifecycle;
 mod retrieval;
 mod scroll;
 mod vector;
@@ -30,6 +31,7 @@ pub use exact::{ExactSearchItem, ScoredPoint, SearchLimit, exact_top_k};
 pub use identity::PointId;
 pub use matryoshka::{MAX_MATRYOSHKA_PREFIXES, MatryoshkaPolicy, PrefixDimensions};
 pub use metric::DistanceMetric;
+pub use profile_lifecycle::ProfileLifecycle;
 pub use retrieval::{
     Completion, ConfigurationRevision, GenerationId, IndexKind, OccurrenceId, ProfileId,
     ReadinessReason, ScoreOrder, SourceAuthority, SourceVersion,
