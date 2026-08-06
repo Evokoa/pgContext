@@ -22,6 +22,9 @@ a database.
   source-recheck ports, application strategy selection, query-plan validation,
   readiness/cancellation states, bounded diagnostics, and deterministic
   execution outcomes.
+- `context-rerank`: external-reranker transport — wire format, backend port,
+  batching, response validation, fallback policy, and a deterministic no-model
+  backend; it depends only on `context-core` and `context-query`.
 - `context-storage`: rebuildable segment artifacts, headers, checksums, mmap
   validation, atomic writes, import/export, and loader fuzz targets.
 - `context-pg`: pgrx SQL facade, catalogs, PostgreSQL access checks, SPI

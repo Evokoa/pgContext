@@ -89,7 +89,7 @@
         "./hnsw_storage_contract.md"
       ],
       "path": "contributor_guide/architecture.md",
-      "sha256": "2d0bb87e0156d62afcaf1ce54bf95ab895df5b3b2adf22ebb022292042243183"
+      "sha256": "a8f22c7639123bcefcd1c9a1cfa41cbdb363d0764500d969c14f4021c9f72d11"
     },
     {
       "links": [
@@ -151,7 +151,7 @@
     {
       "links": [],
       "path": "contributor_guide/repository_map.md",
-      "sha256": "287b2807bbdd7e128e88b520eddb358e0453f15241ec395b79b88a1df3be145b"
+      "sha256": "f05849e2056d26a6066a3420750ebab870452b960608c6df78fc3122f34bf420"
     },
     {
       "links": [],

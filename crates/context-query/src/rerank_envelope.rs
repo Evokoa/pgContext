@@ -358,8 +358,13 @@ impl RerankResponse {
 pub enum RerankFallbackPolicy {
     /// Fail the query rather than return an un-reranked answer.
     Require,
-    /// Return the fused pre-rerank ordering, marked degraded.
-    FuseWithoutRerank,
+    /// Report the attempt as non-authoritative instead of failing the query.
+    ///
+    /// The reranking port has no channel for "these rows are usable but
+    /// unranked", so the executor surfaces a degraded attempt as a
+    /// budget-exhausted completion. This policy chooses between a visibly
+    /// incomplete answer and a hard error — not between two orderings.
+    DegradeWithoutRerank,
 }
 
 /// Why a rerank response was refused.
@@ -688,7 +693,7 @@ mod tests {
         );
         assert_ne!(
             RerankFallbackPolicy::Require,
-            RerankFallbackPolicy::FuseWithoutRerank
+            RerankFallbackPolicy::DegradeWithoutRerank
         );
     }
 }

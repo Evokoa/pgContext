@@ -19,7 +19,13 @@ pub struct PortBudget {
 }
 
 impl PortBudget {
-    pub(crate) const fn new(
+    /// Creates an explicit per-call budget.
+    ///
+    /// The executor is what supplies this in production. It is public so a port
+    /// adapter living in another crate can build the budget its own tests need
+    /// without a back door into the executor.
+    #[must_use]
+    pub const fn new(
         max_comparisons: usize,
         max_memory_bytes: usize,
         max_hydration_bytes: usize,

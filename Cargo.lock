@@ -387,6 +387,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "context-rerank"
+version = "0.1.0"
+dependencies = [
+ "context-core",
+ "context-query",
+ "proptest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "context-storage"
 version = "0.1.0"
 dependencies = [

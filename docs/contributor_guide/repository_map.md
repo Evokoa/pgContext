@@ -6,6 +6,7 @@
 | `crates/context-filter` | Filter AST, validation, and SQL-safe rendering inputs |
 | `crates/context-query` | Exact and hybrid query planning/execution kernels |
 | `crates/context-index` | HNSW algorithms and index-facing abstractions |
+| `crates/context-rerank` | External-reranker transport, batching, and validation |
 | `crates/context-storage` | Durable segment/page formats and validated loaders |
 | `crates/context-pg` | PostgreSQL SQL, SPI, catalog, type, and access-method adapter |
 | `sql/` | Checked-in generated extension SQL contract |
