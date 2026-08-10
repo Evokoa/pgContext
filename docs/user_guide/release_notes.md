@@ -222,6 +222,22 @@ The late-interaction ANN path currently requires a user-maintained token
 companion table. Internal transactional maintenance of that index is roadmap
 work.
 
+### Adaptive-dimension exact retrieval
+
+Embedding profiles may certify Matryoshka prefix dimensions for experimental
+exact dense retrieval. pgContext starts a prefix schedule only after a bounded
+visibility preflight proves that every visible candidate, scan, exact source
+recheck, expansion, and Rust-owned candidate page fits the cardinality and
+memory budgets. Elapsed time remains enforced by the statement timeout. A
+non-exhaustive prefix page is never returned as complete; an over-budget query
+selects full-vector exact search before prefix work. Telemetry records the
+selected prefix, widening count, and stable termination reason without query or
+source text.
+
+This scan-based implementation is a correctness contract, not a performance
+claim. Its PG17/PG18 gate shows more work than full-vector exact search, and
+larger corpora select exact fallback under the 10,000-candidate ceiling.
+
 ### Operations and observability
 
 pgContext provides SQL-visible operational tools for understanding collections
@@ -294,6 +310,7 @@ We use maturity labels deliberately:
 | `halfvec`, `sparsevec`, and `bitvec` SQL/selected indexes | Experimental |
 | Quantized HNSW serving and exact reranking | Stable |
 | Named sparse and late-interaction advanced paths | Experimental |
+| Adaptive-dimension exact retrieval | Experimental; scan-based performance no-go |
 
 ## Parity Matrix Alignment
 
@@ -312,6 +329,7 @@ deliberately different feature cannot be mistaken for stable parity.
 | Per-vector dense index and quantization metadata | `experimental` | Validated configuration metadata exists; complete build-and-scan consumption is planned. |
 | Named sparse vectors per collection | `experimental` | Registration, exact fallback, validated HNSW binding, filters, bounded-work explain counters, exact rerank, and exact fusion exist. |
 | Multi-vector and late-interaction query | `experimental` | Exact MaxSim and experimental token candidates exist; internal token-index maintenance is planned. |
+| Adaptive-dimension exact retrieval | `experimental` | Certified prefixes run only when an exhaustive bounded schedule fits; every result is authoritatively reranked at full dimensions, otherwise the query selects exact fallback before prefix work. The scan-based path is not promoted for latency. |
 | IVFFlat | `experimental` | Native `pgcontext_ivfflat` supports page-native full-precision, SQ8, and PQ postings, bounded probes, DML/VACUUM/REINDEX/CIC/partition lifecycle, exact source rerank, PG17/18 dump/restore, crash replay, and physical replication. pgvector drop-in names and automatic conversion remain separate migration work. |
 | PostgreSQL-native ACL, RLS, transactions, and backups | `intentionally different` | pgContext uses PostgreSQL's authority instead of recreating it in another service. |
 | Rebuildable acceleration artifacts | `intentionally different` | PostgreSQL tables are authoritative; indexes and generated segments are disposable acceleration state. |

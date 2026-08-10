@@ -122,12 +122,20 @@ failure.
   refresh across a table rewrite, and confirms the complete exact fallback
   survives an index drop. Set `ROW_COUNT` to scale the corpus.
 - `adaptive_prefix_recall.sh`: registers a Matryoshka-certified profile and
-  proves that every declared prefix reproduces the full-vector ordered answer,
-  that the adaptive candidate path is actually selected rather than silently
-  skipped, that a disabled setting reads the full dimensions, and that an
-  uncertified collection never reads a prefix. Reports candidate and latency
-  evidence for the promotion decision. Set `ROW_COUNT` and `QUERY_COUNT` to
-  scale it.
+  proves that every declared prefix reproduces the full-vector ordered answer
+  with and without a registered filter, that exhaustive widening is selected
+  when it fits, and that candidate saturation selects exact fallback before
+  prefix work. It also checks disabled and uncertified controls and reports
+  prefix, termination, candidate, recheck, and latency evidence. `ROW_COUNT`
+  accepts 500 through 9,960; the frozen Phase 10 manifest records the 1M/10M
+  no-go decisions where the scheduler performs zero prefix work.
+- `adaptive_prefix_scale.sh`: runs the frozen live scan-based no-go frontier.
+  `ROW_COUNT=1000000` proves fail-closed elapsed-budget cancellation with zero
+  prefix expansion; the pure manifest pins the 1,000,000-comparison allowance
+  and `recheck_budget` decision. `ROW_COUNT=10000000` preserves the larger
+  command/report contract and likewise requires fail-closed termination. Run
+  the 1M lane on both PG17 and PG18; the 10M lane is an explicit release-scale
+  command rather than a default matrix gate.
 - `sqlstate_contract.sh`: runs the pgrx SQLSTATE contract module against the
   configured PostgreSQL version.
 

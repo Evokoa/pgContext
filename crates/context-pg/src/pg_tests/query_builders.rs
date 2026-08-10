@@ -151,6 +151,56 @@ fn execute_query_allocates_candidate_budget_to_every_prefetch_branch() {
 }
 
 #[pg_test]
+fn adaptive_candidate_reservation_is_not_reapplied_per_prefetch_branch() {
+    Spi::run(
+         "CREATE TABLE public.stage_g_adaptive_branch_budget (
+             id bigint PRIMARY KEY,
+             embedding vector(2) NOT NULL,
+             bucket text NOT NULL DEFAULT 'all'
+         );
+         INSERT INTO public.stage_g_adaptive_branch_budget
+         SELECT value, ARRAY[value::real, (21 - value)::real]::real[]::vector
+           FROM generate_series(1, 20) AS value;
+         SELECT pgcontext.create_collection(
+             'stage_g_adaptive_branch_budget', 'public.stage_g_adaptive_branch_budget'
+         );
+         SELECT pgcontext.register_vector(
+             'stage_g_adaptive_branch_budget', 'embedding', 'embedding', 2, 'l2'
+         );
+         SELECT pgcontext.register_filter_column(
+             'stage_g_adaptive_branch_budget', 'bucket', 'bucket'
+         );
+         SELECT pgcontext.backfill_points('stage_g_adaptive_branch_budget', 100);
+         SET LOCAL pgcontext.adaptive_prefix_dimensions = 0;
+         SET LOCAL pgcontext.hnsw_mask_candidate_limit = 0;",
+    )
+    .expect("exact composite fixture should be created");
+
+    let rows = table_search_rows(
+        r#"SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'stage_g_adaptive_branch_budget',
+               pgcontext.query_rerank(
+                   pgcontext.query_prefetch(ARRAY[
+                       pgcontext.query_nearest(
+                           NULL, '[1,20]'::vector,
+                           '{"must":[{"key":"bucket","match":"all"}]}'::jsonb,
+                           5
+                       ),
+                       pgcontext.query_nearest(
+                           NULL, '[20,1]'::vector,
+                           '{"must":[{"key":"bucket","match":"all"}]}'::jsonb,
+                           5
+                       )
+                   ]),
+                   5
+               )
+           )"#,
+    );
+    assert_eq!(rows.len(), 5);
+}
+
+#[pg_test]
 fn execute_query_routes_named_dense_vectors_and_filters() {
     Spi::run(
         "CREATE TABLE public.stage_g_named_dense (

@@ -148,6 +148,14 @@ CREATE TABLE pgcontext._query_stats (
     rechecks bigint NOT NULL DEFAULT 0 CHECK (rechecks >= 0),
     stages bigint NOT NULL DEFAULT 0 CHECK (stages >= 0),
     expansions bigint NOT NULL DEFAULT 0 CHECK (expansions >= 0),
+    adaptive_prefix_dimensions int4 CHECK (adaptive_prefix_dimensions > 0),
+    adaptive_termination text CHECK (
+        adaptive_termination IN (
+            'exhaustive', 'empty_corpus', 'candidate_budget',
+            'comparison_budget', 'recheck_budget', 'memory_budget',
+            'expansion_budget'
+        )
+    ),
     completion text NOT NULL DEFAULT 'unspecified' CHECK (
         completion IN ('unspecified', 'complete', 'cancelled', 'budget_exhausted', 'error')
     ),

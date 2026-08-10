@@ -1206,23 +1206,25 @@ final returned score.
 
 ## Adaptive-Dimension and Coarse-to-Fine Retrieval
 
-Status: planned research track.
+Status: implemented as an experimental correctness-preserving path; scan-based
+promotion is a performance no-go.
 
 Depends on: registered model/version metadata, typed vector dimensions, exact
 source reranking, versioned codecs, and the query advisor.
 
 [Matryoshka Representation Learning](https://proceedings.neurips.cc/paper_files/paper/2022/hash/c32319f4868da7613d78af9993100e42-Abstract-Conference.html)
 trains embeddings whose useful information is nested in prefixes. pgContext
-will use this property only when the registered model contract explicitly
-guarantees it; arbitrary embeddings will never be silently truncated.
+uses this property only when the registered model contract explicitly
+guarantees it; arbitrary embeddings are never silently truncated.
 
 Scope:
 
 - register the full dimension, supported prefix dimensions, model/version,
   normalization, and compatibility hash alongside each named vector;
-- search a smaller prefix or compressed prefix for candidates, then score the
-  full authoritative vector exactly; support multiple widening stages when
-  evidence shows they improve tail latency;
+- search a smaller prefix for candidates only after a bounded visible-corpus
+  preflight proves an exhaustive one- or two-stage schedule fits, then score
+  every admitted authoritative vector exactly; otherwise choose full-vector
+  exact search before prefix work;
 - let the advisor select a dimension, candidate budget, and rerank budget from
   a recall/latency/memory objective while preserving reproducible manual
   controls;
@@ -1231,13 +1233,17 @@ Scope:
 - support online model and prefix-policy changes through build, validate,
   publish, alias cutover, and rollback rather than mixing incompatible
   embedding generations;
-- expose stage dimensions, candidates, bytes read, full-vector reranks, recall
-  checks, and why a query widened or fell back.
+- expose stage dimensions, candidates, full-vector reranks, expansion count,
+  and why a query completed or fell back. Byte-read and advisor-selected
+  objectives remain research work.
 
-Promotion is per model family and prefix dimension. It requires held-out
-quality curves at 1M and 10M, distribution-shift tests, exact final scoring,
-and proof that missing or incompatible model metadata selects the full-vector
-path.
+The implemented scan-based path preserves exact ordered results on PostgreSQL
+17 and 18 and proves that missing, incompatible, or over-budget policies select
+the full-vector path. It is not promoted as a latency optimization: exhaustive
+prefix coverage performs more scan work than full-vector exact search, and
+larger corpora hit the 10,000-candidate ceiling and fall back before prefix
+work. Future prefix indexing or compression must establish held-out 1M/10M
+quality and latency curves before it can replace this no-go decision.
 
 ## Multimodal Document Retrieval
 

@@ -34,7 +34,8 @@ default:
   `pgcontext.query_execution_stats` expose local counters
   for monitoring trends, including candidates considered, rows rechecked, rows
   pruned, recall targets and achieved recall, latency buckets, and serving
-lifecycle state.
+  lifecycle state. Adaptive exact execution additionally reports its selected
+  prefix dimension, stable termination reason, and widening count.
 
 `query_execution_stats` is populated automatically by executor-backed
 `search` and `execute_query` calls. Its rows contain only bounded strategy,
@@ -42,6 +43,19 @@ completion, lifecycle, latency-bucket, and numeric work fields. Apart from its
 collection association, the membership-filtered view does not expose vectors,
 payloads, filters, query text, source keys, roles, or caller-provided tenant
 dimensions.
+
+For adaptive-dimension queries, `adaptive_prefix_dimensions` is null unless a
+certified prefix ran. `adaptive_termination` is one of `exhaustive`,
+`empty_corpus`, `candidate_budget`, `comparison_budget`, `recheck_budget`,
+`memory_budget`, or `expansion_budget`. A `*_budget` termination means the
+adapter selected full-vector exact search before doing prefix work; it does not
+mean a partial prefix result was returned.
+
+The adaptive preflight does not predict elapsed time. The collection query
+timeout remains armed across preflight, prefix work, and exact recheck, and may
+cancel any of them without returning partial results. Likewise, exact fallback
+can still fail closed at the global comparison or elapsed limit on a large
+corpus.
 
 Automatic events are offered nonblockingly to a bounded named shared-memory
 queue and committed by a database-scoped background worker. Members of

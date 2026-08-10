@@ -386,7 +386,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/adaptive_dimension.md",
-      "sha256": "2763db9a67c9ec0ee162421e61f950f40aac732cf139dd79c18e438fc8bb6207"
+      "sha256": "5271e8f0cdb4385f587738e16d6e32f7336b50e81737450951c4d4c67502347c"
     },
     {
       "links": [
@@ -398,7 +398,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "128619cdba62c6aefce9ebe5ffe19a1dc8859c6c7baec13ef48b7d41169ce130"
+      "sha256": "b6c6cb0bcd8ec110b8c2bac64017238d35d8b5c7fd0d37ac96063f30c2286f6e"
     },
     {
       "links": [],
@@ -470,7 +470,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/limitations.md",
-      "sha256": "dc4bf3217a8c20e5c2d0d53af574e010e154f2a5e65bec07a0df23e426c4da22"
+      "sha256": "139f857f15794fe8116e92dcafd6784991c969464e6aee668e9a0aa77400717e"
     },
     {
       "links": [
@@ -500,7 +500,7 @@
         "troubleshooting.md"
       ],
       "path": "user_guide/operations.md",
-      "sha256": "f372f0b75e69ef3d6ab0f015e645624f04060fafb10c9bb4e499a4b0bcc93133"
+      "sha256": "fe0f8a8eebd0833c5d69dea1ad27ef1424462575fa2b14ea6f159f3dc18b548f"
     },
     {
       "links": [],
@@ -563,7 +563,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "0f4310d1314019c6f5422910de01b4fc51bec9f676766a6486371165f73fcb08"
+      "sha256": "0730c9d6789d0ad059c03de3f4356c1aeeac19c950a94665f53bbdaa44999064"
     },
     {
       "links": [
@@ -686,7 +686,7 @@
         "lexical_retrieval.md"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "1efc368278c5d1aec1b59e91e9964de3de6be35f06eebe2d1319ac12b296e475"
+      "sha256": "73e4f0192570ddf5206dd1b460994c5c28fb88eea3ffce6cc558319b56960508"
     },
     {
       "links": [],
@@ -701,7 +701,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "abe62d01e6481d5f0c5ef5efdbf026be59acb8d66185e51570082c19590ddbb2"
+      "sha256": "1c5af99e5d89d4a8c1a58a5c4def39e78c8c20674086a0b6bb0b5d58bb4b887f"
     },
     {
       "links": [],
@@ -735,7 +735,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "3c726f9c945b057612a1c533274be038da9cb397060e81dcb89e5938cea42adc"
+      "sha256": "19db6cddf1441cead26e761bf4023b2ed4c6b74df54b017c0e2ddc94c347fa4a"
     },
     {
       "links": [],

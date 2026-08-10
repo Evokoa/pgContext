@@ -13,6 +13,7 @@ use context_query::CandidateBranch;
 
 mod certification;
 mod late_interaction;
+mod p10_adaptive;
 mod p5_codec;
 mod p8_composite;
 mod p9_lexical;
@@ -42,6 +43,11 @@ pub use p9_lexical::{
     P9_MAX_HEADLINE_OUTPUT_BYTES, P9_MAX_HEADLINE_POINTS, P9_MAX_HEADLINE_SOURCE_BYTES,
     P9_MAX_JSON_PATH_DEPTH, P9_MAX_QUERY_BYTES, P9_MAX_QUERY_NODES, P9_QUERY_FORMS, P9_RANKERS,
     P9LexicalGate, p9_lexical_manifest_hash,
+};
+pub use p10_adaptive::{
+    P10_ADAPTIVE_GATES, P10_CANDIDATE_BUDGET, P10_COMPARISON_BUDGET, P10_EXPECTED_TERMINATION,
+    P10_FULL_DIMENSIONS, P10_PREFIX_DIMENSIONS, P10_RECHECK_BUDGET, P10_TOP_K, P10AdaptiveGate,
+    p10_adaptive_manifest_hash,
 };
 
 /// Maximum accepted latency regression before explicit review is required.

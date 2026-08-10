@@ -75,6 +75,12 @@ Extended production certification and unimplemented product behavior live in
 
 ## Experimental or Unimplemented Serving Paths
 
+- Adaptive-dimension exact retrieval is correctness-preserving but is not a
+  latency optimization in the current scan-based form. It starts a certified
+  prefix schedule only when the complete visible corpus and every exact recheck
+  fit the request budgets; otherwise it selects full-vector exact search before
+  prefix work. Corpora beyond the 10,000-candidate single-leaf ceiling therefore
+  use exact fallback.
 - Named sparse ANN densifies sparse values for graph traversal, then exactly
   rechecks authoritative sparse source rows. Its index records therefore share
   the documented single-page dimension/degree envelope, and the feature is not

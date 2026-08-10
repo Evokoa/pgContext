@@ -57,6 +57,8 @@ pub(crate) struct TestEventSnapshot {
     pub(crate) rechecks: u64,
     pub(crate) stages: u64,
     pub(crate) expansions: u64,
+    pub(crate) adaptive_prefix_dimensions: Option<i32>,
+    pub(crate) adaptive_termination: Option<String>,
     pub(crate) completion: String,
     pub(crate) lifecycle: String,
     pub(crate) latency_micros: u64,
@@ -81,9 +83,9 @@ mod supported {
     // Bump the suffix whenever QueueHeader's process-shared layout changes so
     // a backend loading an upgraded extension never reinterprets an older
     // postmaster-lifetime mapping.
-    const QUEUE_NAME: &CStr = c"pgcontext_query_telemetry_v8";
+    const QUEUE_NAME: &CStr = c"pgcontext_query_telemetry_v9";
     #[cfg(feature = "pg_test")]
-    const FAILURE_QUEUE_NAME: &CStr = c"pgcontext_query_telemetry_v8_failure";
+    const FAILURE_QUEUE_NAME: &CStr = c"pgcontext_query_telemetry_v9_failure";
     const QUEUE_CAPACITY: usize = 1024;
     const DATABASE_CAPACITY: usize = 64;
     const DRAIN_BATCH: usize = 64;
@@ -143,11 +145,13 @@ mod supported {
         rechecks: u64,
         stages: u64,
         expansions: u64,
+        adaptive_prefix_dimensions: i32,
         latency_micros: u64,
         query_kind: BoundedLabel,
         strategy: BoundedLabel,
         completion: BoundedLabel,
         lifecycle: BoundedLabel,
+        adaptive_termination: BoundedLabel,
         database_slot: u8,
         used_fallback: u8,
         saw_fusion: u8,
@@ -169,11 +173,13 @@ mod supported {
             rechecks: 0,
             stages: 0,
             expansions: 0,
+            adaptive_prefix_dimensions: 0,
             latency_micros: 0,
             query_kind: BoundedLabel::EMPTY,
             strategy: BoundedLabel::EMPTY,
             completion: BoundedLabel::EMPTY,
             lifecycle: BoundedLabel::EMPTY,
+            adaptive_termination: BoundedLabel::EMPTY,
             database_slot: 0,
             used_fallback: 0,
             saw_fusion: 0,
@@ -845,6 +851,16 @@ mod supported {
                     );
                     active.event.saw_quantized |=
                         u8::from(diagnostic.strategy().contains("quantized"));
+                    if let Some(adaptive) = diagnostic.adaptive() {
+                        if let Some(prefix_dimensions) = adaptive.prefix_dimensions() {
+                            active.event.adaptive_prefix_dimensions =
+                                i32::try_from(prefix_dimensions).unwrap_or(i32::MAX);
+                        }
+                        if let Some(termination) = adaptive.termination() {
+                            active.event.adaptive_termination =
+                                BoundedLabel::from_static(termination.stable_name());
+                        }
+                    }
                 }
                 StageKind::SourceRecheck => {
                     active.event.rechecks = active
@@ -989,9 +1005,9 @@ mod supported {
              ), matching_extension AS MATERIALIZED (
                  SELECT oid
                    FROM pg_catalog.pg_extension
-                  WHERE oid = $14
+                  WHERE oid = $16
                     AND extname = 'pgcontext'
-                    AND extowner = $15
+                    AND extowner = $17
              ), inserted AS (
                  INSERT INTO pgcontext._query_stats (
                      collection_id, cohort, query_kind, result_count,
@@ -999,18 +1015,20 @@ mod supported {
                      recall_threshold, recall_achieved, latency_bucket,
                      lifecycle_state, latency_ms, strategy, visits,
                      filter_candidates, candidates, rechecks, stages,
-                     expansions, completion
+                     expansions, adaptive_prefix_dimensions,
+                     adaptive_termination, completion
                  )
                  SELECT collection_id, 'automatic', $2, $3,
                         $6, $7, GREATEST($6 - $7, 0), NULL, NULL,
                         CASE
-                            WHEN $11 < 1 THEN 'Lt1Ms'
-                            WHEN $11 < 10 THEN 'Lt10Ms'
-                            WHEN $11 < 100 THEN 'Lt100Ms'
-                            WHEN $11 < 1000 THEN 'Lt1S'
+                            WHEN $13 < 1 THEN 'Lt1Ms'
+                            WHEN $13 < 10 THEN 'Lt10Ms'
+                            WHEN $13 < 100 THEN 'Lt100Ms'
+                            WHEN $13 < 1000 THEN 'Lt1S'
                             ELSE 'Gte1S'
                         END,
-                        $12, $11, $4, $5, $8, $6, $7, $9, $10, $13
+                        $14, $13, $4, $5, $8, $6, $7, $9, $10,
+                        NULLIF($11, 0), NULLIF($12, ''), $15
                    FROM collection
                   CROSS JOIN matching_extension
                  RETURNING true
@@ -1029,6 +1047,8 @@ mod supported {
                     .into(),
                 i64::try_from(event.stages).unwrap_or(i64::MAX).into(),
                 i64::try_from(event.expansions).unwrap_or(i64::MAX).into(),
+                event.adaptive_prefix_dimensions.into(),
+                event.adaptive_termination.as_str().into(),
                 latency_ms.into(),
                 event.lifecycle.as_str().into(),
                 event.completion.as_str().into(),
@@ -1283,6 +1303,10 @@ mod supported {
                     rechecks: event.rechecks,
                     stages: event.stages,
                     expansions: event.expansions,
+                    adaptive_prefix_dimensions: (event.adaptive_prefix_dimensions > 0)
+                        .then_some(event.adaptive_prefix_dimensions),
+                    adaptive_termination: (!event.adaptive_termination.as_str().is_empty())
+                        .then(|| event.adaptive_termination.as_str().to_owned()),
                     completion: event.completion.as_str().to_owned(),
                     lifecycle: event.lifecycle.as_str().to_owned(),
                     latency_micros: event.latency_micros,

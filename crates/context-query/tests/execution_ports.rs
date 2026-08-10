@@ -6,11 +6,12 @@ use std::{cell::Cell, collections::BTreeMap, rc::Rc};
 
 use context_core::{OccurrenceId, PointId, SourceAuthority, SourceKey};
 use context_query::{
-    Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateProvenance, CandidateSource,
-    CandidateSourceKind, Completion, ExecutionBudget, ExecutionOutcome, ExecutionState,
-    FilterCandidateBatch, FilterCandidateSource, HydratedCandidate, PortBudget, QueryClock,
-    QueryError, QueryExecutor, QueryIr, ReadinessReason, RecheckPage, ScoreOrder, SourceReadiness,
-    SourceRechecker, StageDiagnostic, TelemetrySink,
+    AdaptiveWideningTermination, Cancellation, Candidate, CandidateBranch, CandidatePage,
+    CandidateProvenance, CandidateSource, CandidateSourceKind, CandidateStageDiagnostic,
+    Completion, ExecutionBudget, ExecutionOutcome, ExecutionState, FilterCandidateBatch,
+    FilterCandidateSource, HydratedCandidate, PortBudget, QueryClock, QueryError, QueryExecutor,
+    QueryIr, ReadinessReason, RecheckPage, ScoreOrder, SourceReadiness, SourceRechecker,
+    StageDiagnostic, TelemetrySink,
 };
 use proptest::prelude::*;
 
@@ -508,6 +509,93 @@ fn executor_rejects_candidate_sources_that_exceed_the_requested_budget() {
         QueryError::PortContractViolation {
             stage: "candidate_source",
             ..
+        }
+    ));
+}
+
+#[test]
+fn executor_charges_and_reports_every_adaptive_candidate_step() {
+    let page =
+        CandidatePage::with_scored_count(vec![candidate(1, 0.2), candidate(2, 0.3)], 10, true)
+            .with_candidate_work_count(6)
+            .with_expansion_count(1)
+            .with_stage_diagnostics(vec![
+                CandidateStageDiagnostic::new("dense_adaptive_prefix_initial", 5, 4)
+                    .with_adaptive_prefix(128, None),
+                CandidateStageDiagnostic::new("dense_adaptive_prefix_exhaustive", 5, 2)
+                    .with_adaptive_prefix(256, Some(AdaptiveWideningTermination::Exhaustive)),
+            ]);
+    let mut candidates = FakeCandidateSource {
+        readiness: SourceReadiness::Ready,
+        page,
+        ..Default::default()
+    };
+    let mut rechecker = FakeRechecker {
+        rows: vec![hydrated(1, 0.2), hydrated(2, 0.3)],
+        ..Default::default()
+    };
+    let mut telemetry = FakeTelemetry::default();
+
+    let outcome = QueryExecutor::new(
+        &mut candidates,
+        None,
+        &mut rechecker,
+        &mut telemetry,
+        &CancelAfter::never(),
+    )
+    .execute(&query(false), budget())
+    .expect("bounded adaptive diagnostics should execute");
+
+    assert_eq!(outcome.completion(), Completion::Complete);
+    assert_eq!(outcome.usage().candidates(), 6);
+    assert_eq!(outcome.usage().expansions(), 1);
+    assert_eq!(outcome.usage().stages(), 3);
+    assert_eq!(telemetry.diagnostics.len(), 3);
+    assert_eq!(telemetry.diagnostics[0].input_count(), 5);
+    assert_eq!(telemetry.diagnostics[0].output_count(), 4);
+    assert_eq!(
+        telemetry.diagnostics[0]
+            .adaptive()
+            .expect("initial adaptive detail")
+            .prefix_dimensions(),
+        Some(128)
+    );
+    assert_eq!(
+        telemetry.diagnostics[1]
+            .adaptive()
+            .expect("terminal adaptive detail")
+            .termination(),
+        Some(AdaptiveWideningTermination::Exhaustive)
+    );
+}
+
+#[test]
+fn executor_rejects_adaptive_candidate_work_above_the_requested_budget() {
+    let mut candidates = FakeCandidateSource {
+        readiness: SourceReadiness::Ready,
+        page: CandidatePage::new(vec![candidate(1, 0.2), candidate(2, 0.3)], true)
+            .with_candidate_work_count(9),
+        ..Default::default()
+    };
+    let mut rechecker = FakeRechecker::default();
+    let mut telemetry = FakeTelemetry::default();
+
+    let error = QueryExecutor::new(
+        &mut candidates,
+        None,
+        &mut rechecker,
+        &mut telemetry,
+        &CancelAfter::never(),
+    )
+    .execute(&query(false), budget())
+    .expect_err("unreported candidate work must fail closed");
+
+    assert!(matches!(
+        error,
+        QueryError::PortContractViolation {
+            stage: "candidate_work",
+            requested: 8,
+            returned: 9,
         }
     ));
 }

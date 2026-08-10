@@ -25,7 +25,8 @@ mod validation;
 pub use adaptive::{
     ADAPTIVE_PREFIX_OVERSAMPLE, AdaptivePrefixControl, AdaptivePrefixReason,
     AdaptivePrefixStrategy, AdaptivePrefixStrategyInput, AdaptivePrefixStrategyKind,
-    select_adaptive_prefix_strategy,
+    AdaptiveWideningBudget, AdaptiveWideningInput, AdaptiveWideningPlan, AdaptiveWideningStep,
+    AdaptiveWideningTermination, plan_adaptive_widening, select_adaptive_prefix_strategy,
 };
 pub use budget::{
     BudgetUsage, DEFAULT_QUERY_COMPARISONS, DEFAULT_QUERY_ELAPSED_MICROS,
@@ -69,10 +70,10 @@ pub use strategy::{
     MultiVectorAnnStrategyKind, select_filtered_ann_strategy, select_multi_vector_ann_strategy,
 };
 pub use types::{
-    BranchContribution, Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage,
-    CandidateProvenance, CandidateSourceKind, ExecutionOutcome, ExecutionState, ExternalRerankPage,
-    FilterCandidateBatch, HydratedCandidate, RecheckPage, SourceReadiness, StageDiagnostic,
-    StageKind,
+    AdaptiveStageDiagnostic, BranchContribution, Candidate, CandidateBranch, CandidateDiagnostics,
+    CandidatePage, CandidateProvenance, CandidateSourceKind, CandidateStageDiagnostic,
+    ExecutionOutcome, ExecutionState, ExternalRerankPage, FilterCandidateBatch, HydratedCandidate,
+    RecheckPage, SourceReadiness, StageDiagnostic, StageKind,
 };
 pub use validation::QueryPlanValidator;
 

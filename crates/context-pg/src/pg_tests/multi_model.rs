@@ -394,7 +394,7 @@ fn multi_model_retired_profiles_stop_driving_prefix_selection() {
     assert!(
         observed_strategies("mm_retired_prefix")
             .iter()
-            .any(|strategy| strategy == "dense_adaptive_prefix"),
+            .any(|strategy| strategy == "dense_adaptive_prefix_exhaustive"),
         "an active profile must drive prefix selection"
     );
 
@@ -422,7 +422,7 @@ fn multi_model_retired_profiles_stop_driving_prefix_selection() {
         strategies
             .iter()
             .skip(before)
-            .all(|strategy| strategy != "dense_adaptive_prefix"),
+            .all(|strategy| !strategy.starts_with("dense_adaptive_prefix")),
         "a retired profile must stop driving prefix selection, saw {strategies:?}"
     );
 }

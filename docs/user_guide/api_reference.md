@@ -257,7 +257,9 @@ Operations, diagnostics, and telemetry:
 - `pgcontext.query_cohort_stats()`
 - `pgcontext.query_execution_stats()` — membership-filtered automatic rollups
   by actual strategy, completion, latency bucket, lifecycle state, and bounded
-  executor work counters
+  executor work counters. Adaptive exact leaves also expose nullable
+  `adaptive_prefix_dimensions` and `adaptive_termination` grouping columns;
+  `total_expansions` includes every prefix-widening step.
 - `pgcontext.query_telemetry_queue_stats()` — `pg_monitor`-restricted health
   counters for the bounded asynchronous delivery queue
 - `pgcontext.register_model_version(collection text, model_name text, model_version text, dimensions integer, metric text)`

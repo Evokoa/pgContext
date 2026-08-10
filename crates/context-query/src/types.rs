@@ -7,7 +7,7 @@ use context_core::{
     ReadinessReason, ScoreOrder, SourceAuthority, SourceKey, SourceVersion,
 };
 
-use crate::{BudgetUsage, QueryError, Result};
+use crate::{AdaptiveWideningTermination, BudgetUsage, QueryError, Result};
 
 /// Candidate branch selected by application strategy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -398,10 +398,12 @@ impl Candidate {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CandidatePage {
     candidates: Vec<Candidate>,
+    candidate_work_count: usize,
     scored_count: usize,
     expansion_count: usize,
     exhausted: bool,
     strategy: &'static str,
+    stage_diagnostics: Vec<CandidateStageDiagnostic>,
 }
 
 impl CandidatePage {
@@ -409,12 +411,15 @@ impl CandidatePage {
     #[must_use]
     pub const fn new(candidates: Vec<Candidate>, exhausted: bool) -> Self {
         let scored_count = candidates.len();
+        let candidate_work_count = candidates.len();
         Self {
             candidates,
+            candidate_work_count,
             scored_count,
             expansion_count: 0,
             exhausted,
             strategy: "candidate_source",
+            stage_diagnostics: Vec::new(),
         }
     }
 
@@ -425,13 +430,27 @@ impl CandidatePage {
         scored_count: usize,
         exhausted: bool,
     ) -> Self {
+        let candidate_work_count = candidates.len();
         Self {
             candidates,
+            candidate_work_count,
             scored_count,
             expansion_count: 0,
             exhausted,
             strategy: "candidate_source",
+            stage_diagnostics: Vec::new(),
         }
+    }
+
+    /// Attaches total candidate materialization work across internal steps.
+    ///
+    /// This count may exceed the retained final page when an adapter performs
+    /// bounded widening. The executor validates and charges it against the
+    /// candidate budget.
+    #[must_use]
+    pub const fn with_candidate_work_count(mut self, candidate_work_count: usize) -> Self {
+        self.candidate_work_count = candidate_work_count;
+        self
     }
 
     /// Attaches a cardinality-bounded static serving strategy label.
@@ -448,6 +467,16 @@ impl CandidatePage {
         self
     }
 
+    /// Attaches bounded diagnostics for internal candidate-generation steps.
+    #[must_use]
+    pub fn with_stage_diagnostics(
+        mut self,
+        stage_diagnostics: Vec<CandidateStageDiagnostic>,
+    ) -> Self {
+        self.stage_diagnostics = stage_diagnostics;
+        self
+    }
+
     /// Returns owned candidates in source order.
     #[must_use]
     pub fn candidates(&self) -> &[Candidate] {
@@ -458,6 +487,12 @@ impl CandidatePage {
     #[must_use]
     pub fn into_candidates(self) -> Vec<Candidate> {
         self.candidates
+    }
+
+    /// Returns total candidate materialization work across internal steps.
+    #[must_use]
+    pub const fn candidate_work_count(&self) -> usize {
+        self.candidate_work_count
     }
 
     /// Returns how many source candidates the adapter scored to produce this page.
@@ -482,6 +517,109 @@ impl CandidatePage {
     #[must_use]
     pub const fn strategy(&self) -> &'static str {
         self.strategy
+    }
+
+    /// Returns bounded diagnostics for internal candidate-generation steps.
+    #[must_use]
+    pub fn stage_diagnostics(&self) -> &[CandidateStageDiagnostic] {
+        &self.stage_diagnostics
+    }
+}
+
+/// One bounded diagnostic reported by an internal candidate-source step.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CandidateStageDiagnostic {
+    strategy: &'static str,
+    input_count: usize,
+    output_count: usize,
+    adaptive: Option<AdaptiveStageDiagnostic>,
+}
+
+impl CandidateStageDiagnostic {
+    /// Creates a candidate-stage diagnostic without query or source content.
+    #[must_use]
+    pub const fn new(strategy: &'static str, input_count: usize, output_count: usize) -> Self {
+        Self {
+            strategy,
+            input_count,
+            output_count,
+            adaptive: None,
+        }
+    }
+
+    /// Attaches a Matryoshka prefix and optional terminal widening reason.
+    #[must_use]
+    pub const fn with_adaptive_prefix(
+        mut self,
+        prefix_dimensions: usize,
+        termination: Option<AdaptiveWideningTermination>,
+    ) -> Self {
+        self.adaptive = Some(AdaptiveStageDiagnostic {
+            prefix_dimensions: Some(prefix_dimensions),
+            termination,
+        });
+        self
+    }
+
+    /// Attaches an adaptive termination that occurred before prefix scoring.
+    #[must_use]
+    pub const fn with_adaptive_termination(
+        mut self,
+        termination: AdaptiveWideningTermination,
+    ) -> Self {
+        self.adaptive = Some(AdaptiveStageDiagnostic {
+            prefix_dimensions: None,
+            termination: Some(termination),
+        });
+        self
+    }
+
+    /// Returns the bounded strategy label.
+    #[must_use]
+    pub const fn strategy(&self) -> &'static str {
+        self.strategy
+    }
+
+    /// Returns source work performed by this step.
+    #[must_use]
+    pub const fn input_count(&self) -> usize {
+        self.input_count
+    }
+
+    /// Returns candidates materialized by this step.
+    #[must_use]
+    pub const fn output_count(&self) -> usize {
+        self.output_count
+    }
+
+    /// Returns adaptive-prefix detail when this is a widening step.
+    #[must_use]
+    pub const fn adaptive(&self) -> Option<AdaptiveStageDiagnostic> {
+        self.adaptive
+    }
+}
+
+/// Bounded adaptive-prefix detail attached to a stage diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AdaptiveStageDiagnostic {
+    prefix_dimensions: Option<usize>,
+    termination: Option<AdaptiveWideningTermination>,
+}
+
+impl AdaptiveStageDiagnostic {
+    /// Returns the declared prefix dimension scored by this step.
+    ///
+    /// This is `None` when the preflight selected exact fallback before any
+    /// prefix scoring.
+    #[must_use]
+    pub const fn prefix_dimensions(self) -> Option<usize> {
+        self.prefix_dimensions
+    }
+
+    /// Returns a terminal reason only on the final widening step.
+    #[must_use]
+    pub const fn termination(self) -> Option<AdaptiveWideningTermination> {
+        self.termination
     }
 }
 
@@ -795,6 +933,7 @@ pub struct StageDiagnostic {
     input_count: usize,
     output_count: usize,
     reason: Option<ReadinessReason>,
+    adaptive: Option<AdaptiveStageDiagnostic>,
 }
 
 impl StageDiagnostic {
@@ -811,7 +950,13 @@ impl StageDiagnostic {
             input_count,
             output_count,
             reason,
+            adaptive: None,
         }
+    }
+
+    pub(crate) const fn with_adaptive(mut self, adaptive: AdaptiveStageDiagnostic) -> Self {
+        self.adaptive = Some(adaptive);
+        self
     }
 
     /// Returns the logical stage.
@@ -842,6 +987,12 @@ impl StageDiagnostic {
     #[must_use]
     pub const fn reason(&self) -> Option<ReadinessReason> {
         self.reason
+    }
+
+    /// Returns adaptive-prefix detail when this diagnostic represents a widening step.
+    #[must_use]
+    pub const fn adaptive(&self) -> Option<AdaptiveStageDiagnostic> {
+        self.adaptive
     }
 }
 

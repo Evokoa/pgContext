@@ -324,6 +324,20 @@ impl<'a> QueryExecutor<'a> {
                 page.candidates().len(),
             ));
         }
+        if page.candidate_work_count() < page.candidates().len() {
+            return Err(contract_violation(
+                "candidate_work_minimum",
+                page.candidates().len(),
+                page.candidate_work_count(),
+            ));
+        }
+        if page.candidate_work_count() > candidate_limit {
+            return Err(contract_violation(
+                "candidate_work",
+                candidate_limit,
+                page.candidate_work_count(),
+            ));
+        }
         if page.expansion_count() > budget.max_expansions() {
             return Err(contract_violation(
                 "candidate_expansions",
@@ -338,8 +352,52 @@ impl<'a> QueryExecutor<'a> {
                 page.scored_count(),
             ));
         }
+        if !page.stage_diagnostics().is_empty() {
+            let expected_stages = page.expansion_count().saturating_add(1);
+            if page.stage_diagnostics().len() != expected_stages {
+                return Err(contract_violation(
+                    "candidate_stage_count",
+                    expected_stages,
+                    page.stage_diagnostics().len(),
+                ));
+            }
+            let diagnostic_comparisons =
+                page.stage_diagnostics()
+                    .iter()
+                    .try_fold(0_usize, |total, diagnostic| {
+                        total.checked_add(diagnostic.input_count()).ok_or(
+                            QueryError::ArithmeticOverflow {
+                                operation: "candidate_stage_comparison_accounting",
+                            },
+                        )
+                    })?;
+            if diagnostic_comparisons != page.scored_count() {
+                return Err(contract_violation(
+                    "candidate_stage_comparisons",
+                    page.scored_count(),
+                    diagnostic_comparisons,
+                ));
+            }
+            let diagnostic_candidates =
+                page.stage_diagnostics()
+                    .iter()
+                    .try_fold(0_usize, |total, diagnostic| {
+                        total.checked_add(diagnostic.output_count()).ok_or(
+                            QueryError::ArithmeticOverflow {
+                                operation: "candidate_stage_candidate_accounting",
+                            },
+                        )
+                    })?;
+            if diagnostic_candidates != page.candidate_work_count() {
+                return Err(contract_violation(
+                    "candidate_stage_candidates",
+                    page.candidate_work_count(),
+                    diagnostic_candidates,
+                ));
+            }
+        }
         reject_duplicate_candidates("candidate_source", page.candidates())?;
-        usage.add_candidates(page.candidates().len());
+        usage.add_candidates(page.candidate_work_count());
         usage.add_expansions(page.expansion_count());
         usage.add_comparisons(page.scored_count());
         usage.add_memory_bytes(
@@ -347,21 +405,48 @@ impl<'a> QueryExecutor<'a> {
                 .len()
                 .saturating_mul(size_of::<Candidate>()),
         );
-        usage.add_stage();
+        let candidate_stage_count = page.stage_diagnostics().len().max(1);
+        if usage.stages().saturating_add(candidate_stage_count) > budget.max_stages() {
+            return Err(contract_violation(
+                "candidate_stages",
+                budget.max_stages().saturating_sub(usage.stages()),
+                candidate_stage_count,
+            ));
+        }
+        for _ in 0..candidate_stage_count {
+            usage.add_stage();
+        }
         let mut completion = if page.exhausted() {
             Completion::Complete
         } else {
             Completion::BudgetExhausted
         };
-        let diagnostic = StageDiagnostic::new(
-            StageKind::Candidates,
-            page.strategy(),
-            page.scored_count(),
-            page.candidates().len(),
-            None,
-        );
-        self.telemetry.record(&diagnostic)?;
-        diagnostics.push(diagnostic);
+        if page.stage_diagnostics().is_empty() {
+            let diagnostic = StageDiagnostic::new(
+                StageKind::Candidates,
+                page.strategy(),
+                page.scored_count(),
+                page.candidate_work_count(),
+                None,
+            );
+            self.telemetry.record(&diagnostic)?;
+            diagnostics.push(diagnostic);
+        } else {
+            for candidate_diagnostic in page.stage_diagnostics() {
+                let mut diagnostic = StageDiagnostic::new(
+                    StageKind::Candidates,
+                    candidate_diagnostic.strategy(),
+                    candidate_diagnostic.input_count(),
+                    candidate_diagnostic.output_count(),
+                    None,
+                );
+                if let Some(adaptive) = candidate_diagnostic.adaptive() {
+                    diagnostic = diagnostic.with_adaptive(adaptive);
+                }
+                self.telemetry.record(&diagnostic)?;
+                diagnostics.push(diagnostic);
+            }
+        }
 
         if let Some(completion) = self.checkpoint(deadline, &mut usage)? {
             return Ok(outcome(completion, Vec::new(), diagnostics, usage));

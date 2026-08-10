@@ -6,17 +6,19 @@ pub(crate) use lexical::{LexicalStrategy, lexical_headline_rows};
 pub(crate) use sparse::{SparseCandidateStrategy, run_sparse_query};
 
 use context_core::{
-    CollectionName, ConfigurationRevision, DenseVector, GenerationId, OccurrenceId, PointId,
-    ScoreOrder, SearchLimit, SourceAuthority, SourceKey,
+    CollectionName, ConfigurationRevision, DenseVector, GenerationId, MatryoshkaPolicy,
+    OccurrenceId, PointId, ScoreOrder, SearchLimit, SourceAuthority, SourceKey,
 };
 use context_index::HnswComparisonBudget;
 use context_query::{
-    AdaptivePrefixStrategy, AdaptivePrefixStrategyInput, AdaptivePrefixStrategyKind, Cancellation,
+    AdaptivePrefixStrategy, AdaptivePrefixStrategyInput, AdaptivePrefixStrategyKind,
+    AdaptiveWideningBudget, AdaptiveWideningInput, AdaptiveWideningTermination, Cancellation,
     Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage, CandidateProvenance,
-    CandidateSource, CandidateSourceKind, Completion, ExecutionBudget, ExecutionOutcome,
-    ExecutionState, FilterCandidateBatch, FilterCandidateSource, HydratedCandidate, PortBudget,
-    QueryClock, QueryError, QueryExecutor, QueryIr, QueryKind, RecheckPage, Result,
-    SourceReadiness, SourceRechecker, StageDiagnostic, TelemetrySink,
+    CandidateSource, CandidateSourceKind, CandidateStageDiagnostic, Completion, ExecutionBudget,
+    ExecutionOutcome, ExecutionState, FilterCandidateBatch, FilterCandidateSource,
+    HydratedCandidate, PortBudget, QueryClock, QueryError, QueryExecutor, QueryIr, QueryKind,
+    RecheckPage, Result, SourceReadiness, SourceRechecker, StageDiagnostic, TelemetrySink,
+    plan_adaptive_widening,
 };
 use core::mem::size_of;
 use pgrx::datum::DatumWithOid;
@@ -184,7 +186,7 @@ type AdaptivePrefixCache = Rc<RefCell<BTreeMap<Option<String>, AdaptivePrefixPla
 #[derive(Clone, Debug)]
 struct AdaptivePrefixPlan {
     strategy: AdaptivePrefixStrategy,
-    query_prefix: Option<Vec<f32>>,
+    policy: Option<MatryoshkaPolicy>,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -384,8 +386,8 @@ impl CandidateSource for PgCandidateRouter<'_> {
                 .adaptive_prefixes
                 .borrow()
                 .get(&dense_vector_key(query)?)
-                .filter(|plan| plan.query_prefix.is_some())
-                .map_or_else(|| query.limit(), |plan| plan.strategy.candidates());
+                .filter(|plan| plan.policy.is_some() && plan.strategy.prefix().is_some())
+                .map_or_else(|| query.limit(), |_| remaining);
             return Ok(requested.min(remaining));
         }
         Ok(leaf_candidate_limit(query, self.adapter)?.min(remaining))
@@ -408,17 +410,16 @@ impl CandidateSource for PgCandidateRouter<'_> {
                         .get(&dense_vector_key(query)?)
                         .cloned();
                     match plan
-                        .and_then(|plan| plan.query_prefix.map(|prefix| (plan.strategy, prefix)))
+                        .filter(|plan| plan.policy.is_some() && plan.strategy.prefix().is_some())
                     {
-                        Some((strategy, query_prefix)) => adaptive_prefix_candidates(
+                        Some(plan) => adaptive_prefix_candidates(
                             self.collection_id,
                             registered_vector,
                             query,
                             filter,
                             limit,
                             budget,
-                            strategy,
-                            &query_prefix,
+                            &plan,
                         ),
                         None => SpiExactCandidateSource::new(self.collection_id, registered_vector)
                             .candidates(query, filter, limit, budget)
@@ -2392,11 +2393,29 @@ fn effective_candidate_adapter(query: &QueryIr, adapter: CandidateAdapter) -> Ca
 }
 
 fn projected_candidate_limit(query: &QueryIr, adapter: CandidateAdapter) -> Result<usize> {
+    if adapter == CandidateAdapter::Exact
+        && !matches!(
+            crate::settings::adaptive_prefix_control_from_guc(),
+            context_query::AdaptivePrefixControl::Disabled
+        )
+        && is_single_nearest_pipeline(query)
+    {
+        return Ok(context_core::policy::MAX_RECALL_CHECK_POINT_IDS);
+    }
+    projected_candidate_limit_without_adaptive_reservation(query, adapter)
+}
+
+fn projected_candidate_limit_without_adaptive_reservation(
+    query: &QueryIr,
+    adapter: CandidateAdapter,
+) -> Result<usize> {
     match query.kind() {
         QueryKind::Prefetch { branches, .. } => {
             branches.iter().try_fold(0_usize, |total, branch| {
                 total
-                    .checked_add(projected_candidate_limit(branch, adapter)?)
+                    .checked_add(projected_candidate_limit_without_adaptive_reservation(
+                        branch, adapter,
+                    )?)
                     .ok_or(QueryError::ArithmeticOverflow {
                         operation: "composite_candidate_projection",
                     })
@@ -2407,8 +2426,26 @@ fn projected_candidate_limit(query: &QueryIr, adapter: CandidateAdapter) -> Resu
         | QueryKind::Formula { query, .. }
         | QueryKind::Rerank { query }
         | QueryKind::ExternalRerank { query, .. }
-        | QueryKind::TopologyExpand { query, .. } => projected_candidate_limit(query, adapter),
+        | QueryKind::TopologyExpand { query, .. } => {
+            projected_candidate_limit_without_adaptive_reservation(query, adapter)
+        }
         _ => leaf_candidate_limit(query, adapter),
+    }
+}
+
+fn is_single_nearest_pipeline(query: &QueryIr) -> bool {
+    match query.kind() {
+        QueryKind::Nearest { .. } => true,
+        QueryKind::Weighted { query, .. }
+        | QueryKind::ScoreThreshold { query, .. }
+        | QueryKind::Formula { query, .. }
+        | QueryKind::Rerank { query }
+        | QueryKind::ExternalRerank { query, .. } => is_single_nearest_pipeline(query),
+        // Topology expansion admits additional candidates of its own, so it
+        // must retain the ordinary composite allocation even when its seed is
+        // a single nearest leaf.
+        QueryKind::TopologyExpand { .. } => false,
+        _ => false,
     }
 }
 
@@ -3198,34 +3235,33 @@ fn prepare_adaptive_prefix_plan(
     let AdaptivePrefixStrategyKind::Prefix { dimensions, .. } = strategy.kind() else {
         return Ok(AdaptivePrefixPlan {
             strategy,
-            query_prefix: None,
+            policy: None,
         });
     };
     let Some(policy) = policy else {
         return Ok(AdaptivePrefixPlan {
             strategy,
-            query_prefix: None,
+            policy: None,
         });
     };
     let vector = nearest_vector(query)?;
     // A query whose dimension disagrees with the certified profile is not a
     // prefix problem: fall back to the full-dimension path and let the existing
     // dimension checks report it.
-    let query_prefix = policy
+    let policy = policy
         .query_prefix(vector.as_slice(), dimensions, registered_vector.metric)
-        .ok();
-    Ok(AdaptivePrefixPlan {
-        strategy,
-        query_prefix,
-    })
+        .ok()
+        .map(|_| policy);
+    Ok(AdaptivePrefixPlan { strategy, policy })
 }
 
 /// Generates candidates from a certified Matryoshka prefix.
 ///
-/// The probe orders by the prefix distance only. Nothing downstream trusts that
-/// score: the executor's source recheck recomputes the exact full-dimension
-/// distance for every admitted candidate, so an oversampled prefix probe
-/// returns the same answer as a full-dimension scan at a sufficient budget.
+/// Prefix work starts only when a bounded preflight proves that widening can
+/// admit the complete invoker-visible corpus. Otherwise the adapter chooses
+/// full-vector exact search before scoring a prefix. Nothing downstream trusts
+/// a prefix score: the source recheck recomputes the full authoritative
+/// distance for every admitted row.
 #[allow(
     clippy::too_many_arguments,
     reason = "the prefix probe threads the same adapter inputs as its full-dimension sibling"
@@ -3237,42 +3273,210 @@ fn adaptive_prefix_candidates(
     filter: Option<&FilterCandidateBatch>,
     limit: usize,
     budget: PortBudget,
-    strategy: AdaptivePrefixStrategy,
-    query_prefix: &[f32],
+    adaptive: &AdaptivePrefixPlan,
 ) -> Result<CandidatePage> {
-    let AdaptivePrefixStrategyKind::Prefix { dimensions, .. } = strategy.kind() else {
-        return SpiExactCandidateSource::new(collection_id, registered_vector)
-            .candidates(query, filter, limit, budget)
-            .map(|page| page.with_strategy("dense_exact"));
+    let AdaptivePrefixStrategyKind::Prefix { dimensions, .. } = adaptive.strategy.kind() else {
+        return adaptive_full_vector_fallback(
+            collection_id,
+            registered_vector,
+            query,
+            filter,
+            limit,
+            budget,
+            AdaptiveWideningTermination::CandidateBudget,
+        );
     };
-    let prefix_dimensions =
-        i32::try_from(dimensions.get()).map_err(|_| QueryError::PortFailure {
-            stage: "adaptive_prefix_candidate_source",
-            message: "prefix dimensions exceed PostgreSQL integer".to_owned(),
-        })?;
+    let policy = adaptive.policy.as_ref().ok_or(QueryError::PortFailure {
+        stage: "adaptive_prefix_candidate_source",
+        message: "adaptive prefix policy disappeared after readiness".to_owned(),
+    })?;
     let filter_ids = filter.map_or(0, |batch| batch.point_ids().len());
-    let query_bytes = dense_vector_copy_bytes(
-        query_prefix.len(),
-        1,
-        "adaptive_prefix_query_vector_memory_projection",
-    )?;
-    require_port_memory_bytes(
-        candidate_response_peak_bytes(limit, filter_ids, query_bytes)?,
-        budget,
-        "candidate_memory",
-    )?;
-    let prefix_vector = Vector::from_dense(DenseVector::new(query_prefix.to_vec())?);
-    prefix_candidate_rows(
+    let visible_candidates = adaptive_visible_candidate_count(
         collection_id,
         registered_vector,
-        query,
         filter,
-        limit,
-        budget.max_comparisons(),
-        prefix_dimensions,
-        prefix_vector,
+        limit.saturating_add(1),
+    )?;
+    let widening = plan_adaptive_widening(AdaptiveWideningInput::new(
+        policy,
+        dimensions,
+        SearchLimit::new(query.limit())?,
+        visible_candidates,
+        size_of::<Candidate>(),
+        AdaptiveWideningBudget::new(
+            limit,
+            budget.max_comparisons(),
+            limit,
+            budget.max_memory_bytes(),
+            context_core::policy::MAX_QUERY_EXPANSIONS,
+        )?,
+    )?)?;
+    if widening.termination() != AdaptiveWideningTermination::Exhaustive {
+        return adaptive_full_vector_fallback(
+            collection_id,
+            registered_vector,
+            query,
+            filter,
+            limit,
+            budget,
+            widening.termination(),
+        );
+    }
+
+    let vector = nearest_vector(query)?;
+    let mut final_candidates = Vec::new();
+    let mut scored_count = 0_usize;
+    let mut diagnostics = Vec::with_capacity(widening.steps().len());
+    for (index, step) in widening.steps().iter().copied().enumerate() {
+        if index > 0 {
+            // Only the final exhaustive page is authoritative input to the
+            // rechecker. Release the narrower page before allocating the next
+            // one so the planner's one-page peak-memory projection is true.
+            drop(core::mem::take(&mut final_candidates));
+        }
+        let query_prefix = policy.query_prefix(
+            vector.as_slice(),
+            step.dimensions(),
+            registered_vector.metric,
+        )?;
+        let query_bytes = dense_vector_copy_bytes(
+            query_prefix.len(),
+            1,
+            "adaptive_prefix_query_vector_memory_projection",
+        )?;
+        require_port_memory_bytes(
+            candidate_response_peak_bytes(step.candidate_limit(), filter_ids, query_bytes)?,
+            budget,
+            "candidate_memory",
+        )?;
+        let prefix_dimensions =
+            i32::try_from(step.dimensions().get()).map_err(|_| QueryError::PortFailure {
+                stage: "adaptive_prefix_candidate_source",
+                message: "prefix dimensions exceed PostgreSQL integer".to_owned(),
+            })?;
+        let prefix_vector = Vector::from_dense(DenseVector::new(query_prefix)?);
+        let page = prefix_candidate_rows(
+            collection_id,
+            registered_vector,
+            query,
+            filter,
+            step.candidate_limit(),
+            visible_candidates,
+            prefix_dimensions,
+            prefix_vector,
+        )?;
+        scored_count = scored_count.checked_add(page.scored_count()).ok_or(
+            QueryError::ArithmeticOverflow {
+                operation: "adaptive_prefix_scored_count",
+            },
+        )?;
+        let last = index.saturating_add(1) == widening.steps().len();
+        diagnostics.push(
+            CandidateStageDiagnostic::new(
+                if index == 0 {
+                    "dense_adaptive_prefix_initial"
+                } else if last {
+                    "dense_adaptive_prefix_exhaustive"
+                } else {
+                    "dense_adaptive_prefix_widened"
+                },
+                page.scored_count(),
+                page.candidates().len(),
+            )
+            .with_adaptive_prefix(
+                step.dimensions().get(),
+                last.then_some(AdaptiveWideningTermination::Exhaustive),
+            ),
+        );
+        final_candidates = page.into_candidates();
+    }
+
+    Ok(
+        CandidatePage::with_scored_count(final_candidates, scored_count, true)
+            .with_candidate_work_count(widening.candidate_work())
+            .with_expansion_count(widening.expansion_count())
+            .with_stage_diagnostics(diagnostics)
+            .with_strategy("dense_adaptive_prefix_exhaustive"),
     )
-    .map(|page| page.with_strategy("dense_adaptive_prefix"))
+}
+
+fn adaptive_full_vector_fallback(
+    collection_id: i64,
+    registered_vector: &SearchVector,
+    query: &QueryIr,
+    filter: Option<&FilterCandidateBatch>,
+    limit: usize,
+    budget: PortBudget,
+    termination: AdaptiveWideningTermination,
+) -> Result<CandidatePage> {
+    let strategy = match termination {
+        AdaptiveWideningTermination::Exhaustive => "dense_exact_adaptive_exhaustive",
+        AdaptiveWideningTermination::EmptyCorpus => "dense_exact_adaptive_empty",
+        AdaptiveWideningTermination::CandidateBudget => "dense_exact_adaptive_candidate_budget",
+        AdaptiveWideningTermination::ComparisonBudget => "dense_exact_adaptive_comparison_budget",
+        AdaptiveWideningTermination::RecheckBudget => "dense_exact_adaptive_recheck_budget",
+        AdaptiveWideningTermination::MemoryBudget => "dense_exact_adaptive_memory_budget",
+        AdaptiveWideningTermination::ExpansionBudget => "dense_exact_adaptive_expansion_budget",
+    };
+    SpiExactCandidateSource::new(collection_id, registered_vector)
+        .candidates(query, filter, query.limit().min(limit), budget)
+        .map(|page| {
+            let page = page.with_strategy(strategy);
+            let diagnostic = CandidateStageDiagnostic::new(
+                strategy,
+                page.scored_count(),
+                page.candidate_work_count(),
+            )
+            .with_adaptive_termination(termination);
+            page.with_stage_diagnostics(vec![diagnostic])
+        })
+}
+
+fn adaptive_visible_candidate_count(
+    collection_id: i64,
+    registered_vector: &SearchVector,
+    filter: Option<&FilterCandidateBatch>,
+    limit: usize,
+) -> Result<usize> {
+    let table_name = quote_qualified_identifier(
+        &registered_vector.schema_name,
+        &registered_vector.table_name,
+    );
+    let sql_limit = sql_limit(limit, "adaptive_prefix_preflight")?;
+    let (filter_sql, point_ids) = match filter {
+        Some(filter) => (
+            " AND points.point_id = ANY($3::bigint[])",
+            Some(sql_point_ids(filter.point_ids().iter().copied())?),
+        ),
+        None => ("", None),
+    };
+    let sql = format!(
+        "SELECT count(*)::bigint
+           FROM (
+                 SELECT 1
+                   FROM pgcontext._visible_collection_points AS points
+                   JOIN {table_name} AS source ON source.id::text = points.source_key
+                  WHERE points.collection_id = $1
+                    AND points.deleted_at IS NULL
+                    {filter_sql}
+                  LIMIT $2
+                ) AS bounded_visible"
+    );
+    let point_ids = point_ids.unwrap_or_default();
+    let count = Spi::get_one_with_args::<i64>(
+        &sql,
+        &[
+            collection_id.into(),
+            sql_limit.into(),
+            point_ids.as_slice().into(),
+        ],
+    )
+    .map_err(|error| port_failure("adaptive_prefix_preflight", error))?
+    .unwrap_or(0);
+    usize::try_from(count).map_err(|_| QueryError::PortFailure {
+        stage: "adaptive_prefix_preflight",
+        message: "visible candidate count exceeds usize".to_owned(),
+    })
 }
 
 #[allow(

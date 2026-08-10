@@ -18,8 +18,8 @@ QUERY_COUNT="${QUERY_COUNT:-25}"
 # shellcheck source=tests/heavy/lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
-if [[ ! "${ROW_COUNT}" =~ ^[0-9]+$ ]] || (( ROW_COUNT < 500 )); then
-    echo "ROW_COUNT must be an integer of at least 500" >&2
+if [[ ! "${ROW_COUNT}" =~ ^[0-9]+$ ]] || (( ROW_COUNT < 500 || ROW_COUNT > 9960 )); then
+    echo "ROW_COUNT must be an integer between 500 and 9960" >&2
     exit 2
 fi
 if [[ ! "${QUERY_COUNT}" =~ ^[0-9]+$ ]] || (( QUERY_COUNT < 1 )); then
@@ -37,7 +37,21 @@ assert_equal() {
 }
 
 scalar() {
-    psql_db -tAc "$1" | tr -d '[:space:]'
+    psql_db -q -tAc "$1" | tr -d '[:space:]'
+}
+
+wait_for_positive_scalar() {
+    local sql="$1" label="$2" value=""
+    for _ in $(seq 1 50); do
+        value="$(scalar "${sql}")"
+        if [[ "${value}" =~ ^[0-9]+$ ]] && (( value > 0 )); then
+            printf '%s\n' "${value}"
+            return 0
+        fi
+        sleep 0.2
+    done
+    echo "timed out waiting for ${label}" >&2
+    return 1
 }
 
 # Ranked answer for one query id at one adaptive-prefix setting.
@@ -53,6 +67,20 @@ ranked() {
           )" | tr -d '[:space:]'
 }
 
+# Ranked answer for one query id with a registered metadata filter.
+ranked_filtered() {
+    local setting="$1" query_id="$2"
+    psql_db -tAc "
+        SET pgcontext.adaptive_prefix_dimensions = ${setting};
+        SELECT string_agg(source_key, ',' ORDER BY score ASC, point_id ASC)
+          FROM pgcontext.search(
+              'adaptive_docs',
+              (SELECT embedding FROM public.adaptive_docs WHERE id = ${query_id}),
+              '{\"must\":[{\"key\":\"bucket\",\"match\":\"b1\"}]}',
+              10
+          )" | tr -d '[:space:]'
+}
+
 start_and_install_extension
 reset_database
 
@@ -61,22 +89,25 @@ CREATE EXTENSION pgcontext;
 
 CREATE TABLE public.adaptive_docs (
     id bigint PRIMARY KEY,
-    embedding vector(64) NOT NULL
+    embedding vector(64) NOT NULL,
+    bucket text NOT NULL
 );
 
 -- Deterministic unit-L2 vectors. The generator is correlated on id so every row
 -- gets its own vector: an uncorrelated subquery would become an InitPlan and
 -- give all rows the same value, which would make any parity check vacuous.
-INSERT INTO public.adaptive_docs (id, embedding)
+INSERT INTO public.adaptive_docs (id, embedding, bucket)
 SELECT d.id,
        (SELECT pg_catalog.array_agg((c.v / sqrt(c.sq))::real)::vector
           FROM (SELECT v, pg_catalog.sum(v * v) OVER () AS sq
                   FROM (SELECT sin(d.id * 0.7 + k * 1.3)::real AS v
-                          FROM pg_catalog.generate_series(1, 64) AS k) AS raw) AS c)
+                          FROM pg_catalog.generate_series(1, 64) AS k) AS raw) AS c),
+       'b' || (d.id % 5)::text
   FROM pg_catalog.generate_series(1, ${ROW_COUNT}) AS d(id);
 
 SELECT pgcontext.create_collection('adaptive_docs', 'public.adaptive_docs');
 SELECT pgcontext.register_vector('adaptive_docs', 'embedding', 'embedding', 64, 'cosine');
+SELECT pgcontext.register_filter_column('adaptive_docs', 'bucket', 'bucket');
 SELECT pgcontext.backfill_points('adaptive_docs', ${ROW_COUNT});
 
 CREATE INDEX adaptive_docs_hnsw ON public.adaptive_docs
@@ -122,32 +153,79 @@ for query_id in $(seq 1 "${QUERY_COUNT}"); do
 done
 echo "every declared prefix reproduces the full-vector ordered answer: ok"
 
+filtered_baseline="$(ranked_filtered -1 7)"
+if [[ -z "${filtered_baseline}" ]]; then
+    echo "full-vector filtered search returned no rows" >&2
+    exit 1
+fi
+for setting in 0 8 16 32; do
+    filtered_observed="$(ranked_filtered "${setting}" 7)"
+    assert_equal "filtered prefix ${setting} preserves ordered parity" \
+        "${filtered_baseline}" "${filtered_observed}"
+done
+
+composite_count="$(scalar "
+    SET pgcontext.adaptive_prefix_dimensions = 0;
+    SET pgcontext.hnsw_mask_candidate_limit = 0;
+    SELECT count(*)
+      FROM pgcontext.execute_query(
+          'adaptive_docs',
+          pgcontext.query_rerank(
+              pgcontext.query_prefetch(ARRAY[
+                  pgcontext.query_nearest(
+                      NULL,
+                      (SELECT embedding FROM public.adaptive_docs WHERE id = 7),
+                      '{\"must\":[{\"key\":\"bucket\",\"match\":\"b1\"}]}'::jsonb,
+                      5
+                  ),
+                  pgcontext.query_nearest(
+                      NULL,
+                      (SELECT embedding FROM public.adaptive_docs WHERE id = 11),
+                      '{\"must\":[{\"key\":\"bucket\",\"match\":\"b1\"}]}'::jsonb,
+                      5
+                  )
+              ]),
+              5
+          )
+      )")"
+assert_equal "adaptive reservation is not multiplied across composite branches" \
+    "5" "${composite_count}"
+
 # ---------------------------------------------------------------------------
 # The prefix path must actually be selected, and never selected without a
 # certified policy.
 # ---------------------------------------------------------------------------
 
-sleep 1
-adaptive_selected="$(scalar "
+adaptive_selected="$(wait_for_positive_scalar "
     SELECT count(*) FROM pgcontext.query_execution_stats()
-     WHERE collection_name = 'adaptive_docs' AND strategy = 'dense_adaptive_prefix'")"
-if [[ "${adaptive_selected}" == "0" ]]; then
-    echo "a certified prefix never selected the adaptive candidate path" >&2
-    exit 1
-fi
+     WHERE collection_name = 'adaptive_docs'
+       AND strategy = 'dense_adaptive_prefix_exhaustive'" \
+    "adaptive prefix telemetry")"
 echo "the adaptive candidate path is actually selected: ok"
 
 # Without oversampling the recheck can only reorder a set the prefix already
 # chose, so parity above would only be measuring whether the corpus is easy.
 adaptive_candidates_per_query="$(scalar "
-    SELECT (total_candidates / query_count)::bigint
+    SELECT (sum(total_candidates) / sum(query_count))::bigint
       FROM pgcontext.query_execution_stats()
-     WHERE collection_name = 'adaptive_docs' AND strategy = 'dense_adaptive_prefix'")"
+     WHERE collection_name = 'adaptive_docs'
+       AND strategy = 'dense_adaptive_prefix_exhaustive'")"
 if (( adaptive_candidates_per_query <= 10 )); then
     echo "the prefix probe did not oversample: ${adaptive_candidates_per_query} candidates for a limit of 10" >&2
     exit 1
 fi
 echo "the prefix probe oversamples (${adaptive_candidates_per_query} candidates for a limit of 10): ok"
+
+adaptive_expansions_per_query="$(scalar "
+    SELECT (sum(total_expansions) / sum(query_count))::bigint
+      FROM pgcontext.query_execution_stats()
+     WHERE collection_name = 'adaptive_docs'
+       AND strategy = 'dense_adaptive_prefix_exhaustive'")"
+if (( adaptive_expansions_per_query < 1 )); then
+    echo "the adaptive path did not report its widening step" >&2
+    exit 1
+fi
+echo "the adaptive path reports ${adaptive_expansions_per_query} widening step per query: ok"
 
 full_vector_selected="$(scalar "
     SELECT count(*) FROM pgcontext.query_execution_stats()
@@ -175,11 +253,59 @@ SELECT count(*) FROM pgcontext.search(
 );
 SQL
 
-sleep 1
+wait_for_positive_scalar "
+    SELECT count(*) FROM pgcontext.query_execution_stats()
+     WHERE collection_name = 'adaptive_uncertified'" \
+    "uncertified full-vector telemetry" >/dev/null
 uncertified_prefix="$(scalar "
     SELECT count(*) FROM pgcontext.query_execution_stats()
-     WHERE collection_name = 'adaptive_uncertified' AND strategy = 'dense_adaptive_prefix'")"
+     WHERE collection_name = 'adaptive_uncertified'
+       AND strategy LIKE 'dense_adaptive_prefix%'")"
 assert_equal "an uncertified collection never reads a prefix" "0" "${uncertified_prefix}"
+
+# ---------------------------------------------------------------------------
+# A corpus that cannot fund exhaustive widening must choose full-vector exact
+# before doing prefix work. Ten thousand visible rows need the final exhaustive
+# page plus the initial oversampled page, which exceeds the 10,000-candidate
+# execution ceiling.
+# ---------------------------------------------------------------------------
+
+psql_db <<SQL
+INSERT INTO public.adaptive_docs (id, embedding, bucket)
+SELECT d.id,
+       (SELECT pg_catalog.array_agg((c.v / sqrt(c.sq))::real)::vector
+          FROM (SELECT v, pg_catalog.sum(v * v) OVER () AS sq
+                  FROM (SELECT sin(d.id * 0.7 + k * 1.3)::real AS v
+                          FROM pg_catalog.generate_series(1, 64) AS k) AS raw) AS c),
+       'b' || (d.id % 5)::text
+  FROM pg_catalog.generate_series(${ROW_COUNT} + 1, 10000) AS d(id);
+SELECT pgcontext.backfill_points('adaptive_docs', 10000);
+ANALYZE public.adaptive_docs;
+SQL
+
+fallback_baseline="$(ranked -1 7)"
+fallback_observed="$(ranked 8 7)"
+assert_equal "over-budget widening preserves full-vector order" \
+    "${fallback_baseline}" "${fallback_observed}"
+wait_for_positive_scalar "
+    SELECT count(*) FROM pgcontext.query_execution_stats()
+     WHERE collection_name = 'adaptive_docs'
+       AND strategy = 'dense_exact_adaptive_candidate_budget'" \
+    "adaptive full-vector fallback telemetry" >/dev/null
+fallback_expansions="$(scalar "
+    SELECT sum(total_expansions)
+      FROM pgcontext.query_execution_stats()
+     WHERE collection_name = 'adaptive_docs'
+       AND strategy = 'dense_exact_adaptive_candidate_budget'")"
+assert_equal "over-budget widening performs no prefix expansion" "0" "${fallback_expansions}"
+fallback_termination="$(scalar "
+    SELECT string_agg(DISTINCT adaptive_termination, ',' ORDER BY adaptive_termination)
+      FROM pgcontext.query_execution_stats()
+     WHERE collection_name = 'adaptive_docs'
+       AND strategy = 'dense_exact_adaptive_candidate_budget'")"
+assert_equal "over-budget widening reports its termination" \
+    "candidate_budget" "${fallback_termination}"
+echo "over-budget widening selects full-vector exact before prefix work: ok"
 
 # ---------------------------------------------------------------------------
 # Evidence for the promotion decision.
@@ -192,6 +318,8 @@ psql_db -c "
            query_count,
            total_candidates,
            total_rechecks,
+           adaptive_prefix_dimensions,
+           adaptive_termination,
            round(avg_latency_ms::numeric, 3) AS avg_latency_ms
       FROM pgcontext.query_execution_stats()
      WHERE collection_name = 'adaptive_docs'
