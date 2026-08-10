@@ -5,11 +5,11 @@ vector search, metadata filtering, HNSW indexing, and hybrid retrieval over the
 data you already keep in PostgreSQL.
 
 This release is for prototypes, evaluation, and controlled pilots on
-PostgreSQL 17. It already provides a broad retrieval surface, including exact
-and approximate vector search, filtered search, collections, hybrid full-text
-retrieval, recommendation, discovery, grouping, facets, and operational
-diagnostics. Some advanced index and vector-representation features are
-explicitly experimental; those boundaries are described below.
+PostgreSQL 17 and 18. It already provides a broad retrieval surface, including
+exact and approximate vector search, filtered search, collections, hybrid
+full-text retrieval, recommendation, discovery, grouping, facets, and
+operational diagnostics. Some advanced index and vector-representation
+features are explicitly experimental; those boundaries are described below.
 
 ## Our Thesis
 
@@ -117,10 +117,10 @@ The stable table-backed search surface includes:
   context examples;
 - deleted-point and source-row visibility checks throughout.
 
-Validated query constructors are also available for nearest, recommend,
-discover, lookup, prefetch, weighting, thresholds, formulas, and final-rerank
-plans. These constructors provide a typed client-facing plan format; complete
-execution of every composite plan is part of the roadmap.
+Validated query constructors and bounded composite execution are available for
+nearest, recommend, discover, lookup, prefetch, weighting, thresholds,
+formulas, and final-rerank plans. External rerank and topology providers remain
+separate later-phase integrations.
 
 ### Persisted HNSW indexing
 

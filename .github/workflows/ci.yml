@@ -38,6 +38,8 @@ jobs:
         run: scripts/check-parity-matrix.sh
       - name: Parity matrix smoke
         run: tests/shell/check_parity_matrix_smoke.sh
+      - name: Supported feature marker smoke
+        run: tests/shell/check_supported_feature_markers_smoke.sh
       - name: SQL object inventory
         run: scripts/generate-sql-object-inventory.sh --check
       - name: Benchmark report smoke

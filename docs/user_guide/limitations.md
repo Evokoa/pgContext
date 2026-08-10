@@ -28,7 +28,7 @@ Extended production certification and unimplemented product behavior live in
 - Named sparse table-backed ANN/index serving is experimental and requires an
   explicitly attached, metric-matched HNSW index. It falls back to exact search
   when the binding is absent or stale. Internally maintained
-  internally maintained multi-vector/late-interaction ANN remains outside the
+  multi-vector/late-interaction ANN remains outside the
   stable 0.2 surface.
 - Qdrant-style payload mutation helpers and bulk point backfill APIs are stable
   SQL surfaces. Experimental backend-local build-job metadata exists for

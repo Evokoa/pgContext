@@ -18,7 +18,7 @@ Start from the question you are answering, not the index type.
 | You want to retrieve by… | Use | Method | Maturity |
 | --- | --- | --- | --- |
 | Meaning of a query embedding | `pgcontext.search` | Dense vector | Stable (exact) / Experimental (ANN) |
-| Exact keyword / phrase match | `pgcontext.query` full-text branch | Lexical (full-text) | Stable |
+| Exact keyword / phrase match | `pgcontext.query` registered lexical branch | Lexical (full-text) | Stable |
 | Learned term-weight overlap | `pgcontext.search_sparse` | Sparse vector | Experimental |
 | Token-level fine-grained match | `pgcontext.rerank_late_interaction` / `pgcontext.search_late_interaction` | Late-interaction | Experimental |
 | Similarity to example points | `pgcontext.recommend` / `pgcontext.discover` | Example-based | Experimental |

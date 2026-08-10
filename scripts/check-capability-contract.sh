@@ -26,6 +26,8 @@ if [[ ! -f "${SUPPORTED_FEATURES}" ]]; then
 fi
 
 "${REPO_ROOT}/scripts/check-parity-matrix.sh"
+"${REPO_ROOT}/scripts/check-supported-feature-markers.sh" \
+  "${SOURCE}" "${SUPPORTED_FEATURES}"
 
 expected="$(mktemp "${TMPDIR:-/tmp}/pgcontext-capability-expected.XXXXXX")"
 actual="$(mktemp "${TMPDIR:-/tmp}/pgcontext-capability-actual.XXXXXX")"

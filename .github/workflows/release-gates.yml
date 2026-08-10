@@ -191,6 +191,8 @@ jobs:
         run: scripts/check-parity-matrix.sh
       - name: Parity matrix smoke
         run: tests/shell/check_parity_matrix_smoke.sh
+      - name: Supported feature marker smoke
+        run: tests/shell/check_supported_feature_markers_smoke.sh
       - name: Benchmark report smoke
         run: tests/shell/run_benchmark_report_smoke.sh
       - name: Release artifact report smoke

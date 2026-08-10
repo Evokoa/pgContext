@@ -89,7 +89,7 @@
         "./hnsw_storage_contract.md"
       ],
       "path": "contributor_guide/architecture.md",
-      "sha256": "a8f22c7639123bcefcd1c9a1cfa41cbdb363d0764500d969c14f4021c9f72d11"
+      "sha256": "9aaffcdbd748cdf834dd1bc38c7b6bb001f8c52b2be50d4b6a2afcb69fa8918d"
     },
     {
       "links": [
@@ -151,7 +151,7 @@
     {
       "links": [],
       "path": "contributor_guide/repository_map.md",
-      "sha256": "f05849e2056d26a6066a3420750ebab870452b960608c6df78fc3122f34bf420"
+      "sha256": "55918d7b565ca98a4e67d36ecc37bcafecd016624193fda6b1648a44995a08b5"
     },
     {
       "links": [],
@@ -243,7 +243,7 @@
         "user_guide/troubleshooting.md"
       ],
       "path": "known_issues.md",
-      "sha256": "48527c1f2968435acfd7a16bc75385c3f58a74cd5691737ffdec73b068011003"
+      "sha256": "7ab16a87c987dc1140358798c4223b8bbd5aa2bc3f14dc3fc351fcac359a69ef"
     },
     {
       "links": [
@@ -398,7 +398,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "7ef260d08a23987b7acdf26cfb94d16d4444fd9beb42b2751e544010b2f410c3"
+      "sha256": "128619cdba62c6aefce9ebe5ffe19a1dc8859c6c7baec13ef48b7d41169ce130"
     },
     {
       "links": [],
@@ -462,7 +462,7 @@
         "retrieval_methods.md"
       ],
       "path": "user_guide/lexical_retrieval.md",
-      "sha256": "7060763ca7820ad212b31be36cf529028cce9e1924f9a8bc037cb1fa86744794"
+      "sha256": "1c7f063b9004bfe9b5aad21f35b4cfef385ff5ef1bc012d07ba8da7121648cdf"
     },
     {
       "links": [
@@ -470,7 +470,7 @@
         "roadmap.md"
       ],
       "path": "user_guide/limitations.md",
-      "sha256": "ab778ebec39e3f5ebbc1381315983647636814b5f90dd425d17c81a0aa8502d8"
+      "sha256": "dc4bf3217a8c20e5c2d0d53af574e010e154f2a5e65bec07a0df23e426c4da22"
     },
     {
       "links": [
@@ -505,7 +505,7 @@
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "b9319a7d9f738f5b23955664b48ae8295a8ba257fd1eb7c459ad76131d92a08b"
+      "sha256": "5cf84b0adedb548ba6c93ce1a13c613a07cd61396dd1d5fe04995173f3be4791"
     },
     {
       "links": [
@@ -563,7 +563,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "b3e26e10381adeef70fe5569236a5ca0eab01fa4aa46932f6297822bc7011737"
+      "sha256": "0f4310d1314019c6f5422910de01b4fc51bec9f676766a6486371165f73fcb08"
     },
     {
       "links": [
@@ -599,7 +599,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/retrieval_methods.md",
-      "sha256": "c102244fbf6954a657237dc5e4db281072368be5c7d0f41f601f68cd8e85b59c"
+      "sha256": "ac31b613f671af138c40fa682f0bdcc6d2ba0f7aecff53aa29d5fa92d771d80e"
     },
     {
       "links": [
@@ -686,7 +686,7 @@
         "lexical_retrieval.md"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "090f92a3d9f3fab952e7fe8ddb20af80acc6f03ea64b0d5cbc1d3803009fa62d"
+      "sha256": "1efc368278c5d1aec1b59e91e9964de3de6be35f06eebe2d1319ac12b296e475"
     },
     {
       "links": [],
@@ -701,7 +701,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "0cbcc95e3598781205d943f3b2adf877e684efd7812de70c4ca981ef64054e2f"
+      "sha256": "abe62d01e6481d5f0c5ef5efdbf026be59acb8d66185e51570082c19590ddbb2"
     },
     {
       "links": [],
@@ -735,7 +735,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "30753d59c9330fd1fe3096a225eec8433fc45d2a3fc484c211df9873ba5a7a4a"
+      "sha256": "3c726f9c945b057612a1c533274be038da9cb397060e81dcb89e5938cea42adc"
     },
     {
       "links": [],

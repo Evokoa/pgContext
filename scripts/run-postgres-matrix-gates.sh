@@ -27,6 +27,9 @@ HEAVY_GATES=(
   tests/heavy/low_memory_build.sh
   tests/heavy/corrupt_artifact_detection.sh
   tests/heavy/sqlstate_contract.sh
+  tests/heavy/composite_large_hnsw.sh
+  tests/heavy/indexed_lexical_hybrid.sh
+  tests/heavy/adaptive_prefix_recall.sh
 )
 MMAP_HNSW_RESTART_MARKERS=(
   "mmap_artifact_serving_ready: before_restart"

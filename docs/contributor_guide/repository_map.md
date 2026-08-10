@@ -3,6 +3,7 @@
 | Path | Responsibility |
 |---|---|
 | `crates/context-core` | Shared vector, collection, and error domain types |
+| `crates/context-build` | Generation lifecycle kernels and bounded structure-first character chunking foundations |
 | `crates/context-filter` | Filter AST, validation, and SQL-safe rendering inputs |
 | `crates/context-query` | Exact and hybrid query planning/execution kernels |
 | `crates/context-index` | HNSW algorithms and index-facing abstractions |

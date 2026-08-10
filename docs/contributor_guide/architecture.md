@@ -11,8 +11,10 @@ a database.
   newtypes (including logical `PointId`), policy constants, cursors, and stable
   error taxonomy.
 - `context-build`: pure artifact/projection generation kinds, lifecycle state,
-  monotonic checkpoints, cancellation, and retry transitions; it depends only
-  on `context-core`.
+  monotonic checkpoints, cancellation, retry transitions, and bounded
+  structure-first Unicode-safe character chunking; it depends only on
+  `context-core`. The chunking kernel is not tokenizer-aware and is not yet
+  wired to SQL catalogs, ingestion jobs, or an external worker.
 - `context-filter`: filter AST parsing, field registration, JSONB path
   validation, and SQL predicate rendering.
 - `context-hybrid`: reciprocal rank fusion and hybrid result diagnostics.

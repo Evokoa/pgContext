@@ -80,7 +80,6 @@ Search and query:
 - `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, filter jsonb, limit integer)`
 - `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, limit integer)`
 - `pgcontext.query_lexical(source text, query jsonb, filter jsonb, limit integer)`
-- `pgcontext.query_fuzzy(source text, query text, mode text, threshold double precision, filter jsonb, limit integer)`
 - `pgcontext.query_late_interaction(query_vectors vector[], candidates_per_query integer, limit integer)`
 - `pgcontext.query_recommend(positive_point_ids bigint[], negative_point_ids bigint[], limit integer)`
 - `pgcontext.query_discover(context_point_ids bigint[], limit integer)`
@@ -695,6 +694,8 @@ source columns and stores per-vector sparse storage/index/status metadata:
 - `pgcontext.register_fuzzy_source(collection text, source_name text, text_column text)`
   registers a PostgreSQL `text` column as a `pg_trgm` trigram source, resolving
   the extension through its catalog entry rather than `search_path`.
+- `pgcontext.query_fuzzy(source text, query text, mode text, threshold double precision, filter jsonb, limit integer)`
+  builds an experimental registered trigram-fuzzy query leaf.
 - `pgcontext.create_fuzzy_index(collection text, source_name text, method text)`
   creates and attaches the canonical `gin_trgm_ops` or `gist_trgm_ops` index.
 - `pgcontext.attach_fuzzy_index(collection text, source_name text, index_name text)`,

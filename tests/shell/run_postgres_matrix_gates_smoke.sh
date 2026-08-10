@@ -26,6 +26,12 @@ if [[ "${#heavy_gate_names[@]}" -eq 0 ]]; then
   echo "could not derive HEAVY_GATES from scripts/run-postgres-matrix-gates.sh" >&2
   exit 1
 fi
+for required_gate in composite_large_hnsw indexed_lexical_hybrid adaptive_prefix_recall; do
+  if [[ ! " ${heavy_gate_names[*]} " =~ " ${required_gate} " ]]; then
+    echo "PostgreSQL matrix is missing required heavy gate: ${required_gate}" >&2
+    exit 1
+  fi
+done
 supported_major_count=2
 full_matrix_rows=$((supported_major_count * (6 + ${#heavy_gate_names[@]})))
 
