@@ -1170,8 +1170,18 @@ pub fn embedding_profile_coverage(
           WHERE collection_id = $1 AND deleted_at IS NULL",
         &[collection_id.into()],
     )
-    .unwrap_or(Some(0))
-    .unwrap_or(0);
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to count active collection points: {error}"),
+        )
+    })
+    .unwrap_or_else(|| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            "active collection point count returned null",
+        )
+    });
 
     let profiles = Spi::connect(|client| {
         let rows = client
@@ -1192,8 +1202,28 @@ pub fn embedding_profile_coverage(
             });
         let mut profiles = Vec::new();
         for row in rows {
-            let read = |index: usize| row.get::<String>(index).ok().flatten().unwrap_or_default();
-            profiles.push((read(1), read(2), read(3), read(4), read(5)));
+            let read = |index: usize, label: &str| {
+                row.get::<String>(index)
+                    .unwrap_or_else(|error| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                            format!("failed to read embedding profile {label}: {error}"),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                            format!("embedding profile {label} returned null"),
+                        )
+                    })
+            };
+            profiles.push((
+                read(1, "name"),
+                read(2, "lifecycle"),
+                read(3, "source schema"),
+                read(4, "source table"),
+                read(5, "source column"),
+            ));
         }
         profiles
     });
@@ -1216,8 +1246,18 @@ pub fn embedding_profile_coverage(
             ),
             &[collection_id.into()],
         )
-        .unwrap_or(Some(0))
-        .unwrap_or(0);
+        .unwrap_or_else(|_| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                format!("failed to count embedding profile coverage for {profile_name}"),
+            )
+        })
+        .unwrap_or_else(|| {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                format!("embedding profile coverage count returned null for {profile_name}"),
+            )
+        });
         output.push((
             profile_name,
             lifecycle,

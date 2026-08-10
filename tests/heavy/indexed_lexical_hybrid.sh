@@ -47,6 +47,25 @@ assert_nonempty() {
     echo "${label}: ok"
 }
 
+expect_sql_error() {
+    local label="$1"
+    local statement="$2"
+    local expected="$3"
+    local suffix="$4"
+    local log_file="${HEAVY_TMPDIR}/${DBNAME}_${suffix}.log"
+    rm -f "${log_file}"
+    if psql_db -c "${statement}" >/dev/null 2>"${log_file}"; then
+        echo "${label}: unexpectedly succeeded" >&2
+        exit 1
+    fi
+    if ! grep -Fqi "${expected}" "${log_file}"; then
+        echo "${label}: failed for an unexpected reason" >&2
+        cat "${log_file}" >&2
+        exit 1
+    fi
+    echo "${label}: ok"
+}
+
 scalar() {
     psql_db -tAc "$1" | tr -d '[:space:]'
 }
@@ -182,6 +201,32 @@ assert_nonempty "exact boolean form returns rows" "${exact_boolean}"
 assert_nonempty "exact weight-restricted form returns rows" "${exact_weighted}"
 assert_nonempty "exact prefix form returns rows" "${exact_prefix}"
 assert_nonempty "exact JSON-path source returns rows" "${exact_topic}"
+
+psql_db <<'SQL' >/dev/null
+CREATE INDEX lexical_small_wrong_document_gin
+    ON public.lexical_small USING gin ((
+        pg_catalog.setweight(
+            pg_catalog.to_tsvector(
+                'pg_catalog.simple'::pg_catalog.regconfig,
+                coalesce(title::text, ''::text)
+            ),
+            'A'
+        ) OPERATOR(pg_catalog.||) pg_catalog.setweight(
+            pg_catalog.to_tsvector(
+                'pg_catalog.simple'::pg_catalog.regconfig,
+                coalesce(body::text, ''::text)
+            ),
+            'D'
+        )
+    ));
+SQL
+expect_sql_error "an unrelated same-column lexical expression cannot attach" \
+    "SELECT pgcontext.attach_lexical_index(
+         'lexical_small', 'article', 'lexical_small_wrong_document_gin'
+     )" \
+    "lexical index does not match the registered document expression" \
+    "wrong_lexical_expression"
+psql_db -c "DROP INDEX public.lexical_small_wrong_document_gin" >/dev/null
 
 small_index="$(scalar "SELECT pgcontext.create_lexical_index('lexical_small', 'article')")"
 assert_nonempty "lexical index creation returns an index name" "${small_index}"
@@ -381,13 +426,47 @@ if [[ "$(scalar "SELECT count(*) FROM pg_catalog.pg_available_extensions WHERE n
     psql_db <<SQL >/dev/null
 CREATE SCHEMA trgm_home;
 CREATE EXTENSION pg_trgm SCHEMA trgm_home;
-CREATE TABLE public.fuzzy_docs (id bigint PRIMARY KEY, body text NOT NULL);
-INSERT INTO public.fuzzy_docs VALUES
-    (1, 'postgres'), (2, 'postgresql database'), (3, 'completely different'), (4, 'postgrs');
+CREATE TABLE public.fuzzy_docs (
+    id bigint PRIMARY KEY,
+    body text NOT NULL,
+    other text NOT NULL,
+    bad_value integer NOT NULL DEFAULT 0
+);
+INSERT INTO public.fuzzy_docs (id, body, other) VALUES
+    (1, 'postgres', 'alpha'),
+    (2, 'postgresql database', 'beta'),
+    (3, 'completely different', 'gamma'),
+    (4, 'postgrs', 'delta');
 SELECT pgcontext.create_collection('fuzzy_docs', 'public.fuzzy_docs');
 SELECT pgcontext.backfill_points('fuzzy_docs', 100);
 SELECT pgcontext.register_fuzzy_source('fuzzy_docs', 'body_trgm', 'body');
 SQL
+
+    expect_sql_error "fuzzy registration rejects non-text columns" \
+        "SELECT pgcontext.register_fuzzy_source('fuzzy_docs', 'bad_trgm', 'bad_value')" \
+        "fuzzy source column must be text" \
+        "fuzzy_non_text"
+
+    psql_db -c \
+        "CREATE INDEX fuzzy_docs_wrong_column_gin
+             ON public.fuzzy_docs USING gin (other trgm_home.gin_trgm_ops)" >/dev/null
+    expect_sql_error "a fuzzy index for another column cannot attach" \
+        "SELECT pgcontext.attach_fuzzy_index(
+             'fuzzy_docs', 'body_trgm', 'fuzzy_docs_wrong_column_gin'
+         )" \
+        "fuzzy index does not match the registered text column and pg_trgm operator class" \
+        "wrong_fuzzy_column"
+    psql_db -c "DROP INDEX public.fuzzy_docs_wrong_column_gin" >/dev/null
+
+    psql_db -c "ALTER TABLE public.fuzzy_docs ALTER COLUMN body TYPE varchar(100)" >/dev/null
+    expect_sql_error "fuzzy column type drift fails closed" \
+        "SELECT count(*) FROM pgcontext.execute_query(
+             'fuzzy_docs',
+             pgcontext.query_fuzzy('body_trgm', 'postgrs', 'similarity', 0.3, NULL, 10)
+         )" \
+        "registered fuzzy source text column drifted" \
+        "fuzzy_type_drift"
+    psql_db -c "ALTER TABLE public.fuzzy_docs ALTER COLUMN body TYPE text" >/dev/null
 
     assert_equal "fuzzy sources resolve a relocated pg_trgm schema" "trgm_home" \
         "$(scalar "SELECT trgm_schema FROM pgcontext.fuzzy_sources('fuzzy_docs')")"

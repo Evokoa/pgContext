@@ -252,6 +252,21 @@ fn multi_model_coverage_reports_serving_state_and_partial_backfill() {
 }
 
 #[pg_test]
+fn multi_model_coverage_fails_closed_when_the_registered_source_drifts() {
+    multi_model_corpus("mm_coverage_drift");
+    register_multi_model_profile("mm_coverage_drift", "legacy_v1", "legacy", 4, "active");
+    Spi::run("ALTER TABLE public.mm_coverage_drift RENAME TO mm_coverage_drift_moved")
+        .expect("source relation should be renamed");
+
+    shared_assert_sql_failure(
+        "SELECT * FROM pgcontext.embedding_profile_coverage('mm_coverage_drift')",
+        "42P01",
+        "relation \"public.mm_coverage_drift\" does not exist",
+        "coverage read after source relation drift",
+    );
+}
+
+#[pg_test]
 fn multi_model_lifecycle_requires_collection_ownership() {
     multi_model_corpus("mm_acl");
     register_multi_model_profile("mm_acl", "legacy_v1", "legacy", 4, "active");

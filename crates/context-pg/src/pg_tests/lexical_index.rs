@@ -237,6 +237,27 @@ fn attaching_a_partial_or_foreign_index_is_rejected() {
 }
 
 #[pg_test]
+fn attaching_a_same_table_index_for_the_wrong_document_is_rejected() {
+    indexed_lexical_corpus("lex_index_wrong_document", 30);
+    Spi::run(
+        "ALTER TABLE public.lex_index_wrong_document ADD COLUMN other text NOT NULL DEFAULT 'other';
+         CREATE INDEX lex_index_wrong_document_gin
+             ON public.lex_index_wrong_document
+          USING gin ((pg_catalog.to_tsvector('pg_catalog.simple', other)))",
+    )
+    .expect("same-table index over another document should be created");
+
+    shared_assert_sql_failure(
+        "SELECT pgcontext.attach_lexical_index(
+             'lex_index_wrong_document', 'article', 'lex_index_wrong_document_gin'
+         )",
+        "XX000",
+        "lexical index does not match the registered document expression: lex_index_wrong_document_gin",
+        "same-table lexical index over the wrong document",
+    );
+}
+
+#[pg_test]
 fn detaching_a_lexical_index_restores_exact_serving() {
     indexed_lexical_corpus("lex_index_detach", 30);
     Spi::run("SELECT pgcontext.create_lexical_index('lex_index_detach', 'article')")

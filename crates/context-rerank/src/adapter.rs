@@ -6,10 +6,13 @@
 //! a provider, and the adapter knows how the executor's budget, ordering, and
 //! authority rules apply to what comes back.
 //!
-//! Authorization is the caller's job, not the adapter's. A hydrated row carries
-//! no text and no version, so releasing anything to a provider requires an
-//! [`AuthorizedRowSource`] that re-reads the authoritative row and decides what
-//! may leave the database.
+//! Authorization is the caller's job, not the provider's. A hydrated row carries
+//! no text and no version, so releasing anything requires an
+//! [`AuthorizedRowSource`] that reads the authoritative row and decides what may
+//! leave the database. The adapter calls that source again after provider
+//! scoring and compares the complete authorized snapshot; a source-version,
+//! text, metadata, identity, deletion, ACL, RLS, or filter change therefore
+//! fails or degrades before any reranked row is returned.
 //!
 //! # The score a reranked row carries
 //!
@@ -52,6 +55,8 @@ use crate::{
 /// The implementation is the component with database authority: it re-reads the
 /// row, applies whatever the deployment considers releasable, and stamps the
 /// occurrence identity and source version the response is validated against.
+/// It is called once before provider release and again before finalization, so
+/// it must evaluate current deletion, filter, ACL, and RLS state on every call.
 /// Returning `None` withholds the row from the provider. A withheld row cannot
 /// be ranked, so it does not appear in a complete reranked answer; if that
 /// leaves fewer than the requested number of rows, the query degrades rather
@@ -190,6 +195,12 @@ where
             let Some(candidate) = self.rows.authorize(row)? else {
                 continue;
             };
+            if candidate.point_id() != row.point_id() {
+                return Err(QueryError::PortFailure {
+                    stage: "external_rerank",
+                    message: "authorized row changed the requested point identity".to_owned(),
+                });
+            }
             if by_occurrence
                 .insert(candidate.occurrence_id(), row.point_id())
                 .is_some()
@@ -286,6 +297,13 @@ where
                 .then_with(|| left.0.cmp(&right.0))
         });
 
+        let released_by_point = batches
+            .requests()
+            .iter()
+            .flat_map(|request| request.candidates())
+            .map(|candidate| (candidate.point_id(), candidate))
+            .collect::<BTreeMap<_, _>>();
+
         let mut page = Vec::with_capacity(limit);
         for (point_id, score) in ranked.into_iter().take(limit) {
             let Some(row) = by_point.get(&point_id) else {
@@ -294,6 +312,19 @@ where
                     point_id,
                 });
             };
+            let Some(released) = released_by_point.get(&point_id) else {
+                return Err(QueryError::UnexpectedPointId {
+                    stage: "external_rerank_source_recheck",
+                    point_id,
+                });
+            };
+            self.cancellation.check_interrupt()?;
+            let Some(current) = self.rows.authorize(row)? else {
+                return authorization_changed(self.policy, model_revision, comparisons);
+            };
+            if current != **released {
+                return authorization_changed(self.policy, model_revision, comparisons);
+            }
             page.push(HydratedCandidate::new(
                 point_id,
                 row.source_key().clone(),
@@ -323,6 +354,20 @@ where
 /// that reported zero would understate what the query actually did.
 fn unranked(model_revision: u64, comparisons: usize) -> ExternalRerankPage {
     ExternalRerankPage::new(Vec::new(), comparisons, false, model_revision)
+}
+
+fn authorization_changed(
+    policy: RerankFallbackPolicy,
+    model_revision: u64,
+    comparisons: usize,
+) -> context_query::Result<ExternalRerankPage> {
+    match policy {
+        RerankFallbackPolicy::Require => Err(QueryError::PortFailure {
+            stage: "external_rerank_source_recheck",
+            message: "authoritative rerank source changed before finalization".to_owned(),
+        }),
+        RerankFallbackPolicy::DegradeWithoutRerank => Ok(unranked(model_revision, comparisons)),
+    }
 }
 
 fn port_failure(error: RerankBackendError) -> QueryError {
@@ -388,6 +433,64 @@ mod tests {
             row: &HydratedCandidate,
         ) -> context_query::Result<Option<RerankCandidate>> {
             candidate_for(row).map(Some)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum FinalChange {
+        SourceVersion,
+        Text,
+        Revoke,
+    }
+
+    struct ChangeAfterRelease {
+        calls: BTreeMap<PointId, usize>,
+        change: FinalChange,
+    }
+
+    impl ChangeAfterRelease {
+        fn new(change: FinalChange) -> Self {
+            Self {
+                calls: BTreeMap::new(),
+                change,
+            }
+        }
+    }
+
+    impl AuthorizedRowSource for ChangeAfterRelease {
+        fn authorize(
+            &mut self,
+            row: &HydratedCandidate,
+        ) -> context_query::Result<Option<RerankCandidate>> {
+            let calls = self.calls.entry(row.point_id()).or_default();
+            *calls = calls.saturating_add(1);
+            if *calls == 1 {
+                return candidate_for(row).map(Some);
+            }
+            if matches!(self.change, FinalChange::Revoke) {
+                return Ok(None);
+            }
+            let occurrence =
+                OccurrenceId::new(row.point_id().get()).ok_or(QueryError::InvalidInput {
+                    field: "occurrence_id",
+                    reason: "must be nonzero".to_owned(),
+                })?;
+            let version =
+                SourceVersion::new(if matches!(self.change, FinalChange::SourceVersion) {
+                    2
+                } else {
+                    1
+                })
+                .ok_or(QueryError::InvalidInput {
+                    field: "source_version",
+                    reason: "must be nonzero".to_owned(),
+                })?;
+            let text = if matches!(self.change, FinalChange::Text) {
+                format!("edited row {}", row.point_id().get())
+            } else {
+                format!("row {}", row.point_id().get())
+            };
+            RerankCandidate::new(occurrence, row.point_id(), version, text, Vec::new()).map(Some)
         }
     }
 
@@ -627,6 +730,76 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_source_version_change_after_provider_scoring_fails_the_required_rerank() {
+        let backend = DeterministicRerankBackend::new(7);
+        let mut rows = ChangeAfterRelease::new(FinalChange::SourceVersion);
+        let (cancellation, clock) = (NeverCancelled, FixedClock);
+        let mut adapter = reranker(
+            &backend,
+            &mut rows,
+            &cancellation,
+            &clock,
+            RerankFallbackPolicy::Require,
+        );
+
+        let error = adapter
+            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
+            .expect_err("source version drift must fail closed");
+        assert!(matches!(
+            error,
+            QueryError::PortFailure {
+                stage: "external_rerank_source_recheck",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn an_unversioned_text_edit_after_provider_scoring_also_fails_closed() {
+        let backend = DeterministicRerankBackend::new(7);
+        let mut rows = ChangeAfterRelease::new(FinalChange::Text);
+        let (cancellation, clock) = (NeverCancelled, FixedClock);
+        let mut adapter = reranker(
+            &backend,
+            &mut rows,
+            &cancellation,
+            &clock,
+            RerankFallbackPolicy::Require,
+        );
+
+        let error = adapter
+            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
+            .expect_err("authorized text drift must fail closed");
+        assert!(matches!(
+            error,
+            QueryError::PortFailure {
+                stage: "external_rerank_source_recheck",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_post_provider_permission_change_degrades_without_returning_stale_rows() {
+        let backend = DeterministicRerankBackend::new(7);
+        let mut rows = ChangeAfterRelease::new(FinalChange::Revoke);
+        let (cancellation, clock) = (NeverCancelled, FixedClock);
+        let mut adapter = reranker(
+            &backend,
+            &mut rows,
+            &cancellation,
+            &clock,
+            RerankFallbackPolicy::DegradeWithoutRerank,
+        );
+
+        let page = adapter
+            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
+            .expect("permission drift should degrade under the configured policy");
+        assert!(!page.exhausted());
+        assert!(page.rows().is_empty());
+    }
+
     /// Scores every candidate identically, so only the tie-break decides which
     /// rows survive the limit.
     struct TiedBackend;
@@ -822,11 +995,7 @@ mod tests {
             .rerank(&query(2), &fused_rows(6), 2, budget(2))
             .expect("reranked");
         assert_eq!(page.comparisons(), 2, "the port must respect its budget");
-        assert_eq!(
-            rows.calls.get(),
-            2,
-            "rows past the budget are never authorized, let alone released"
-        );
+        assert_eq!(rows.calls.get(), 4, "two admitted rows are read twice");
         assert_eq!(backend.released(), 2);
         assert_eq!(page.rows().len(), 2);
     }

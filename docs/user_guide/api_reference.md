@@ -683,7 +683,9 @@ source columns and stores per-vector sparse storage/index/status metadata:
 - `pgcontext.attach_lexical_index(collection text, source_name text, index_name text)`
   attaches an existing valid, live, non-partial GIN or GiST index on the
   registered source relation and records its full definition for drift
-  detection.
+  detection. It must contain exactly one key and no included columns, use
+  PostgreSQL's `tsvector_ops`, and match the registered stored column or the
+  planner-proven canonical raw-field expression.
 - `pgcontext.detach_lexical_index(collection text, source_name text)` removes the
   index binding and restores the complete exact fallback.
 - `pgcontext.drop_lexical_source(collection text, source_name text)` removes a
@@ -691,14 +693,16 @@ source columns and stores per-vector sparse storage/index/status metadata:
 - `pgcontext.lexical_sources(collection text)` lists registered lexical sources
   visible to the caller.
 - `pgcontext.register_fuzzy_source(collection text, source_name text, text_column text)`
-  registers a `pg_trgm` trigram source, resolving the extension through its
-  catalog entry rather than `search_path`.
+  registers a PostgreSQL `text` column as a `pg_trgm` trigram source, resolving
+  the extension through its catalog entry rather than `search_path`.
 - `pgcontext.create_fuzzy_index(collection text, source_name text, method text)`
   creates and attaches the canonical `gin_trgm_ops` or `gist_trgm_ops` index.
 - `pgcontext.attach_fuzzy_index(collection text, source_name text, index_name text)`,
   `pgcontext.detach_fuzzy_index(collection text, source_name text)`, and
   `pgcontext.drop_fuzzy_source(collection text, source_name text)` manage fuzzy
-  bindings.
+  bindings. An attached index must key the registered column directly and use
+  the operator class owned by the resolved `pg_trgm` extension; a same-table
+  index over another column is rejected.
 - `pgcontext.fuzzy_sources(collection text)` lists registered fuzzy sources
   visible to the caller.
 - `pgcontext.refresh_lexical_catalog(collection text)` re-derives lexical and

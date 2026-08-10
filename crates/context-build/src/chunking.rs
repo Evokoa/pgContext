@@ -1,14 +1,15 @@
-//! Deterministic, structure-first, token-safe text chunking.
+//! Deterministic, structure-first, Unicode-safe text chunking.
 //!
 //! The original document row stays authoritative. A chunk is a *citation span*
-//! into that row — a byte range plus the text it covers — so a chunk can always
+//! into that row — a character range plus the text it covers — so a chunk can always
 //! be traced back to the exact region it came from, and re-chunking the same
 //! source under the same profile always produces the same spans.
 //!
 //! Chunking prefers structural boundaries (blank lines, then line breaks, then
 //! sentence ends, then whitespace) and falls back to a hard cut only when a
 //! single run of text exceeds the budget. Every cut lands on a UTF-8 character
-//! boundary, so a chunk is never a partial code point.
+//! boundary, so a chunk is never a partial code point. Token-budget enforcement
+//! belongs to the external tokenizer adapter and is not claimed by this module.
 
 use std::fmt;
 
@@ -16,6 +17,10 @@ use std::fmt;
 pub const MAX_CHUNK_CHARS: usize = 64 * 1024;
 /// Maximum characters a chunking profile may accept as input.
 pub const MAX_CHUNK_SOURCE_CHARS: usize = 8 * 1024 * 1024;
+/// Maximum chunks one call may materialize.
+pub const MAX_CHUNKS_PER_DOCUMENT: usize = 16 * 1024;
+/// Maximum characters across chunk text after overlap duplication.
+pub const MAX_CHUNK_OUTPUT_CHARS: usize = 2 * MAX_CHUNK_SOURCE_CHARS;
 
 /// Why a chunking profile or input was rejected.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,6 +39,18 @@ pub enum ChunkError {
         /// Maximum accepted character count.
         maximum: usize,
     },
+    /// The profile would materialize too many independently allocated chunks.
+    TooManyChunks {
+        /// Maximum chunks one document may produce.
+        maximum: usize,
+    },
+    /// Overlap duplication exceeded the bounded materialized text allowance.
+    OutputTooLarge {
+        /// Projected characters after adding the next chunk.
+        actual: usize,
+        /// Maximum characters across all chunk text.
+        maximum: usize,
+    },
 }
 
 impl fmt::Display for ChunkError {
@@ -45,6 +62,16 @@ impl fmt::Display for ChunkError {
             Self::SourceTooLarge { actual, maximum } => write!(
                 formatter,
                 "document has {actual} characters, exceeding the maximum {maximum}"
+            ),
+            Self::TooManyChunks { maximum } => {
+                write!(
+                    formatter,
+                    "document would exceed the maximum {maximum} chunks"
+                )
+            }
+            Self::OutputTooLarge { actual, maximum } => write!(
+                formatter,
+                "chunk text would contain {actual} characters after overlap, exceeding the maximum {maximum}"
             ),
         }
     }
@@ -153,7 +180,7 @@ impl Chunk {
     }
 }
 
-/// Splits a document into deterministic, ordered, token-safe chunks.
+/// Splits a document into deterministic, ordered, Unicode-safe chunks.
 ///
 /// Guarantees, each covered by a property test:
 ///
@@ -162,6 +189,8 @@ impl Chunk {
 /// - **Boundary safety.** Every span boundary is a UTF-8 character boundary, so
 ///   no chunk contains a partial code point.
 /// - **Bounded size.** No chunk exceeds the profile's `max_chars`.
+/// - **Bounded materialization.** Chunk count and overlap-expanded output have
+///   independent hard limits.
 /// - **Determinism.** The same document and profile always produce the same
 ///   chunks.
 /// - **Progress.** Every chunk advances past the previous chunk's start, so
@@ -172,85 +201,139 @@ impl Chunk {
 /// Returns [`ChunkError::SourceTooLarge`] when the document exceeds
 /// [`MAX_CHUNK_SOURCE_CHARS`]. Oversized input is refused rather than silently
 /// truncated: a truncated document would produce chunks that cite spans the
-/// caller never asked to publish.
+/// caller never asked to publish. Returns [`ChunkError::TooManyChunks`] or
+/// [`ChunkError::OutputTooLarge`] when a pathological profile/input combination
+/// would exceed the bounded materialized result.
 pub fn chunk_document(source: &str, profile: ChunkProfile) -> Result<Vec<Chunk>> {
-    let characters = source.chars().collect::<Vec<_>>();
-    if characters.len() > MAX_CHUNK_SOURCE_CHARS {
+    let source_chars = source.chars().count();
+    if source_chars > MAX_CHUNK_SOURCE_CHARS {
         return Err(ChunkError::SourceTooLarge {
-            actual: characters.len(),
+            actual: source_chars,
             maximum: MAX_CHUNK_SOURCE_CHARS,
         });
     }
-    if characters.is_empty() {
+    if source.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut chunks = Vec::new();
-    let mut start = 0_usize;
-    while start < characters.len() {
-        let hard_end = characters.len().min(start + profile.max_chars());
-        let end = if hard_end == characters.len() {
-            hard_end
+    let mut emitted_chars = 0_usize;
+    let mut start_byte = 0_usize;
+    let mut start_char = 0_usize;
+    while start_byte < source.len() {
+        let (hard_end_byte, hard_end_chars) =
+            bounded_window_end(source, start_byte, profile.max_chars());
+        let (end_byte, consumed_chars) = if start_byte + hard_end_byte == source.len() {
+            (hard_end_byte, hard_end_chars)
         } else {
-            structural_break(&characters, start, hard_end)
+            structural_break(&source[start_byte..start_byte + hard_end_byte])
         };
-        // `structural_break` never returns `start`, so each iteration consumes
+        let end_byte = start_byte + end_byte;
+        let end_char = start_char + consumed_chars;
+        // `structural_break` never returns the start, so each iteration consumes
         // at least one character and the loop terminates.
-        let text = characters[start..end].iter().collect::<String>();
+        if chunks.len() >= MAX_CHUNKS_PER_DOCUMENT {
+            return Err(ChunkError::TooManyChunks {
+                maximum: MAX_CHUNKS_PER_DOCUMENT,
+            });
+        }
+        emitted_chars =
+            emitted_chars
+                .checked_add(consumed_chars)
+                .ok_or(ChunkError::OutputTooLarge {
+                    actual: usize::MAX,
+                    maximum: MAX_CHUNK_OUTPUT_CHARS,
+                })?;
+        if emitted_chars > MAX_CHUNK_OUTPUT_CHARS {
+            return Err(ChunkError::OutputTooLarge {
+                actual: emitted_chars,
+                maximum: MAX_CHUNK_OUTPUT_CHARS,
+            });
+        }
+        let text = source[start_byte..end_byte].to_owned();
         let content_hash = fnv1a(text.as_bytes());
         chunks.push(Chunk {
             ordinal: chunks.len(),
-            start_char: start,
-            end_char: end,
+            start_char,
+            end_char,
             text,
             content_hash,
         });
-        if end >= characters.len() {
+        if end_byte >= source.len() {
             break;
         }
         // Overlap rewinds the next start, but never far enough to revisit the
         // current chunk's own start, so progress is strictly monotonic.
-        let rewind = profile.overlap_chars().min(end.saturating_sub(start + 1));
-        start = end - rewind;
+        let rewind = profile
+            .overlap_chars()
+            .min(end_char.saturating_sub(start_char + 1));
+        start_byte = rewind_characters(source, end_byte, rewind);
+        start_char = end_char - rewind;
     }
     Ok(chunks)
 }
 
-/// Finds the best structural boundary within `start..hard_end`.
+/// Finds the best structural boundary within one already-bounded UTF-8 window.
 ///
 /// Preference order is paragraph break, line break, sentence end, then any
 /// whitespace. A run of text with no boundary at all is cut at `hard_end`,
 /// which is why a single very long token still respects the size bound.
-fn structural_break(characters: &[char], start: usize, hard_end: usize) -> usize {
-    debug_assert!(hard_end > start);
-    let window = &characters[start..hard_end];
-
-    // A paragraph break: the split lands after the second newline.
-    for index in (1..window.len()).rev() {
-        if window[index] == '\n' && window[index - 1] == '\n' {
-            return start + index + 1;
+fn structural_break(window: &str) -> (usize, usize) {
+    debug_assert!(!window.is_empty());
+    let mut paragraph = None;
+    let mut line = None;
+    let mut sentence = None;
+    let mut whitespace = None;
+    let mut previous_was_newline = false;
+    let mut characters = window.char_indices().peekable();
+    let mut seen = 0_usize;
+    while let Some((offset, character)) = characters.next() {
+        seen = seen.saturating_add(1);
+        let after = offset + character.len_utf8();
+        if character == '\n' {
+            line = Some((after, seen));
+            if previous_was_newline {
+                paragraph = Some((after, seen));
+            }
         }
-    }
-    for index in (0..window.len()).rev() {
-        if window[index] == '\n' {
-            return start + index + 1;
-        }
-    }
-    for index in (0..window.len()).rev() {
-        if matches!(window[index], '.' | '!' | '?')
-            && window
-                .get(index + 1)
-                .is_none_or(|next| next.is_whitespace())
+        if matches!(character, '.' | '!' | '?')
+            && characters
+                .peek()
+                .is_none_or(|(_, next)| next.is_whitespace())
         {
-            return start + index + 1;
+            sentence = Some((after, seen));
         }
-    }
-    for index in (0..window.len()).rev() {
-        if window[index].is_whitespace() {
-            return start + index + 1;
+        if character.is_whitespace() {
+            whitespace = Some((after, seen));
         }
+        previous_was_newline = character == '\n';
     }
-    hard_end
+    paragraph
+        .or(line)
+        .or(sentence)
+        .or(whitespace)
+        .unwrap_or((window.len(), seen))
+}
+
+fn bounded_window_end(source: &str, start_byte: usize, max_chars: usize) -> (usize, usize) {
+    let mut end_byte = start_byte;
+    let mut count = 0_usize;
+    for (offset, character) in source[start_byte..].char_indices().take(max_chars) {
+        count = count.saturating_add(1);
+        end_byte = start_byte + offset + character.len_utf8();
+    }
+    (end_byte - start_byte, count)
+}
+
+fn rewind_characters(source: &str, end_byte: usize, count: usize) -> usize {
+    if count == 0 {
+        return end_byte;
+    }
+    source[..end_byte]
+        .char_indices()
+        .rev()
+        .nth(count - 1)
+        .map_or(0, |(offset, _)| offset)
 }
 
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -304,6 +387,32 @@ mod tests {
     }
 
     #[test]
+    fn pathological_chunk_counts_fail_before_unbounded_allocation() {
+        let source = "x".repeat(MAX_CHUNKS_PER_DOCUMENT + 1);
+        let error = chunk_document(&source, profile(1, 0)).expect_err("chunk count bound");
+        assert_eq!(
+            error,
+            ChunkError::TooManyChunks {
+                maximum: MAX_CHUNKS_PER_DOCUMENT
+            }
+        );
+    }
+
+    #[test]
+    fn pathological_overlap_fails_at_the_total_output_bound() {
+        let source = "x".repeat(MAX_CHUNK_CHARS + 300);
+        let error = chunk_document(&source, profile(MAX_CHUNK_CHARS, MAX_CHUNK_CHARS - 1))
+            .expect_err("overlap output bound");
+        assert!(matches!(
+            error,
+            ChunkError::OutputTooLarge {
+                maximum: MAX_CHUNK_OUTPUT_CHARS,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn chunking_prefers_paragraph_then_line_then_sentence_boundaries() {
         let paragraphs =
             chunk_document("alpha\n\nbeta gamma delta", profile(12, 0)).expect("chunks");
@@ -322,6 +431,15 @@ mod tests {
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].text().chars().count(), 10);
         assert_eq!(chunks[2].text().chars().count(), 5);
+    }
+
+    #[test]
+    fn source_spans_are_character_offsets_for_multibyte_text() {
+        let chunks = chunk_document("éé alpha", profile(3, 0)).expect("chunks");
+        assert_eq!(chunks[0].start_char(), 0);
+        assert_eq!(chunks[0].end_char(), 3);
+        assert_eq!(chunks[0].text(), "éé ");
+        assert_eq!(chunks[1].start_char(), 3);
     }
 
     #[test]

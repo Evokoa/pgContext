@@ -82,6 +82,7 @@ CREATE TABLE pgcontext._collection_fuzzy_sources (
     source_table_name text NOT NULL,
     text_column_name text NOT NULL,
     text_attnum int2 NOT NULL,
+    text_type_oid oid NOT NULL,
     text_collation_oid oid NOT NULL DEFAULT 0,
     trgm_extension_oid oid NOT NULL,
     trgm_schema_name text NOT NULL,
@@ -513,7 +514,7 @@ BEGIN
             USING ERRCODE = '42704';
     END IF;
 
-    SELECT attribute.attnum, attribute.attcollation
+    SELECT attribute.attnum, attribute.atttypid, attribute.attcollation
       INTO attribute_row
       FROM pg_catalog.pg_attribute AS attribute
      WHERE attribute.attrelid = source_oid
@@ -524,15 +525,21 @@ BEGIN
         RAISE EXCEPTION 'fuzzy source text column is missing: %', p_column_name
             USING ERRCODE = '42703';
     END IF;
+    IF attribute_row.atttypid <> 'pg_catalog.text'::pg_catalog.regtype THEN
+        RAISE EXCEPTION 'fuzzy source column must be text: %', p_column_name
+            USING ERRCODE = '42804';
+    END IF;
 
     INSERT INTO pgcontext._collection_fuzzy_sources (
         collection_id, source_name, source_table_oid, source_schema_name,
-        source_table_name, text_column_name, text_attnum, text_collation_oid,
+        source_table_name, text_column_name, text_attnum, text_type_oid,
+        text_collation_oid,
         trgm_extension_oid, trgm_schema_name
     )
     VALUES (
         p_collection_id, p_source_name, source_oid, source_schema, source_table,
-        p_column_name, attribute_row.attnum, attribute_row.attcollation,
+        p_column_name, attribute_row.attnum, attribute_row.atttypid,
+        attribute_row.attcollation,
         extension_row.extension_oid, extension_row.schema_name
     )
     RETURNING fuzzy_source_id INTO new_source_id;
@@ -733,6 +740,7 @@ BEGIN
     UPDATE pgcontext._collection_fuzzy_sources AS sources
        SET source_table_oid = source_class.oid,
            text_attnum = attribute.attnum,
+           text_type_oid = attribute.atttypid,
            text_collation_oid = attribute.attcollation,
            trgm_extension_oid = extension.oid,
            trgm_schema_name = extension_namespace.nspname,
@@ -754,6 +762,7 @@ BEGIN
        AND attribute.attname = sources.text_column_name
        AND attribute.attnum > 0
        AND NOT attribute.attisdropped
+       AND attribute.atttypid = 'pg_catalog.text'::pg_catalog.regtype
        AND sources.status <> 'failed';
     GET DIAGNOSTICS touched = ROW_COUNT;
     refreshed := refreshed + touched;
@@ -799,6 +808,12 @@ BEGIN
              FROM pg_catalog.pg_class AS source_class
              JOIN pg_catalog.pg_namespace AS source_namespace
                ON source_namespace.oid = source_class.relnamespace
+             JOIN pg_catalog.pg_attribute AS attribute
+               ON attribute.attrelid = source_class.oid
+              AND attribute.attname = sources.text_column_name
+              AND attribute.attnum > 0
+              AND NOT attribute.attisdropped
+              AND attribute.atttypid = 'pg_catalog.text'::pg_catalog.regtype
             WHERE source_class.oid = sources.source_table_oid
               AND source_namespace.nspname = sources.source_schema_name
               AND source_class.relname = sources.source_table_name

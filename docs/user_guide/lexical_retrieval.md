@@ -128,7 +128,13 @@ SELECT pgcontext.detach_lexical_index('articles', 'article');
 
 `pgcontext.attach_lexical_index` binds an index you created yourself. Attachment
 requires a valid, live, non-partial GIN or GiST index on the registered source
-relation. The full `pg_get_indexdef` text is recorded and rechecked on every
+relation, with exactly one key and no included columns. A stored-document source
+must use that `tsvector` column directly with PostgreSQL's `tsvector_ops`. A
+raw-field source must use the exact canonical document expression: pgContext
+checks the referenced columns and asks PostgreSQL's planner to prove that the
+registered predicate can use the index. An index over the same table, or even
+the same columns with a different configuration or weighting expression, is
+rejected. The full `pg_get_indexdef` text is recorded and rechecked on every
 query, so an index that is later redefined fails closed rather than silently
 changing semantics.
 
@@ -176,6 +182,12 @@ SELECT point_id, source_key, score
       pgcontext.query_fuzzy('body_trgm', 'postgrs', 'similarity', 0.35, NULL, 10)
   );
 ```
+
+The registered source column must have PostgreSQL type `text`. An attached
+fuzzy index must key that exact column directly, contain no included columns,
+and use the `gin_trgm_ops` or `gist_trgm_ops` operator class owned by the
+resolved `pg_trgm` extension. An index over another text column on the same
+table is rejected.
 
 Modes are `similarity`, `word_similarity`, and `strict_word_similarity`.
 Thresholds are finite and within `0.0 < threshold <= 1.0`. An indexed probe sets
@@ -240,9 +252,9 @@ SELECT pgcontext.refresh_lexical_catalog('articles');
 ```
 
 Rows whose stable names no longer resolve to a compatible object are left
-untouched and fail closed at query time. Column, type, collation, text-search
-configuration, relation, and index drift are each detected before Q1 execution
-starts.
+untouched and fail closed at query time. Column number, type, collation,
+text-search configuration, relation, index expression or key, and operator-class
+drift are each detected before Q1 execution starts.
 
 ## Limits
 

@@ -3,8 +3,8 @@
 //! An external cross-encoder is untrusted infrastructure. It receives a bounded,
 //! explicitly authorized snapshot of already-visible rows and returns an
 //! ordering; it never receives database authority. Everything it can influence
-//! is re-validated against the request that produced it, and the executor
-//! re-applies the authoritative source recheck afterwards.
+//! is re-validated against the request that produced it, and the authorized
+//! adapter re-applies the source recheck after provider scoring.
 //!
 //! The envelope is versioned because the request and the response cross a
 //! process boundary: a provider built against an older contract must be

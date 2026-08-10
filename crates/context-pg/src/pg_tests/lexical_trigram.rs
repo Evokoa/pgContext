@@ -172,6 +172,113 @@ fn fuzzy_registration_requires_collection_ownership() {
 }
 
 #[pg_test]
+fn fuzzy_registration_rejects_non_text_columns() {
+    if !pg_trgm_is_available() {
+        return;
+    }
+    Spi::run(
+        "CREATE SCHEMA IF NOT EXISTS trgm_type;
+         CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA trgm_type;
+         CREATE TABLE public.fuzzy_non_text (
+             id bigint PRIMARY KEY,
+             body integer NOT NULL
+         );
+         SELECT pgcontext.create_collection('fuzzy_non_text', 'public.fuzzy_non_text');",
+    )
+    .expect("non-text fuzzy fixture should be created");
+
+    shared_assert_sql_failure(
+        "SELECT pgcontext.register_fuzzy_source('fuzzy_non_text', 'body_trgm', 'body')",
+        "42804",
+        "fuzzy source column must be text: body",
+        "non-text fuzzy registration",
+    );
+}
+
+#[pg_test]
+fn attaching_a_same_table_fuzzy_index_for_another_column_is_rejected() {
+    if !pg_trgm_is_available() {
+        return;
+    }
+    fuzzy_corpus("fuzzy_wrong_column", "trgm_wrong_column");
+    Spi::run(
+        "ALTER TABLE public.fuzzy_wrong_column ADD COLUMN other text NOT NULL DEFAULT 'other';
+         CREATE INDEX fuzzy_wrong_column_gin
+             ON public.fuzzy_wrong_column
+          USING gin (other trgm_wrong_column.gin_trgm_ops)",
+    )
+    .expect("same-table trigram index over another column should be created");
+
+    shared_assert_sql_failure(
+        "SELECT pgcontext.attach_fuzzy_index(
+             'fuzzy_wrong_column', 'body_trgm', 'fuzzy_wrong_column_gin'
+         )",
+        "XX000",
+        "fuzzy index does not match the registered text column and pg_trgm operator class: fuzzy_wrong_column_gin",
+        "same-table fuzzy index over the wrong column",
+    );
+}
+
+#[pg_test]
+fn fuzzy_column_identity_drift_fails_closed() {
+    if !pg_trgm_is_available() {
+        return;
+    }
+    fuzzy_corpus("fuzzy_column_drift", "trgm_column_drift");
+    Spi::run(
+        "ALTER TABLE public.fuzzy_column_drift
+             ALTER COLUMN body TYPE varchar(100)",
+    )
+    .expect("fuzzy column type should be changed");
+
+    shared_assert_sql_failure(
+        "SELECT * FROM pgcontext.execute_query(
+             'fuzzy_column_drift',
+             pgcontext.query_fuzzy('body_trgm', 'postgrs', 'similarity', 0.3, NULL, 10)
+         )",
+        "XX000",
+        "registered fuzzy source text column drifted: body",
+        "fuzzy column identity drift",
+    );
+}
+
+#[pg_test]
+fn fuzzy_column_collation_drift_fails_closed() {
+    if !pg_trgm_is_available() {
+        return;
+    }
+    Spi::run(
+        "CREATE SCHEMA IF NOT EXISTS trgm_collation_drift;
+         CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA trgm_collation_drift;
+         CREATE TABLE public.fuzzy_collation_drift (
+             id bigint PRIMARY KEY,
+             body text COLLATE pg_catalog.\"C\" NOT NULL
+         );
+         INSERT INTO public.fuzzy_collation_drift VALUES (1, 'postgres');
+         SELECT pgcontext.create_collection(
+             'fuzzy_collation_drift', 'public.fuzzy_collation_drift'
+         );
+         SELECT pgcontext.backfill_points('fuzzy_collation_drift', 100);
+         SELECT pgcontext.register_fuzzy_source(
+             'fuzzy_collation_drift', 'body_trgm', 'body'
+         );
+         ALTER TABLE public.fuzzy_collation_drift
+             ALTER COLUMN body TYPE text COLLATE pg_catalog.\"POSIX\"",
+    )
+    .expect("fuzzy column collation should be changed");
+
+    shared_assert_sql_failure(
+        "SELECT * FROM pgcontext.execute_query(
+             'fuzzy_collation_drift',
+             pgcontext.query_fuzzy('body_trgm', 'postgres', 'similarity', 0.3, NULL, 10)
+         )",
+        "XX000",
+        "registered fuzzy source text column drifted: body",
+        "fuzzy column collation drift",
+    );
+}
+
+#[pg_test]
 fn word_similarity_probes_restore_their_own_mode_default() {
     // Regression: `pg_trgm` placeholder GUCs read as NULL until the module is
     // loaded, and every mode has a different documented default. Restoring a

@@ -5,6 +5,8 @@
 //! ACL and membership checks, and the canonical document SQL that both index
 //! creation and query execution render from.
 
+use std::collections::BTreeSet;
+
 use context_core::CollectionName;
 use context_query::{
     LexicalNormalization, LexicalRankWeights, LexicalRanker, LexicalWeight, MAX_LEXICAL_FIELDS,
@@ -115,6 +117,10 @@ pub(crate) struct PreparedFuzzySource {
     pub(crate) table_name: String,
     pub(crate) table_oid: pg_sys::Oid,
     pub(crate) text_column_name: String,
+    pub(crate) text_attnum: i16,
+    pub(crate) text_type_oid: pg_sys::Oid,
+    pub(crate) text_collation_oid: pg_sys::Oid,
+    pub(crate) trgm_extension_oid: pg_sys::Oid,
     pub(crate) trgm_schema_name: String,
     pub(crate) index: Option<LexicalIndexBinding>,
     pub(crate) registration_revision: i64,
@@ -216,10 +222,7 @@ impl PreparedFuzzySource {
 
     /// Returns the trigram text expression for this source.
     pub(crate) fn text_sql(&self, alias: Option<&str>) -> String {
-        format!(
-            "coalesce({}::text, ''::text)",
-            column_sql(&self.text_column_name, alias)
-        )
+        column_sql(&self.text_column_name, alias)
     }
 
     /// Returns the schema-qualified `pg_trgm` operator class for an access method.
@@ -308,7 +311,7 @@ pub(crate) fn prepare_lexical_source(
     require_source_select(source.table_oid, &source.schema_name, &source.table_name)?;
     validate_lexical_document(&source)?;
     if let Some(index) = source.index.take() {
-        match validate_index_binding(source.table_oid, &index)? {
+        match validate_lexical_index_binding(&source, &index)? {
             true => source.index = Some(index),
             false => source.index = None,
         }
@@ -329,18 +332,36 @@ pub(crate) fn prepare_fuzzy_source(
         "fuzzy",
     )?;
     require_source_select(source.table_oid, &source.schema_name, &source.table_name)?;
-    validate_column(
-        source.table_oid,
-        &source.text_column_name,
-        "fuzzy source text column",
-    )?;
+    validate_fuzzy_column(&source)?;
     if let Some(index) = source.index.take() {
-        match validate_index_binding(source.table_oid, &index)? {
+        match validate_fuzzy_index_binding(&source, &index)? {
             true => source.index = Some(index),
             false => source.index = None,
         }
     }
     Ok(source)
+}
+
+/// Proves that a newly attached lexical expression is planner-equivalent to
+/// the registered document before the catalog write can commit.
+pub(crate) fn validate_lexical_index_attachment(
+    collection_id: i64,
+    source_name: &str,
+) -> QueryResult<()> {
+    let source = prepare_lexical_source(collection_id, source_name)?;
+    let index = source
+        .index
+        .as_ref()
+        .ok_or_else(|| port_failure("lexical index attachment did not persist a usable index"))?;
+    if matches!(source.document, LexicalDocument::Fields(_))
+        && !planner_uses_lexical_index(&source, index)?
+    {
+        return Err(port_failure(format!(
+            "lexical index does not match the registered document expression: {}",
+            index.index_name
+        )));
+    }
+    Ok(())
 }
 
 fn load_lexical_source(
@@ -531,6 +552,9 @@ fn load_fuzzy_source(collection_id: i64, source_name: &str) -> QueryResult<Prepa
                         source_schema_name,
                         source_table_name,
                         text_column_name,
+                        text_attnum,
+                        text_type_oid,
+                        text_collation_oid,
                         trgm_extension_oid,
                         trgm_schema_name,
                         index_oid,
@@ -550,20 +574,20 @@ fn load_fuzzy_source(collection_id: i64, source_name: &str) -> QueryResult<Prepa
                 "fuzzy source is not registered or not visible: {source_name}"
             )));
         };
-        let status = required::<String>(&row, 13, "status")?;
+        let status = required::<String>(&row, 16, "status")?;
         if status != "ready" {
             return Err(port_failure(format!(
                 "fuzzy source {source_name} is {status}"
             )));
         }
-        let extension_oid = required::<pg_sys::Oid>(&row, 6, "trgm_extension_oid")?;
-        let trgm_schema_name = required::<String>(&row, 7, "trgm_schema_name")?;
+        let extension_oid = required::<pg_sys::Oid>(&row, 9, "trgm_extension_oid")?;
+        let trgm_schema_name = required::<String>(&row, 10, "trgm_schema_name")?;
         require_trgm_extension(extension_oid, &trgm_schema_name)?;
         let index = match (
-            optional::<pg_sys::Oid>(&row, 8)?,
-            optional::<String>(&row, 9)?,
-            optional::<String>(&row, 10)?,
-            optional::<String>(&row, 11)?,
+            optional::<pg_sys::Oid>(&row, 11)?,
+            optional::<String>(&row, 12)?,
+            optional::<String>(&row, 13)?,
+            optional::<String>(&row, 14)?,
         ) {
             (Some(index_oid), Some(index_name), Some(am_name), Some(definition)) => {
                 Some(LexicalIndexBinding {
@@ -584,9 +608,13 @@ fn load_fuzzy_source(collection_id: i64, source_name: &str) -> QueryResult<Prepa
             schema_name: required::<String>(&row, 3, "source_schema_name")?,
             table_name: required::<String>(&row, 4, "source_table_name")?,
             text_column_name: required::<String>(&row, 5, "text_column_name")?,
+            text_attnum: required::<i16>(&row, 6, "text_attnum")?,
+            text_type_oid: required::<pg_sys::Oid>(&row, 7, "text_type_oid")?,
+            text_collation_oid: required::<pg_sys::Oid>(&row, 8, "text_collation_oid")?,
+            trgm_extension_oid: extension_oid,
             trgm_schema_name,
             index,
-            registration_revision: required::<i64>(&row, 12, "registration_revision")?,
+            registration_revision: required::<i64>(&row, 15, "registration_revision")?,
         })
     })
 }
@@ -753,23 +781,45 @@ fn validate_field_column(table_oid: pg_sys::Oid, field: &LexicalFieldBinding) ->
     Ok(())
 }
 
-fn validate_column(
-    table_oid: pg_sys::Oid,
-    column_name: &str,
-    label: &'static str,
-) -> QueryResult<()> {
-    let exists = Spi::get_one_with_args::<bool>(
-        "SELECT true
-           FROM pg_catalog.pg_attribute
-          WHERE attrelid = $1 AND attname = $2 AND attnum > 0 AND NOT attisdropped",
-        &[table_oid.into(), column_name.into()],
-    )
-    .map_err(spi_error)?
-    .unwrap_or(false);
-    if exists {
+fn validate_fuzzy_column(source: &PreparedFuzzySource) -> QueryResult<()> {
+    let identity = Spi::connect(|client| {
+        let rows = client
+            .select(
+                "SELECT attribute.attnum, attribute.atttypid, attribute.attcollation
+                   FROM pg_catalog.pg_attribute AS attribute
+                  WHERE attribute.attrelid = $1
+                    AND attribute.attname = $2
+                    AND attribute.attnum > 0
+                    AND NOT attribute.attisdropped",
+                Some(1),
+                &[
+                    source.table_oid.into(),
+                    source.text_column_name.as_str().into(),
+                ],
+            )
+            .map_err(spi_error)?;
+        let Some(row) = rows.into_iter().next() else {
+            return Ok(None);
+        };
+        Ok::<_, QueryError>(Some((
+            required::<i16>(&row, 1, "attnum")?,
+            required::<pg_sys::Oid>(&row, 2, "atttypid")?,
+            required::<pg_sys::Oid>(&row, 3, "attcollation")?,
+        )))
+    })?;
+    if identity
+        == Some((
+            source.text_attnum,
+            source.text_type_oid,
+            source.text_collation_oid,
+        ))
+    {
         Ok(())
     } else {
-        Err(port_failure(format!("{label} is missing: {column_name}")))
+        Err(port_failure(format!(
+            "registered fuzzy source text column drifted: {}",
+            source.text_column_name
+        )))
     }
 }
 
@@ -807,15 +857,27 @@ fn validate_typed_column(
     }
 }
 
-/// Revalidates an attached index and reports whether it remains usable.
-///
-/// A dropped index detaches silently so the exact fallback still serves the
-/// query. A live index whose definition, relation, access method, validity, or
-/// partiality drifted fails closed instead of silently changing semantics.
-fn validate_index_binding(
-    table_oid: pg_sys::Oid,
-    index: &LexicalIndexBinding,
-) -> QueryResult<bool> {
+#[derive(Debug)]
+struct ObservedIndex {
+    indrelid: pg_sys::Oid,
+    access_method: String,
+    is_valid: bool,
+    is_live: bool,
+    is_full: bool,
+    key_count: i16,
+    attribute_count: i16,
+    key_attnum: i16,
+    has_expression: bool,
+    opclass_oid: pg_sys::Oid,
+    opclass_schema: String,
+    opclass_name: String,
+    definition: String,
+}
+
+/// Revalidates the lifecycle and structural identity shared by lexical and
+/// fuzzy indexes. A dropped index detaches to the exact fallback; semantic
+/// drift fails closed.
+fn observe_index(index: &LexicalIndexBinding) -> QueryResult<Option<ObservedIndex>> {
     let observed = Spi::connect(|client| {
         let rows = client
             .select(
@@ -824,12 +886,23 @@ fn validate_index_binding(
                         index.indisvalid,
                         index.indislive,
                         index.indpred IS NULL,
+                        index.indnkeyatts,
+                        index.indnatts,
+                        index.indkey[0],
+                        index.indexprs IS NOT NULL,
+                        operator_class.oid,
+                        operator_namespace.nspname::text,
+                        operator_class.opcname::text,
                         pg_catalog.pg_get_indexdef(index.indexrelid)
                    FROM pg_catalog.pg_index AS index
                    JOIN pg_catalog.pg_class AS index_class
                      ON index_class.oid = index.indexrelid
                    JOIN pg_catalog.pg_am AS access_method
                      ON access_method.oid = index_class.relam
+                   JOIN pg_catalog.pg_opclass AS operator_class
+                     ON operator_class.oid = index.indclass[0]
+                   JOIN pg_catalog.pg_namespace AS operator_namespace
+                     ON operator_namespace.oid = operator_class.opcnamespace
                   WHERE index.indexrelid = $1",
                 Some(1),
                 &[index.index_oid.into()],
@@ -838,37 +911,229 @@ fn validate_index_binding(
         let Some(row) = rows.into_iter().next() else {
             return Ok(None);
         };
-        Ok::<_, QueryError>(Some((
-            required::<pg_sys::Oid>(&row, 1, "indrelid")?,
-            required::<String>(&row, 2, "amname")?,
-            required::<bool>(&row, 3, "indisvalid")?,
-            required::<bool>(&row, 4, "indislive")?,
-            required::<bool>(&row, 5, "indpred")?,
-            required::<String>(&row, 6, "indexdef")?,
-        )))
+        Ok::<_, QueryError>(Some(ObservedIndex {
+            indrelid: required::<pg_sys::Oid>(&row, 1, "indrelid")?,
+            access_method: required::<String>(&row, 2, "amname")?,
+            is_valid: required::<bool>(&row, 3, "indisvalid")?,
+            is_live: required::<bool>(&row, 4, "indislive")?,
+            is_full: required::<bool>(&row, 5, "is_full")?,
+            key_count: required::<i16>(&row, 6, "indnkeyatts")?,
+            attribute_count: required::<i16>(&row, 7, "indnatts")?,
+            key_attnum: required::<i16>(&row, 8, "indkey")?,
+            has_expression: required::<bool>(&row, 9, "has_expression")?,
+            opclass_oid: required::<pg_sys::Oid>(&row, 10, "opclass_oid")?,
+            opclass_schema: required::<String>(&row, 11, "opclass_schema")?,
+            opclass_name: required::<String>(&row, 12, "opclass_name")?,
+            definition: required::<String>(&row, 13, "indexdef")?,
+        }))
     })?;
-    let Some((indrelid, amname, is_valid, is_live, is_full, definition)) = observed else {
-        return Ok(false);
+    Ok(observed)
+}
+
+fn validate_index_lifecycle(
+    table_oid: pg_sys::Oid,
+    index: &LexicalIndexBinding,
+) -> QueryResult<Option<ObservedIndex>> {
+    let Some(observed) = observe_index(index)? else {
+        return Ok(None);
     };
-    if indrelid != table_oid || amname != index.access_method.stable_name() {
+    if observed.indrelid != table_oid || observed.access_method != index.access_method.stable_name()
+    {
         return Err(port_failure(format!(
             "attached lexical index drifted from its registered relation or access method: {}",
             index.index_name
         )));
     }
-    if definition != index.definition {
+    if observed.definition != index.definition {
         return Err(port_failure(format!(
             "attached lexical index definition drifted: {}",
             index.index_name
         )));
     }
-    if !is_full {
+    if !observed.is_full {
         return Err(port_failure(format!(
             "attached lexical index is partial: {}",
             index.index_name
         )));
     }
-    Ok(is_valid && is_live)
+    if observed.key_count != 1 || observed.attribute_count != 1 {
+        return Err(port_failure(format!(
+            "attached lexical index must contain exactly one key and no included columns: {}",
+            index.index_name
+        )));
+    }
+    if !observed.is_valid || !observed.is_live {
+        return Ok(None);
+    }
+    Ok(Some(observed))
+}
+
+fn validate_lexical_index_binding(
+    source: &PreparedLexicalSource,
+    index: &LexicalIndexBinding,
+) -> QueryResult<bool> {
+    let Some(observed) = validate_index_lifecycle(source.table_oid, index)? else {
+        return Ok(false);
+    };
+    let expected_key_shape = match &source.document {
+        LexicalDocument::StoredVector { attnum, .. } => {
+            observed.key_attnum == *attnum && !observed.has_expression
+        }
+        LexicalDocument::Fields(fields) => {
+            let expected = fields
+                .iter()
+                .map(|field| field.attnum)
+                .collect::<BTreeSet<_>>();
+            observed.key_attnum == 0
+                && observed.has_expression
+                && observed_index_columns(index.index_oid, source.table_oid)? == expected
+        }
+    };
+    if !expected_key_shape
+        || observed.opclass_schema != "pg_catalog"
+        || observed.opclass_name != "tsvector_ops"
+    {
+        return Err(port_failure(format!(
+            "lexical index does not match the registered document expression: {}",
+            index.index_name
+        )));
+    }
+    Ok(true)
+}
+
+fn validate_fuzzy_index_binding(
+    source: &PreparedFuzzySource,
+    index: &LexicalIndexBinding,
+) -> QueryResult<bool> {
+    let Some(observed) = validate_index_lifecycle(source.table_oid, index)? else {
+        return Ok(false);
+    };
+    let expected_opclass = match index.access_method {
+        LexicalIndexAm::Gin => "gin_trgm_ops",
+        LexicalIndexAm::Gist => "gist_trgm_ops",
+    };
+    let extension_owned = Spi::get_one_with_args::<bool>(
+        "SELECT EXISTS (
+             SELECT 1
+               FROM pg_catalog.pg_depend AS dependency
+              WHERE dependency.classid = 'pg_catalog.pg_opclass'::pg_catalog.regclass
+                AND dependency.objid = $1
+                AND dependency.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+                AND dependency.refobjid = $2
+                AND dependency.deptype = 'e'
+         )",
+        &[
+            observed.opclass_oid.into(),
+            source.trgm_extension_oid.into(),
+        ],
+    )
+    .map_err(spi_error)?
+    .unwrap_or(false);
+    if observed.key_attnum != source.text_attnum
+        || observed.has_expression
+        || observed.opclass_schema != source.trgm_schema_name
+        || observed.opclass_name != expected_opclass
+        || !extension_owned
+    {
+        return Err(port_failure(format!(
+            "fuzzy index does not match the registered text column and pg_trgm operator class: {}",
+            index.index_name
+        )));
+    }
+    Ok(true)
+}
+
+fn observed_index_columns(
+    index_oid: pg_sys::Oid,
+    table_oid: pg_sys::Oid,
+) -> QueryResult<BTreeSet<i16>> {
+    Spi::connect(|client| {
+        let rows = client
+            .select(
+                "SELECT DISTINCT dependency.refobjsubid::int2
+                   FROM pg_catalog.pg_depend AS dependency
+                  WHERE dependency.classid = 'pg_catalog.pg_class'::pg_catalog.regclass
+                    AND dependency.objid = $1
+                    AND dependency.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
+                    AND dependency.refobjid = $2
+                    AND dependency.refobjsubid > 0",
+                None,
+                &[index_oid.into(), table_oid.into()],
+            )
+            .map_err(spi_error)?;
+        rows.into_iter()
+            .map(|row| required::<i16>(&row, 1, "index_column_attnum"))
+            .collect::<QueryResult<BTreeSet<_>>>()
+    })
+}
+
+fn planner_uses_lexical_index(
+    source: &PreparedLexicalSource,
+    index: &LexicalIndexBinding,
+) -> QueryResult<bool> {
+    let previous = Spi::get_one::<String>("SELECT pg_catalog.current_setting('enable_seqscan')")
+        .map_err(spi_error)?
+        .ok_or_else(|| port_failure("enable_seqscan setting returned null"))?;
+    set_local_setting("enable_seqscan", "off")?;
+    let outcome = explain_uses_lexical_index(source, index);
+    let restored = set_local_setting("enable_seqscan", &previous);
+    match (outcome, restored) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Ok(uses_index), Ok(())) => Ok(uses_index),
+    }
+}
+
+fn explain_uses_lexical_index(
+    source: &PreparedLexicalSource,
+    index: &LexicalIndexBinding,
+) -> QueryResult<bool> {
+    let query_text = quote_literal("pgcontext index validation");
+    let sql = format!(
+        "EXPLAIN (FORMAT JSON, COSTS OFF)
+         SELECT 1
+           FROM {table} AS {alias}
+          WHERE {document} OPERATOR(pg_catalog.@@)
+                pg_catalog.plainto_tsquery({configuration}, {query_text})",
+        table = source.qualified_table(),
+        alias = SOURCE_ALIAS,
+        document = source.document_sql(),
+        configuration = source.configuration_sql(),
+    );
+    Spi::connect(|client| {
+        let rows = client.select(&sql, Some(1), &[]).map_err(spi_error)?;
+        let Some(row) = rows.into_iter().next() else {
+            return Err(port_failure(
+                "lexical index validation plan returned no row",
+            ));
+        };
+        let plan = required::<pgrx::Json>(&row, 1, "query_plan")?;
+        Ok(json_uses_index(&plan.0, &index.index_name))
+    })
+}
+
+fn set_local_setting(setting: &str, value: &str) -> QueryResult<()> {
+    Spi::get_one_with_args::<String>(
+        "SELECT pg_catalog.set_config($1, $2, true)",
+        &[setting.into(), value.into()],
+    )
+    .map(|_| ())
+    .map_err(spi_error)
+}
+
+fn json_uses_index(value: &serde_json::Value, index_name: &str) -> bool {
+    match value {
+        serde_json::Value::Object(object) => {
+            object.get("Index Name").and_then(serde_json::Value::as_str) == Some(index_name)
+                || object
+                    .values()
+                    .any(|child| json_uses_index(child, index_name))
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|child| json_uses_index(child, index_name)),
+        _ => false,
+    }
 }
 
 fn required<T>(row: &spi::SpiHeapTupleData<'_>, index: usize, label: &'static str) -> QueryResult<T>

@@ -17,6 +17,7 @@ use pgrx::prelude::*;
 use crate::error::{raise_query_error, raise_sql_error};
 use crate::lexical_catalog::{
     LexicalIndexAm, prepare_fuzzy_source, prepare_lexical_source, require_collection_owner_id,
+    validate_lexical_index_attachment,
 };
 use crate::table_search::{quote_identifier, quote_qualified_identifier};
 
@@ -162,6 +163,8 @@ pub fn create_lexical_index(
         &prepared.schema_name,
         &index_name,
     );
+    validate_lexical_index_attachment(collection_id, source_name.as_str())
+        .unwrap_or_else(|error| raise_query_error(error));
     index_name
 }
 
@@ -180,6 +183,8 @@ pub fn attach_lexical_index(collection: String, source_name: String, index_name:
         &prepared.schema_name,
         &index_name,
     );
+    validate_lexical_index_attachment(collection_id, source_name.as_str())
+        .unwrap_or_else(|error| raise_query_error(error));
     true
 }
 
@@ -245,7 +250,7 @@ pub fn create_fuzzy_index(
         .unwrap_or_else(|error| raise_query_error(error));
     let index_name = index_name_for("fuzzy", collection_id, source_name.as_str());
     let statement = format!(
-        "CREATE INDEX {index} ON {table} USING {method} (({text}) {operator_class})",
+        "CREATE INDEX {index} ON {table} USING {method} ({text} {operator_class})",
         index = quote_identifier(&index_name),
         table = quote_qualified_identifier(&prepared.schema_name, &prepared.table_name),
         method = access_method.stable_name(),
@@ -260,6 +265,8 @@ pub fn create_fuzzy_index(
         &prepared.schema_name,
         &index_name,
     );
+    prepare_fuzzy_source(collection_id, source_name.as_str())
+        .unwrap_or_else(|error| raise_query_error(error));
     index_name
 }
 
@@ -279,6 +286,8 @@ pub fn attach_fuzzy_index(collection: String, source_name: String, index_name: S
         &prepared.schema_name,
         &index_name,
     );
+    prepare_fuzzy_source(collection_id, source_name.as_str())
+        .unwrap_or_else(|error| raise_query_error(error));
     true
 }
 
