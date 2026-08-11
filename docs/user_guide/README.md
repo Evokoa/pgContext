@@ -29,6 +29,7 @@ code-backed capability contract. Planned-only work remains in the
 - [Hybrid retrieval](hybrid_retrieval.md)
 - [Lexical and fuzzy retrieval](lexical_retrieval.md)
 - [Adaptive-dimension retrieval](adaptive_dimension.md)
+- [Multi-model retrieval](multi_model.md)
 - [Retrieval methods overview](retrieval_methods.md)
 - [Indexes](indexes.md)
 - [Rebuildable storage artifacts](storage.md)

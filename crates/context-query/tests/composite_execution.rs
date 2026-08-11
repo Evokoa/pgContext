@@ -2,14 +2,14 @@
 
 #![allow(clippy::expect_used)]
 
-use context_core::{OccurrenceId, PointId, SourceAuthority, SourceKey};
+use context_core::{OccurrenceId, PointId, ProfileId, SourceAuthority, SourceKey, SourceVersion};
 use context_query::{
     Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateProvenance, CandidateSource,
     CandidateSourceKind, Completion, ExecutionBudget, ExecutionState, ExternalRerankPage,
     ExternalReranker, FilterCandidateBatch, FilterCandidateSource, Formula, Fusion,
-    HydratedCandidate, PortBudget, QueryClock, QueryError, QueryExecutor, QueryIr, QueryKind,
-    RecheckPage, ScoreOrder, SourceReadiness, SourceRechecker, StageDiagnostic, StageKind,
-    TelemetrySink, TopologyExpander,
+    HydratedCandidate, MultiProfileBranch, PortBudget, ProfileName, QueryClock, QueryError,
+    QueryExecutor, QueryIr, QueryKind, RecheckPage, ScoreOrder, SourceReadiness, SourceRechecker,
+    StageDiagnostic, StageKind, TelemetrySink, TopologyExpander, build_multi_profile_query,
 };
 use std::cell::Cell;
 
@@ -19,6 +19,8 @@ struct RoutingSource {
     readiness_calls: usize,
     unavailable_second_branch: bool,
     partial_pages: bool,
+    retained_memory_bytes: usize,
+    observed_memory_budgets: Vec<usize>,
 }
 
 impl CandidateSource for RoutingSource {
@@ -42,18 +44,19 @@ impl CandidateSource for RoutingSource {
         query: &QueryIr,
         _filter: Option<&FilterCandidateBatch>,
         limit: usize,
-        _budget: PortBudget,
+        budget: PortBudget,
     ) -> Result<CandidatePage, QueryError> {
         self.calls += 1;
+        self.observed_memory_budgets.push(budget.max_memory_bytes());
         let rows = if is_second_branch(query) {
             vec![candidate(2, 0.9), candidate(3, 0.1)]
         } else {
             vec![candidate(1, 0.9), candidate(2, 0.1)]
         };
-        Ok(CandidatePage::new(
-            rows.into_iter().take(limit).collect(),
-            !self.partial_pages,
-        ))
+        Ok(
+            CandidatePage::new(rows.into_iter().take(limit).collect(), !self.partial_pages)
+                .with_retained_memory_bytes(self.retained_memory_bytes),
+        )
     }
 }
 
@@ -200,6 +203,258 @@ fn execute(
     )
     .execute(query, budget(stages))
     .expect("composite execution should succeed")
+}
+
+struct ProfileSource {
+    score_scale: f64,
+}
+
+impl CandidateSource for ProfileSource {
+    fn readiness(
+        &mut self,
+        _query: &QueryIr,
+        _budget: PortBudget,
+    ) -> Result<SourceReadiness, QueryError> {
+        Ok(SourceReadiness::Ready)
+    }
+
+    fn candidates(
+        &mut self,
+        query: &QueryIr,
+        _filter: Option<&FilterCandidateBatch>,
+        limit: usize,
+        _budget: PortBudget,
+    ) -> Result<CandidatePage, QueryError> {
+        let QueryKind::ProfileNearest { profile, .. } = query.kind() else {
+            return Err(QueryError::PortFailure {
+                stage: "profile_fixture",
+                message: "expected profile-nearest leaf".to_owned(),
+            });
+        };
+        let (profile_id, source_version, point_ids) = if profile.as_str() == "legacy" {
+            (10, 100, [1, 2])
+        } else {
+            (20, 200, [3, 2])
+        };
+        let rows = point_ids
+            .into_iter()
+            .enumerate()
+            .take(limit)
+            .map(|(rank, point_id)| {
+                Candidate::new(
+                    PointId::new(point_id),
+                    self.score_scale
+                        * f64::from(
+                            u32::try_from(rank.saturating_add(1)).expect("bounded fixture rank"),
+                        ),
+                    CandidateProvenance::new(
+                        OccurrenceId::new(profile_id * 1_000 + point_id)
+                            .expect("profile occurrence"),
+                        CandidateBranch::MultiProfile,
+                        CandidateSourceKind::Hnsw,
+                        ScoreOrder::LowerIsBetter,
+                        SourceAuthority::DerivedArtifact,
+                    )
+                    .with_profile(ProfileId::new(profile_id).expect("profile identity"))
+                    .with_source_version(
+                        SourceVersion::new(source_version).expect("source version"),
+                    ),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(CandidatePage::new(rows, true))
+    }
+}
+
+fn profile_branch(name: &str, hash: u64, weight: f64) -> MultiProfileBranch {
+    MultiProfileBranch::new(
+        ProfileName::new(name).expect("profile name"),
+        hash,
+        "[1,0,0]".to_owned(),
+        2,
+        weight,
+    )
+    .expect("profile branch")
+}
+
+fn execute_profile_query(
+    score_scale: f64,
+    budget: ExecutionBudget,
+) -> context_query::ExecutionOutcome {
+    let query = build_multi_profile_query(
+        vec![
+            profile_branch("legacy", 11, 2.0),
+            profile_branch("modern", 22, 1.0),
+        ],
+        None,
+        60,
+        3,
+    )
+    .expect("multi-profile query");
+    QueryExecutor::new(
+        &mut ProfileSource { score_scale },
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&query, budget)
+    .expect("multi-profile execution")
+}
+
+#[test]
+fn profile_nearest_executor_uses_rank_only_fusion_and_retains_provenance() {
+    let budget = ExecutionBudget::new(8, 8, 8, 8, 2, 3).expect("profile budget");
+    let small_scores = execute_profile_query(0.001, budget);
+    let large_scores = execute_profile_query(1_000_000.0, budget);
+
+    let point_ids = |outcome: &context_query::ExecutionOutcome| {
+        outcome
+            .points()
+            .iter()
+            .map(|point| point.point_id().get())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(point_ids(&small_scores), vec![2, 1, 3]);
+    assert_eq!(point_ids(&small_scores), point_ids(&large_scores));
+    assert_eq!(small_scores.points().len(), 3);
+
+    let shared = &small_scores.points()[0];
+    assert_eq!(shared.point_id(), PointId::new(2));
+    assert_eq!(shared.contributions().len(), 2);
+    assert_eq!(
+        shared
+            .contributions()
+            .iter()
+            .map(|contribution| {
+                let provenance = contribution.provenance();
+                (
+                    provenance.branch(),
+                    provenance.source(),
+                    provenance.profile().map(ProfileId::get),
+                    provenance.source_version().map(SourceVersion::get),
+                )
+            })
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                CandidateBranch::MultiProfile,
+                CandidateSourceKind::Hnsw,
+                Some(10),
+                Some(100),
+            ),
+            (
+                CandidateBranch::MultiProfile,
+                CandidateSourceKind::Hnsw,
+                Some(20),
+                Some(200),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn prefetch_carries_retained_candidate_memory_between_branch_budgets() {
+    let query = QueryIr::new(
+        QueryKind::Prefetch {
+            branches: vec![branch(1.0), branch(-1.0)],
+            fusion: Fusion::STANDARD_RRF,
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        3,
+    )
+    .expect("prefetch should be valid");
+    let mut source = RoutingSource {
+        retained_memory_bytes: 1_024,
+        ..Default::default()
+    };
+    let budget = ExecutionBudget::new(8, 8, 8, 8, 2, 3)
+        .and_then(|budget| budget.with_resource_limits(100, 1024 * 1024, 1024 * 1024, 10_000))
+        .expect("prefetch memory budget");
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&query, budget)
+    .expect("prefetch should account retained adapter state");
+
+    assert_eq!(source.observed_memory_budgets.len(), 2);
+    assert!(source.observed_memory_budgets[1] < source.observed_memory_budgets[0]);
+    assert!(outcome.usage().memory_bytes() >= 2 * source.retained_memory_bytes);
+}
+
+#[test]
+fn profile_nearest_executor_breaks_equal_rank_fusion_scores_by_point_id() {
+    let query = build_multi_profile_query(
+        vec![
+            profile_branch("legacy", 11, 1.0),
+            profile_branch("modern", 22, 1.0),
+        ],
+        None,
+        60,
+        3,
+    )
+    .expect("equal-weight multi-profile query");
+    let outcome = QueryExecutor::new(
+        &mut ProfileSource { score_scale: 1.0 },
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(
+        &query,
+        ExecutionBudget::new(8, 8, 8, 8, 2, 3).expect("tie budget"),
+    )
+    .expect("equal-weight execution");
+
+    assert_eq!(
+        outcome
+            .points()
+            .iter()
+            .map(|point| point.point_id().get())
+            .collect::<Vec<_>>(),
+        vec![2, 1, 3]
+    );
+    assert_eq!(outcome.points()[1].score(), outcome.points()[2].score());
+}
+
+#[test]
+fn profile_nearest_executor_fails_closed_at_candidate_budget() {
+    let budget = ExecutionBudget::new(2, 8, 8, 8, 2, 3).expect("bounded profile budget");
+    let outcome = execute_profile_query(1.0, budget);
+    assert_eq!(outcome.completion(), Completion::BudgetExhausted);
+    assert!(outcome.points().is_empty());
+    assert!(outcome.usage().candidates() <= 2);
+}
+
+#[test]
+fn profile_nearest_executor_cancels_before_profile_port_work() {
+    let query = build_multi_profile_query(vec![profile_branch("legacy", 11, 1.0)], None, 60, 2)
+        .expect("multi-profile query");
+    let mut source = ProfileSource { score_scale: 1.0 };
+    let outcome = QueryExecutor::new(
+        &mut source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &CancelOnCall {
+            calls: Cell::new(0),
+            call: 1,
+        },
+    )
+    .execute(
+        &query,
+        ExecutionBudget::new(4, 4, 4, 4, 1, 2).expect("cancellation budget"),
+    )
+    .expect("cancelled execution");
+
+    assert_eq!(outcome.completion(), Completion::Cancelled);
+    assert!(outcome.points().is_empty());
 }
 
 #[test]

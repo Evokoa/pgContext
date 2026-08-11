@@ -48,7 +48,8 @@ the surrounding SQL type context.
 
 Use `pgcontext.register_jsonb_path` to expose a JSONB path as a filter and facet
 field. Missing path values behave like SQL `NULL` for facets and are omitted
-from counts.
+from counts. A path has at most 16 segments and 8,192 aggregate UTF-8 bytes;
+registration and retrieval both fail closed if that contract is exceeded.
 
 Registered filter fields also define the payload mutation surface. Qdrant-style
 `set_payload`, `delete_payload`, and `clear_payload` can update only registered

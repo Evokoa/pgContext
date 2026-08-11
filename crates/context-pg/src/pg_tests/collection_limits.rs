@@ -68,6 +68,40 @@ fn configure_collection_limits_round_trips_strict_policy() {
 }
 
 #[pg_test]
+fn multi_model_timeout_may_use_an_explicit_bounded_collection_override() {
+    create_limit_collection("m12_limits_multi_model_timeout", "embedding vector");
+    configure_limit_collection(
+        "m12_limits_multi_model_timeout",
+        "true, NULL, NULL, NULL, NULL, NULL, NULL, 1000, NULL",
+    );
+    let collection_id = Spi::get_one::<i64>(
+        "SELECT collection_id
+           FROM pgcontext._collections
+          WHERE collection_name = 'm12_limits_multi_model_timeout'",
+    )
+    .expect("collection identity lookup should succeed")
+    .expect("collection identity should exist");
+
+    assert_eq!(
+        crate::collection_limits::query_timeout_micros(
+            collection_id,
+            context_query::DEFAULT_QUERY_ELAPSED_MICROS,
+        ),
+        context_query::DEFAULT_QUERY_ELAPSED_MICROS,
+        "the canonical query path keeps its default ceiling",
+    );
+    assert_eq!(
+        crate::collection_limits::query_timeout_micros_with_ceiling(
+            collection_id,
+            context_query::DEFAULT_QUERY_ELAPSED_MICROS,
+            context_query::MAX_QUERY_ELAPSED_MICROS,
+        ),
+        1_000_000,
+        "multi-model execution may honor an explicit collection override",
+    );
+}
+
+#[pg_test]
 #[should_panic(expected = "collection m12_limits_dimensions max_dimensions 2 exceeded: 3")]
 fn register_vector_rejects_dimensions_above_strict_collection_limit() {
     create_limit_collection("m12_limits_dimensions", "embedding vector");

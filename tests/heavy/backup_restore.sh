@@ -42,10 +42,28 @@ SELECT * FROM pgcontext.register_filter_column('backup_docs', 'tenant', 'tenant'
 SELECT * FROM pgcontext.register_jsonb_path('backup_docs', 'priority', 'metadata', ARRAY['priority']);
 SELECT * FROM pgcontext.upsert_points('backup_docs', ARRAY['1', '2', '3']);
 SELECT * FROM pgcontext.record_query_stat('backup_docs', 'tenant:acme', 'search_filtered', 2, 3, 1.25);
-SELECT * FROM pgcontext.register_model_version('backup_docs', 'embed-small', 'v1', 2, 'l2');
-SELECT * FROM pgcontext.register_model_version('backup_docs', 'embed-small', 'v2', 2, 'l2');
-SELECT * FROM pgcontext.create_embedding_migration('backup_docs', 'embed-small', 'v1', 'embed-small', 'v2', 3);
 CREATE INDEX docs_embedding_hnsw_idx ON public.docs USING pgcontext_hnsw (embedding);
+SELECT pgcontext.register_embedding_profile(
+    'backup_docs', 'embed_v1', 'embedding', 'public.docs_embedding_hnsw_idx',
+    jsonb_build_object(
+        'representation', 'dense', 'dimensions', 2, 'normalization', 'none',
+        'metric', 'l2', 'provider', 'fixture', 'model', 'embed-small',
+        'revision', 'v1', 'input_template', '{t}', 'output_template', '{v}',
+        'bit_order', NULL, 'byte_order', NULL, 'scale', NULL, 'zero_point', NULL,
+        'configuration_hash', '0123456789abcdef'
+    )
+);
+SELECT pgcontext.register_embedding_profile(
+    'backup_docs', 'embed_v2', 'embedding', 'public.docs_embedding_hnsw_idx',
+    jsonb_build_object(
+        'representation', 'dense', 'dimensions', 2, 'normalization', 'none',
+        'metric', 'l2', 'provider', 'fixture', 'model', 'embed-small',
+        'revision', 'v2', 'input_template', '{t}', 'output_template', '{v}',
+        'bit_order', NULL, 'byte_order', NULL, 'scale', NULL, 'zero_point', NULL,
+        'configuration_hash', 'fedcba9876543210'
+    )
+);
+SELECT * FROM pgcontext.create_embedding_migration('backup_docs', 'embed_v1', 'embed_v2', 3);
 SQL
 
 pg_dump -h "${PGHOST}" -p "${PGPORT}" -Fc -d "${DBNAME}" -f "${DUMP_FILE}"
@@ -64,7 +82,7 @@ DECLARE
     filtered_count bigint;
     priority_count bigint;
     point_count bigint;
-    model_count bigint;
+    profile_count bigint;
     migration_count bigint;
     telemetry_status text;
     restored_query_count bigint;
@@ -106,12 +124,12 @@ BEGIN
     END IF;
     RAISE NOTICE 'backup_restore_scroll_verified';
 
-    SELECT count(*) INTO model_count FROM pgcontext.model_versions()
+    SELECT count(*) INTO profile_count FROM pgcontext.embedding_profiles()
      WHERE collection_name = 'backup_docs';
-    IF model_count <> 2 THEN
-        RAISE EXCEPTION 'unexpected restored model version count: %', model_count;
+    IF profile_count <> 2 THEN
+        RAISE EXCEPTION 'unexpected restored embedding profile count: %', profile_count;
     END IF;
-    RAISE NOTICE 'backup_restore_model_versions_verified';
+    RAISE NOTICE 'backup_restore_embedding_profiles_verified';
 
     SELECT count(*) INTO migration_count FROM pgcontext.embedding_migrations()
      WHERE collection_name = 'backup_docs'

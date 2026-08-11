@@ -3,8 +3,8 @@
 use core::fmt;
 
 use crate::policy::{
-    MAX_COLLECTION_NAME_BYTES, MAX_SOURCE_KEY_BYTES, MAX_SQL_IDENTIFIER_BYTES,
-    MAX_VECTOR_DIMENSIONS,
+    MAX_COLLECTION_NAME_BYTES, MAX_PROFILE_NAME_BYTES, MAX_SOURCE_KEY_BYTES,
+    MAX_SQL_IDENTIFIER_BYTES, MAX_VECTOR_DIMENSIONS,
 };
 use crate::{Error, Result};
 
@@ -41,6 +41,57 @@ impl CollectionName {
 }
 
 impl fmt::Display for CollectionName {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+/// Validated immutable embedding-profile name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ProfileName(String);
+
+impl ProfileName {
+    /// Validates a borrowed profile name without allocating it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when the name is blank, exceeds the byte
+    /// ceiling, or contains a control character.
+    pub fn validate(name: &str) -> core::result::Result<(), &'static str> {
+        if name.len() > MAX_PROFILE_NAME_BYTES {
+            return Err("exceeds 128 bytes");
+        }
+        if name.trim().is_empty() {
+            return Err("must not be blank");
+        }
+        if name.chars().any(char::is_control) {
+            return Err("must not contain control characters");
+        }
+        Ok(())
+    }
+
+    /// Validates and stores an embedding-profile name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidIdentifier`] when the name is blank, exceeds
+    /// [`MAX_PROFILE_NAME_BYTES`], or contains a control character.
+    pub fn new(name: impl Into<String>) -> Result<Self> {
+        let name = name.into();
+        if let Err(reason) = Self::validate(&name) {
+            return Err(invalid_identifier("profile name", &name, reason));
+        }
+        Ok(Self(name))
+    }
+
+    /// Returns the validated profile name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ProfileName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }

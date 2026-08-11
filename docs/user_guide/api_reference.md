@@ -80,6 +80,11 @@ Search and query:
 - `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, filter jsonb, limit integer)`
 - `pgcontext.query_sparse_nearest(vector_name text, vector sparsevec, limit integer)`
 - `pgcontext.query_lexical(source text, query jsonb, filter jsonb, limit integer)`
+- `pgcontext.query_multi_model(collection text, branches jsonb, filter jsonb,
+  limit integer, rrf_k integer, unique_candidate_budget integer,
+  require_all_profiles boolean)` returns a bounded, version-safe JSON report
+  for rank-only weighted-RRF fusion across immutable profiles. See
+  [Multi-model retrieval](multi_model.md).
 - `pgcontext.query_late_interaction(query_vectors vector[], candidates_per_query integer, limit integer)`
 - `pgcontext.query_recommend(positive_point_ids bigint[], negative_point_ids bigint[], limit integer)`
 - `pgcontext.query_discover(context_point_ids bigint[], limit integer)`
@@ -174,7 +179,8 @@ Provider-native integer and packed-binary source contracts are experimental:
   `invalid_parameter_value` outside `1..=vector_dims(vector)`. See
   [Adaptive-dimension retrieval](adaptive_dimension.md).
 - `pgcontext.register_embedding_profile(collection text, profile_name text,
-  source_column text, hnsw_index text, profile jsonb)` stores an immutable
+  source_column text, hnsw_index text, profile jsonb, lifecycle text DEFAULT
+  'active')` stores an immutable
   provider contract. `hnsw_index` must be schema-qualified and must be a live,
   simple `pgcontext_hnsw` index over `source_column` with the exact
   representation, typmod, metric, and pgContext opclass declared by the
@@ -182,7 +188,10 @@ Provider-native integer and packed-binary source contracts are experimental:
   contain exactly `representation`, `dimensions`, `normalization`, `metric`,
   `provider`, `model`, `revision`, `input_template`, `output_template`,
   `bit_order`, `byte_order`, `scale`, `zero_point`, and
-  `configuration_hash`, and may additionally carry `matryoshka_prefixes`. Binary profiles require Hamming or Jaccard plus both
+  `configuration_hash`, and may additionally carry `matryoshka_prefixes` or
+  the paired `source_version_column` and `embedding_version_column`. Version
+  bindings must name distinct `bigint` columns and are required by
+  `query_multi_model`. Binary profiles require Hamming or Jaccard plus both
   orders; integer profiles may declare a positive scale and in-range zero
   point. The configuration hash is 16 lowercase hexadecimal digits and cannot
   be zero. `matryoshka_prefixes` is an optional array of 1..=8 strictly
@@ -202,10 +211,11 @@ Provider-native integer and packed-binary source contracts are experimental:
   through `shadow` before it can serve again. `retired` is terminal and no
   state may be re-declared as itself. Requires collection ownership.
 - `pgcontext.embedding_profile_coverage(collection text)` reports, per profile,
-  its lifecycle, whether it serves queries, its source column, how many active
-  visible points carry a value in that column, and the collection's total
-  active points — so an incomplete backfill is visible before a cutover rather
-  than discovered as a thin branch at query time.
+  its lifecycle, whether it serves queries, its source column, current covered
+  points, stale points whose embedding version differs from the source version,
+  and active mapped points. All three counts join the authoritative source and
+  therefore include only rows visible under the invoker's current ACL and RLS
+  policy.
 - `pgcontext.embedding_profiles()` lists source-column and HNSW bindings for
   collections owned by the session role.
   `pgcontext.embedding_profile_explain(collection text, profile_name text)`
@@ -262,12 +272,6 @@ Operations, diagnostics, and telemetry:
   `total_expansions` includes every prefix-widening step.
 - `pgcontext.query_telemetry_queue_stats()` — `pg_monitor`-restricted health
   counters for the bounded asynchronous delivery queue
-- `pgcontext.register_model_version(collection text, model_name text, model_version text, dimensions integer, metric text)`
-- `pgcontext.model_versions()`
-- `pgcontext.create_embedding_migration(collection text, source_model_name text, source_model_version text, target_model_name text, target_model_version text, total_points bigint)`
-- `pgcontext.update_embedding_migration(migration_id bigint, processed_points bigint, status text)`
-- `pgcontext.embedding_migrations()`
-
 Stable status values use the SQL enum labels below. String inputs that update
 catalog state, such as `pgcontext.update_embedding_migration(..., status text)`,
 may accept lowercase command strings, but result rows expose the typed enum
@@ -317,6 +321,17 @@ graduates from the experimental parity row.
   see [pgvector_coexist.md](pgvector_coexist.md))
 
 ## Experimental APIs
+
+Profile-backed migration tracking:
+
+- `pgcontext.create_embedding_migration(collection text, source_profile text,
+  target_profile text, total_points bigint)`
+- `pgcontext.update_embedding_migration(migration_id bigint, processed_points bigint, status text)`
+- `pgcontext.embedding_migrations()`
+
+The former `register_model_version`, `model_versions`, and `_model_versions`
+surfaces were removed. There is no compatibility overload; migrations now
+reference immutable profiles.
 
 pgvector coexist-mode tooling (see [pgvector_coexist.md](pgvector_coexist.md)
 for semantics and caveats):

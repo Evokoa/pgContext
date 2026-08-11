@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `03117bcf1f569bf0c9e67d0119ece1194d6d446a877472b26bc1cc3c02ca6977`
+Full SQL artifact SHA-256: `db6e6fbcbd394916aaf1f40c1d94df762d735fd420523b457a5f329180df9a38`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,8 +16,8 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 391 |
-| Tables | 26 |
+| Functions | 390 |
+| Tables | 25 |
 | Views | 16 |
 | Triggers | 6 |
 | Casts | 35 |
@@ -74,7 +74,6 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._generation_build_rows`
 - table `pgcontext._generation_manifests`
 - table `pgcontext._generation_reader_pins`
-- table `pgcontext._model_versions`
 - table `pgcontext._pgvector_ownership_conversions`
 - table `pgcontext._query_stats`
 - trigger `embedding_profiles_immutable`
@@ -272,7 +271,6 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"lexical_headline"`
 - `"lexical_sources"`
 - `"migration_report"`
-- `"model_versions"`
 - `"negative_inner_product"`
 - `"optimization_status"`
 - `"pgvector_compatibility_inventory"`
@@ -291,6 +289,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"query_late_interaction"`
 - `"query_lexical"`
 - `"query_lookup"`
+- `"query_multi_model"`
 - `"query_nearest"`
 - `"query_prefetch"`
 - `"query_recommend"`
@@ -312,7 +311,6 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"register_lexical_document_source"`
 - `"register_lexical_source"`
 - `"register_lexical_tsquery"`
-- `"register_model_version"`
 - `"register_sparse_vector"`
 - `"register_vector"`
 - `"repair_late_interaction"`

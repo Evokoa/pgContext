@@ -1,23 +1,25 @@
 //! Validated query intermediate representation.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use context_core::policy::{MAX_FILTER_DEPTH, MAX_FILTER_NODES, MAX_RECALL_CHECK_POINT_IDS};
-use context_core::{DenseVector, PointId, SearchLimit, SparseVector, VectorName};
+use context_core::{DenseVector, PointId, ProfileName, SearchLimit, SparseVector, VectorName};
 use context_filter::{Filter, parse_filter_json};
 use serde_json::Value as JsonValue;
 
 use crate::{
     Formula, FuzzyQuery, FuzzySourceName, LateInteractionWork, LexicalQuery, LexicalSourceName,
-    MAX_LATE_INTERACTION_COMPARISONS, MAX_LATE_INTERACTION_SCALAR_CELLS, QueryError, Result,
-    ScoreOrder,
+    MAX_LATE_INTERACTION_COMPARISONS, MAX_LATE_INTERACTION_SCALAR_CELLS, MultiProfileBranch,
+    MultiProfileQuery, QueryError, Result, ScoreOrder,
 };
 
 /// Maximum nesting depth accepted by a typed query plan.
 pub const MAX_QUERY_DEPTH: usize = 32;
 /// Maximum total nodes accepted by a typed query plan.
 pub const MAX_QUERY_NODES: usize = 256;
-const MAX_FILTER_SCALAR_BYTES: usize = 64 * 1024;
+/// Maximum aggregate scalar bytes accepted by one query filter.
+pub const MAX_FILTER_SCALAR_BYTES: usize = 64 * 1024;
 
 /// Rank-only fusion policy for a prefetch node.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,6 +65,15 @@ pub enum QueryKind {
         vector_name: VectorName,
         /// Validated sparse query vector.
         vector: SparseVector,
+    },
+    /// Nearest-neighbor retrieval through one immutable embedding profile.
+    ProfileNearest {
+        /// Registered immutable profile name.
+        profile: ProfileName,
+        /// Expected immutable profile configuration hash.
+        configuration_hash: u64,
+        /// Bounded provider-native query payload.
+        query: MultiProfileQuery,
     },
     /// PostgreSQL-native lexical retrieval over a registered lexical source.
     Lexical {
@@ -157,7 +168,7 @@ pub enum QueryKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct QueryIr {
     kind: QueryKind,
-    filter: Option<Filter>,
+    filter: Option<Arc<Filter>>,
     limit: SearchLimit,
     score_order: ScoreOrder,
 }
@@ -210,6 +221,33 @@ impl QueryIr {
             filter: parse_filter(filter)?,
             limit: SearchLimit::new(limit)?,
             score_order,
+        };
+        query.validate()?;
+        Ok(query)
+    }
+
+    /// Creates a validated profile-bound nearest-neighbor request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] for a zero configuration hash,
+    /// invalid filter shape, or zero limit.
+    pub fn profile_nearest(
+        profile: ProfileName,
+        configuration_hash: u64,
+        query: MultiProfileQuery,
+        filter: Option<JsonValue>,
+        limit: usize,
+    ) -> Result<Self> {
+        let query = Self {
+            kind: QueryKind::ProfileNearest {
+                profile,
+                configuration_hash,
+                query,
+            },
+            filter: parse_filter(filter)?,
+            limit: SearchLimit::new(limit)?,
+            score_order: ScoreOrder::LowerIsBetter,
         };
         query.validate()?;
         Ok(query)
@@ -326,8 +364,8 @@ impl QueryIr {
 
     /// Returns optional filter JSON for a filter-candidate adapter.
     #[must_use]
-    pub const fn filter(&self) -> Option<&Filter> {
-        self.filter.as_ref()
+    pub fn filter(&self) -> Option<&Filter> {
+        self.filter.as_deref()
     }
 
     /// Returns the requested final result limit.
@@ -358,6 +396,7 @@ impl QueryIr {
                 | QueryKind::TopologyExpand { query, .. } => query.has_filter_in_subtree(),
                 QueryKind::Nearest { .. }
                 | QueryKind::SparseNearest { .. }
+                | QueryKind::ProfileNearest { .. }
                 | QueryKind::Lexical { .. }
                 | QueryKind::Fuzzy { .. }
                 | QueryKind::LateInteraction { .. }
@@ -365,6 +404,31 @@ impl QueryIr {
                 | QueryKind::Discover { .. }
                 | QueryKind::Lookup { .. } => false,
             }
+    }
+
+    /// Returns the first shared filter attached to this query tree.
+    #[must_use]
+    pub fn filter_in_subtree(&self) -> Option<&Filter> {
+        self.filter().or_else(|| match &self.kind {
+            QueryKind::Prefetch { branches, .. } => {
+                branches.iter().find_map(Self::filter_in_subtree)
+            }
+            QueryKind::Weighted { query, .. }
+            | QueryKind::ScoreThreshold { query, .. }
+            | QueryKind::Formula { query, .. }
+            | QueryKind::Rerank { query }
+            | QueryKind::ExternalRerank { query, .. }
+            | QueryKind::TopologyExpand { query, .. } => query.filter_in_subtree(),
+            QueryKind::Nearest { .. }
+            | QueryKind::SparseNearest { .. }
+            | QueryKind::ProfileNearest { .. }
+            | QueryKind::Lexical { .. }
+            | QueryKind::Fuzzy { .. }
+            | QueryKind::LateInteraction { .. }
+            | QueryKind::Recommend { .. }
+            | QueryKind::Discover { .. }
+            | QueryKind::Lookup { .. } => None,
+        })
     }
 
     /// Returns the largest result limit requested by any node in this tree.
@@ -384,6 +448,7 @@ impl QueryIr {
             | QueryKind::TopologyExpand { query, .. } => query.max_node_limit(),
             QueryKind::Nearest { .. }
             | QueryKind::SparseNearest { .. }
+            | QueryKind::ProfileNearest { .. }
             | QueryKind::Lexical { .. }
             | QueryKind::Fuzzy { .. }
             | QueryKind::LateInteraction { .. }
@@ -439,6 +504,7 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
         QueryKind::Weighted { query: child, .. }
         | QueryKind::ScoreThreshold { query: child, .. }
         | QueryKind::Rerank { query: child } => Some(child.score_order()),
+        QueryKind::ProfileNearest { .. } => Some(ScoreOrder::LowerIsBetter),
         QueryKind::Nearest { .. } | QueryKind::SparseNearest { .. } => None,
     };
     if expected_order.is_some_and(|expected| query.score_order != expected) {
@@ -453,6 +519,16 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
 fn validate_kind(kind: &QueryKind, depth: usize, nodes: &mut usize) -> Result<()> {
     match kind {
         QueryKind::Nearest { .. } | QueryKind::SparseNearest { .. } => {}
+        QueryKind::ProfileNearest {
+            configuration_hash,
+            query,
+            ..
+        } => {
+            if *configuration_hash == 0 {
+                return Err(invalid("configuration_hash", "must be nonzero"));
+            }
+            query.validate()?;
+        }
         QueryKind::Lexical { query, .. } => query.validate()?,
         QueryKind::Fuzzy { .. } => {}
         QueryKind::LateInteraction {
@@ -582,6 +658,93 @@ fn validate_kind(kind: &QueryKind, depth: usize, nodes: &mut usize) -> Result<()
     Ok(())
 }
 
+/// Builds the canonical multi-profile rank-fusion tree.
+///
+/// Every branch remains in its native score space. The executor uses only the
+/// branch order and explicit weight when applying weighted reciprocal-rank
+/// fusion.
+///
+/// # Errors
+///
+/// Returns [`QueryError`] when the branch set, shared filter, limits, weights,
+/// profile bindings, or resulting recursive IR violate a hard query bound.
+pub fn build_multi_profile_query(
+    branches: Vec<MultiProfileBranch>,
+    filter: Option<JsonValue>,
+    rrf_k: u32,
+    result_limit: usize,
+) -> Result<QueryIr> {
+    if branches.is_empty() {
+        return Err(invalid("branches", "must contain at least one query"));
+    }
+    if branches.len() > crate::MAX_MULTI_PROFILE_BRANCHES {
+        return Err(QueryError::InvalidInput {
+            field: "branches",
+            reason: format!(
+                "must contain at most {} queries",
+                crate::MAX_MULTI_PROFILE_BRANCHES
+            ),
+        });
+    }
+    let aggregate_query_bytes = branches.iter().try_fold(0_usize, |total, branch| {
+        total
+            .checked_add(branch.typed_query().as_str().len())
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "multi_profile_query_byte_projection",
+            })
+    })?;
+    if aggregate_query_bytes > crate::MAX_MULTI_PROFILE_QUERY_TOTAL_BYTES {
+        return Err(QueryError::WorkBudgetExceeded {
+            budget: "multi_profile_query_bytes",
+            actual: aggregate_query_bytes,
+            maximum: crate::MAX_MULTI_PROFILE_QUERY_TOTAL_BYTES,
+        });
+    }
+    if rrf_k == 0 {
+        return Err(invalid("rrf_k", "must be positive"));
+    }
+    let filter = parse_filter(filter)?;
+    let mut profiles = BTreeSet::new();
+    let mut weighted = Vec::with_capacity(branches.len());
+    for branch in branches {
+        let (profile, configuration_hash, query, limit, weight) = branch.into_query_parts();
+        if !profiles.insert(profile.clone()) {
+            return Err(invalid("branches", "profile names must be unique"));
+        }
+        let leaf = QueryIr {
+            kind: QueryKind::ProfileNearest {
+                profile,
+                configuration_hash,
+                query,
+            },
+            filter: filter.clone(),
+            limit: SearchLimit::new(limit)?,
+            score_order: ScoreOrder::LowerIsBetter,
+        };
+        leaf.validate()?;
+        weighted.push(QueryIr::new(
+            QueryKind::Weighted {
+                query: Box::new(leaf),
+                weight,
+            },
+            ScoreOrder::LowerIsBetter,
+            None,
+            limit,
+        )?);
+    }
+    QueryIr::new(
+        QueryKind::Prefetch {
+            branches: weighted,
+            fusion: Fusion::WeightedRrf {
+                rank_constant: rrf_k,
+            },
+        },
+        ScoreOrder::HigherIsBetter,
+        None,
+        result_limit,
+    )
+}
+
 fn validate_late_interaction_raw_shape(
     vectors: &[Vec<f32>],
     candidates_per_query: usize,
@@ -664,23 +827,35 @@ fn invalid(field: &'static str, reason: &'static str) -> QueryError {
     }
 }
 
-fn parse_filter(filter: Option<JsonValue>) -> Result<Option<Filter>> {
+fn parse_filter(filter: Option<JsonValue>) -> Result<Option<Arc<Filter>>> {
     filter
         .map(|filter| {
-            let mut nodes = 0;
-            let mut scalar_bytes = 0;
-            validate_filter_value(&filter, 1, &mut nodes, &mut scalar_bytes)?;
+            validate_filter_json_value(&filter)?;
             let encoded =
                 serde_json::to_string(&filter).map_err(|error| QueryError::InvalidInput {
                     field: "filter",
                     reason: error.to_string(),
                 })?;
-            parse_filter_json(&encoded).map_err(|error| QueryError::InvalidInput {
-                field: "filter",
-                reason: error.to_string(),
-            })
+            parse_filter_json(&encoded)
+                .map(Arc::new)
+                .map_err(|error| QueryError::InvalidInput {
+                    field: "filter",
+                    reason: error.to_string(),
+                })
         })
         .transpose()
+}
+
+/// Validates a JSON filter before serialization or cloning at transport boundaries.
+///
+/// # Errors
+///
+/// Returns [`QueryError::InvalidInput`] when depth, node count, or aggregate
+/// scalar bytes exceed the canonical Q1 limits.
+pub fn validate_filter_json_value(value: &JsonValue) -> Result<()> {
+    let mut nodes = 0;
+    let mut scalar_bytes = 0;
+    validate_filter_value(value, 1, &mut nodes, &mut scalar_bytes)
 }
 
 fn validate_filter_value(

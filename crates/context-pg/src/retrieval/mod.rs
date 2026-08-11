@@ -7,7 +7,8 @@ pub(crate) use sparse::{SparseCandidateStrategy, run_sparse_query};
 
 use context_core::{
     CollectionName, ConfigurationRevision, DenseVector, GenerationId, MatryoshkaPolicy,
-    OccurrenceId, PointId, ScoreOrder, SearchLimit, SourceAuthority, SourceKey,
+    OccurrenceId, PointId, ProfileId, ScoreOrder, SearchLimit, SourceAuthority, SourceKey,
+    SourceVersion,
 };
 use context_index::HnswComparisonBudget;
 use context_query::{
@@ -84,6 +85,48 @@ fn artifact_candidate_provenance(
             .with_generation(generation)
             .with_configuration(configuration),
     )
+}
+
+pub(super) fn profile_candidate_provenance(
+    point_id: PointId,
+    configuration: ConfigurationRevision,
+    profile: ProfileId,
+    source_version: SourceVersion,
+    adapter: CandidateAdapter,
+    exact_authority: SourceAuthority,
+) -> Result<CandidateProvenance> {
+    let (source, authority) = match adapter {
+        CandidateAdapter::Exact => (CandidateSourceKind::Exact, exact_authority),
+        CandidateAdapter::Hnsw => (CandidateSourceKind::Hnsw, SourceAuthority::DerivedArtifact),
+    };
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for bytes in [
+        point_id.get().to_le_bytes(),
+        u64::from(CandidateBranch::MultiProfile.stable_code()).to_le_bytes(),
+        u64::from(source.stable_code()).to_le_bytes(),
+        configuration.get().to_le_bytes(),
+        profile.get().to_le_bytes(),
+        source_version.get().to_le_bytes(),
+    ] {
+        for byte in bytes {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    let occurrence_id = OccurrenceId::new(hash).ok_or(QueryError::PortFailure {
+        stage: "candidate_provenance",
+        message: "profile candidate occurrence hash resolved to the reserved zero value".to_owned(),
+    })?;
+    Ok(CandidateProvenance::new(
+        occurrence_id,
+        CandidateBranch::MultiProfile,
+        source,
+        ScoreOrder::LowerIsBetter,
+        authority,
+    )
+    .with_configuration(configuration)
+    .with_profile(profile)
+    .with_source_version(source_version))
 }
 
 fn candidate_occurrence_id(
@@ -534,7 +577,10 @@ impl CandidateSource for PgCandidateRouter<'_> {
                 | CandidateBranch::MultiVector
                 | CandidateBranch::Quantized
                 | CandidateBranch::Topology
-                | CandidateBranch::UserProvided => unreachable!("advanced branch is validated"),
+                | CandidateBranch::UserProvided
+                | CandidateBranch::MultiProfile => {
+                    unreachable!("advanced branch is validated")
+                }
             };
             let candidate = Candidate::new(
                 row.point_id(),
@@ -974,6 +1020,12 @@ pub(crate) struct PgTelemetrySink {
     diagnostics: Vec<StageDiagnostic>,
 }
 
+impl PgTelemetrySink {
+    pub(crate) fn diagnostics(&self) -> &[StageDiagnostic] {
+        &self.diagnostics
+    }
+}
+
 impl TelemetrySink for PgTelemetrySink {
     fn record(&mut self, diagnostic: &StageDiagnostic) -> Result<()> {
         crate::query_stats_async::record(diagnostic);
@@ -985,22 +1037,36 @@ impl TelemetrySink for PgTelemetrySink {
 /// PostgreSQL cooperative cancellation bridge.
 pub(crate) struct PgCancellation;
 
-struct PgQueryClock {
+pub(crate) struct PgQueryClock {
     started: Instant,
 }
 
 impl PgQueryClock {
-    fn start() -> Self {
+    pub(crate) fn start() -> Self {
         Self {
             started: Instant::now(),
         }
+    }
+
+    pub(crate) fn elapsed_micros(&self) -> u64 {
+        u64::try_from(self.started.elapsed().as_micros()).unwrap_or(u64::MAX)
     }
 }
 
 impl QueryClock for PgQueryClock {
     fn now_micros(&self) -> u64 {
-        u64::try_from(self.started.elapsed().as_micros()).unwrap_or(u64::MAX)
+        self.elapsed_micros()
     }
+}
+
+#[allow(
+    unsafe_code,
+    reason = "pgrx's interrupt checkpoint macro enters PostgreSQL's audited FFI boundary"
+)]
+pub(crate) fn check_query_interrupt() {
+    // SAFETY: pgrx expands this to PostgreSQL's standard backend interrupt
+    // checkpoint; no pointer or borrowed PostgreSQL memory escapes.
+    pg_sys::check_for_interrupts!();
 }
 
 #[allow(
@@ -1281,7 +1347,7 @@ static QUERY_PREPARATION_DELAY_MICROS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(feature = "pg_test")]
-fn run_query_preparation_delay_probe() {
+pub(crate) fn run_query_preparation_delay_probe() {
     use std::sync::atomic::Ordering;
 
     let delay_micros = QUERY_PREPARATION_DELAY_MICROS.swap(0, Ordering::SeqCst);
@@ -1300,11 +1366,35 @@ pub(crate) fn delay_next_query_preparation_for_test(delay_micros: u64) {
     QUERY_PREPARATION_DELAY_MICROS.store(delay_micros, Ordering::SeqCst);
 }
 
+#[cfg(feature = "pg_test")]
+static QUERY_FINALIZATION_DELAY_MICROS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(feature = "pg_test")]
+pub(crate) fn run_query_finalization_delay_probe() {
+    use std::sync::atomic::Ordering;
+
+    let delay_micros = QUERY_FINALIZATION_DELAY_MICROS.swap(0, Ordering::SeqCst);
+    if delay_micros == 0 {
+        return;
+    }
+    let delay_seconds = delay_micros as f64 / 1_000_000.0;
+    Spi::run(&format!("SELECT pg_catalog.pg_sleep({delay_seconds})"))
+        .expect("query finalization delay probe should run");
+}
+
+#[cfg(feature = "pg_test")]
+pub(crate) fn delay_next_query_finalization_for_test(delay_micros: u64) {
+    use std::sync::atomic::Ordering;
+
+    QUERY_FINALIZATION_DELAY_MICROS.store(delay_micros, Ordering::SeqCst);
+}
+
 #[allow(
     unsafe_code,
     reason = "the bounded query timer calls PostgreSQL's registered current-backend timeout API with fixed STATEMENT_TIMEOUT identity and value-only timestamps"
 )]
-mod current_statement_timeout {
+pub(crate) mod current_statement_timeout {
     use core::ffi::c_int;
 
     use context_query::{QueryError, Result};
@@ -1319,13 +1409,13 @@ mod current_statement_timeout {
         fn get_timeout_finish_time(id: c_int) -> pg_sys::TimestampTz;
     }
 
-    pub(super) struct Guard {
+    pub(crate) struct Guard {
         original_finish: Option<pg_sys::TimestampTz>,
         armed: bool,
     }
 
     impl Guard {
-        pub(super) fn arm(timeout_micros: u64) -> Result<Self> {
+        pub(crate) fn arm(timeout_micros: u64) -> Result<Self> {
             let delay_micros =
                 i64::try_from(timeout_micros).map_err(|_| QueryError::ArithmeticOverflow {
                     operation: "query_timeout_deadline",
@@ -1355,7 +1445,7 @@ mod current_statement_timeout {
             }
         }
 
-        pub(super) fn restore(mut self) {
+        pub(crate) fn restore(mut self) {
             self.disarm(true);
         }
 
@@ -1364,7 +1454,7 @@ mod current_statement_timeout {
                 return;
             }
             // SAFETY: this guard exclusively replaces the backend's statement
-            // timeout for its lexical query section. The saved finish time is
+            // timeout for its bounded query section. The saved finish time is
             // an owned scalar from the same backend and is restored only on a
             // successful path; PostgreSQL command cleanup owns error paths.
             unsafe {
@@ -1902,6 +1992,7 @@ fn collect_dense_vector_names(query: &QueryIr, names: &mut BTreeSet<Option<Strin
         | QueryKind::ExternalRerank { query, .. }
         | QueryKind::TopologyExpand { query, .. } => collect_dense_vector_names(query, names),
         QueryKind::SparseNearest { .. }
+        | QueryKind::ProfileNearest { .. }
         | QueryKind::Lexical { .. }
         | QueryKind::Fuzzy { .. }
         | QueryKind::LateInteraction { .. }
@@ -2538,7 +2629,7 @@ fn leaf_candidate_limit(query: &QueryIr, adapter: CandidateAdapter) -> Result<us
     Ok(limit)
 }
 
-fn require_complete_outcome(outcome: &ExecutionOutcome) {
+pub(crate) fn require_complete_outcome(outcome: &ExecutionOutcome) {
     match outcome.state() {
         ExecutionState::Ready => {}
         ExecutionState::RebuildRequired { reason } => raise_sql_error(

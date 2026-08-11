@@ -352,6 +352,21 @@ impl<'a> QueryExecutor<'a> {
                 page.scored_count(),
             ));
         }
+        let page_memory_bytes = page
+            .candidates()
+            .len()
+            .checked_mul(size_of::<Candidate>())
+            .and_then(|bytes| bytes.checked_add(page.retained_memory_bytes()))
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "candidate_page_memory_accounting",
+            })?;
+        if page_memory_bytes > port_budget.max_memory_bytes() {
+            return Err(contract_violation(
+                "candidate_memory",
+                port_budget.max_memory_bytes(),
+                page_memory_bytes,
+            ));
+        }
         if !page.stage_diagnostics().is_empty() {
             let expected_stages = page.expansion_count().saturating_add(1);
             if page.stage_diagnostics().len() != expected_stages {
@@ -400,11 +415,7 @@ impl<'a> QueryExecutor<'a> {
         usage.add_candidates(page.candidate_work_count());
         usage.add_expansions(page.expansion_count());
         usage.add_comparisons(page.scored_count());
-        usage.add_memory_bytes(
-            page.candidates()
-                .len()
-                .saturating_mul(size_of::<Candidate>()),
-        );
+        usage.add_memory_bytes(page_memory_bytes);
         let candidate_stage_count = page.stage_diagnostics().len().max(1);
         if usage.stages().saturating_add(candidate_stage_count) > budget.max_stages() {
             return Err(contract_violation(

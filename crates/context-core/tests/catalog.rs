@@ -1,8 +1,8 @@
 //! Collection catalog value-object tests.
 
 use context_core::{
-    CollectionName, Error, QualifiedTableName, SourceKey, SqlIdentifier, VectorDimensions,
-    VectorName,
+    CollectionName, Error, ProfileName, QualifiedTableName, SourceKey, SqlIdentifier,
+    VectorDimensions, VectorName,
 };
 
 #[test]
@@ -114,6 +114,34 @@ fn source_key_rejects_empty_and_oversized_keys() {
         SourceKey::new(oversized.clone()),
         Err(Error::InvalidSourceKey(oversized))
     );
+}
+
+#[test]
+fn profile_name_uses_one_shared_bounded_control_free_identity() {
+    assert_eq!(
+        ProfileName::new("legacy v1").map(|name| name.as_str().to_owned()),
+        Ok("legacy v1".to_owned())
+    );
+    for (name, reason) in [
+        ("   ".to_owned(), "must not be blank"),
+        (
+            "bad\nname".to_owned(),
+            "must not contain control characters",
+        ),
+        ("x".repeat(129), "exceeds 128 bytes"),
+        (" ".repeat(129), "exceeds 128 bytes"),
+    ] {
+        assert_eq!(ProfileName::validate(&name), Err(reason));
+        assert_eq!(
+            ProfileName::new(name.clone()),
+            Err(Error::InvalidIdentifier {
+                kind: "profile name",
+                value: name,
+                reason,
+            })
+        );
+    }
+    assert_eq!(ProfileName::validate("legacy v1"), Ok(()));
 }
 
 fn assert_invalid_collection_name(name: &str, expected_reason: &'static str) {

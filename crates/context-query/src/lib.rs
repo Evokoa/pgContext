@@ -14,6 +14,7 @@ mod executor;
 mod formula;
 mod ir;
 mod lexical;
+mod multi_profile;
 mod plan;
 mod policy;
 mod ports;
@@ -34,11 +35,17 @@ pub use budget::{
     MAX_QUERY_COMPARISONS, MAX_QUERY_ELAPSED_MICROS, MAX_QUERY_HYDRATION_BYTES,
     MAX_QUERY_MEMORY_BYTES,
 };
-pub use context_core::{Completion, PointId, ProfileLifecycle, ReadinessReason, ScoreOrder};
+pub use context_core::policy::MAX_PROFILE_NAME_BYTES;
+pub use context_core::{
+    Completion, PointId, ProfileLifecycle, ProfileName, ReadinessReason, ScoreOrder,
+};
 pub use error::{QueryError, Result};
 pub use executor::QueryExecutor;
 pub use formula::{CompiledFormula, Formula, MAX_FORMULA_BYTES, MAX_FORMULA_OPERATIONS};
-pub use ir::{Fusion, MAX_QUERY_DEPTH, MAX_QUERY_NODES, QueryIr, QueryKind};
+pub use ir::{
+    Fusion, MAX_FILTER_SCALAR_BYTES, MAX_QUERY_DEPTH, MAX_QUERY_NODES, QueryIr, QueryKind,
+    build_multi_profile_query, validate_filter_json_value,
+};
 pub use lexical::{
     FuzzyMode, FuzzyQuery, FuzzySourceName, FuzzyThreshold, LexicalBooleanOperator,
     LexicalNormalization, LexicalPrefixTerm, LexicalQuery, LexicalRankWeights, LexicalRanker,
@@ -48,6 +55,13 @@ pub use lexical::{
     MAX_LEXICAL_NAME_BYTES, MAX_LEXICAL_NORMALIZATION, MAX_LEXICAL_PHRASE_DISTANCE,
     MAX_LEXICAL_QUERY_DEPTH, MAX_LEXICAL_QUERY_NODES, MAX_LEXICAL_TEXT_BYTES,
     RegisteredTsQueryName,
+};
+pub use multi_profile::{
+    MAX_MULTI_PROFILE_BRANCH_LIMIT, MAX_MULTI_PROFILE_BRANCHES, MAX_MULTI_PROFILE_QUERY_BYTES,
+    MAX_MULTI_PROFILE_QUERY_TOTAL_BYTES, MissingProfile, MissingProfileReason, MultiProfileBranch,
+    MultiProfileContribution, MultiProfileCoverage, MultiProfileDecision, MultiProfileFusedPoint,
+    MultiProfileObserved, MultiProfileQuery, MultiProfileRankedBranch, MultiProfileRankedCandidate,
+    MultiProfileRequest, fuse_multi_profile, plan_multi_profile,
 };
 pub use plan::parse_query_plan;
 pub use policy::{

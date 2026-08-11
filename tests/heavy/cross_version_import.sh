@@ -25,10 +25,10 @@ if [[ -n "${SOURCE_VERSIONS:-}" ]]; then
     # shellcheck disable=SC2206
     SOURCE_VERSION_LIST=(${SOURCE_VERSIONS})
 else
-    SOURCE_VERSION_LIST=()
-    while IFS= read -r version; do
-        SOURCE_VERSION_LIST+=("${version}")
-    done < <(discover_source_versions)
+    # The immutable-profile catalog is a clean replacement contract. Historical
+    # extension SQL remains available for archival installs, but automatic
+    # import certification starts at the current contract version.
+    SOURCE_VERSION_LIST=("${CURRENT_VERSION}")
 fi
 
 if [[ "${#SOURCE_VERSION_LIST[@]}" -eq 0 ]]; then
@@ -46,7 +46,7 @@ CREATE EXTENSION pgcontext VERSION '${source_version}';
 
 CREATE TABLE public.docs (
     id bigint PRIMARY KEY,
-    embedding vector NOT NULL,
+    embedding vector(2) NOT NULL,
     sparse_terms sparsevec NOT NULL,
     body text NOT NULL,
     tenant text NOT NULL,
@@ -80,10 +80,28 @@ SELECT * FROM pgcontext.register_filter_column('import_docs', 'tenant', 'tenant'
 SELECT * FROM pgcontext.register_jsonb_path('import_docs', 'priority', 'metadata', ARRAY['priority']);
 SELECT * FROM pgcontext.upsert_points('import_docs', ARRAY['1', '2', '3']);
 SELECT * FROM pgcontext.record_query_stat('import_docs', 'tenant:acme', 'search_filtered', 2, 3, 1.25);
-SELECT * FROM pgcontext.register_model_version('import_docs', 'embed-small', 'v1', 2, 'l2');
-SELECT * FROM pgcontext.register_model_version('import_docs', 'embed-small', 'v2', 2, 'l2');
-SELECT * FROM pgcontext.create_embedding_migration('import_docs', 'embed-small', 'v1', 'embed-small', 'v2', 3);
 CREATE INDEX docs_embedding_hnsw_idx ON public.docs USING pgcontext_hnsw (embedding);
+SELECT pgcontext.register_embedding_profile(
+    'import_docs', 'embed_v1', 'embedding', 'public.docs_embedding_hnsw_idx',
+    jsonb_build_object(
+        'representation', 'dense', 'dimensions', 2, 'normalization', 'none',
+        'metric', 'l2', 'provider', 'fixture', 'model', 'embed-small',
+        'revision', 'v1', 'input_template', '{t}', 'output_template', '{v}',
+        'bit_order', NULL, 'byte_order', NULL, 'scale', NULL, 'zero_point', NULL,
+        'configuration_hash', '0123456789abcdef'
+    )
+);
+SELECT pgcontext.register_embedding_profile(
+    'import_docs', 'embed_v2', 'embedding', 'public.docs_embedding_hnsw_idx',
+    jsonb_build_object(
+        'representation', 'dense', 'dimensions', 2, 'normalization', 'none',
+        'metric', 'l2', 'provider', 'fixture', 'model', 'embed-small',
+        'revision', 'v2', 'input_template', '{t}', 'output_template', '{v}',
+        'bit_order', NULL, 'byte_order', NULL, 'scale', NULL, 'zero_point', NULL,
+        'configuration_hash', 'fedcba9876543210'
+    )
+);
+SELECT * FROM pgcontext.create_embedding_migration('import_docs', 'embed_v1', 'embed_v2', 3);
 SQL
 }
 
@@ -108,7 +126,7 @@ DECLARE
     dense_options jsonb;
     sparse_options jsonb;
     point_count bigint;
-    model_count bigint;
+    profile_count bigint;
     migration_count bigint;
     restored_query_count bigint;
     telemetry_status text;
@@ -187,10 +205,10 @@ BEGIN
         RAISE EXCEPTION 'unexpected imported point count from ${source_version}: %', point_count;
     END IF;
 
-    SELECT count(*) INTO model_count FROM pgcontext.model_versions()
+    SELECT count(*) INTO profile_count FROM pgcontext.embedding_profiles()
      WHERE collection_name = 'import_docs';
-    IF model_count <> 2 THEN
-        RAISE EXCEPTION 'unexpected imported model version count from ${source_version}: %', model_count;
+    IF profile_count <> 2 THEN
+        RAISE EXCEPTION 'unexpected imported embedding profile count from ${source_version}: %', profile_count;
     END IF;
 
     SELECT count(*) INTO migration_count FROM pgcontext.embedding_migrations()

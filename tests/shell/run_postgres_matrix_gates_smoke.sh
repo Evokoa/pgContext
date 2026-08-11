@@ -26,7 +26,8 @@ if [[ "${#heavy_gate_names[@]}" -eq 0 ]]; then
   echo "could not derive HEAVY_GATES from scripts/run-postgres-matrix-gates.sh" >&2
   exit 1
 fi
-for required_gate in composite_large_hnsw indexed_lexical_hybrid adaptive_prefix_recall; do
+for required_gate in composite_large_hnsw indexed_lexical_hybrid adaptive_prefix_recall \
+    multi_model_coverage multi_model_rls_acl; do
   if [[ ! " ${heavy_gate_names[*]} " =~ " ${required_gate} " ]]; then
     echo "PostgreSQL matrix is missing required heavy gate: ${required_gate}" >&2
     exit 1
@@ -234,6 +235,12 @@ assert_heavy_row \
 assert_heavy_row \
   "sqlstate_contract" \
   "PG_VERSION=pg17 PG_FEATURE=pg17 PG_CONFIG=${fake_bin}/pg_config PGPORT=28817 tests/heavy/sqlstate_contract.sh"
+assert_heavy_row \
+  "multi_model_coverage" \
+  "PG_VERSION=pg17 PG_FEATURE=pg17 PG_CONFIG=${fake_bin}/pg_config PGPORT=28817 tests/heavy/multi_model_coverage.sh"
+assert_heavy_row \
+  "multi_model_rls_acl" \
+  "PG_VERSION=pg17 PG_FEATURE=pg17 PG_CONFIG=${fake_bin}/pg_config PGPORT=28817 tests/heavy/multi_model_rls_acl.sh"
 
 write_mmap_hnsw_restart_fixture() {
   local script_path="$1"
@@ -463,7 +470,7 @@ printf 'NOTICE:  backup_restore_nearest_verified\n'
 printf 'NOTICE:  backup_restore_filter_verified\n'
 printf 'NOTICE:  backup_restore_jsonb_facet_verified\n'
 printf 'NOTICE:  backup_restore_scroll_verified\n'
-printf 'NOTICE:  backup_restore_model_versions_verified\n'
+printf 'NOTICE:  backup_restore_embedding_profiles_verified\n'
 printf 'NOTICE:  backup_restore_migration_verified\n'
 printf 'NOTICE:  backup_restore_telemetry_verified\n'
 printf 'NOTICE:  backup_restore_query_stats_verified\n'
@@ -495,6 +502,46 @@ SH
   chmod +x "${script_path}"
 }
 
+write_multi_model_coverage_fixture() {
+  local script_path="$1"
+  cat >"${script_path}" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+dataset_hash=5552ad7c2aa17f6ad4eccf08571939cf
+workload_hash=b196c0d412eb4d26e8348b06459b301e
+pg_major="${PG_VERSION#pg}"
+for query in 1 2 3 4 5 6 7 8; do
+  for curve in a_only b_only fused partial degraded; do
+    completion=complete
+    [[ "${curve}" == degraded ]] && completion=degraded
+    printf 'multi_model_sample dataset_hash=%s workload_hash=%s query=%s curve=%s hits=20 results=20 candidates=102 rechecks=100 comparisons=1700 contributions=20 elapsed_us=25000 completion=%s\n' \
+      "${dataset_hash}" "${workload_hash}" "${query}" "${curve}" "${completion}"
+  done
+done
+printf 'multi_model_quality rows=10000 coverage=2667/1333/5333/667 recall=17/17/13 work=102/100 contributions=33\n'
+printf 'multi_model_quality_contract dataset_hash=%s workload_hash=%s queries=8 weights=1/1 top_k=20 rrf_k=60 budget=102 decision=no_go curves=a_only,b_only,fused,partial,degraded\n' \
+  "${dataset_hash}" "${workload_hash}"
+for curve in a_only b_only fused partial degraded; do
+  printf 'multi_model_latency_cost dataset_hash=%s workload_hash=%s curve=%s samples=8 latency_us_p50=20000.00 latency_us_p95=25000.00 latency_us_max=30000 candidates_avg=102.00 rechecks_avg=100.00 comparisons_avg=1700.00\n' \
+    "${dataset_hash}" "${workload_hash}" "${curve}"
+done
+printf 'multi_model_environment dataset_hash=%s workload_hash=%s pg_major=%s pg_version_num=%s0010 hardware_os=Darwin hardware_arch=arm64 hardware_cpus=14 guc_work_mem=4MB guc_maintenance_work_mem=64MB guc_effective_cache_size=4GB guc_parallel=2 guc_jit=on\n' \
+  "${dataset_hash}" "${workload_hash}" "${pg_major}" "${pg_major}"
+printf 'multi_model_coverage: ok (10000 mixed-coverage rows)\n'
+SH
+  chmod +x "${script_path}"
+}
+
+write_multi_model_rls_acl_fixture() {
+  local script_path="$1"
+  cat >"${script_path}" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'multi_model_rls_acl: ok\n'
+SH
+  chmod +x "${script_path}"
+}
+
 PATH="${default_bin}:${PATH}" \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
     --dry-run \
@@ -506,7 +553,7 @@ grep -qF "PostgreSQL 18.99-test" "${work_dir}/default-pg-config/summary.tsv"
 grep -qF "pg_config: ${default_bin}/pg_config" \
   "${work_dir}/default-pg-config/pg18-workspace-fast.log"
 
-PATH="${client_only_bin}:${PATH}" \
+PATH="${client_only_bin}:${PATH}" PG_CONFIG_SKIP_STANDARD_PATHS=1 \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
   --dry-run \
   --allow-missing \
@@ -516,6 +563,7 @@ PATH="${client_only_bin}:${PATH}" \
 grep -qF $'pg18\tpg_config\tskipped\t0' "${work_dir}/client-only/summary.tsv"
 
 PATH="${fake_bin}:${PATH}" PG18_CONFIG="${client_only_bin}/pg_config" \
+  PG_CONFIG_SKIP_STANDARD_PATHS=1 \
   "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
   --dry-run \
   --allow-missing \
@@ -570,6 +618,8 @@ write_build_job_resumability_fixture "${heavy_root}/tests/heavy/build_job_resuma
 write_large_exact_search_fixture "${heavy_root}/tests/heavy/large_exact_search.sh"
 write_partitioned_collections_fixture "${heavy_root}/tests/heavy/partitioned_collections.sh"
 write_low_memory_build_fixture "${heavy_root}/tests/heavy/low_memory_build.sh"
+write_multi_model_coverage_fixture "${heavy_root}/tests/heavy/multi_model_coverage.sh"
+write_multi_model_rls_acl_fixture "${heavy_root}/tests/heavy/multi_model_rls_acl.sh"
 cat >"${heavy_root}/tests/heavy/upgrade_matrix.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -649,6 +699,54 @@ grep -qF 'upgrade_from_previous: passed' \
   "${work_dir}/heavy-pass/pg17-heavy-upgrade_matrix.log"
 grep -qF 'matrix gate status: passed' \
   "${work_dir}/heavy-pass/pg17-heavy-upgrade_matrix.log"
+
+cat >"${heavy_root}/tests/heavy/multi_model_coverage.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'multi_model_coverage: ok (10000 mixed-coverage rows)\n'
+SH
+chmod +x "${heavy_root}/tests/heavy/multi_model_coverage.sh"
+if env \
+  PATH="${fake_bin}:${PATH}" \
+  FAKE_CARGO_LOG="${work_dir}/heavy-missing-multi-model-quality-cargo.log" \
+  PG17_CONFIG="${work_dir}/pg17-matrix/bin/pg_config" \
+  REPO_ROOT="${heavy_root}" \
+  "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
+    --major 17 \
+    --mode heavy \
+    --out-dir "${work_dir}/heavy-missing-multi-model-quality"; then
+  echo "multi-model coverage without quality evidence should fail" >&2
+  exit 1
+fi
+grep -qF $'pg17\theavy:multi_model_coverage\tfailed\t1' \
+  "${work_dir}/heavy-missing-multi-model-quality/summary.tsv"
+grep -qF 'multi_model_coverage: failed; missing held-out quality, cost, environment, or completion evidence marker' \
+  "${work_dir}/heavy-missing-multi-model-quality/pg17-heavy-multi_model_coverage.log"
+write_multi_model_coverage_fixture "${heavy_root}/tests/heavy/multi_model_coverage.sh"
+
+cat >"${heavy_root}/tests/heavy/multi_model_rls_acl.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'multi-model ACL/RLS fixture omitted its evidence marker\n'
+SH
+chmod +x "${heavy_root}/tests/heavy/multi_model_rls_acl.sh"
+if env \
+  PATH="${fake_bin}:${PATH}" \
+  FAKE_CARGO_LOG="${work_dir}/heavy-missing-multi-model-acl-cargo.log" \
+  PG17_CONFIG="${work_dir}/pg17-matrix/bin/pg_config" \
+  REPO_ROOT="${heavy_root}" \
+  "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
+    --major 17 \
+    --mode heavy \
+    --out-dir "${work_dir}/heavy-missing-multi-model-acl"; then
+  echo "multi-model ACL/RLS gate without evidence should fail" >&2
+  exit 1
+fi
+grep -qF $'pg17\theavy:multi_model_rls_acl\tfailed\t1' \
+  "${work_dir}/heavy-missing-multi-model-acl/summary.tsv"
+grep -qF 'multi_model_rls_acl: failed; missing ACL/RLS evidence marker' \
+  "${work_dir}/heavy-missing-multi-model-acl/pg17-heavy-multi_model_rls_acl.log"
+write_multi_model_rls_acl_fixture "${heavy_root}/tests/heavy/multi_model_rls_acl.sh"
 
 cat >"${heavy_root}/tests/heavy/mmap_hnsw_artifact_restart.sh" <<'SH'
 #!/usr/bin/env bash
@@ -1391,7 +1489,7 @@ printf 'NOTICE:  backup_restore_migration_verified\n'
 printf 'NOTICE:  backup_restore_telemetry_verified\n'
 printf 'NOTICE:  backup_restore_query_stats_verified\n'
 printf 'NOTICE:  backup_restore_hnsw_ready\n'
-printf 'backup/restore gate passed without model-version marker\n'
+printf 'backup/restore gate passed without embedding-profile marker\n'
 SH
 chmod +x "${heavy_root}/tests/heavy/backup_restore.sh"
 if env \
@@ -1403,12 +1501,12 @@ if env \
     --major 17 \
     --mode heavy \
     --out-dir "${work_dir}/heavy-missing-backup-restore-evidence"; then
-  echo "backup/restore pass without model-version marker evidence should fail" >&2
+  echo "backup/restore pass without embedding-profile marker evidence should fail" >&2
   exit 1
 fi
 grep -qF $'pg17\theavy:backup_restore\tfailed\t1' \
   "${work_dir}/heavy-missing-backup-restore-evidence/summary.tsv"
-grep -qF 'backup_restore: failed; missing evidence marker: NOTICE:  backup_restore_model_versions_verified' \
+grep -qF 'backup_restore: failed; missing evidence marker: NOTICE:  backup_restore_embedding_profiles_verified' \
   "${work_dir}/heavy-missing-backup-restore-evidence/pg17-heavy-backup_restore.log"
 grep -qF 'matrix gate status: failed' \
   "${work_dir}/heavy-missing-backup-restore-evidence/pg17-heavy-backup_restore.log"
@@ -1425,7 +1523,7 @@ printf 'NOTICE:  backup_restore_nearest_verified\n'
 printf 'NOTICE:  backup_restore_filter_verified\n'
 printf 'NOTICE:  backup_restore_jsonb_facet_verified\n'
 printf 'NOTICE:  backup_restore_scroll_verified\n'
-printf 'NOTICE:  backup_restore_model_versions_verified\n'
+printf 'NOTICE:  backup_restore_embedding_profiles_verified\n'
 printf 'NOTICE:  backup_restore_migration_verified\n'
 printf 'NOTICE:  backup_restore_telemetry_verified\n'
 printf 'NOTICE:  backup_restore_query_stats_verified\n'
@@ -1703,6 +1801,8 @@ write_build_job_resumability_fixture "${clean_matrix_root}/tests/heavy/build_job
 write_large_exact_search_fixture "${clean_matrix_root}/tests/heavy/large_exact_search.sh"
 write_partitioned_collections_fixture "${clean_matrix_root}/tests/heavy/partitioned_collections.sh"
 write_low_memory_build_fixture "${clean_matrix_root}/tests/heavy/low_memory_build.sh"
+write_multi_model_coverage_fixture "${clean_matrix_root}/tests/heavy/multi_model_coverage.sh"
+write_multi_model_rls_acl_fixture "${clean_matrix_root}/tests/heavy/multi_model_rls_acl.sh"
 cat >"${clean_matrix_root}/tests/heavy/upgrade_matrix.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail

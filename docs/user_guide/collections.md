@@ -253,64 +253,28 @@ vector-column registrations use SQLSTATE `42710` (`duplicate_object`). Option
 values must be JSON objects, and status accepts `ready`, `building`,
 `disabled`, or `failed`.
 
-## Model Versions
+## Embedding Profiles and Migrations
 
-Register embedding model versions used by a collection before planning
-migrations or shadow reads:
+Register immutable, index-bound embedding profiles before a model cutover.
+Multi-model profiles also bind current-source and embedding-version `bigint`
+columns so an edit invalidates stale vectors immediately. See
+[Multi-model retrieval](multi_model.md) for the complete registration and
+query contract.
 
-```sql
-SELECT collection_name,
-       model_name,
-       model_version,
-       dimensions,
-       metric,
-       is_active
-FROM pgcontext.register_model_version(
-  'docs',
-  'text-embedding-3-small',
-  '2026-07-02',
-  1536,
-  'cosine'
-);
-```
-
-List registered model versions with:
-
-```sql
-SELECT collection_name,
-       model_name,
-       model_version,
-       dimensions,
-       metric,
-       is_active
-FROM pgcontext.model_versions();
-```
-
-Model names and versions are operator-defined labels. Supported metric names
-match vector registration. Duplicate model/version pairs use SQLSTATE `42710`
-(`duplicate_object`).
-
-## Embedding Migrations
-
-Create a migration between two registered model versions before starting a
-backfill:
+Create a migration between two registered profiles before starting a backfill:
 
 ```sql
 SELECT migration_id,
        collection_name,
-       source_model,
-       source_version,
-       target_model,
-       target_version,
+       source_profile,
+       target_profile,
        status,
        total_points,
        processed_points
 FROM pgcontext.create_embedding_migration(
   'docs',
-  'text-embedding-3-small',
-  '2026-07-02',
-  'text-embedding-3-large',
-  '2026-07-02',
+  'legacy_v1',
+  'modern_v2',
   100000
 );
 ```
@@ -326,6 +290,10 @@ List migrations with `pgcontext.embedding_migrations()`. `status` is the typed
 enum `pgcontext."EmbeddingMigrationStatus"` with `Planned`, `Running`, `Completed`, or
 `Failed`; update input uses lowercase `planned`, `running`, `completed`, or
 `failed`.
+
+The mutable model-version registry was removed. Profile registration owns the
+provider/model/revision, representation, dimensions, metric, configuration
+hash, version binding, HNSW binding, and serving lifecycle in one contract.
 
 ## Register Filter Columns
 
@@ -348,7 +316,8 @@ SELECT collection_name, filter_key, table_schema, table_name, column_name, jsonb
 FROM pgcontext.register_jsonb_path('docs', 'topic', 'metadata', ARRAY['topic']);
 ```
 
-The JSONB column must exist and have type `jsonb`. Missing JSONB path values do
+The JSONB column must exist and have type `jsonb`. A registered path has at
+most 16 segments and 8,192 aggregate UTF-8 bytes. Missing JSONB path values do
 not appear in facet counts.
 
 ## Mutate Registered Payload Fields

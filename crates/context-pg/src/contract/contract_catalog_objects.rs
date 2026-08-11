@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 250;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 249;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -405,12 +405,6 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
         SqlObjectKind::Table,
         Some("pgcontext"),
         "_query_stats",
-        SqlLifecycle::Internal,
-    ),
-    SqlContractObject::object(
-        SqlObjectKind::Table,
-        Some("pgcontext"),
-        "_model_versions",
         SqlLifecycle::Internal,
     ),
     SqlContractObject::object(

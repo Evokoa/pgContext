@@ -136,6 +136,17 @@ failure.
   command/report contract and likewise requires fail-closed termination. Run
   the 1M lane on both PG17 and PG18; the 10M lane is an explicit release-scale
   command rather than a default matrix gate.
+- `multi_model_coverage.sh`: builds A-only, B-only, dual-covered, and uncovered
+  versioned rows and eight held-out queries over independent 4D and 8D model
+  spaces. It compares A-only, B-only, equal-weight fused, filtered-partial, and
+  degraded curves at the same 102-candidate allowance. The report includes 40
+  raw samples, dataset/workload hashes, latency and work summaries, environment
+  evidence, and an explicit pass/no-go quality decision. Run
+  `ROW_COUNT=1000000` on PG17 and PG18. `ROW_COUNT=10000000` preserves the
+  scheduled release-scale command and the same evidence contract.
+- `multi_model_rls_acl.sh`: proves multi-model branches preserve forced RLS,
+  registered filters, collection membership, and source-table `SELECT`
+  revocation without returning a permissive partial result.
 - `sqlstate_contract.sh`: runs the pgrx SQLSTATE contract module against the
   configured PostgreSQL version.
 

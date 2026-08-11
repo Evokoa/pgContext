@@ -14,8 +14,9 @@ using hidden catalog tables or internal APIs. The runnable SQL files live under
 - `03_hybrid_recommend_tenant_ops.sql`: combine hybrid dense plus full-text
   retrieval with recommendation search, discovery/explore search, tenant
   filters, and operational telemetry.
-- `04_model_quantization.sql`: record model versions and migrations, use
-  collection aliases for cutover, and call SQL quantization helpers.
+- `04_model_quantization.sql`: register immutable embedding profiles and a
+  profile-backed migration, use collection aliases for cutover, and call SQL
+  quantization helpers.
 - `05_named_dense_sparse_vectors.sql`: show named dense vector registration,
   exact search over a registered sparse source column with
   `pgcontext.search_sparse`, and exact dense+sparse RRF query fusion with

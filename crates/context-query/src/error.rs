@@ -54,6 +54,11 @@ pub enum QueryError {
         /// Stable operation name.
         operation: &'static str,
     },
+    /// An internal cross-component invariant was violated.
+    InvariantViolation {
+        /// Stable invariant name.
+        operation: &'static str,
+    },
 }
 
 impl fmt::Display for QueryError {
@@ -87,6 +92,9 @@ impl fmt::Display for QueryError {
             } => write!(formatter, "{budget} budget exceeded: {actual} > {maximum}"),
             Self::ArithmeticOverflow { operation } => {
                 write!(formatter, "arithmetic overflow during {operation}")
+            }
+            Self::InvariantViolation { operation } => {
+                write!(formatter, "query invariant violated during {operation}")
             }
         }
     }

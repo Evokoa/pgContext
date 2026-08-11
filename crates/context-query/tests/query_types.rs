@@ -265,6 +265,7 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
         CandidateBranch::Topology,
         CandidateBranch::UserProvided,
         CandidateBranch::Fuzzy,
+        CandidateBranch::MultiProfile,
     ];
     let sources = [
         CandidateSourceKind::Exact,
@@ -297,11 +298,12 @@ fn candidate_branch_and_source_registries_are_exhaustive() {
             "topology",
             "user_provided",
             "fuzzy",
+            "multi_profile",
         ]
     );
     assert_eq!(
         branches.map(CandidateBranch::stable_code),
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     );
     assert_eq!(
         sources.map(CandidateSourceKind::stable_name),

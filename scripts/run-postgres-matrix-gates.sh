@@ -30,6 +30,8 @@ HEAVY_GATES=(
   tests/heavy/composite_large_hnsw.sh
   tests/heavy/indexed_lexical_hybrid.sh
   tests/heavy/adaptive_prefix_recall.sh
+  tests/heavy/multi_model_coverage.sh
+  tests/heavy/multi_model_rls_acl.sh
 )
 MMAP_HNSW_RESTART_MARKERS=(
   "mmap_artifact_serving_ready: before_restart"
@@ -151,7 +153,7 @@ BACKUP_RESTORE_MARKERS=(
   "NOTICE:  backup_restore_filter_verified"
   "NOTICE:  backup_restore_jsonb_facet_verified"
   "NOTICE:  backup_restore_scroll_verified"
-  "NOTICE:  backup_restore_model_versions_verified"
+  "NOTICE:  backup_restore_embedding_profiles_verified"
   "NOTICE:  backup_restore_migration_verified"
   "NOTICE:  backup_restore_telemetry_verified"
   "NOTICE:  backup_restore_query_stats_verified"
@@ -305,6 +307,12 @@ pg_config_for_major() {
   if pg_config_is_usable_for_major "${candidate}" "${major}"; then
     printf '%s\n' "${candidate}"
     return 0
+  fi
+
+  # Shell contract tests use a client-only pg_config fixture and must not
+  # accidentally discover a developer workstation's Homebrew server install.
+  if [[ "${PG_CONFIG_SKIP_STANDARD_PATHS:-0}" == "1" ]]; then
+    return 1
   fi
 
   for candidate in \
@@ -609,6 +617,43 @@ run_gate() {
         exit_code=1
         overall_status=1
         printf '\nphysical_backup_wal_replay: failed; missing ordered evidence marker: %s\n' "${marker}" >>"${log_file}"
+      fi
+    fi
+    if [[ "${status}" == "passed" && "${gate}" == "heavy:multi_model_coverage" ]]; then
+      local sample_count latency_count curve query markers_complete contract_identity dataset_hash workload_hash
+      contract_identity="$(sed -nE 's/^multi_model_quality_contract dataset_hash=([0-9a-f]{32}) workload_hash=([0-9a-f]{32}) .*/\1 \2/p' "${log_file}" | head -n 1)"
+      dataset_hash="${contract_identity%% *}"
+      workload_hash="${contract_identity#* }"
+      sample_count="$(grep -Ec '^multi_model_sample dataset_hash=[0-9a-f]{32} workload_hash=[0-9a-f]{32} query=[1-8] curve=(a_only|b_only|fused|partial|degraded) hits=[0-9]+ results=[0-9]+ candidates=[0-9]+ rechecks=[0-9]+ comparisons=[0-9]+ contributions=[0-9]+ elapsed_us=[0-9]+ completion=(complete|degraded)$' "${log_file}" || true)"
+      latency_count="$(grep -Ec '^multi_model_latency_cost dataset_hash=[0-9a-f]{32} workload_hash=[0-9a-f]{32} curve=(a_only|b_only|fused|partial|degraded) samples=8 latency_us_p50=[0-9]+(\.[0-9]+)? latency_us_p95=[0-9]+(\.[0-9]+)? latency_us_max=[0-9]+ candidates_avg=[0-9]+(\.[0-9]+)? rechecks_avg=[0-9]+(\.[0-9]+)? comparisons_avg=[0-9]+(\.[0-9]+)?$' "${log_file}" || true)"
+      markers_complete=true
+      for curve in a_only b_only fused partial degraded; do
+        if ! grep -Eq "^multi_model_latency_cost dataset_hash=${dataset_hash} workload_hash=${workload_hash} curve=${curve} samples=8 " "${log_file}"; then
+          markers_complete=false
+        fi
+        for query in 1 2 3 4 5 6 7 8; do
+          if ! grep -Eq "^multi_model_sample dataset_hash=${dataset_hash} workload_hash=${workload_hash} query=${query} curve=${curve} " "${log_file}"; then
+            markers_complete=false
+          fi
+        done
+      done
+      if [[ -z "${contract_identity}" || "${sample_count}" != "40" || "${latency_count}" != "5" || "${markers_complete}" != "true" ]] \
+          || ! grep -Eq '^multi_model_quality rows=[0-9]+ coverage=[0-9]+/[0-9]+/[0-9]+/[0-9]+ recall=[0-9]+/[0-9]+/[0-9]+ work=[0-9]+/[0-9]+ contributions=[0-9]+$' "${log_file}" \
+          || ! grep -Eq '^multi_model_quality_contract dataset_hash=[0-9a-f]{32} workload_hash=[0-9a-f]{32} queries=8 weights=1/1 top_k=20 rrf_k=60 budget=102 decision=(pass|no_go) curves=a_only,b_only,fused,partial,degraded$' "${log_file}" \
+          || ! grep -Eq "^multi_model_environment dataset_hash=${dataset_hash} workload_hash=${workload_hash} pg_major=${major} pg_version_num=[0-9]+ hardware_os=[^ ]+ hardware_arch=[^ ]+ hardware_cpus=[^ ]+ guc_work_mem=[^ ]+ guc_maintenance_work_mem=[^ ]+ guc_effective_cache_size=[^ ]+ guc_parallel=[^ ]+ guc_jit=[^ ]+$" "${log_file}" \
+          || ! grep -Eq '^multi_model_coverage: ok \([0-9]+ mixed-coverage rows\)$' "${log_file}"; then
+        status="failed"
+        exit_code=1
+        overall_status=1
+        printf '\nmulti_model_coverage: failed; missing held-out quality, cost, environment, or completion evidence marker\n' >>"${log_file}"
+      fi
+    fi
+    if [[ "${status}" == "passed" && "${gate}" == "heavy:multi_model_rls_acl" ]]; then
+      if ! grep -qxF 'multi_model_rls_acl: ok' "${log_file}"; then
+        status="failed"
+        exit_code=1
+        overall_status=1
+        printf '\nmulti_model_rls_acl: failed; missing ACL/RLS evidence marker\n' >>"${log_file}"
       fi
     fi
   fi

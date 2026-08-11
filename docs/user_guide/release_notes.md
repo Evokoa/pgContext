@@ -74,8 +74,11 @@ The collection layer includes:
 - idempotent point upsert and deletion mappings;
 - bounded bulk backfill from an existing source table;
 - configurable collection limits and operational status;
-- model-version registration;
-- embedding-migration records with bounded progress tracking;
+- immutable, index-bound embedding profiles with version columns and validated
+  lifecycle transitions;
+- profile-backed embedding-migration records with bounded progress tracking;
+- Stable bounded multi-model weighted-RRF retrieval with explicit
+  degraded policy and per-profile contribution provenance;
 - registered payload fields backed by ordinary columns and JSONB paths;
 - checked set, delete, and clear operations for registered payload fields.
 

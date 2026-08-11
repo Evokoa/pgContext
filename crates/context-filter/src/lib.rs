@@ -5,10 +5,11 @@
 
 use core::fmt;
 use core::str::FromStr;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use context_core::policy::{
-    MAX_FILTER_DEPTH, MAX_FILTER_KEY_BYTES, MAX_FILTER_NODES, MAX_FILTER_PATH_DEPTH,
+    MAX_FILTER_DEPTH, MAX_FILTER_KEY_BYTES, MAX_FILTER_NODES, MAX_FILTER_PATH_BYTES,
+    MAX_FILTER_PATH_DEPTH,
 };
 use context_core::{Error as CoreError, SqlIdentifier};
 use serde_json::{Map, Number, Value};
@@ -127,6 +128,30 @@ pub struct Filter {
 impl Filter {
     fn is_empty(&self) -> bool {
         self.must.is_empty() && self.should.is_empty() && self.must_not.is_empty()
+    }
+
+    /// Returns the distinct registered field keys referenced by this filter.
+    #[must_use]
+    pub fn field_keys(&self) -> BTreeSet<&FilterKey> {
+        fn collect<'a>(filter: &'a Filter, keys: &mut BTreeSet<&'a FilterKey>) {
+            for condition in filter
+                .must
+                .iter()
+                .chain(&filter.should)
+                .chain(&filter.must_not)
+            {
+                match condition {
+                    Condition::Field { key, .. } => {
+                        keys.insert(key);
+                    }
+                    Condition::Nested(filter) => collect(filter, keys),
+                }
+            }
+        }
+
+        let mut keys = BTreeSet::new();
+        collect(self, &mut keys);
+        keys
     }
 }
 
@@ -830,6 +855,16 @@ fn validate_jsonb_path(path: &[String]) -> Result<()> {
             budget: "JSONB path depth",
             actual: path.len(),
             max: MAX_FILTER_PATH_DEPTH,
+        });
+    }
+    let path_bytes = path.iter().fold(0_usize, |total, segment| {
+        total.saturating_add(segment.len())
+    });
+    if path_bytes > MAX_FILTER_PATH_BYTES {
+        return Err(FilterError::BudgetExceeded {
+            budget: "JSONB path bytes",
+            actual: path_bytes,
+            max: MAX_FILTER_PATH_BYTES,
         });
     }
     if path.iter().any(|segment| segment.is_empty()) {

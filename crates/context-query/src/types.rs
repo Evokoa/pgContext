@@ -36,6 +36,8 @@ pub enum CandidateBranch {
     Topology,
     /// Caller-provided candidate IDs.
     UserProvided,
+    /// One immutable profile branch in a multi-profile query.
+    MultiProfile,
 }
 
 impl CandidateBranch {
@@ -55,6 +57,7 @@ impl CandidateBranch {
             Self::Topology => 9,
             Self::UserProvided => 10,
             Self::Fuzzy => 11,
+            Self::MultiProfile => 12,
         }
     }
 
@@ -74,6 +77,7 @@ impl CandidateBranch {
             Self::Topology => "topology",
             Self::UserProvided => "user_provided",
             Self::Fuzzy => "fuzzy",
+            Self::MultiProfile => "multi_profile",
         }
     }
 }
@@ -398,6 +402,7 @@ impl Candidate {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CandidatePage {
     candidates: Vec<Candidate>,
+    retained_memory_bytes: usize,
     candidate_work_count: usize,
     scored_count: usize,
     expansion_count: usize,
@@ -414,6 +419,7 @@ impl CandidatePage {
         let candidate_work_count = candidates.len();
         Self {
             candidates,
+            retained_memory_bytes: 0,
             candidate_work_count,
             scored_count,
             expansion_count: 0,
@@ -433,6 +439,7 @@ impl CandidatePage {
         let candidate_work_count = candidates.len();
         Self {
             candidates,
+            retained_memory_bytes: 0,
             candidate_work_count,
             scored_count,
             expansion_count: 0,
@@ -450,6 +457,16 @@ impl CandidatePage {
     #[must_use]
     pub const fn with_candidate_work_count(mut self, candidate_work_count: usize) -> Self {
         self.candidate_work_count = candidate_work_count;
+        self
+    }
+
+    /// Attaches extension-owned adapter state retained until authoritative recheck.
+    ///
+    /// The executor adds these bytes to its global memory accounting in
+    /// addition to the fixed-width [`Candidate`] allocation.
+    #[must_use]
+    pub const fn with_retained_memory_bytes(mut self, retained_memory_bytes: usize) -> Self {
+        self.retained_memory_bytes = retained_memory_bytes;
         self
     }
 
@@ -481,6 +498,12 @@ impl CandidatePage {
     #[must_use]
     pub fn candidates(&self) -> &[Candidate] {
         &self.candidates
+    }
+
+    /// Returns extension-owned adapter state retained with this page.
+    #[must_use]
+    pub const fn retained_memory_bytes(&self) -> usize {
+        self.retained_memory_bytes
     }
 
     /// Consumes the page and returns its candidates.

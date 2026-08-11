@@ -34,7 +34,8 @@ pub const fn sql_error_code_for_query_error(error: &QueryError) -> PgSqlErrorCod
         }
         QueryError::PortFailure { .. }
         | QueryError::PortContractViolation { .. }
-        | QueryError::UnexpectedPointId { .. } => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+        | QueryError::UnexpectedPointId { .. }
+        | QueryError::InvariantViolation { .. } => PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
     }
 }
 

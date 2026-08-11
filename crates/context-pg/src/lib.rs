@@ -44,7 +44,7 @@ mod late_interaction_catalog_schema;
 mod lexical_catalog;
 mod lexical_catalog_schema;
 mod lexical_sql;
-mod model_versions;
+mod multi_model;
 mod operations;
 mod payload_catalog;
 mod payload_mutations;
@@ -201,7 +201,6 @@ mod tests {
     include!("pg_tests/late_interaction_planner.rs");
     include!("pg_tests/index_advisor.rs");
     include!("pg_tests/integer_vector.rs");
-    include!("pg_tests/model_versions.rs");
     include!("pg_tests/multitenancy.rs");
     include!("pg_tests/operations.rs");
     include!("pg_tests/payload_mutations.rs");

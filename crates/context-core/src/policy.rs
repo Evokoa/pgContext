@@ -93,8 +93,14 @@ pub const MAX_IVFFLAT_CANDIDATE_BUDGET: usize = 10_000_000;
 /// Maximum byte length for collection names stored in pgContext catalogs.
 pub const MAX_COLLECTION_NAME_BYTES: usize = 63;
 
+/// Maximum byte length for one immutable embedding-profile name.
+pub const MAX_PROFILE_NAME_BYTES: usize = 128;
+
 /// Maximum byte length for SQL identifiers stored in pgContext catalogs.
 pub const MAX_SQL_IDENTIFIER_BYTES: usize = 63;
+/// Maximum total attached HNSW parent/child indexes resolved for one
+/// multi-profile request before PostgreSQL execution begins.
+pub const MAX_MULTI_PROFILE_ATTACHED_INDEXES: usize = 4_096;
 
 /// Maximum vector dimensions or bit length accepted by core vector types.
 pub const MAX_VECTOR_DIMENSIONS: usize = 16_000;
@@ -113,3 +119,5 @@ pub const MAX_FILTER_KEY_BYTES: usize = 512;
 
 /// Maximum number of dotted path segments in one filter field key.
 pub const MAX_FILTER_PATH_DEPTH: usize = 16;
+/// Maximum aggregate UTF-8 bytes in one registered JSONB filter path.
+pub const MAX_FILTER_PATH_BYTES: usize = MAX_FILTER_PATH_DEPTH * MAX_FILTER_KEY_BYTES;

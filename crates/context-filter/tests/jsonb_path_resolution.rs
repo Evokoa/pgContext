@@ -90,6 +90,19 @@ fn rejects_invalid_jsonb_path_registrations() -> Result<(), Box<dyn std::error::
             if budget == "JSONB path depth"
     ));
 
+    let exact_bytes = "x".repeat(context_core::policy::MAX_FILTER_PATH_BYTES);
+    assert!(JsonbPath::new([exact_bytes]).is_ok());
+    let oversized = "x".repeat(context_core::policy::MAX_FILTER_PATH_BYTES + 1);
+    assert!(matches!(
+        JsonbPath::new([oversized]),
+        Err(FilterError::BudgetExceeded {
+            budget: "JSONB path bytes",
+            actual,
+            max,
+        }) if actual == context_core::policy::MAX_FILTER_PATH_BYTES + 1
+            && max == context_core::policy::MAX_FILTER_PATH_BYTES
+    ));
+
     let result = FieldRegistry::builder()
         .register_jsonb_path("metadata.topic", "metadata", ["topic"])?
         .register_column("metadata.topic", "metadata_topic");

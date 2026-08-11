@@ -21,6 +21,7 @@ Start from the question you are answering, not the index type.
 | Exact keyword / phrase match | `pgcontext.query` registered lexical branch | Lexical (full-text) | Stable |
 | Learned term-weight overlap | `pgcontext.search_sparse` | Sparse vector | Experimental |
 | Token-level fine-grained match | `pgcontext.rerank_late_interaction` / `pgcontext.search_late_interaction` | Late-interaction | Experimental |
+| Old and new embedding profiles during cutover | `pgcontext.query_multi_model` | Multi-model weighted RRF | Stable |
 | Similarity to example points | `pgcontext.recommend` / `pgcontext.discover` | Example-based | Experimental |
 | A blend of the above | `pgcontext.query` / `pgcontext.execute_query` | Hybrid fusion | Stable (dense+full-text) / Experimental (others) |
 
@@ -121,6 +122,20 @@ orchestration, an exact fallback, and authoritative source recheck.
   fragments that the caller must sanitize for its output context.
 - Guide: [Lexical retrieval](lexical_retrieval.md),
   [Hybrid retrieval](hybrid_retrieval.md).
+
+## Multi-Model Retrieval
+
+During an embedding-model cutover, separate immutable profiles may use
+different vector representations, dimensions, metrics, and HNSW indexes while
+sharing one stable point occurrence. `pgcontext.query_multi_model` validates a
+query value and source-version binding for each profile, executes the same
+filter and PostgreSQL authorization boundary per branch, authoritatively
+rechecks current rows, and combines ranks through weighted RRF. Native branch
+scores are diagnostics only and are never compared across profiles.
+
+The default all-profile policy fails closed. Callers must explicitly allow a
+degraded report when a named profile is unavailable. **Stable**. Guide:
+[Multi-model retrieval](multi_model.md).
 
 ## Example-Based Retrieval
 

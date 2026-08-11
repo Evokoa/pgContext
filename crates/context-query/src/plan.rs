@@ -507,6 +507,21 @@ mod tests {
     }
 
     #[test]
+    fn profile_nearest_is_not_an_independently_executable_public_plan() {
+        assert!(matches!(
+            parse_query_plan(&json!({
+                "kind": "profile_nearest",
+                "profile": "modern",
+                "configuration_hash": 42,
+                "query": "[1,0,0]",
+                "filter": null,
+                "limit": 4
+            })),
+            Err(QueryError::InvalidInput { field: "plan", .. })
+        ));
+    }
+
+    #[test]
     fn recommendation_and_rerank_preserve_lower_is_better_order() -> Result<()> {
         let query = parse_query_plan(&json!({
             "kind": "rerank",

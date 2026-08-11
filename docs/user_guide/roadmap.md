@@ -1316,12 +1316,16 @@ Validated by end-to-end serving tests before promotion.
 
 ## Multi-Model Retrieval, Semantic Reranking, and Automatic Chunking
 
-Status: partially implemented foundations. Immutable embedding-profile
-lifecycle and coverage reporting, provider-neutral rerank envelopes and a
-transport-only reference crate, and a deterministic bounded character-span
-chunking kernel are implemented. Mixed-profile query execution, model-backed
-semantic reranking, tokenizer-aware chunking, SQL ingestion catalogs, durable
-jobs, and external-worker publication remain incomplete.
+Status: mixed-profile retrieval shipped as a Stable SQL surface after the
+frozen equal-weight held-out contract passed at one million rows on PostgreSQL
+17 and 18.
+Immutable profile lifecycle and versioned coverage, bounded weighted-RRF
+execution, explicit degraded policy, equivalent filter/ACL/RLS rechecks, and
+profile-backed migration records are implemented. Provider-neutral rerank
+envelopes and a deterministic bounded character-span chunking kernel are
+foundations only; model-backed semantic reranking, tokenizer-aware chunking,
+SQL ingestion catalogs, durable jobs, and external-worker publication remain
+incomplete. See [Multi-model retrieval](multi_model.md).
 
 Depends on: stable source and chunk occurrence identities, immutable
 model/profile metadata bound to named vectors, composite query execution,
@@ -1418,10 +1422,14 @@ Scope:
 Promotion is staged. Mixed-profile retrieval first requires known-answer and
 property tests for weighted RRF; different-dimension named-vector, filter,
 ACL/RLS, source-edit, missing-profile, and ANN exact-recheck gates; and held-out
-A-only, B-only, fused, and degraded quality results. Semantic reranking then
-requires bounded-envelope, arbitrary-ID injection, concurrent source/permission
-change, final-revalidation, timeout/fallback, and held-out lift/latency/cost
-evidence. Automatic chunking requires deterministic span/citation fixtures,
+A-only, B-only, fused, and degraded quality results. The frozen equal-weight,
+eight-query workload passes at one million rows on PostgreSQL 17 and 18: fused
+recall is no worse than the stronger single-profile baseline under the same
+declared global budget, so mixed-profile retrieval is Stable. Semantic
+reranking then requires
+bounded-envelope, arbitrary-ID injection, concurrent source/permission change,
+final-revalidation, timeout/fallback, and held-out lift/latency/cost evidence.
+Automatic chunking requires deterministic span/citation fixtures,
 malformed and oversized input handling, worker crash/lease/retry/supersession,
 atomic publish/rollback/delete, backup/recovery, large-document bounded-memory,
 and mixed-profile end-to-end tests. The combined workflow graduates only after

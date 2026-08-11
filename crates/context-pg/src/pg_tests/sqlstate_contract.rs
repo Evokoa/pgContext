@@ -228,47 +228,15 @@ fn sqlstate_contract_covers_filter_and_operation_bad_paths() {
 }
 
 #[pg_test]
-fn sqlstate_contract_covers_model_migration_and_telemetry_bad_paths() {
+fn sqlstate_contract_covers_profile_migration_and_telemetry_bad_paths() {
     Spi::run("SELECT * FROM pgcontext.create_collection('m0_sqlstate_ops')")
         .expect("operations collection should be created");
 
     assert_sqlstate(
-        "SELECT * FROM pgcontext.register_model_version(
-             'm0_sqlstate_ops',
-             'model',
-             'v1',
-             2,
-             'hamming'
-         )",
-        PgSqlErrorCode::ERRCODE_FEATURE_NOT_SUPPORTED,
-    );
-    Spi::run(
-        "SELECT * FROM pgcontext.register_model_version(
-             'm0_sqlstate_ops',
-             'model',
-             'v1',
-             2,
-             'l2'
-         )",
-    )
-    .expect("source model version should be registered");
-    assert_sqlstate(
-        "SELECT * FROM pgcontext.register_model_version(
-             'm0_sqlstate_ops',
-             'model',
-             'v1',
-             2,
-             'l2'
-         )",
-        PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
-    );
-    assert_sqlstate(
         "SELECT * FROM pgcontext.create_embedding_migration(
              'm0_sqlstate_ops',
-             'model',
-             'v1',
-             'model',
-             'missing',
+             'missing_source',
+             'missing_target',
              1
          )",
         PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
@@ -276,11 +244,9 @@ fn sqlstate_contract_covers_model_migration_and_telemetry_bad_paths() {
     assert_sqlstate(
         "SELECT * FROM pgcontext.create_embedding_migration(
              'm0_sqlstate_ops',
-             'model',
-             'v1',
-             'model',
-             'v1',
-             1
+             'missing_source',
+             'missing_target',
+             -1
          )",
         PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
     );

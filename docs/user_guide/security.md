@@ -63,9 +63,13 @@ Reviewed groups:
   `optimization_status`, `vacuum_advice`, `record_query_stat`,
   `query_cohort_stats`, `query_execution_stats`, and the `pg_monitor`-restricted
   `query_telemetry_queue_stats`.
-- Model metadata: `register_model_version`, `model_versions`,
+- Profile and migration metadata: `register_embedding_profile`,
+  `embedding_profiles`, `embedding_profile_explain`,
+  `set_embedding_profile_lifecycle`, `embedding_profile_coverage`,
   `create_embedding_migration`, `update_embedding_migration`, and
-  `embedding_migrations`.
+  `embedding_migrations`. `query_multi_model` executes as the invoker and
+  checks collection membership plus source-table `SELECT` before applying the
+  same RLS and registered-filter boundary to every branch.
 - Artifact operations: `publish_artifact_segment`,
   `publish_artifact_segment_file`, `artifact_segments`,
   `artifact_segment_memory`, `artifact_segment_diagnostics`,

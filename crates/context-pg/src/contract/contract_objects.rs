@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 392;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 391;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -474,8 +474,8 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     ),
     SqlContractObject::function(
         "create_embedding_migration",
-        "collection text, source_model_name text, source_model_version text, target_model_name text, target_model_version text, total_points bigint",
-        SqlLifecycle::Stable,
+        "collection text, source_profile text, target_profile text, total_points bigint",
+        SqlLifecycle::Experimental,
     ),
     SqlContractObject::function("count", "collection text", SqlLifecycle::Stable),
     SqlContractObject::function(
@@ -693,7 +693,6 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
         "\"left\" vector, \"right\" vector",
         SqlLifecycle::Stable,
     ),
-    SqlContractObject::function("model_versions", "", SqlLifecycle::Stable),
     SqlContractObject::function(
         "negative_inner_product",
         "\"left\" vector, \"right\" vector",
@@ -742,12 +741,17 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "set_embedding_profile_lifecycle",
         "collection text, profile_name text, lifecycle text",
-        SqlLifecycle::Stable,
+        SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(
         "embedding_profile_coverage",
         "collection text",
-        SqlLifecycle::Stable,
+        SqlLifecycle::Experimental,
+    ),
+    SqlContractObject::function(
+        "query_multi_model",
+        "collection text, branches jsonb, filter jsonb, \"limit\" integer, rrf_k integer, unique_candidate_budget integer, require_all_profiles boolean",
+        SqlLifecycle::Experimental,
     ),
     SqlContractObject::function(
         "vector_prefix",
@@ -877,11 +881,6 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "register_jsonb_path",
         "collection_name text, filter_key text, column_name text, path text[]",
-        SqlLifecycle::Stable,
-    ),
-    SqlContractObject::function(
-        "register_model_version",
-        "collection text, model_name text, model_version text, dimensions integer, metric text",
         SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
@@ -1144,7 +1143,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "update_embedding_migration",
         "migration_id bigint, processed_points bigint, status text",
-        SqlLifecycle::Stable,
+        SqlLifecycle::Experimental,
     ),
     SqlContractObject::function("validate_artifact_segment", "segment bytea", SqlLifecycle::Experimental),
     SqlContractObject::function(

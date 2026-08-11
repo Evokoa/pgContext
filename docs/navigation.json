@@ -107,6 +107,10 @@
           "path": "user_guide/adaptive_dimension.md"
         },
         {
+          "title": "Multi-model retrieval",
+          "path": "user_guide/multi_model.md"
+        },
+        {
           "title": "Retrieval methods overview",
           "path": "user_guide/retrieval_methods.md"
         },

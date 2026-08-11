@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use context_core::{
     EmbeddingProfile, IntegerScale, MatryoshkaPolicy, PrefixDimensions, ProfileId,
-    ProfileLifecycle, ProviderBinaryLayout, ProviderBitOrder, ProviderByteOrder,
+    ProfileLifecycle, ProfileName, ProviderBinaryLayout, ProviderBitOrder, ProviderByteOrder,
     VectorNormalization, VectorRepresentation,
 };
 use pgrx::JsonB;
@@ -15,7 +15,7 @@ use crate::domain_types::{distance_metric_label, parse_distance_metric};
 use crate::error::raise_sql_error;
 use crate::table_search::{quote_identifier, quote_qualified_identifier};
 
-const PROFILE_KEYS: [&str; 15] = [
+const PROFILE_KEYS: [&str; 17] = [
     "representation",
     "dimensions",
     "normalization",
@@ -31,6 +31,8 @@ const PROFILE_KEYS: [&str; 15] = [
     "zero_point",
     "configuration_hash",
     "matryoshka_prefixes",
+    "source_version_column",
+    "embedding_version_column",
 ];
 
 #[derive(Clone, Copy)]
@@ -47,9 +49,22 @@ struct ProfileBinding {
     source_attnum: i16,
     source_type_name: String,
     source_typmod: i32,
+    version_columns: Option<VersionColumnBinding>,
     hnsw_schema_name: String,
     hnsw_index_name: String,
     hnsw_opclass: String,
+}
+
+struct VersionColumnNames {
+    source: String,
+    embedding: String,
+}
+
+struct VersionColumnBinding {
+    source_name: String,
+    source_attnum: i16,
+    embedding_name: String,
+    embedding_attnum: i16,
 }
 
 pub(crate) struct ProviderProfileContract {
@@ -69,7 +84,8 @@ pub fn register_embedding_profile(
     profile: JsonB,
     lifecycle: default!(String, "'active'"),
 ) -> JsonB {
-    validate_profile_name(&profile_name);
+    let profile_name =
+        ProfileName::new(profile_name).unwrap_or_else(|error| invalid_profile(error.to_string()));
     let lifecycle = registration_lifecycle(&lifecycle);
     let collection_row = resolve_collection(&collection);
     require_collection_owner(collection_row, &collection);
@@ -81,10 +97,10 @@ pub fn register_embedding_profile(
         &hnsw_index,
         &normalized,
     );
-    reject_duplicate_profile(collection_row.collection_id, &profile_name);
+    reject_duplicate_profile(collection_row.collection_id, profile_name.as_str());
     insert_profile(
         collection_row.collection_id,
-        &profile_name,
+        profile_name.as_str(),
         &binding,
         &normalized,
         lifecycle,
@@ -130,7 +146,9 @@ pub fn embedding_profiles() -> TableIterator<
                         'scale', profiles.scale,
                         'zero_point', profiles.zero_point,
                         'configuration_hash', profiles.configuration_hash,
-                        'matryoshka_prefixes', profiles.matryoshka_prefixes
+                        'matryoshka_prefixes', profiles.matryoshka_prefixes,
+                        'source_version_column', profiles.source_version_column_name,
+                        'embedding_version_column', profiles.embedding_version_column_name
                     )
                FROM pgcontext._embedding_profiles AS profiles
                JOIN pgcontext._collections AS collections USING (collection_id)
@@ -181,7 +199,9 @@ pub fn embedding_profile_explain(collection: String, profile_name: String) -> Js
                         'scale', profiles.scale,
                         'zero_point', profiles.zero_point,
                         'configuration_hash', profiles.configuration_hash,
-                        'matryoshka_prefixes', profiles.matryoshka_prefixes
+                        'matryoshka_prefixes', profiles.matryoshka_prefixes,
+                        'source_version_column', profiles.source_version_column_name,
+                        'embedding_version_column', profiles.embedding_version_column_name
                     ),
                     'source_column', pg_catalog.format(
                         '%I.%I.%I',
@@ -400,6 +420,7 @@ struct ParsedProfile {
     byte_order: Option<&'static str>,
     configuration_hash: String,
     matryoshka_prefixes: Option<Vec<i32>>,
+    version_columns: Option<VersionColumnNames>,
 }
 
 impl ParsedProfile {
@@ -420,6 +441,8 @@ impl ParsedProfile {
             "zero_point": self.profile.integer_scale().map(|scale| scale.zero_point),
             "configuration_hash": self.configuration_hash,
             "matryoshka_prefixes": self.matryoshka_prefixes,
+            "source_version_column": self.version_columns.as_ref().map(|columns| columns.source.as_str()),
+            "embedding_version_column": self.version_columns.as_ref().map(|columns| columns.embedding.as_str()),
         })
     }
 }
@@ -506,6 +529,31 @@ fn parse_profile(profile: &JsonB) -> ParsedProfile {
     )
     .unwrap_or_else(|error| invalid_profile(error.to_string()));
     let matryoshka_prefixes = optional_prefixes(object);
+    let version_columns = match (
+        optional_string(object, "source_version_column"),
+        optional_string(object, "embedding_version_column"),
+    ) {
+        (Some(source), Some(embedding)) => {
+            if source.trim().is_empty() || embedding.trim().is_empty() {
+                invalid_profile("version column names must not be blank".to_owned());
+            }
+            if source == embedding {
+                invalid_profile(
+                    "source_version_column and embedding_version_column must be different"
+                        .to_owned(),
+                );
+            }
+            Some(VersionColumnNames {
+                source: source.to_owned(),
+                embedding: embedding.to_owned(),
+            })
+        }
+        (None, None) => None,
+        _ => invalid_profile(
+            "source_version_column and embedding_version_column must be supplied together"
+                .to_owned(),
+        ),
+    };
     let parsed = match &matryoshka_prefixes {
         None => parsed,
         Some(prefixes) => {
@@ -535,6 +583,7 @@ fn parse_profile(profile: &JsonB) -> ParsedProfile {
         byte_order: byte_order.map(|(_, label)| label),
         configuration_hash,
         matryoshka_prefixes,
+        version_columns,
     }
 }
 
@@ -600,17 +649,36 @@ fn insert_profile(
     let dimensions = i32::try_from(parsed.profile.dimensions())
         .unwrap_or_else(|_| invalid_profile("dimensions exceed int4".to_owned()));
     let scale = parsed.profile.integer_scale();
+    let source_version_name = binding
+        .version_columns
+        .as_ref()
+        .map(|columns| columns.source_name.as_str());
+    let source_version_attnum = binding
+        .version_columns
+        .as_ref()
+        .map(|columns| columns.source_attnum);
+    let embedding_version_name = binding
+        .version_columns
+        .as_ref()
+        .map(|columns| columns.embedding_name.as_str());
+    let embedding_version_attnum = binding
+        .version_columns
+        .as_ref()
+        .map(|columns| columns.embedding_attnum);
     Spi::run_with_args(
         "INSERT INTO pgcontext._embedding_profiles (
              collection_id, profile_name,
              source_schema_name, source_table_name, source_column_name, source_attnum,
-             source_type_name, source_typmod, hnsw_schema_name, hnsw_index_name, hnsw_opclass,
+             source_type_name, source_typmod,
+             source_version_column_name, source_version_attnum,
+             embedding_version_column_name, embedding_version_attnum,
+             hnsw_schema_name, hnsw_index_name, hnsw_opclass,
              representation, dimensions, normalization, metric,
              provider, model, revision, input_template, output_template, bit_order, byte_order,
              scale, zero_point, configuration_hash, matryoshka_prefixes, lifecycle
          ) VALUES (
              $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-             $21,$22,$23,$24,$25,$26,$27
+             $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31
          )",
         &[
             collection_id.into(),
@@ -621,6 +689,10 @@ fn insert_profile(
             binding.source_attnum.into(),
             binding.source_type_name.as_str().into(),
             binding.source_typmod.into(),
+            source_version_name.into(),
+            source_version_attnum.into(),
+            embedding_version_name.into(),
+            embedding_version_attnum.into(),
             binding.hnsw_schema_name.as_str().into(),
             binding.hnsw_index_name.as_str().into(),
             binding.hnsw_opclass.as_str().into(),
@@ -733,6 +805,24 @@ fn resolve_profile_binding(
             ),
         );
     }
+    let version_columns = parsed.version_columns.as_ref().map(|columns| {
+        let source_attnum = resolve_version_column(
+            collection.source_table_oid,
+            &columns.source,
+            "source_version_column",
+        );
+        let embedding_attnum = resolve_version_column(
+            collection.source_table_oid,
+            &columns.embedding,
+            "embedding_version_column",
+        );
+        VersionColumnBinding {
+            source_name: columns.source.clone(),
+            source_attnum,
+            embedding_name: columns.embedding.clone(),
+            embedding_attnum,
+        }
+    });
 
     let expected_opclass = expected_hnsw_opclass(parsed);
     let index = Spi::connect(|client| {
@@ -831,10 +921,54 @@ fn resolve_profile_binding(
         source_attnum,
         source_type_name: type_name,
         source_typmod: typmod,
+        version_columns,
         hnsw_schema_name,
         hnsw_index_name,
         hnsw_opclass,
     }
+}
+
+fn resolve_version_column(
+    source_table_oid: pg_sys::Oid,
+    column_name: &str,
+    argument_name: &'static str,
+) -> i16 {
+    let row = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT attribute.attnum, attribute.atttypid
+               FROM pg_catalog.pg_attribute AS attribute
+              WHERE attribute.attrelid = $1
+                AND attribute.attname = $2
+                AND attribute.attnum > 0
+                AND NOT attribute.attisdropped",
+            Some(1),
+            &[source_table_oid.into(), column_name.into()],
+        )?;
+        if rows.is_empty() {
+            raise_sql_error(
+                PgSqlErrorCode::ERRCODE_UNDEFINED_COLUMN,
+                format!("{argument_name} does not exist: {column_name}"),
+            );
+        }
+        let row = rows.first();
+        Ok::<_, spi::Error>((
+            required(row.get::<i16>(1)?, "version column attnum"),
+            required(row.get::<pg_sys::Oid>(2)?, "version column type"),
+        ))
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to validate {argument_name}: {error}"),
+        )
+    });
+    if row.1 != pg_sys::INT8OID {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATATYPE_MISMATCH,
+            format!("{argument_name} must be a pg_catalog.int8 column: {column_name}"),
+        );
+    }
+    row.0
 }
 
 fn representation_type_name(representation: &str) -> &'static str {
@@ -940,12 +1074,6 @@ fn reject_duplicate_profile(collection_id: i64, profile_name: &str) {
             PgSqlErrorCode::ERRCODE_DUPLICATE_OBJECT,
             format!("embedding profile already exists: {profile_name}"),
         );
-    }
-}
-
-fn validate_profile_name(value: &str) {
-    if value.is_empty() || value.len() > 128 {
-        invalid_profile("profile_name must be 1..=128 bytes".to_owned());
     }
 }
 
@@ -1141,9 +1269,13 @@ pub fn set_embedding_profile_lifecycle(
 
 /// Reports per-profile lifecycle, coverage, and staleness for a collection.
 ///
-/// `covered_points` counts active visible points whose registered source column
-/// carries a value, so an incomplete backfill is visible as a gap rather than
-/// discovered as a silently thin branch at query time.
+/// `covered_points` counts current, version-matched embeddings. `stale_points`
+/// counts populated vectors whose required version pair is absent or differs.
+/// `active_points` counts only active mappings whose authoritative source row
+/// is visible to the invoker under current ACL and RLS policy.
+/// Profiles without version bindings retain the single-profile coverage
+/// behavior and report zero stale points; they are not eligible for mixed-model
+/// execution.
 #[pg_extern]
 #[search_path(pg_catalog, pgcontext, public)]
 #[allow(
@@ -1160,37 +1292,25 @@ pub fn embedding_profile_coverage(
         name!(serves_queries, bool),
         name!(source_column, String),
         name!(covered_points, i64),
+        name!(stale_points, i64),
         name!(active_points, i64),
     ),
 > {
     let collection_id = crate::lexical_catalog::require_collection_owner_id(&collection);
-    let active_points = Spi::get_one_with_args::<i64>(
-        "SELECT count(*)
-           FROM pgcontext._visible_collection_points
-          WHERE collection_id = $1 AND deleted_at IS NULL",
-        &[collection_id.into()],
-    )
-    .unwrap_or_else(|error| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            format!("failed to count active collection points: {error}"),
-        )
-    })
-    .unwrap_or_else(|| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-            "active collection point count returned null",
-        )
-    });
-
     let profiles = Spi::connect(|client| {
         let rows = client
             .select(
-                "SELECT profile_name, lifecycle, source_schema_name, source_table_name,
-                        source_column_name
-                   FROM pgcontext._visible_embedding_profiles
-                  WHERE collection_id = $1
-                  ORDER BY profile_name",
+                "SELECT profiles.profile_name, profiles.lifecycle,
+                        profiles.source_schema_name, profiles.source_table_name,
+                        collections.source_table_oid, source_column_name, source_attnum,
+                        source_type_name, source_typmod,
+                        source_version_column_name, source_version_attnum,
+                        embedding_version_column_name, embedding_version_attnum
+                   FROM pgcontext._visible_embedding_profiles AS profiles
+                   JOIN pgcontext._visible_collections AS collections
+                     ON collections.collection_id = profiles.collection_id
+                  WHERE profiles.collection_id = $1
+                  ORDER BY profiles.profile_name",
                 None,
                 &[collection_id.into()],
             )
@@ -1222,50 +1342,370 @@ pub fn embedding_profile_coverage(
                 read(2, "lifecycle"),
                 read(3, "source schema"),
                 read(4, "source table"),
-                read(5, "source column"),
+                row.get::<pg_sys::Oid>(5)
+                    .unwrap_or_else(|error| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                            format!("failed to read source table OID: {error}"),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                            "embedding profile source table OID returned null",
+                        )
+                    }),
+                read(6, "source column"),
+                row.get::<i16>(7)
+                    .unwrap_or_else(|error| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                            format!("failed to read source column attnum: {error}"),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                            "embedding profile source column attnum returned null",
+                        )
+                    }),
+                read(8, "source type"),
+                row.get::<i32>(9)
+                    .unwrap_or_else(|error| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                            format!("failed to read source vector typmod: {error}"),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        raise_sql_error(
+                            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                            "embedding profile source vector typmod returned null",
+                        )
+                    }),
+                row.get::<String>(10).unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                        format!("failed to read source version column: {error}"),
+                    )
+                }),
+                row.get::<i16>(11).unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                        format!("failed to read source version attnum: {error}"),
+                    )
+                }),
+                row.get::<String>(12).unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                        format!("failed to read embedding version column: {error}"),
+                    )
+                }),
+                row.get::<i16>(13).unwrap_or_else(|error| {
+                    raise_sql_error(
+                        PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+                        format!("failed to read embedding version attnum: {error}"),
+                    )
+                }),
             ));
         }
         profiles
     });
 
     let mut output = Vec::with_capacity(profiles.len());
-    for (profile_name, lifecycle, schema_name, table_name, column_name) in profiles {
+    for (
+        profile_name,
+        lifecycle,
+        schema_name,
+        table_name,
+        table_oid,
+        column_name,
+        column_attnum,
+        source_type_name,
+        source_typmod,
+        source_version_column,
+        source_version_attnum,
+        embedding_version_column,
+        embedding_version_attnum,
+    ) in profiles
+    {
         let serves = ProfileLifecycle::parse(&lifecycle)
             .map(ProfileLifecycle::serves_queries)
             .unwrap_or(false);
-        let covered = Spi::get_one_with_args::<i64>(
-            &format!(
-                "SELECT count(*)
-                   FROM pgcontext._visible_collection_points AS points
-                   JOIN {table} AS source ON source.id::text = points.source_key
-                  WHERE points.collection_id = $1
-                    AND points.deleted_at IS NULL
-                    AND source.{column} IS NOT NULL",
-                table = quote_qualified_identifier(&schema_name, &table_name),
-                column = quote_identifier(&column_name),
-            ),
-            &[collection_id.into()],
-        )
-        .unwrap_or_else(|_| {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                format!("failed to count embedding profile coverage for {profile_name}"),
-            )
-        })
-        .unwrap_or_else(|| {
-            raise_sql_error(
-                PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
-                format!("embedding profile coverage count returned null for {profile_name}"),
-            )
-        });
+        let (covered, stale, active) = profile_coverage_counts(
+            collection_id,
+            &profile_name,
+            &schema_name,
+            &table_name,
+            table_oid,
+            &column_name,
+            column_attnum,
+            &source_type_name,
+            source_typmod,
+            source_version_column.as_deref(),
+            source_version_attnum,
+            embedding_version_column.as_deref(),
+            embedding_version_attnum,
+        );
         output.push((
             profile_name,
             lifecycle,
             serves,
             column_name,
             covered,
-            active_points,
+            stale,
+            active,
         ));
     }
     TableIterator::new(output)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the arguments are the validated catalog binding used to render one bounded count"
+)]
+fn profile_coverage_counts(
+    collection_id: i64,
+    profile_name: &str,
+    schema_name: &str,
+    table_name: &str,
+    table_oid: pg_sys::Oid,
+    vector_column: &str,
+    vector_attnum: i16,
+    vector_type_name: &str,
+    vector_typmod: i32,
+    source_version_column: Option<&str>,
+    source_version_attnum: Option<i16>,
+    embedding_version_column: Option<&str>,
+    embedding_version_attnum: Option<i16>,
+) -> (i64, i64, i64) {
+    validate_profile_coverage_relation(profile_name, schema_name, table_name, table_oid);
+    validate_profile_coverage_attribute(
+        profile_name,
+        schema_name,
+        table_name,
+        table_oid,
+        CoverageAttributeBinding {
+            attnum: vector_attnum,
+            name: vector_column,
+            type_schema: "pgcontext",
+            type_name: vector_type_name,
+            typmod: vector_typmod,
+        },
+    );
+    match (
+        source_version_column,
+        source_version_attnum,
+        embedding_version_column,
+        embedding_version_attnum,
+    ) {
+        (Some(source_name), Some(source_attnum), Some(embedding_name), Some(embedding_attnum)) => {
+            validate_profile_coverage_attribute(
+                profile_name,
+                schema_name,
+                table_name,
+                table_oid,
+                CoverageAttributeBinding {
+                    attnum: source_attnum,
+                    name: source_name,
+                    type_schema: "pg_catalog",
+                    type_name: "int8",
+                    typmod: -1,
+                },
+            );
+            validate_profile_coverage_attribute(
+                profile_name,
+                schema_name,
+                table_name,
+                table_oid,
+                CoverageAttributeBinding {
+                    attnum: embedding_attnum,
+                    name: embedding_name,
+                    type_schema: "pg_catalog",
+                    type_name: "int8",
+                    typmod: -1,
+                },
+            );
+        }
+        (None, None, None, None) => {}
+        _ => raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            format!("embedding profile version binding is incomplete: {profile_name}"),
+        ),
+    }
+    let table = quote_qualified_identifier(schema_name, table_name);
+    let vector = quote_identifier(vector_column);
+    let (covered_predicate, stale_predicate) =
+        match (source_version_column, embedding_version_column) {
+            (Some(source_version), Some(embedding_version)) => {
+                let source_version = quote_identifier(source_version);
+                let embedding_version = quote_identifier(embedding_version);
+                (
+                    format!(
+                        "source.{vector} IS NOT NULL
+                     AND source.{source_version} IS NOT NULL
+                     AND source.{embedding_version} IS NOT NULL
+                     AND source.{source_version} = source.{embedding_version}"
+                    ),
+                    format!(
+                        "source.{vector} IS NOT NULL
+                     AND (source.{source_version} IS NULL
+                          OR source.{embedding_version} IS NULL
+                          OR source.{source_version} <> source.{embedding_version})"
+                    ),
+                )
+            }
+            (None, None) => (format!("source.{vector} IS NOT NULL"), "false".to_owned()),
+            _ => raise_sql_error(
+                PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+                format!("embedding profile version binding is incomplete: {profile_name}"),
+            ),
+        };
+    Spi::connect(|client| {
+        let rows = client.select(
+            &format!(
+                "SELECT count(*) FILTER (WHERE {covered_predicate}),
+                        count(*) FILTER (WHERE {stale_predicate}),
+                        count(*)
+                   FROM pgcontext._visible_collection_points AS points
+                   JOIN {table} AS source ON source.id::text = points.source_key
+                  WHERE points.collection_id = $1
+                    AND points.deleted_at IS NULL"
+            ),
+            Some(1),
+            &[collection_id.into()],
+        )?;
+        let row = rows.first();
+        Ok::<_, spi::Error>((
+            required(row.get::<i64>(1)?, "covered_points"),
+            required(row.get::<i64>(2)?, "stale_points"),
+            required(row.get::<i64>(3)?, "active_points"),
+        ))
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to count embedding profile coverage for {profile_name}: {error}"),
+        )
+    })
+}
+
+fn validate_profile_coverage_relation(
+    profile_name: &str,
+    schema_name: &str,
+    table_name: &str,
+    table_oid: pg_sys::Oid,
+) {
+    let (current_oid, has_select) = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT pg_catalog.to_regclass(pg_catalog.format('%I.%I', $1, $2)),
+                    pg_catalog.has_table_privilege(SESSION_USER, $3, 'SELECT')",
+            Some(1),
+            &[schema_name.into(), table_name.into(), table_oid.into()],
+        )?;
+        let row = rows.first();
+        Ok::<_, spi::Error>((row.get::<pg_sys::Oid>(1)?, row.get::<bool>(2)?))
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to validate embedding profile source relation: {error}"),
+        )
+    });
+    let Some(current_oid) = current_oid else {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_UNDEFINED_TABLE,
+            format!("relation \"{schema_name}.{table_name}\" does not exist"),
+        );
+    };
+    if current_oid != table_oid {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            format!("embedding profile source relation identity changed: {profile_name}"),
+        );
+    }
+    if !has_select.unwrap_or(false) {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INSUFFICIENT_PRIVILEGE,
+            format!("permission denied for source table of embedding profile {profile_name}"),
+        );
+    }
+}
+
+struct CoverageAttributeBinding<'a> {
+    attnum: i16,
+    name: &'a str,
+    type_schema: &'a str,
+    type_name: &'a str,
+    typmod: i32,
+}
+
+fn validate_profile_coverage_attribute(
+    profile_name: &str,
+    schema_name: &str,
+    table_name: &str,
+    table_oid: pg_sys::Oid,
+    expected: CoverageAttributeBinding<'_>,
+) {
+    let expected_type_oid = Spi::get_one_with_args::<pg_sys::Oid>(
+        "SELECT pg_catalog.to_regtype(pg_catalog.format('%I.%I', $1, $2))",
+        &[expected.type_schema.into(), expected.type_name.into()],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to resolve embedding profile source type: {error}"),
+        )
+    })
+    .unwrap_or_else(|| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            format!(
+                "embedding profile source type is unavailable: {}.{}",
+                expected.type_schema, expected.type_name
+            ),
+        )
+    });
+    let actual = Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT attname::pg_catalog.text, atttypid, atttypmod
+               FROM pg_catalog.pg_attribute
+              WHERE attrelid = $1 AND attnum = $2 AND NOT attisdropped",
+            Some(1),
+            &[table_oid.into(), expected.attnum.into()],
+        )?;
+        if rows.is_empty() {
+            return Ok::<_, spi::Error>(None);
+        }
+        let row = rows.first();
+        Ok(Some((
+            required(row.get::<String>(1)?, "source column name"),
+            required(row.get::<pg_sys::Oid>(2)?, "source column type"),
+            required(row.get::<i32>(3)?, "source column typmod"),
+        )))
+    })
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to validate embedding profile source column: {error}"),
+        )
+    });
+    let Some((actual_name, actual_type_oid, actual_typmod)) = actual else {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_UNDEFINED_COLUMN,
+            format!(
+                "column \"{}\" of relation \"{schema_name}.{table_name}\" does not exist",
+                expected.name
+            ),
+        );
+    };
+    if actual_name != expected.name
+        || actual_type_oid != expected_type_oid
+        || actual_typmod != expected.typmod
+    {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
+            format!("embedding profile source column identity changed: {profile_name}"),
+        );
+    }
 }

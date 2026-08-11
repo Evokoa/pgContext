@@ -14,6 +14,7 @@ use context_query::CandidateBranch;
 mod certification;
 mod late_interaction;
 mod p10_adaptive;
+mod p11_multi_model;
 mod p5_codec;
 mod p8_composite;
 mod p9_lexical;
@@ -48,6 +49,13 @@ pub use p10_adaptive::{
     P10_ADAPTIVE_GATES, P10_CANDIDATE_BUDGET, P10_COMPARISON_BUDGET, P10_EXPECTED_TERMINATION,
     P10_FULL_DIMENSIONS, P10_PREFIX_DIMENSIONS, P10_RECHECK_BUDGET, P10_TOP_K, P10AdaptiveGate,
     p10_adaptive_manifest_hash,
+};
+pub use p11_multi_model::{
+    P11_CANDIDATE_BUDGET, P11_DATASET_REVISION, P11_FUSED_BRANCH_LIMIT, P11_HELD_OUT_QUERY_COUNT,
+    P11_MIN_FUSED_RECALL_DELTA, P11_MULTI_MODEL_GATES, P11_PROFILE_COUNT, P11_PROFILE_WEIGHTS,
+    P11_QUALITY_CURVES, P11_REPORT_MARKERS, P11_REQUIRED_PG_MAJORS, P11_RRF_K,
+    P11_SINGLE_BRANCH_LIMIT, P11_TOP_K, P11_WORKLOAD_REVISION, P11MultiModelGate,
+    p11_multi_model_manifest_hash,
 };
 
 /// Maximum accepted latency regression before explicit review is required.

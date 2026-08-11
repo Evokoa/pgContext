@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
-use std::{cell::Cell, collections::BTreeMap, rc::Rc};
+use std::{cell::Cell, collections::BTreeMap, mem::size_of, rc::Rc};
 
 use context_core::{OccurrenceId, PointId, SourceAuthority, SourceKey};
 use context_query::{
@@ -212,6 +212,76 @@ fn hydrated(point_id: u64, score: f64) -> HydratedCandidate {
         score,
     )
     .expect("hydrated fixture should be valid")
+}
+
+#[test]
+fn retained_candidate_memory_is_charged_once_and_stops_before_recheck_at_the_boundary() {
+    let retained_memory = 512;
+    let page_memory = size_of::<Candidate>() + retained_memory;
+    let mut candidates = FakeCandidateSource {
+        readiness: SourceReadiness::Ready,
+        page: CandidatePage::new(vec![candidate(1, 0.5)], true)
+            .with_retained_memory_bytes(retained_memory),
+        ..Default::default()
+    };
+    let mut rechecker = FakeRechecker {
+        rows: vec![hydrated(1, 0.5)],
+        ..Default::default()
+    };
+    let mut telemetry = FakeTelemetry::default();
+    let cancellation = CancelAfter::never();
+    let budget = budget()
+        .with_resource_limits(32, page_memory, 1024, 10_000)
+        .expect("exact retained-memory boundary should be valid");
+
+    let outcome = QueryExecutor::new(
+        &mut candidates,
+        None,
+        &mut rechecker,
+        &mut telemetry,
+        &cancellation,
+    )
+    .execute(&query(false), budget)
+    .expect("the exact retained-memory boundary should fail closed as completion");
+
+    assert_eq!(outcome.completion(), Completion::BudgetExhausted);
+    assert_eq!(outcome.usage().memory_bytes(), page_memory);
+    assert_eq!(rechecker.calls, 0);
+}
+
+#[test]
+fn candidate_source_cannot_report_memory_beyond_its_port_budget() {
+    let memory_limit = size_of::<Candidate>() + 511;
+    let mut candidates = FakeCandidateSource {
+        readiness: SourceReadiness::Ready,
+        page: CandidatePage::new(vec![candidate(1, 0.5)], true).with_retained_memory_bytes(512),
+        ..Default::default()
+    };
+    let mut rechecker = FakeRechecker::default();
+    let mut telemetry = FakeTelemetry::default();
+    let cancellation = CancelAfter::never();
+    let budget = budget()
+        .with_resource_limits(32, memory_limit, 1024, 10_000)
+        .expect("under-bound port budget should be valid");
+
+    let error = QueryExecutor::new(
+        &mut candidates,
+        None,
+        &mut rechecker,
+        &mut telemetry,
+        &cancellation,
+    )
+    .execute(&query(false), budget)
+    .expect_err("a source cannot exceed its supplied memory budget");
+
+    assert!(matches!(
+        error,
+        QueryError::PortContractViolation {
+            stage: "candidate_memory",
+            ..
+        }
+    ));
+    assert_eq!(rechecker.calls, 0);
 }
 
 #[test]

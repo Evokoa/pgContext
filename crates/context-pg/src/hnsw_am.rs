@@ -114,12 +114,16 @@ struct HnswCandidateHelperAuthorization {
 
 struct HnswCandidateHelperGuard;
 
-struct HnswQueryBudgetGuard;
+struct HnswQueryBudgetGuard {
+    comparison: HnswComparisonBudget,
+    exact_strategy: Arc<AtomicBool>,
+}
 
 #[derive(Clone, Debug)]
 struct HnswQueryBudget {
     comparison: HnswComparisonBudget,
     max_memory_bytes: usize,
+    exact_strategy: Arc<AtomicBool>,
 }
 
 impl HnswCandidateHelperGuard {
@@ -151,6 +155,8 @@ impl Drop for HnswCandidateHelperGuard {
 
 impl HnswQueryBudgetGuard {
     fn enter(max_comparisons: usize, max_memory_bytes: usize) -> Self {
+        let comparison = HnswComparisonBudget::new(max_comparisons);
+        let exact_strategy = Arc::new(AtomicBool::new(false));
         HNSW_QUERY_BUDGET.with(|budget| {
             let mut budget = budget.borrow_mut();
             if budget.is_some() {
@@ -160,11 +166,22 @@ impl HnswQueryBudgetGuard {
                 );
             }
             *budget = Some(HnswQueryBudget {
-                comparison: HnswComparisonBudget::new(max_comparisons),
+                comparison: comparison.clone(),
                 max_memory_bytes,
+                exact_strategy: Arc::clone(&exact_strategy),
             });
         });
-        Self
+        Self {
+            comparison,
+            exact_strategy,
+        }
+    }
+
+    fn work(&self) -> HnswQueryWork {
+        HnswQueryWork {
+            comparisons: self.comparison.consumed(),
+            exact_strategy: self.exact_strategy.load(Ordering::Acquire),
+        }
     }
 }
 
@@ -181,6 +198,23 @@ pub(crate) fn with_hnsw_query_budget<T>(
 ) -> T {
     let _guard = HnswQueryBudgetGuard::enter(max_comparisons, max_memory_bytes);
     operation()
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HnswQueryWork {
+    pub(crate) comparisons: usize,
+    pub(crate) exact_strategy: bool,
+}
+
+pub(crate) fn with_hnsw_query_budget_and_work<T>(
+    max_comparisons: usize,
+    max_memory_bytes: usize,
+    operation: impl FnOnce() -> T,
+) -> (T, HnswQueryWork) {
+    let guard = HnswQueryBudgetGuard::enter(max_comparisons, max_memory_bytes);
+    let result = operation();
+    let work = guard.work();
+    (result, work)
 }
 
 fn active_hnsw_query_budget() -> Option<HnswQueryBudget> {
@@ -566,6 +600,13 @@ thread_local! {
 }
 
 fn record_hnsw_scan_work(work: HnswScanWork) {
+    if work.exact_strategy {
+        HNSW_QUERY_BUDGET.with(|budget| {
+            if let Some(budget) = budget.borrow().as_ref() {
+                budget.exact_strategy.store(true, Ordering::Release);
+            }
+        });
+    }
     HNSW_LAST_SCAN_WORK.with(|last| *last.borrow_mut() = work);
 }
 
@@ -1331,6 +1372,7 @@ unsafe fn hnsw_scan_candidates_with_metric(
     let query_budget = active_hnsw_query_budget().unwrap_or_else(|| HnswQueryBudget {
         comparison: HnswComparisonBudget::new(usize::MAX),
         max_memory_bytes: usize::MAX,
+        exact_strategy: Arc::new(AtomicBool::new(false)),
     });
     // SAFETY: The caller's relation, metric, and query are unchanged; regular
     // AM scans retain their existing unbounded comparison policy.

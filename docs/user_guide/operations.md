@@ -183,9 +183,10 @@ planning changes. It reports typed recommendations such as `CreateBtreeIndex`,
 `CreateGinIndex`, `AnalyzeTable`, and `TuneHnswSettings`; suggested SQL is
 advisory and should be reviewed with the application schema owner.
 
-For embedding-model changes, register the old and new model versions, track the
-backfill with the embedding migration APIs, and keep exact search or the prior
-serving path available until migrated fixtures pass recall validation.
+For embedding-model changes, register immutable version-bound profiles, track
+their backfill with the profile-backed migration APIs, and keep the incumbent
+profile active or draining until held-out multi-model quality and coverage
+checks pass. See [Multi-model retrieval](multi_model.md).
 
 Before building or rebuilding a `pgcontext_hnsw` index, size
 `maintenance_work_mem` for the corpus: the build enforces it as a hard budget

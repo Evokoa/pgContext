@@ -58,11 +58,15 @@ Treat `Failing` recall as a release gate failure for that collection. Increase
 candidate budgets, rebuild the index, or use exact search until the measured
 fixture passes.
 
-Track embedding-model changes with `pgcontext.register_model_version`,
+Track embedding-model changes with immutable embedding profiles,
+`pgcontext.embedding_profile_coverage`,
 `pgcontext.create_embedding_migration`, `pgcontext.update_embedding_migration`,
-and `pgcontext.embedding_migrations`. Keep old and new model versions explicit
-until backfill progress reaches the planned total and recall checks pass for
-the migrated collection.
+and `pgcontext.embedding_migrations`. Keep the incumbent profile active or
+draining until versioned coverage and held-out multi-model quality checks pass.
+If a branch reports `configuration_changed`, `version_bindings_missing`,
+`lifecycle_not_serving`, or `not_ready`, repair that immutable registration or
+register a replacement; do not bypass it with raw scores or an unvalidated
+index. See [Multi-model retrieval](multi_model.md).
 
 Back up and restore with PostgreSQL-native tooling. Rebuildable pgContext
 artifacts are cache data, not authoritative data. If an artifact cannot be

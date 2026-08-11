@@ -21,7 +21,8 @@ mod scroll;
 mod vector;
 
 pub use catalog::{
-    CollectionName, QualifiedTableName, SourceKey, SqlIdentifier, VectorDimensions, VectorName,
+    CollectionName, ProfileName, QualifiedTableName, SourceKey, SqlIdentifier, VectorDimensions,
+    VectorName,
 };
 pub use embedding_profile::{
     EmbeddingProfile, IntegerScale, ProviderBinaryLayout, VectorNormalization,

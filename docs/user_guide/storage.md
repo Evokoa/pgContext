@@ -150,7 +150,7 @@ Use PostgreSQL backup/restore as the authoritative recovery path:
    artifact copy is useful, copy it only after the writer has
    completed its atomic rename and the validator accepts the target file.
 3. Restore PostgreSQL data first. Confirm that collections, points, vectors,
-   filters, aliases, model versions, and migration records are present in the
+   filters, aliases, immutable embedding profiles, and migration records are present in the
    catalog before rebuilding derived artifacts.
 4. Rebuild or revalidate pgContext acceleration artifacts from source tables.
    Do not trust a copied artifact unless its header version, bounds, alignment,
