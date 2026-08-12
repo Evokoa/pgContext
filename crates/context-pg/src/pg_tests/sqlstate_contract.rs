@@ -215,7 +215,7 @@ fn sqlstate_contract_covers_filter_and_operation_bad_paths() {
              'missing_body',
              1
          )",
-        PgSqlErrorCode::ERRCODE_UNDEFINED_COLUMN,
+        PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
     );
     assert_sqlstate(
         "SELECT * FROM pgcontext.recall_check(ARRAY[1]::bigint[], ARRAY[1]::bigint[], 1.5)",

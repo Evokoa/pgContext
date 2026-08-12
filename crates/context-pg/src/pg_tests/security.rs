@@ -182,7 +182,10 @@ fn security_definer_collection_create_ignores_hostile_search_path() {
     )
     .expect("collection creation should ignore hostile search_path");
 
-    assert_eq!(security_count("SELECT count(*)::bigint FROM msec_shadow._collections"), 0);
+    assert_eq!(
+        security_count("SELECT count(*)::bigint FROM msec_shadow._collections"),
+        0
+    );
     assert_eq!(
         security_count(
             "SELECT count(*)::bigint
@@ -200,7 +203,7 @@ fn security_definer_catalog_writers_ignore_hostile_shadow_objects() {
     Spi::run(
         "CREATE TABLE public.msec_catalog_docs (
              id bigint PRIMARY KEY,
-             embedding vector NOT NULL,
+             embedding vector(2) NOT NULL,
              status text NOT NULL,
              metadata jsonb NOT NULL
          )",

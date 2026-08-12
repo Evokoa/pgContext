@@ -7,17 +7,26 @@ fn query_builders_construct_nested_query_json() {
                     pgcontext.query_nearest('[1,2]'::vector, 10),
                     0.75
                 ),
-                pgcontext.query_score_threshold(
-                    pgcontext.query_recommend(ARRAY[1, 2]::bigint[], ARRAY[3]::bigint[], 5),
-                    0.1,
-                    0.9
+                pgcontext.query_weight(
+                    pgcontext.query_score_threshold(
+                        pgcontext.query_recommend(ARRAY[1, 2]::bigint[], ARRAY[3]::bigint[], 5),
+                        0.1,
+                        0.9
+                    ),
+                    1.0
                 ),
-                pgcontext.query_formula(
-                    pgcontext.query_discover(ARRAY[4]::bigint[], 6),
-                    '$score * 0.5'
+                pgcontext.query_weight(
+                    pgcontext.query_formula(
+                        pgcontext.query_discover(ARRAY[4]::bigint[], 6),
+                        '$score * 0.5'
+                    ),
+                    1.0
                 ),
-                pgcontext.query_lookup(ARRAY[7, 8]::bigint[])
-            ]),
+                pgcontext.query_weight(
+                    pgcontext.query_lookup(ARRAY[7, 8]::bigint[]),
+                    1.0
+                )
+            ], 'weighted_rrf', 60),
             3
         )::jsonb",
     );
@@ -27,18 +36,20 @@ fn query_builders_construct_nested_query_json() {
     assert_eq!(plan["branch"]["kind"], "prefetch");
     assert_eq!(plan["branch"]["branches"][0]["kind"], "weight");
     assert_eq!(plan["branch"]["branches"][0]["branch"]["kind"], "nearest");
-    assert_eq!(plan["branch"]["branches"][1]["branch"]["kind"], "recommend");
-    assert_eq!(plan["branch"]["branches"][2]["branch"]["kind"], "discover");
-    assert_eq!(plan["branch"]["branches"][3]["kind"], "lookup");
+    assert_eq!(
+        plan["branch"]["branches"][1]["branch"]["branch"]["kind"],
+        "recommend"
+    );
+    assert_eq!(
+        plan["branch"]["branches"][2]["branch"]["branch"]["kind"],
+        "discover"
+    );
+    assert_eq!(plan["branch"]["branches"][3]["branch"]["kind"], "lookup");
 }
 
 #[pg_test]
 fn execute_query_runs_nested_constructor_plan() {
-    create_dense_hnsw_adapter_collection(
-        "stage_g_execute_plan",
-        "l2",
-        "vector_hnsw_ops",
-    );
+    create_dense_hnsw_adapter_collection("stage_g_execute_plan", "l2", "vector_hnsw_ops");
     let rows = table_search_rows(
         "SELECT point_id, source_key, score
            FROM pgcontext.execute_query(
@@ -76,12 +87,9 @@ fn execute_query_preserves_lower_is_better_rerank_order() {
 }
 
 #[pg_test]
+#[should_panic(expected = "canceling statement due to statement timeout")]
 fn collection_timeout_covers_preparation_before_candidate_execution() {
-    create_dense_hnsw_adapter_collection(
-        "stage_g_preparation_timeout",
-        "l2",
-        "vector_hnsw_ops",
-    );
+    create_dense_hnsw_adapter_collection("stage_g_preparation_timeout", "l2", "vector_hnsw_ops");
     Spi::run(
         "SELECT * FROM pgcontext.configure_collection_limits(
             'stage_g_preparation_timeout', true,
@@ -91,15 +99,13 @@ fn collection_timeout_covers_preparation_before_candidate_execution() {
     .expect("one-millisecond collection timeout should configure");
     crate::retrieval::delay_next_query_preparation_for_test(20_000);
 
-    shared_assert_sql_failure(
+    Spi::run(
         "SELECT * FROM pgcontext.execute_query(
             'stage_g_preparation_timeout',
             pgcontext.query_nearest('[1,0]'::vector, 1)
         )",
-        "57014",
-        "canceling statement due to statement timeout",
-        "query preparation timeout",
-    );
+    )
+    .expect("query preparation timeout should cancel the statement");
 }
 
 #[pg_test]
@@ -153,7 +159,7 @@ fn execute_query_allocates_candidate_budget_to_every_prefetch_branch() {
 #[pg_test]
 fn adaptive_candidate_reservation_is_not_reapplied_per_prefetch_branch() {
     Spi::run(
-         "CREATE TABLE public.stage_g_adaptive_branch_budget (
+        "CREATE TABLE public.stage_g_adaptive_branch_budget (
              id bigint PRIMARY KEY,
              embedding vector(2) NOT NULL,
              bucket text NOT NULL DEFAULT 'all'
@@ -625,6 +631,9 @@ fn execute_query_composes_all_named_postgres_sources() {
          );
          SELECT * FROM pgcontext.register_late_interaction(
              'stage_g_named_sources', 'public.stage_g_named_sources', 'token_vectors'
+         );
+         SELECT pgcontext.register_lexical_source(
+             'stage_g_named_sources', 'body', ARRAY['body'], 'pg_catalog.simple'
          );",
     )
     .expect("named-source fixture should be created");
@@ -749,7 +758,7 @@ fn query_formula_rejects_empty_formulas() {
 }
 
 #[pg_test]
-#[should_panic(expected = "query formula")]
+#[should_panic(expected = "formula expected a number, score, or parenthesis")]
 fn query_formula_rejects_whitespace_only_formulas() {
     Spi::run(
         "SELECT pgcontext.query_formula(
@@ -773,7 +782,7 @@ fn query_formula_preserves_valid_512_byte_formulas() {
 }
 
 #[pg_test]
-#[should_panic(expected = "unknown query kind")]
+#[should_panic(expected = "unsupported query kind")]
 fn composite_builders_reject_invalid_child_plans_immediately() {
     Spi::run(
         "SELECT pgcontext.query_weight(

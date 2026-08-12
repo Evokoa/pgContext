@@ -29,6 +29,7 @@ pub const fn sqlstate_for_context_error(error: ContextError) -> &'static str {
 pub const fn sql_error_code_for_query_error(error: &QueryError) -> PgSqlErrorCode {
     match error {
         QueryError::InvalidInput { .. } => PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
+        QueryError::UnknownResource { .. } => PgSqlErrorCode::ERRCODE_UNDEFINED_OBJECT,
         QueryError::WorkBudgetExceeded { .. } | QueryError::ArithmeticOverflow { .. } => {
             PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED
         }

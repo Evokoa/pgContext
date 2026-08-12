@@ -14,18 +14,67 @@ fn fuzzy_corpus(collection_name: &str, trgm_schema: &str) {
          CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA {trgm_schema};
          CREATE TABLE public.{collection_name} (
              id bigint PRIMARY KEY,
-             body text NOT NULL
+             body text NOT NULL,
+             tenant text NOT NULL
          );
-         INSERT INTO public.{collection_name} (id, body) VALUES
-             (1, 'postgres'),
-             (2, 'postgresql database'),
-             (3, 'completely different'),
-             (4, 'postgrs');
+         INSERT INTO public.{collection_name} (id, body, tenant) VALUES
+             (1, 'postgres', 'other'),
+             (2, 'postgresql database', 'other'),
+             (3, 'completely different', 'other'),
+             (4, 'postgrs', 'selected');
          SELECT pgcontext.create_collection('{collection_name}', 'public.{collection_name}');
          SELECT pgcontext.backfill_points('{collection_name}', 100);
+         SELECT pgcontext.register_filter_column('{collection_name}', 'tenant', 'tenant');
          SELECT pgcontext.register_fuzzy_source('{collection_name}', 'body_trgm', 'body');"
     ))
     .expect("fuzzy corpus should be created");
+}
+
+#[pg_test]
+fn indexed_fuzzy_filter_is_applied_before_the_bounded_probe() {
+    if !pg_trgm_is_available() {
+        return;
+    }
+    fuzzy_corpus("fuzzy_filter_probe", "trgm_filter_probe");
+    Spi::run(
+        "SELECT pgcontext.create_fuzzy_index('fuzzy_filter_probe', 'body_trgm', 'gin');
+         SET pgcontext.lexical_candidate_budget = 1;",
+    )
+    .expect("indexed fuzzy filter fixture should be configured");
+    let keys = lexical_query_source_keys(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'fuzzy_filter_probe',
+               pgcontext.query_fuzzy(
+                   'body_trgm', 'postgrs', 'similarity', 0.2,
+                   jsonb_build_object(
+                       'must', jsonb_build_array(
+                           jsonb_build_object(
+                               'key', 'tenant', 'match', jsonb_build_object('value', 'selected')
+                           )
+                       )
+                   ),
+                   1
+               )
+           )",
+    );
+    Spi::run("RESET pgcontext.lexical_candidate_budget")
+        .expect("lexical candidate budget should reset");
+    assert_eq!(keys, vec!["4".to_owned()]);
+}
+
+#[pg_test]
+fn missing_fuzzy_source_uses_undefined_object_sqlstate() {
+    lexical_corpus("fuzzy_missing_source");
+    shared_assert_sql_failure(
+        "SELECT * FROM pgcontext.execute_query(
+             'fuzzy_missing_source',
+             pgcontext.query_fuzzy('missing', 'query', 'similarity', 0.2, NULL, 1)
+         )",
+        "42704",
+        "fuzzy source is not registered or not visible: missing",
+        "missing fuzzy source",
+    );
 }
 
 fn fuzzy_keys(collection_name: &str, mode: &str, threshold: &str, text: &str) -> Vec<String> {
@@ -214,7 +263,7 @@ fn attaching_a_same_table_fuzzy_index_for_another_column_is_rejected() {
              'fuzzy_wrong_column', 'body_trgm', 'fuzzy_wrong_column_gin'
          )",
         "XX000",
-        "fuzzy index does not match the registered text column and pg_trgm operator class: fuzzy_wrong_column_gin",
+        "lexical_source_catalog failed: fuzzy index does not match the registered text column and pg_trgm operator class: fuzzy_wrong_column_gin",
         "same-table fuzzy index over the wrong column",
     );
 }
@@ -237,7 +286,7 @@ fn fuzzy_column_identity_drift_fails_closed() {
              pgcontext.query_fuzzy('body_trgm', 'postgrs', 'similarity', 0.3, NULL, 10)
          )",
         "XX000",
-        "registered fuzzy source text column drifted: body",
+        "lexical_source_catalog failed: registered fuzzy source text column drifted: body",
         "fuzzy column identity drift",
     );
 }
@@ -273,7 +322,7 @@ fn fuzzy_column_collation_drift_fails_closed() {
              pgcontext.query_fuzzy('body_trgm', 'postgres', 'similarity', 0.3, NULL, 10)
          )",
         "XX000",
-        "registered fuzzy source text column drifted: body",
+        "lexical_source_catalog failed: registered fuzzy source text column drifted: body",
         "fuzzy column collation drift",
     );
 }

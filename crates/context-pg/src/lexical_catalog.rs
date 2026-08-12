@@ -401,10 +401,12 @@ fn load_lexical_source(
                 &[collection_id.into(), source_name.into()],
             )
             .map_err(spi_error)?;
-        let Some(row) = rows.into_iter().next() else {
-            return Err(port_failure(format!(
-                "lexical source is not registered or not visible: {source_name}"
-            )));
+        let mut rows = rows.into_iter();
+        let Some(row) = rows.next() else {
+            return Err(QueryError::UnknownResource {
+                resource: "lexical source",
+                name: source_name.to_owned(),
+            });
         };
         let status = required::<String>(&row, 24, "status")?;
         if status != "ready" {
@@ -569,10 +571,12 @@ fn load_fuzzy_source(collection_id: i64, source_name: &str) -> QueryResult<Prepa
                 &[collection_id.into(), source_name.into()],
             )
             .map_err(spi_error)?;
-        let Some(row) = rows.into_iter().next() else {
-            return Err(port_failure(format!(
-                "fuzzy source is not registered or not visible: {source_name}"
-            )));
+        let mut rows = rows.into_iter();
+        let Some(row) = rows.next() else {
+            return Err(QueryError::UnknownResource {
+                resource: "fuzzy source",
+                name: source_name.to_owned(),
+            });
         };
         let status = required::<String>(&row, 16, "status")?;
         if status != "ready" {
@@ -646,11 +650,16 @@ fn validate_source_relation(
     kind: &'static str,
 ) -> QueryResult<()> {
     let matches = Spi::get_one_with_args::<bool>(
-        "SELECT namespace.nspname = $2 AND source_class.relname = $3
-           FROM pg_catalog.pg_class AS source_class
-           JOIN pg_catalog.pg_namespace AS namespace
-             ON namespace.oid = source_class.relnamespace
-          WHERE source_class.oid = $1 AND source_class.relkind IN ('r', 'p')",
+        "SELECT EXISTS (
+             SELECT 1
+               FROM pg_catalog.pg_class AS source_class
+               JOIN pg_catalog.pg_namespace AS namespace
+                 ON namespace.oid = source_class.relnamespace
+              WHERE source_class.oid = $1
+                AND namespace.nspname = $2
+                AND source_class.relname = $3
+                AND source_class.relkind IN ('r', 'p')
+         )",
         &[table_oid.into(), schema_name.into(), table_name.into()],
     )
     .map_err(spi_error)?
@@ -756,7 +765,8 @@ fn validate_field_column(table_oid: pg_sys::Oid, field: &LexicalFieldBinding) ->
                 &[table_oid.into(), field.column_name.as_str().into()],
             )
             .map_err(spi_error)?;
-        let Some(row) = rows.into_iter().next() else {
+        let mut rows = rows.into_iter();
+        let Some(row) = rows.next() else {
             return Ok(None);
         };
         Ok::<_, QueryError>(Some((
@@ -798,7 +808,8 @@ fn validate_fuzzy_column(source: &PreparedFuzzySource) -> QueryResult<()> {
                 ],
             )
             .map_err(spi_error)?;
-        let Some(row) = rows.into_iter().next() else {
+        let mut rows = rows.into_iter();
+        let Some(row) = rows.next() else {
             return Ok(None);
         };
         Ok::<_, QueryError>(Some((
@@ -908,7 +919,8 @@ fn observe_index(index: &LexicalIndexBinding) -> QueryResult<Option<ObservedInde
                 &[index.index_oid.into()],
             )
             .map_err(spi_error)?;
-        let Some(row) = rows.into_iter().next() else {
+        let mut rows = rows.into_iter();
+        let Some(row) = rows.next() else {
             return Ok(None);
         };
         Ok::<_, QueryError>(Some(ObservedIndex {
@@ -1102,7 +1114,8 @@ fn explain_uses_lexical_index(
     );
     Spi::connect(|client| {
         let rows = client.select(&sql, Some(1), &[]).map_err(spi_error)?;
-        let Some(row) = rows.into_iter().next() else {
+        let mut rows = rows.into_iter();
+        let Some(row) = rows.next() else {
             return Err(port_failure(
                 "lexical index validation plan returned no row",
             ));

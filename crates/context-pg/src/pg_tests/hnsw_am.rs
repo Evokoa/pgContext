@@ -65,6 +65,11 @@ fn hnsw_dense_metric_opclasses_bind_exact_operators_and_support_functions() {
         bindings,
         vec![
             (
+                "vector_cosine_ops".to_owned(),
+                "<=>".to_owned(),
+                "cosine_distance".to_owned(),
+            ),
+            (
                 "vector_hnsw_cosine_ops".to_owned(),
                 "<=>".to_owned(),
                 "cosine_distance".to_owned(),
@@ -81,6 +86,21 @@ fn hnsw_dense_metric_opclasses_bind_exact_operators_and_support_functions() {
             ),
             (
                 "vector_hnsw_ops".to_owned(),
+                "<->".to_owned(),
+                "hnsw_l2_distance".to_owned(),
+            ),
+            (
+                "vector_ip_ops".to_owned(),
+                "<#>".to_owned(),
+                "negative_inner_product".to_owned(),
+            ),
+            (
+                "vector_l1_ops".to_owned(),
+                "<+>".to_owned(),
+                "l1_distance".to_owned(),
+            ),
+            (
+                "vector_l2_ops".to_owned(),
                 "<->".to_owned(),
                 "hnsw_l2_distance".to_owned(),
             ),
@@ -831,7 +851,7 @@ fn quantized_dense_metrics_preserve_native_orderby_types_and_exact_rerank() {
              embedding vector NOT NULL
          );
          INSERT INTO hnsw_quantized_metric_items VALUES
-             (1, '[0,0,0,0]'::vector),
+             (1, '[0.1,0,0,0]'::vector),
              (2, '[1,0.5,-1,2]'::vector),
              (3, '[-2,1,0.25,0.5]'::vector),
              (4, '[3,-1,2,-0.5]'::vector),
@@ -1380,7 +1400,7 @@ fn hnsw_quantized_index_options_reject_bad_inputs_with_sqlstate() {
         (
             "hnsw_bad_pq_dimension_divisor_idx",
             "quantization = 'pq', pq_subvector_dimensions = 3",
-            "failed to train HNSW codec during index build",
+            "product-quantized pgcontext_hnsw dimensions 2 must be divisible by pq_subvector_dimensions 3",
         ),
     ] {
         let sql = format!(

@@ -82,10 +82,14 @@ fn artifact_segment_sql_rejects_unknown_kind_with_sqlstate() {
 
 #[pg_test]
 fn artifact_segment_sql_rejects_truncated_header_with_sqlstate() {
+    let expected = format!(
+        "truncated segment header: 7 < {}",
+        context_storage::SegmentHeader::ENCODED_LEN
+    );
     shared_assert_sql_failure(
         "SELECT * FROM pgcontext.validate_artifact_segment(decode('50474354534547', 'hex'))",
         "XX001",
-        "truncated segment header: 7 < 40",
+        &expected,
         "truncated segment header",
     );
 }
@@ -138,7 +142,11 @@ fn artifact_segment_publish_records_completed_build_metadata() {
     assert_eq!(rows[0].artifact_name, "seg-a");
     assert_eq!(rows[0].target_name, "public.m10_artifact_publish");
     assert_eq!(rows[0].segment_kind, "hnsw_graph");
-    assert_eq!(rows[0].format_version, 1);
+    assert_eq!(
+        rows[0].format_version,
+        i32::try_from(context_storage::CURRENT_SEGMENT_FORMAT_VERSION)
+            .expect("segment format version")
+    );
     assert_eq!(rows[0].payload_bytes, 7);
     assert_ne!(rows[0].checksum, 0);
     assert_eq!(rows[0].lifecycle_state, "validated");
@@ -474,7 +482,11 @@ fn artifact_segment_file_publish_materializes_generated_path() {
     assert_eq!(row.build_job_id, build_job_id);
     assert_eq!(row.artifact_kind, "segment");
     assert_eq!(row.segment_kind, "hnsw_graph");
-    assert_eq!(row.format_version, 1);
+    assert_eq!(
+        row.format_version,
+        i32::try_from(context_storage::CURRENT_SEGMENT_FORMAT_VERSION)
+            .expect("segment format version")
+    );
     assert_eq!(row.payload_bytes, 7);
     assert_eq!(row.lifecycle_state, "file_materialized");
     let relative_path = row
@@ -1026,8 +1038,10 @@ fn artifact_segment_memory_reports_mmap_budget_diagnostics() {
                 target_name: "public.m10_artifact_memory".to_owned(),
                 lifecycle_state: "validated".to_owned(),
                 payload_bytes: 7,
-                header_bytes: 40,
-                mapped_bytes: 47,
+                header_bytes: i64::try_from(context_storage::SegmentHeader::ENCODED_LEN)
+                    .expect("segment header length"),
+                mapped_bytes: i64::try_from(context_storage::SegmentHeader::ENCODED_LEN + 7)
+                    .expect("segment mapped length"),
                 file_materialized: false,
             },
             ArtifactMemoryRow {
@@ -1036,8 +1050,10 @@ fn artifact_segment_memory_reports_mmap_budget_diagnostics() {
                 target_name: "public.m10_artifact_memory".to_owned(),
                 lifecycle_state: "file_materialized".to_owned(),
                 payload_bytes: 1,
-                header_bytes: 40,
-                mapped_bytes: 41,
+                header_bytes: i64::try_from(context_storage::SegmentHeader::ENCODED_LEN)
+                    .expect("segment header length"),
+                mapped_bytes: i64::try_from(context_storage::SegmentHeader::ENCODED_LEN + 1)
+                    .expect("segment mapped length"),
                 file_materialized: true,
             },
         ]

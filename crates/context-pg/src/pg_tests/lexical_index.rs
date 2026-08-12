@@ -2,21 +2,54 @@ fn indexed_lexical_corpus(collection_name: &str, rows: i32) {
     Spi::run(&format!(
         "CREATE TABLE public.{collection_name} (
              id bigint PRIMARY KEY,
-             body text NOT NULL
+             body text NOT NULL,
+             tenant text NOT NULL
          );
-         INSERT INTO public.{collection_name} (id, body)
+         INSERT INTO public.{collection_name} (id, body, tenant)
          SELECT id,
                 CASE WHEN id % 3 = 0 THEN 'postgres storage engine ' || id
                      ELSE 'unrelated filler text ' || id
-                END
+                END,
+                CASE WHEN id = {rows} THEN 'selected' ELSE 'other' END
            FROM pg_catalog.generate_series(1, {rows}) AS id;
          SELECT pgcontext.create_collection('{collection_name}', 'public.{collection_name}');
          SELECT pgcontext.backfill_points('{collection_name}', 10000);
+         SELECT pgcontext.register_filter_column('{collection_name}', 'tenant', 'tenant');
          SELECT pgcontext.register_lexical_source(
              '{collection_name}', 'article', ARRAY['body'], 'pg_catalog.simple'
          );"
     ))
     .expect("indexed lexical corpus should be created");
+}
+
+#[pg_test]
+fn indexed_lexical_filter_is_applied_before_the_bounded_probe() {
+    indexed_lexical_corpus("lex_index_filter_probe", 60);
+    Spi::run(
+        "SELECT pgcontext.create_lexical_index('lex_index_filter_probe', 'article');
+         SET pgcontext.lexical_candidate_budget = 1;",
+    )
+    .expect("indexed filter fixture should be configured");
+    let keys = lexical_query_source_keys(
+        "SELECT point_id, source_key, score
+           FROM pgcontext.execute_query(
+               'lex_index_filter_probe',
+               pgcontext.query_lexical(
+                   'article', jsonb_build_object('form', 'plain', 'text', 'postgres storage'),
+                   jsonb_build_object(
+                       'must', jsonb_build_array(
+                           jsonb_build_object(
+                               'key', 'tenant', 'match', jsonb_build_object('value', 'selected')
+                           )
+                       )
+                   ),
+                   1
+               )
+           )",
+    );
+    Spi::run("RESET pgcontext.lexical_candidate_budget")
+        .expect("lexical candidate budget should reset");
+    assert_eq!(keys, vec!["60".to_owned()]);
 }
 
 fn indexed_lexical_keys(collection_name: &str, limit: i32) -> Vec<String> {
@@ -186,6 +219,9 @@ fn a_drifted_index_definition_fails_closed() {
     ))
     .expect("stored index definition should be perturbed");
 
+    let expected = format!(
+        "lexical_source_catalog failed: attached lexical index definition drifted: {index_name}"
+    );
     shared_assert_sql_failure(
         "SELECT * FROM pgcontext.execute_query(
              'lex_index_drift',
@@ -194,7 +230,7 @@ fn a_drifted_index_definition_fails_closed() {
              )
          )",
         "XX000",
-        "attached lexical index definition drifted",
+        &expected,
         "drifted lexical index definition",
     );
 }
@@ -214,7 +250,7 @@ fn attaching_a_partial_or_foreign_index_is_rejected() {
              'lex_index_reject', 'article', 'lex_index_reject_partial'
          )",
         "0A000",
-        "lexical index must not be partial",
+        "lexical index must not be partial: public.lex_index_reject_partial",
         "partial lexical index",
     );
 
@@ -231,7 +267,7 @@ fn attaching_a_partial_or_foreign_index_is_rejected() {
              'lex_index_reject', 'article', 'lex_index_reject_other_gin'
          )",
         "42809",
-        "is not defined on the registered source relation",
+        "index public.lex_index_reject_other_gin is not defined on the registered source relation",
         "foreign lexical index",
     );
 }
@@ -252,7 +288,7 @@ fn attaching_a_same_table_index_for_the_wrong_document_is_rejected() {
              'lex_index_wrong_document', 'article', 'lex_index_wrong_document_gin'
          )",
         "XX000",
-        "lexical index does not match the registered document expression: lex_index_wrong_document_gin",
+        "lexical_source_catalog failed: lexical index does not match the registered document expression: lex_index_wrong_document_gin",
         "same-table lexical index over the wrong document",
     );
 }

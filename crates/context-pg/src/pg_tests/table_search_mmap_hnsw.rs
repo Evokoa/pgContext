@@ -53,12 +53,7 @@ fn mmap_hnsw_internal_candidate_helper_rejects_direct_sql_calls() {
 fn source_built_mmap_graph_is_navigable() {
     create_search_collection("m13_mmap_source_built_graph");
     upsert_search_points("m13_mmap_source_built_graph", &["10", "20", "30"]);
-    let job_id = start_artifact_build_job(
-        "m13_mmap_source_built_graph",
-        "mmap",
-        "source-built",
-        0,
-    );
+    let job_id = start_artifact_build_job("m13_mmap_source_built_graph", "mmap", "source-built", 0);
     Spi::run(&format!("SELECT pgcontext.run_build_job({job_id}, 1)"))
         .expect("source-built mmap job should complete");
     let published = artifact_file_rows(&format!(
@@ -108,7 +103,7 @@ fn source_built_mmap_graph_is_navigable() {
 }
 
 #[pg_test]
-fn quantized_source_built_graphs_use_v2_and_exact_source_rerank() {
+fn quantized_source_built_graphs_use_current_format_and_exact_source_rerank() {
     for (suffix, options) in [
         ("binary", r#"{"mode":"binary"}"#),
         ("scalar", r#"{"mode":"scalar","levels":2}"#),
@@ -134,11 +129,11 @@ fn quantized_source_built_graphs_use_v2_and_exact_source_rerank() {
         let payload_version = Spi::get_one::<i32>(&format!(
             "SELECT pg_catalog.get_byte(
                  pgcontext.build_mmap_hnsw_artifact({job_id}),
-                 48
+                 56
              )"
         ))
         .expect("quantized graph payload version should load");
-        assert_eq!(payload_version, Some(2));
+        assert_eq!(payload_version, Some(3));
 
         let published = artifact_file_rows(&format!(
             "SELECT artifact_id,
@@ -754,11 +749,7 @@ fn table_search_mmap_hnsw_artifact_denies_non_owner_collections() {
         create_search_collection("m13_mmap_hnsw_acl");
         upsert_search_points("m13_mmap_hnsw_acl", &["10"]);
     });
-    publish_mmap_hnsw_artifact(
-        "m13_mmap_hnsw_acl",
-        "view-a",
-        &[("10", &[3.0, 0.0], &[])],
-    );
+    publish_mmap_hnsw_artifact("m13_mmap_hnsw_acl", "view-a", &[("10", &[3.0, 0.0], &[])]);
     let owner_rows = with_acl_session_user("m13_mmap_hnsw_owner", || {
         table_search_rows(
             "SELECT point_id, source_key, score

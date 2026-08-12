@@ -287,7 +287,7 @@ fn adaptive_prefix_preserves_rls_and_fails_after_source_select_revoke() {
                 CASE WHEN id % 2 = 1 THEN 'acme' ELSE 'other' END
            FROM pg_catalog.generate_series(1, 100) AS id;
          CREATE INDEX adaptive_rls_docs_hnsw ON public.adaptive_rls_docs
-             USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_l2_ops);
+             USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_ops);
          ALTER TABLE public.adaptive_rls_docs ENABLE ROW LEVEL SECURITY;
          ALTER TABLE public.adaptive_rls_docs FORCE ROW LEVEL SECURITY;
          CREATE POLICY adaptive_rls_tenant ON public.adaptive_rls_docs

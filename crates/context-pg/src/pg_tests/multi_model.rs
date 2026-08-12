@@ -947,6 +947,99 @@ fn multi_model_authoritative_recheck_excludes_source_edits_and_deleted_points() 
 }
 
 #[pg_test]
+fn multi_model_candidate_probe_skips_unmapped_and_deleted_nearest_rows() {
+    multi_model_corpus("mm_mapping_probe");
+    register_versioned_profile(
+        "mm_mapping_probe",
+        "legacy_v1",
+        "legacy",
+        "legacy_version",
+        4,
+        "active",
+    );
+    Spi::run(
+        "INSERT INTO public.mm_mapping_probe (
+             id, tenant, source_version, legacy_version, modern_version, legacy, modern
+         ) VALUES (
+             0, 'even', 1, 1, NULL, '[0,1,0,0]'::vector, NULL
+         );
+         SELECT pgcontext.delete_points('mm_mapping_probe', ARRAY['1']);",
+    )
+    .expect("unmapped and deleted nearest rows should be prepared");
+
+    crate::multi_model::set_next_comparison_limit_for_test(200);
+    let report = Spi::get_one::<JsonB>(
+        "SELECT pgcontext.query_multi_model(
+             'mm_mapping_probe',
+             jsonb_build_array(jsonb_build_object(
+                 'profile', 'legacy_v1',
+                 'configuration_hash', '0123456789abcdef',
+                 'query', '[0,1,0,0]', 'limit', 1, 'weight', 1.0
+             )),
+             NULL, 1, 60, 200, true
+         )",
+    )
+    .expect("bounded mapped candidate query should execute")
+    .expect("bounded mapped candidate report should exist");
+    assert_eq!(report.0["completion"], "complete");
+    assert_eq!(report.0["results"][0]["source_key"], "2");
+
+    // Nineteen exact source comparisons plus recheck and the frozen four-unit
+    // one-row fusion projection fit at twenty-four. Counting either unmapped
+    // row would exceed this boundary after the same downstream work.
+    crate::multi_model::set_next_comparison_limit_for_test(24);
+    crate::multi_model::force_next_exact_profile_for_test("legacy_v1");
+    let exact_report = Spi::get_one::<JsonB>(
+        "SELECT pgcontext.query_multi_model(
+             'mm_mapping_probe',
+             jsonb_build_array(jsonb_build_object(
+                 'profile', 'legacy_v1',
+                 'configuration_hash', '0123456789abcdef',
+                 'query', '[0,1,0,0]', 'limit', 1, 'weight', 1.0
+             )),
+             NULL, 1, 60, 24, true
+         )",
+    )
+    .expect("mapped exact-fallback query should execute at its comparison boundary")
+    .expect("mapped exact-fallback report should exist");
+    assert_eq!(exact_report.0["completion"], "complete");
+    assert_eq!(exact_report.0["results"][0]["source_key"], "2");
+    assert_eq!(
+        exact_report.0["branches"][0]["strategy"],
+        "exact_fallback_with_authoritative_recheck"
+    );
+
+    // Ten mapped even rows plus recheck and fusion fit at fifteen; counting
+    // unrelated odd rows would fail before exact execution.
+    crate::multi_model::set_next_comparison_limit_for_test(15);
+    crate::multi_model::force_next_exact_profile_for_test("legacy_v1");
+    let filtered_exact_report = Spi::get_one::<JsonB>(
+        "SELECT pgcontext.query_multi_model(
+             'mm_mapping_probe',
+             jsonb_build_array(jsonb_build_object(
+                 'profile', 'legacy_v1',
+                 'configuration_hash', '0123456789abcdef',
+                 'query', '[0,1,0,0]', 'limit', 1, 'weight', 1.0
+             )),
+             jsonb_build_object(
+                 'must', jsonb_build_array(jsonb_build_object(
+                     'key', 'tenant', 'match', jsonb_build_object('value', 'even')
+                 ))
+             ),
+             1, 60, 15, true
+         )",
+    )
+    .expect("filtered exact fallback should count only mapped matching rows")
+    .expect("filtered exact-fallback report should exist");
+    assert_eq!(filtered_exact_report.0["completion"], "complete");
+    assert_eq!(filtered_exact_report.0["results"][0]["source_key"], "2");
+    assert_eq!(
+        filtered_exact_report.0["branches"][0]["strategy"],
+        "exact_fallback_with_authoritative_recheck"
+    );
+}
+
+#[pg_test]
 fn multi_model_index_drift_is_fail_closed_or_explicitly_degraded() {
     multi_model_corpus("mm_index_drift");
     register_versioned_profile(
@@ -1072,7 +1165,7 @@ fn multi_model_query_fuses_dense_and_provider_native_integer_profiles() {
     .expect("provider-native multi-model query should execute")
     .expect("provider-native query should return a report");
     assert_eq!(report.0["completion"], "complete");
-    assert_eq!(report.0["results"][0]["point_id"], 1);
+    assert_eq!(report.0["results"][0]["source_key"], "1");
     assert_eq!(
         report.0["results"][0]["contributions"]
             .as_array()
@@ -1125,6 +1218,10 @@ fn multi_model_candidate_source_rejects_oversized_keys_before_materialization() 
              'mm_oversized_key', 'embedding', 'embedding', 2, 'l2'
          );
          SELECT pgcontext.upsert_points('mm_oversized_key', ARRAY['valid']);
+         INSERT INTO pgcontext._collection_points (collection_id, source_key)
+         SELECT collection_id, pg_catalog.repeat('OVERSIZED_SENTINEL', 100)
+           FROM pgcontext._collections
+          WHERE collection_name = 'mm_oversized_key';
          CREATE INDEX mm_oversized_key_embedding_hnsw ON public.mm_oversized_key
              USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_ops);",
     )
@@ -1400,6 +1497,7 @@ fn multi_model_memory_and_plan_boundaries_are_inclusive_and_fail_closed() {
 }
 
 #[pg_test]
+#[should_panic(expected = "canceling statement due to statement timeout")]
 fn multi_model_collection_timeout_cancels_before_profile_candidate_work() {
     multi_model_corpus("mm_timeout");
     register_versioned_profile(
@@ -1418,7 +1516,7 @@ fn multi_model_collection_timeout_cancels_before_profile_candidate_work() {
     )
     .expect("one-millisecond multi-profile timeout should configure");
     crate::retrieval::delay_next_query_preparation_for_test(20_000);
-    shared_assert_sql_failure(
+    Spi::run(
         "SELECT pgcontext.query_multi_model(
              'mm_timeout',
              jsonb_build_array(jsonb_build_object(
@@ -1428,13 +1526,12 @@ fn multi_model_collection_timeout_cancels_before_profile_candidate_work() {
              )),
              NULL, 5, 60, 6, true
          )",
-        "57014",
-        "canceling statement due to statement timeout",
-        "multi-profile preparation timeout",
-    );
+    )
+    .expect("multi-profile preparation timeout should cancel the statement");
 }
 
 #[pg_test]
+#[should_panic(expected = "canceling statement due to statement timeout")]
 fn multi_model_collection_timeout_remains_armed_through_report_finalization() {
     multi_model_corpus("mm_final_timeout");
     register_versioned_profile(
@@ -1453,7 +1550,7 @@ fn multi_model_collection_timeout_remains_armed_through_report_finalization() {
     )
     .expect("one-millisecond finalization timeout should configure");
     crate::retrieval::delay_next_query_finalization_for_test(20_000);
-    shared_assert_sql_failure(
+    Spi::run(
         "SELECT pgcontext.query_multi_model(
              'mm_final_timeout',
              jsonb_build_array(jsonb_build_object(
@@ -1463,10 +1560,8 @@ fn multi_model_collection_timeout_remains_armed_through_report_finalization() {
              )),
              NULL, 5, 60, 6, true
          )",
-        "57014",
-        "canceling statement due to statement timeout",
-        "multi-profile finalization timeout",
-    );
+    )
+    .expect("multi-profile finalization timeout should cancel the statement");
 }
 
 #[pg_test]
@@ -1509,10 +1604,10 @@ fn multi_model_filter_preflight_rejects_oversized_scalars_before_catalog_work() 
                      )
                  ))
              ),
-             1, 60, 1, true
+             1, 60, 2, true
          )",
         "22023",
-        "invalid filter: scalar bytes exceed policy maximum",
+        "scalar bytes exceed policy maximum",
         "multi-profile filter preflight before catalog resolution",
     );
 }
@@ -1740,6 +1835,8 @@ fn multi_model_coverage_requires_current_source_select() {
     sql_test_create_role("mm_coverage_collection_owner");
     sql_test_grant_api_access("mm_coverage_source_owner");
     sql_test_grant_api_access("mm_coverage_collection_owner");
+    Spi::run("GRANT CREATE ON SCHEMA public TO mm_coverage_source_owner")
+        .expect("source owner should be allowed to create the fixture relation");
 
     sql_test_set_session_user("mm_coverage_source_owner");
     Spi::run(

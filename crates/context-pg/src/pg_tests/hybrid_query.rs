@@ -775,7 +775,7 @@ fn late_interaction_query_rejects_excessive_comparison_budget_with_sqlstate() {
 }
 
 #[pg_test]
-#[should_panic(expected = "query text column does not exist on public.m5_hybrid_missing_text: body")]
+#[should_panic(expected = "registered lexical field column is missing: body")]
 fn hybrid_query_rejects_missing_text_column() {
     create_hybrid_collection("m5_hybrid_missing_text");
     Spi::run("ALTER TABLE public.m5_hybrid_missing_text DROP COLUMN body")

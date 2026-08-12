@@ -70,7 +70,9 @@ fn hnsw_delta_segment_serves_inserted_rows_without_a_repack() {
 
     let read_ids = |sql: &str| -> Vec<i64> {
         Spi::connect(|client| {
-            let result = client.select(sql, None, &[]).expect("top-k query should run");
+            let result = client
+                .select(sql, None, &[])
+                .expect("top-k query should run");
             let mut ids = Vec::new();
             for row in result {
                 ids.push(row.get::<i64>(1).unwrap().unwrap_or_default());
@@ -139,6 +141,8 @@ fn hnsw_delta_segment_rotates_beyond_the_limit() {
     let rotations_before = read_stat("segment_rotations");
     let multi_scans_before = read_stat("multi_segment_scans");
     let parallel_scans_before = read_stat("parallel_segment_scans");
+    let parallel_denials_before = read_stat("parallel_admission_denials");
+    let serial_degradations_before = read_stat("serial_segment_degradations");
 
     // Ten inserts against a limit of three produce three bounded rotations
     // and leave one row in the active exact delta.
@@ -152,7 +156,10 @@ fn hnsw_delta_segment_rotates_beyond_the_limit() {
     let count: i64 = Spi::get_one("SELECT count(*)::bigint FROM delta_segment_limit_probe")
         .expect("row count query should run")
         .expect("row count should not be null");
-    assert_eq!(count, 60, "every inserted row must be visible regardless of insert path");
+    assert_eq!(
+        count, 60,
+        "every inserted row must be visible regardless of insert path"
+    );
     let rotations_after = read_stat("segment_rotations");
     assert_eq!(
         rotations_after - rotations_before,
@@ -169,7 +176,9 @@ fn hnsw_delta_segment_rotates_beyond_the_limit() {
 
     let read_ids = |sql: &str| -> Vec<i64> {
         Spi::connect(|client| {
-            let result = client.select(sql, None, &[]).expect("top-k query should run");
+            let result = client
+                .select(sql, None, &[])
+                .expect("top-k query should run");
             let mut ids = Vec::new();
             for row in result {
                 ids.push(row.get::<i64>(1).unwrap().unwrap_or_default());
@@ -203,9 +212,14 @@ fn hnsw_delta_segment_rotates_beyond_the_limit() {
         "the index query should report multi-segment fan-out"
     );
     let parallel_scans_after = read_stat("parallel_segment_scans");
+    let parallel_denials_after = read_stat("parallel_admission_denials");
+    let serial_degradations_after = read_stat("serial_segment_degradations");
     assert!(
         parallel_scans_after > parallel_scans_before,
-        "owned immutable packs should be admitted to bounded parallel search"
+        "owned immutable packs should be admitted to bounded parallel search; \
+         admission denials={}, serial degradations={}",
+        parallel_denials_after - parallel_denials_before,
+        serial_degradations_after - serial_degradations_before,
     );
     let frozen_live_history: i64 = Spi::get_one(
         "SELECT frozen_mutation_records
@@ -253,8 +267,7 @@ fn supervised_worker_compacts_one_bounded_hnsw_pair() {
          USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_cosine_ops)",
     )
     .expect("supervised segment index should build");
-    Spi::run("SET pgcontext.hnsw_delta_segment_limit = 1")
-        .expect("delta limit should be settable");
+    Spi::run("SET pgcontext.hnsw_delta_segment_limit = 1").expect("delta limit should be settable");
     Spi::run("SET pgcontext.build_workers_enabled = false")
         .expect("test should use the deterministic manual worker seam");
     Spi::run(&format!(
@@ -266,16 +279,24 @@ fn supervised_worker_compacts_one_bounded_hnsw_pair() {
 
     let (before, active_blocks): (i32, i64) = Spi::connect(|client| {
         let rows = client.select(
-        "SELECT segment_count, active_delta_blocks
+            "SELECT segment_count, active_delta_blocks
            FROM pgcontext.hnsw_segment_stats('supervised_segment_probe_hnsw')",
-        Some(1), &[])?;
+            Some(1),
+            &[],
+        )?;
         let row = rows.first();
         Ok::<_, spi::Error>((
-            row.get::<i32>(1)?.expect("segment count should not be null"),
-            row.get::<i64>(2)?.expect("active block count should not be null"),
+            row.get::<i32>(1)?
+                .expect("segment count should not be null"),
+            row.get::<i64>(2)?
+                .expect("active block count should not be null"),
         ))
-    }).expect("segment stats should run");
-    assert!(before >= 4, "fixture must publish multiple immutable segments");
+    })
+    .expect("segment stats should run");
+    assert!(
+        before >= 4,
+        "fixture must publish multiple immutable segments"
+    );
 
     let job_id: i64 = Spi::get_one(
         "SELECT build_job_id
@@ -330,7 +351,10 @@ fn supervised_worker_compacts_one_bounded_hnsw_pair() {
     )
     .expect("same-intent retry should be accepted")
     .expect("same-intent retry result should not be null");
-    assert!(!retry_applied, "a published job intent must be a retry no-op");
+    assert!(
+        !retry_applied,
+        "a published job intent must be a retry no-op"
+    );
     let after_retry: i32 = Spi::get_one(
         "SELECT segment_count
            FROM pgcontext.hnsw_segment_stats('supervised_segment_probe_hnsw')",
@@ -339,8 +363,7 @@ fn supervised_worker_compacts_one_bounded_hnsw_pair() {
     .expect("post-retry count should not be null");
     assert_eq!(after_retry, after, "retry must not compact a second pair");
 
-    Spi::run("RESET pgcontext.hnsw_delta_segment_limit")
-        .expect("delta limit should reset");
+    Spi::run("RESET pgcontext.hnsw_delta_segment_limit").expect("delta limit should reset");
     Spi::run("RESET pgcontext.build_workers_enabled").expect("worker setting should reset");
 }
 
@@ -372,7 +395,8 @@ fn hnsw_segment_saturation_keeps_mutation_extents_disjoint() {
         )?;
         let row = rows.first();
         Ok::<_, spi::Error>((
-            row.get::<i32>(1)?.expect("segment_count should not be null"),
+            row.get::<i32>(1)?
+                .expect("segment_count should not be null"),
             row.get::<i64>(2)?
                 .expect("active_delta_records should not be null"),
             row.get::<i64>(3)?
@@ -391,6 +415,5 @@ fn hnsw_segment_saturation_keeps_mutation_extents_disjoint() {
     .expect("saturated index query should run")
     .expect("nearest row should not be null");
     assert_eq!(nearest, 30);
-    Spi::run("RESET pgcontext.hnsw_delta_segment_limit")
-        .expect("delta limit should reset");
+    Spi::run("RESET pgcontext.hnsw_delta_segment_limit").expect("delta limit should reset");
 }

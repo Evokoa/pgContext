@@ -173,11 +173,19 @@ fn automatic_query_stats_capture_strategy_work_and_source_updates() {
     .expect("automatic collection should exist");
     let events = crate::query_stats_async::test_events(collection_id);
     assert_eq!(events.len(), 2);
-    assert!(events.iter().all(|event| event.collection_id == collection_id));
+    assert!(
+        events
+            .iter()
+            .all(|event| event.collection_id == collection_id)
+    );
     assert!(events.iter().all(|event| event.query_kind == "search"));
     assert!(events.iter().all(|event| event.strategy == "dense_hnsw"));
     assert!(events.iter().all(|event| event.visits >= event.candidates));
-    assert!(events.iter().all(|event| event.candidates >= event.rechecks));
+    assert!(
+        events
+            .iter()
+            .all(|event| event.candidates >= event.rechecks)
+    );
     assert!(events.iter().all(|event| event.stages >= 2));
     assert!(events.iter().all(|event| event.expansions >= 1));
     assert!(events.iter().all(|event| event.completion == "complete"));
@@ -250,7 +258,11 @@ fn automatic_query_stats_capture_named_sparse_exact_and_ann_searches() {
     assert!(events.iter().all(|event| event.completion == "complete"));
     assert!(events.iter().all(|event| event.result_count == 2));
     assert!(events.iter().all(|event| event.visits >= event.candidates));
-    assert!(events.iter().all(|event| event.candidates >= event.rechecks));
+    assert!(
+        events
+            .iter()
+            .all(|event| event.candidates >= event.rechecks)
+    );
 }
 
 #[pg_test]
@@ -285,7 +297,6 @@ fn automatic_observability_classifies_terminal_outcomes() {
         crate::query_stats::lifecycle_state_label(&corrupt, "quantized_mmap_hnsw", false),
         "IndexCorrupt"
     );
-
 }
 
 #[pg_test]
@@ -352,7 +363,7 @@ fn automatic_observability_captures_executor_error_and_missing_artifact() {
                  'stage_i_terminal_events',
                  pgcontext.query_formula(
                      pgcontext.query_nearest('[1,0]'::vector, 1),
-                     'system($score)'
+                     '$score / 0'
                  )
              )",
         )
@@ -360,12 +371,14 @@ fn automatic_observability_captures_executor_error_and_missing_artifact() {
     });
     assert!(typed_error.is_err());
     let events = crate::query_stats_async::test_events(collection_id);
-    let event = events.last().expect("typed executor error should be captured");
+    let event = events
+        .last()
+        .expect("typed executor error should be captured");
     assert_eq!(event.completion, "error");
-    assert_eq!(event.strategy, "executor_error");
-    assert_eq!(event.visits, 0);
-    assert_eq!(event.candidates, 0);
-    assert_eq!(event.stages, 0);
+    assert_eq!(event.strategy, "dense_hnsw");
+    assert!(event.visits >= event.candidates);
+    assert!(event.candidates >= event.rechecks);
+    assert!(event.stages >= 1);
 
     Spi::run(
         "SELECT pgcontext.configure_vector(
@@ -385,7 +398,9 @@ fn automatic_observability_captures_executor_error_and_missing_artifact() {
     });
     assert!(missing.is_err());
     let events = crate::query_stats_async::test_events(collection_id);
-    let event = events.last().expect("missing artifact event should be captured");
+    let event = events
+        .last()
+        .expect("missing artifact event should be captured");
     assert_eq!(event.completion, "error");
     assert_eq!(event.lifecycle, "ArtifactMissing");
 }
@@ -393,12 +408,29 @@ fn automatic_observability_captures_executor_error_and_missing_artifact() {
 #[pg_test]
 fn automatic_observations_are_owned_by_the_invocation_that_started_them() {
     create_query_stats_collection("stage_i_nested_observation");
+    Spi::run(
+        "INSERT INTO public.stage_i_nested_observation VALUES (1, '[1,0]'::vector);
+         SELECT pgcontext.backfill_points('stage_i_nested_observation', 10);",
+    )
+    .expect("nested observation point should be registered");
     let collection_id = Spi::get_one::<i64>(
         "SELECT collection_id FROM pgcontext._collection_acl
           WHERE collection_name = 'stage_i_nested_observation'",
     )
     .expect("nested observation collection lookup should succeed")
     .expect("nested observation collection should exist");
+    let point_id = Spi::get_one::<i64>(
+        "SELECT point_id
+           FROM pgcontext._visible_collection_points
+          WHERE collection_id = (
+                    SELECT collection_id
+                      FROM pgcontext._collection_acl
+                     WHERE collection_name = 'stage_i_nested_observation'
+                )
+            AND source_key = '1'",
+    )
+    .expect("nested observation point lookup should succeed")
+    .expect("nested observation point should exist");
 
     let outer = crate::query_stats_async::begin(collection_id, "hybrid", false)
         .expect("test telemetry should be enabled");
@@ -417,15 +449,15 @@ fn automatic_observations_are_owned_by_the_invocation_that_started_them() {
     let outer = crate::query_stats_async::begin(collection_id, "hybrid", false)
         .expect("test telemetry should remain enabled");
     let typed = std::panic::catch_unwind(|| {
-        Spi::run(
+        Spi::run(&format!(
             "SELECT * FROM pgcontext.execute_query(
                  'stage_i_nested_observation',
                  pgcontext.query_formula(
-                     pgcontext.query_lookup(ARRAY[1]::bigint[]),
-                     'system($score)'
+                     pgcontext.query_lookup(ARRAY[{point_id}]::bigint[]),
+                     '$score / 0'
                  )
-             )",
-        )
+             )"
+        ))
         .expect("nested typed executor error should fail after its observation finishes");
     });
     assert!(typed.is_err());
@@ -464,16 +496,18 @@ fn automatic_observability_reports_actual_named_source_visits() {
     )
     .expect("named source telemetry fixture should be created");
     let (collection_id, first_point_id) = Spi::connect(|client| {
-        let row = client.select(
-            "SELECT acl.collection_id, points.point_id
+        let row = client
+            .select(
+                "SELECT acl.collection_id, points.point_id
                FROM pgcontext._collection_acl AS acl
                JOIN pgcontext._visible_collection_points AS points
                  ON points.collection_id = acl.collection_id
               WHERE acl.collection_name = 'stage_i_named_visits'
                 AND points.source_key = '1'",
-            None,
-            &[],
-        )?.first();
+                None,
+                &[],
+            )?
+            .first();
         Ok::<_, spi::Error>((
             row.get::<i64>(1)?.expect("collection id should exist"),
             row.get::<i64>(2)?.expect("point id should exist"),
@@ -494,7 +528,10 @@ fn automatic_observability_reports_actual_named_source_visits() {
         1
     );
     let events = crate::query_stats_async::test_events(collection_id);
-    assert_eq!(events.last().map(|event| event.strategy.as_str()), Some("lexical_exact"));
+    assert_eq!(
+        events.last().map(|event| event.strategy.as_str()),
+        Some("lexical_exact")
+    );
     assert_eq!(events.last().map(|event| event.visits), Some(4));
 
     assert_eq!(
@@ -508,7 +545,10 @@ fn automatic_observability_reports_actual_named_source_visits() {
         1
     );
     let events = crate::query_stats_async::test_events(collection_id);
-    assert_eq!(events.last().map(|event| event.strategy.as_str()), Some("exact_recommend"));
+    assert_eq!(
+        events.last().map(|event| event.strategy.as_str()),
+        Some("exact_recommend")
+    );
     assert_eq!(events.last().map(|event| event.visits), Some(3));
 
     assert_eq!(
@@ -522,7 +562,10 @@ fn automatic_observability_reports_actual_named_source_visits() {
         1
     );
     let events = crate::query_stats_async::test_events(collection_id);
-    assert_eq!(events.last().map(|event| event.strategy.as_str()), Some("exact_discover"));
+    assert_eq!(
+        events.last().map(|event| event.strategy.as_str()),
+        Some("exact_discover")
+    );
     assert_eq!(events.last().map(|event| event.visits), Some(3));
 
     let point_ids = Spi::get_one::<Vec<i64>>(
@@ -535,7 +578,11 @@ fn automatic_observability_reports_actual_named_source_visits() {
     )
     .expect("lookup point ids should query")
     .expect("lookup point ids should exist");
-    let ids = point_ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+    let ids = point_ids
+        .iter()
+        .map(i64::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
     assert_eq!(
         table_search_rows(&format!(
             "SELECT * FROM pgcontext.execute_query(
@@ -594,7 +641,9 @@ fn automatic_observability_persists_executor_budget_exhaustion() {
     });
     assert!(exhausted.is_err());
     let events = crate::query_stats_async::test_events(collection_id);
-    let event = events.last().expect("executor budget event should be captured");
+    let event = events
+        .last()
+        .expect("executor budget event should be captured");
     assert_eq!(event.completion, "budget_exhausted");
     assert_eq!(event.strategy, "lexical_exact");
     assert_eq!(event.visits, 200);
@@ -864,7 +913,9 @@ fn create_query_stats_collection(collection_name: &str) {
     .expect("query stats vector should be registered");
 }
 
-fn complete_test_summary(strategy: &'static str) -> crate::query_stats_async::AutomaticQuerySummary {
+fn complete_test_summary(
+    strategy: &'static str,
+) -> crate::query_stats_async::AutomaticQuerySummary {
     crate::query_stats_async::AutomaticQuerySummary {
         result_count: 1,
         visits: 1,
@@ -906,6 +957,12 @@ fn create_query_stats_collection_with_payloads(collection_name: &str) {
         "SELECT pgcontext.register_filter_column('{collection_name}', 'tenant', 'tenant')"
     ))
     .expect("query stats privacy filter should be registered");
+    Spi::run(&format!(
+        "SELECT pgcontext.register_lexical_source(
+             '{collection_name}', 'body', ARRAY['body'], 'pg_catalog.simple'
+         )"
+    ))
+    .expect("query stats privacy lexical source should be registered");
     Spi::run(&format!(
         "SELECT pgcontext.upsert_points('{collection_name}', ARRAY['1'])"
     ))
@@ -952,7 +1009,8 @@ fn detailed_query_cohort_row(sql: &str) -> DetailedQueryCohortTestRow {
             row.get::<String>(3)?
                 .expect("query_kind should not be null"),
             row.get::<i64>(4)?.expect("query_count should not be null"),
-            row.get::<i64>(5)?.expect("total_results should not be null"),
+            row.get::<i64>(5)?
+                .expect("total_results should not be null"),
             row.get::<i64>(6)?,
             row.get::<i64>(7)?
                 .expect("total_rows_rechecked should not be null"),
@@ -964,7 +1022,8 @@ fn detailed_query_cohort_row(sql: &str) -> DetailedQueryCohortTestRow {
                 .expect("latency_bucket should not be null"),
             row.get::<String>(12)?
                 .expect("lifecycle_state should not be null"),
-            row.get::<f64>(13)?.expect("avg_latency_ms should not be null"),
+            row.get::<f64>(13)?
+                .expect("avg_latency_ms should not be null"),
             row.get::<String>(14)?.expect("status should not be null"),
         ))
     })
@@ -983,9 +1042,11 @@ fn query_cohort_rows(sql: &str) -> Vec<QueryCohortTestRow> {
                 row.get::<String>(3)?
                     .expect("query_kind should not be null"),
                 row.get::<i64>(4)?.expect("query_count should not be null"),
-                row.get::<i64>(5)?.expect("total_results should not be null"),
+                row.get::<i64>(5)?
+                    .expect("total_results should not be null"),
                 row.get::<i64>(6)?,
-                row.get::<f64>(7)?.expect("avg_latency_ms should not be null"),
+                row.get::<f64>(7)?
+                    .expect("avg_latency_ms should not be null"),
                 row.get::<String>(8)?.expect("status should not be null"),
             ));
         }

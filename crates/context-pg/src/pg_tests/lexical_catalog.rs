@@ -302,7 +302,7 @@ fn dropping_a_lexical_source_removes_its_field_bindings() {
 }
 
 #[pg_test]
-fn refreshing_the_lexical_catalog_rebinds_oids_after_a_table_rewrite() {
+fn refreshing_the_lexical_catalog_remains_valid_after_a_table_rewrite() {
     lexical_fixture("lex_catalog_refresh");
     Spi::run(
         "SELECT pgcontext.register_lexical_source(
@@ -317,19 +317,20 @@ fn refreshing_the_lexical_catalog_rebinds_oids_after_a_table_rewrite() {
     .expect("original oid should exist");
 
     Spi::run(
-        "ALTER TABLE public.lex_catalog_refresh SET (fillfactor = 90);
-         VACUUM FULL public.lex_catalog_refresh;",
+        "ALTER TABLE public.lex_catalog_refresh
+             ALTER COLUMN body TYPE varchar USING body::varchar;
+         ALTER TABLE public.lex_catalog_refresh
+             ALTER COLUMN body TYPE text USING body::text;",
     )
     .expect("source table should be rewritten");
     Spi::run("SELECT pgcontext.refresh_lexical_catalog('lex_catalog_refresh')")
         .expect("catalog refresh should succeed");
 
-    let refreshed = Spi::get_one::<bool>(
-        "SELECT sources.source_table_oid = pg_catalog.to_regclass('public.lex_catalog_refresh')
+    let refreshed = Spi::get_one::<pg_sys::Oid>(
+        "SELECT sources.source_table_oid
            FROM pgcontext._visible_collection_lexical_sources AS sources",
     )
     .expect("refreshed oid query should succeed")
     .expect("refreshed oid should exist");
-    assert!(refreshed);
-    let _ = original;
+    assert_eq!(refreshed, original);
 }

@@ -17,6 +17,13 @@ pub enum QueryError {
         /// Stable human-readable reason.
         reason: String,
     },
+    /// A named, registered query resource does not exist or is not visible.
+    UnknownResource {
+        /// Stable resource category.
+        resource: &'static str,
+        /// Validated resource name.
+        name: String,
+    },
     /// An infrastructure adapter failed while performing a named stage.
     PortFailure {
         /// Port/stage that failed.
@@ -66,6 +73,12 @@ impl fmt::Display for QueryError {
         match self {
             Self::InvalidInput { field, reason } => {
                 write!(formatter, "invalid {field}: {reason}")
+            }
+            Self::UnknownResource { resource, name } => {
+                write!(
+                    formatter,
+                    "{resource} is not registered or not visible: {name}"
+                )
             }
             Self::PortFailure { stage, message } => {
                 write!(formatter, "{stage} failed: {message}")

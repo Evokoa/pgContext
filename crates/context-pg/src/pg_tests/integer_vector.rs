@@ -40,13 +40,17 @@ fn integer_vectors_round_trip_cast_and_score_exactly() {
     assert_eq!(row.5, 23.0);
     assert_eq!(row.6, vec![1, 2, 3]);
 
-    assert!(
-        Spi::run("SELECT ARRAY[128]::integer[]::pgcontext.int8vec").is_err(),
-        "signed overflow must fail closed"
+    shared_assert_sql_failure(
+        "SELECT ARRAY[128]::integer[]::pgcontext.int8vec",
+        "22003",
+        "int8vec coordinate is outside -128..127: 128",
+        "signed integer vector overflow",
     );
-    assert!(
-        Spi::run("SELECT pgcontext.vector('[1.5,2]')::pgcontext.uint8vec").is_err(),
-        "fractional dense casts must be explicit and rejected"
+    shared_assert_sql_failure(
+        "SELECT pgcontext.vector('[1.5,2]')::pgcontext.uint8vec",
+        "22003",
+        "integer vector cast requires integral coordinates: 1.5",
+        "fractional dense integer vector cast",
     );
 }
 
@@ -107,14 +111,13 @@ fn provider_binary_import_enforces_order_length_and_padding() {
     .expect("provider byte import should run")
     .expect("provider byte import should return a value");
     assert_eq!(bits, "1010");
-    assert!(
-        Spi::run(
-            "SELECT pgcontext.bitvec_from_provider_bytes(
-                 'provider_binary_probe', 'binary_v1', decode('a1', 'hex')
-             )",
-        )
-        .is_err(),
-        "nonzero provider padding must be rejected"
+    shared_assert_sql_failure(
+        "SELECT pgcontext.bitvec_from_provider_bytes(
+             'provider_binary_probe', 'binary_v1', decode('a1', 'hex')
+         )",
+        "22P02",
+        "invalid vector: provider binary padding bit 7 must be zero",
+        "nonzero provider binary padding",
     );
 }
 

@@ -159,12 +159,7 @@ fn pgvector_sparsevec_array_constructor_and_accessors_canonicalize_entries() {
 
     assert_eq!(
         rows,
-        (
-            "{1:1.5,3:2}/5".to_owned(),
-            5,
-            vec![1, 3],
-            vec![1.5, 2.0]
-        )
+        ("{1:1.5,3:2}/5".to_owned(), 5, vec![1, 3], vec![1.5, 2.0])
     );
 }
 
@@ -302,11 +297,10 @@ fn pgvector_sparsevec_dense_vector_casts_enforce_typmods() {
     )
     .expect("sparsevec dense cast typmod insert failed");
 
-    let stored = Spi::get_one::<String>(
-        "SELECT value::text FROM pgcontext_sparsevec_dense_cast_typmod",
-    )
-    .expect("sparsevec dense cast typmod select failed")
-    .unwrap_or_default();
+    let stored =
+        Spi::get_one::<String>("SELECT value::text FROM pgcontext_sparsevec_dense_cast_typmod")
+            .expect("sparsevec dense cast typmod select failed")
+            .unwrap_or_default();
 
     assert_eq!(stored, "{2:1.5,4:-2}/4");
 
@@ -544,7 +538,10 @@ fn pgvector_halfvec_aggregates_return_null_for_empty_input() {
             .expect("empty halfvec aggregate query failed");
 
         let row = result.first();
-        Ok::<_, spi::Error>((row.get::<String>(1)?.is_none(), row.get::<String>(2)?.is_none()))
+        Ok::<_, spi::Error>((
+            row.get::<String>(1)?.is_none(),
+            row.get::<String>(2)?.is_none(),
+        ))
     })
     .expect("empty halfvec aggregate rows failed");
 
@@ -619,7 +616,10 @@ fn pgvector_sparsevec_aggregates_return_null_for_empty_input() {
             .expect("empty sparsevec aggregate query failed");
 
         let row = result.first();
-        Ok::<_, spi::Error>((row.get::<String>(1)?.is_none(), row.get::<String>(2)?.is_none()))
+        Ok::<_, spi::Error>((
+            row.get::<String>(1)?.is_none(),
+            row.get::<String>(2)?.is_none(),
+        ))
     })
     .expect("empty sparsevec aggregate rows failed");
 
@@ -753,7 +753,7 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
             AND namespace.nspname = 'pgcontext'",
     )
     .expect("built-in HNSW opclass validation query failed");
-    assert_eq!(builtin_validation, (Some(14), Some(true)));
+    assert_eq!(builtin_validation, (Some(36), Some(true)));
 
     Spi::run(
         "CREATE TEMP TABLE pgcontext_variant_hnsw_items (
@@ -828,16 +828,50 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
     assert_eq!(
         variant_hnsw_opclasses,
         vec![
-            ("bitvec_hnsw_hamming_ops".to_owned(), false, false, true, true),
-            ("bitvec_hnsw_jaccard_ops".to_owned(), false, false, true, true),
-            ("halfvec_hnsw_cosine_ops".to_owned(), true, false, false, true),
+            ("bit_hamming_ops".to_owned(), false, false, true, true),
+            ("bit_jaccard_ops".to_owned(), false, false, true, true),
+            (
+                "bitvec_hnsw_hamming_ops".to_owned(),
+                false,
+                false,
+                true,
+                true
+            ),
+            (
+                "bitvec_hnsw_jaccard_ops".to_owned(),
+                false,
+                false,
+                true,
+                true
+            ),
+            ("halfvec_cosine_ops".to_owned(), true, false, false, true),
+            (
+                "halfvec_hnsw_cosine_ops".to_owned(),
+                true,
+                false,
+                false,
+                true
+            ),
             ("halfvec_hnsw_ip_ops".to_owned(), true, false, false, true),
             ("halfvec_hnsw_l1_ops".to_owned(), true, false, false, true),
             ("halfvec_hnsw_ops".to_owned(), true, false, false, true),
-            ("sparsevec_hnsw_cosine_ops".to_owned(), false, true, false, true),
+            ("halfvec_ip_ops".to_owned(), true, false, false, true),
+            ("halfvec_l1_ops".to_owned(), true, false, false, true),
+            ("halfvec_l2_ops".to_owned(), true, false, false, true),
+            ("sparsevec_cosine_ops".to_owned(), false, true, false, true),
+            (
+                "sparsevec_hnsw_cosine_ops".to_owned(),
+                false,
+                true,
+                false,
+                true
+            ),
             ("sparsevec_hnsw_ip_ops".to_owned(), false, true, false, true),
             ("sparsevec_hnsw_l1_ops".to_owned(), false, true, false, true),
-            ("sparsevec_hnsw_ops".to_owned(), false, true, false, true)
+            ("sparsevec_hnsw_ops".to_owned(), false, true, false, true),
+            ("sparsevec_ip_ops".to_owned(), false, true, false, true),
+            ("sparsevec_l1_ops".to_owned(), false, true, false, true),
+            ("sparsevec_l2_ops".to_owned(), false, true, false, true)
         ],
         "promoted dense-storage variant HNSW opclasses should be present"
     );
@@ -1349,26 +1383,9 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
         "sparsevec HNSW unsupported strategy operator",
     );
     Spi::run(
-        "CREATE OPERATOR CLASS pgcontext_variant_bitvec_hnsw_bad_jaccard_ops
-            FOR TYPE pgcontext.bitvec USING pgcontext_hnsw AS
-            OPERATOR 1 pgcontext.<%> (pgcontext.bitvec, pgcontext.bitvec) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 pgcontext.bitvec_jaccard_distance(pgcontext.bitvec, pgcontext.bitvec),
-            STORAGE pgcontext.vector",
-    )
-    .expect("bitvec Jaccard HNSW opclass fixture creation failed");
-    assert_eq!(
-        Spi::get_one::<bool>(
-            "SELECT pg_catalog.amvalidate(opclass.oid)
-               FROM pg_catalog.pg_opclass AS opclass
-              WHERE opclass.opcname = 'pgcontext_variant_bitvec_hnsw_bad_jaccard_ops'",
-        )
-        .expect("valid custom HNSW opclass validation query failed"),
-        Some(true),
-    );
-    Spi::run(
         "CREATE INDEX pgcontext_variant_hnsw_jaccard_idx
             ON pgcontext_variant_hnsw_items
-         USING pgcontext_hnsw (bit_value pgcontext_variant_bitvec_hnsw_bad_jaccard_ops)",
+         USING pgcontext_hnsw (bit_value pgcontext.bitvec_hnsw_jaccard_ops)",
     )
     .expect("bitvec Jaccard HNSW index creation failed");
     let jaccard_rows = Spi::connect(|client| {
@@ -1403,15 +1420,13 @@ fn pgvector_variant_hnsw_indexes_use_dense_storage_and_exact_order() {
         "bitvec HNSW unsupported strategy operator",
     );
 
-    let cases = [
-        (
-            "CREATE INDEX pgcontext_variant_hnsw_bit_idx
+    let cases = [(
+        "CREATE INDEX pgcontext_variant_hnsw_bit_idx
                 ON pgcontext_variant_hnsw_items USING pgcontext_hnsw (bit_value)",
-            "42704",
-            "data type bitvec has no default operator class for access method \"pgcontext_hnsw\"",
-            "bitvec HNSW index",
-        ),
-    ];
+        "42704",
+        "data type bitvec has no default operator class for access method \"pgcontext_hnsw\"",
+        "bitvec HNSW index",
+    )];
 
     for (sql, sqlstate, message, context) in cases {
         assert_vector_compat_ddl_failure(sql, sqlstate, message, context);
@@ -1441,16 +1456,76 @@ fn non_dense_hnsw_opclasses_match_exact_oracles_with_bounded_candidates() {
     .expect("non-dense HNSW oracle fixture should build");
 
     let cases = [
-        ("half_l2", "half_value", "halfvec_hnsw_ops", "<->", "pgcontext.halfvec('[3,5,7,11]')"),
-        ("half_ip", "half_value", "halfvec_hnsw_ip_ops", "<#>", "pgcontext.halfvec('[3,5,7,11]')"),
-        ("half_cosine", "half_value", "halfvec_hnsw_cosine_ops", "<=>", "pgcontext.halfvec('[3,5,7,11]')"),
-        ("half_l1", "half_value", "halfvec_hnsw_l1_ops", "<+>", "pgcontext.halfvec('[3,5,7,11]')"),
-        ("sparse_l2", "sparse_value", "sparsevec_hnsw_ops", "<->", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
-        ("sparse_ip", "sparse_value", "sparsevec_hnsw_ip_ops", "<#>", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
-        ("sparse_cosine", "sparse_value", "sparsevec_hnsw_cosine_ops", "<=>", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
-        ("sparse_l1", "sparse_value", "sparsevec_hnsw_l1_ops", "<+>", "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')"),
-        ("bit_hamming", "bit_value", "bitvec_hnsw_hamming_ops", "<~>", "pgcontext.bitvec('0000000010101010')"),
-        ("bit_jaccard", "bit_value", "bitvec_hnsw_jaccard_ops", "<%>", "pgcontext.bitvec('0000000010101010')"),
+        (
+            "half_l2",
+            "half_value",
+            "halfvec_hnsw_ops",
+            "<->",
+            "pgcontext.halfvec('[3,5,7,11]')",
+        ),
+        (
+            "half_ip",
+            "half_value",
+            "halfvec_hnsw_ip_ops",
+            "<#>",
+            "pgcontext.halfvec('[3,5,7,11]')",
+        ),
+        (
+            "half_cosine",
+            "half_value",
+            "halfvec_hnsw_cosine_ops",
+            "<=>",
+            "pgcontext.halfvec('[3,5,7,11]')",
+        ),
+        (
+            "half_l1",
+            "half_value",
+            "halfvec_hnsw_l1_ops",
+            "<+>",
+            "pgcontext.halfvec('[3,5,7,11]')",
+        ),
+        (
+            "sparse_l2",
+            "sparse_value",
+            "sparsevec_hnsw_ops",
+            "<->",
+            "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')",
+        ),
+        (
+            "sparse_ip",
+            "sparse_value",
+            "sparsevec_hnsw_ip_ops",
+            "<#>",
+            "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')",
+        ),
+        (
+            "sparse_cosine",
+            "sparse_value",
+            "sparsevec_hnsw_cosine_ops",
+            "<=>",
+            "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')",
+        ),
+        (
+            "sparse_l1",
+            "sparse_value",
+            "sparsevec_hnsw_l1_ops",
+            "<+>",
+            "pgcontext.sparsevec('{1:3,2:5,3:7,4:11}/4')",
+        ),
+        (
+            "bit_hamming",
+            "bit_value",
+            "bitvec_hnsw_hamming_ops",
+            "<~>",
+            "pgcontext.bitvec('0000000010101010')",
+        ),
+        (
+            "bit_jaccard",
+            "bit_value",
+            "bitvec_hnsw_jaccard_ops",
+            "<%>",
+            "pgcontext.bitvec('0000000010101010')",
+        ),
     ];
 
     for (suffix, column, opclass, operator, query) in cases {
@@ -1519,14 +1594,19 @@ fn non_dense_hnsw_opclasses_match_exact_oracles_with_bounded_candidates() {
         ))
         .expect("non-dense HNSW query should execute")
         .unwrap_or_default();
-        assert_eq!(indexed, exact, "{suffix} HNSW order diverged from its exact oracle");
+        assert_eq!(
+            indexed, exact,
+            "{suffix} HNSW order diverged from its exact oracle"
+        );
 
-        let candidate_count = Spi::get_one::<i64>(
-            "SELECT candidates FROM pgcontext.hnsw_last_scan_work()",
-        )
-        .expect("non-dense HNSW work counters should be readable")
-        .unwrap_or_default();
-        assert!(candidate_count > 0, "{suffix} HNSW scan produced no candidates");
+        let candidate_count =
+            Spi::get_one::<i64>("SELECT candidates FROM pgcontext.hnsw_last_scan_work()")
+                .expect("non-dense HNSW work counters should be readable")
+                .unwrap_or_default();
+        assert!(
+            candidate_count > 0,
+            "{suffix} HNSW scan produced no candidates"
+        );
         assert!(
             candidate_count < 256,
             "{suffix} HNSW scan scored the full collection: {candidate_count}"

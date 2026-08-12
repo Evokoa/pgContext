@@ -624,6 +624,87 @@ fn typed_hnsw_tiny_port_memory_degrades_parallel_segments_to_serial() {
 }
 
 #[test]
+fn parallel_projection_charges_overlay_and_chronological_merge_peak() {
+    let mut meta = HnswMetaPage::empty();
+    meta.dimensions = 8;
+    meta.hnsw_m = 16;
+    for (index, start_block) in [1_u64, 4, 7].into_iter().enumerate() {
+        meta.segments[index] = HnswSegmentMeta {
+            segment_id: index as u64 + 1,
+            generation: 1,
+            start_block,
+            end_block: start_block + 2,
+            graph_nodes: 32,
+            entry_node_id: 0,
+            mutation_generation: 1,
+            mutation_start_block: start_block + 2,
+            mutation_end_block: start_block + 3,
+            mutation_record_count: 8,
+        };
+    }
+    meta.segment_count = 3;
+    let without_overlay = {
+        let mut clean = meta;
+        for index in 0..3 {
+            clean.segments[index].mutation_generation = u64::MAX;
+            clean.segments[index].mutation_start_block = u64::MAX;
+            clean.segments[index].mutation_end_block = u64::MAX;
+            clean.segments[index].mutation_record_count = 0;
+        }
+        projected_parallel_segment_scan_bytes(clean, 34, 40, 0, false)
+            .expect("clean parallel projection should fit")
+    };
+    let with_overlay = projected_parallel_segment_scan_bytes(meta, 34, 40, 0, false)
+        .expect("overlay parallel projection should fit");
+    assert!(with_overlay > without_overlay);
+    assert!(
+        !parallel_segment_projection_admitted(meta, with_overlay, u64::MAX, with_overlay - 1, 2,),
+        "the query memory ceiling must include retained overlay and merge state"
+    );
+    assert!(parallel_segment_projection_admitted(
+        meta,
+        with_overlay,
+        u64::MAX,
+        with_overlay,
+        2,
+    ));
+}
+
+#[test]
+fn parallel_overlay_degrades_before_consuming_a_tight_comparison_budget() {
+    let mut meta = HnswMetaPage::empty();
+    for (index, start_block) in [1_u64, 4, 7].into_iter().enumerate() {
+        meta.segments[index] = HnswSegmentMeta {
+            segment_id: index as u64 + 1,
+            generation: 1,
+            start_block,
+            end_block: start_block + 2,
+            graph_nodes: 32,
+            entry_node_id: 0,
+            mutation_generation: 1,
+            mutation_start_block: start_block + 2,
+            mutation_end_block: start_block + 3,
+            mutation_record_count: 8,
+        };
+    }
+    meta.segment_count = 3;
+    let expanded_limit = SearchLimit::new(34).expect("expanded parallel limit");
+    let exact_minimum = meta.segments().len() * expanded_limit.get();
+    let below = HnswComparisonBudget::new(exact_minimum - 1);
+    assert!(!parallel_segment_comparisons_admitted(
+        meta,
+        expanded_limit,
+        &below,
+    ));
+    let exact = HnswComparisonBudget::new(exact_minimum);
+    assert!(parallel_segment_comparisons_admitted(
+        meta,
+        expanded_limit,
+        &exact,
+    ));
+}
+
+#[test]
 fn serial_traversal_projection_charges_filter_and_retirement_masks() {
     let mut meta = HnswMetaPage::empty();
     meta.dimensions = 8;

@@ -20,10 +20,14 @@ fn ivfflat_access_method_and_dense_opclasses_are_registered() {
     assert_eq!(
         opclasses,
         vec![
+            "vector_cosine_ops".to_owned(),
+            "vector_ip_ops".to_owned(),
             "vector_ivfflat_cosine_ops".to_owned(),
             "vector_ivfflat_ip_ops".to_owned(),
             "vector_ivfflat_l1_ops".to_owned(),
             "vector_ivfflat_ops".to_owned(),
+            "vector_l1_ops".to_owned(),
+            "vector_l2_ops".to_owned(),
         ]
     );
 }

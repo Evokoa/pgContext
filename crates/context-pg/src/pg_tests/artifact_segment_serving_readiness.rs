@@ -1,3 +1,5 @@
+const ARTIFACT_HEADER_BYTES: i64 = context_storage::SegmentHeader::ENCODED_LEN as i64;
+
 #[pg_test]
 fn artifact_segment_serving_readiness_gates_mmap_files_by_budget() {
     let segment_job = completed_artifact_build_job("m10_artifact_serving", "segment", "seg-a");
@@ -39,7 +41,8 @@ fn artifact_segment_serving_readiness_gates_mmap_files_by_budget() {
            )"
     ));
 
-    let rows = artifact_serving_rows(
+    let mmap_bytes = ARTIFACT_HEADER_BYTES + 2;
+    let rows = artifact_serving_rows(&format!(
         "SELECT artifact_kind,
                 artifact_name,
                 target_name,
@@ -49,8 +52,10 @@ fn artifact_segment_serving_readiness_gates_mmap_files_by_budget() {
                 mapped_bytes,
                 max_mapped_bytes,
                 detail
-           FROM pgcontext.artifact_segment_serving_readiness('m10_artifact_serving', 42)",
-    );
+           FROM pgcontext.artifact_segment_serving_readiness(
+               'm10_artifact_serving', {mmap_bytes}
+           )"
+    ));
 
     assert_eq!(
         rows,
@@ -62,8 +67,8 @@ fn artifact_segment_serving_readiness_gates_mmap_files_by_budget() {
                 lifecycle_state: "validated".to_owned(),
                 status: "not_mmap_artifact".to_owned(),
                 serving_ready: false,
-                mapped_bytes: 41,
-                max_mapped_bytes: 42,
+                mapped_bytes: ARTIFACT_HEADER_BYTES + 1,
+                max_mapped_bytes: mmap_bytes,
                 detail: "only mmap artifacts can be serving-ready".to_owned(),
             },
             ArtifactServingRow {
@@ -73,14 +78,15 @@ fn artifact_segment_serving_readiness_gates_mmap_files_by_budget() {
                 lifecycle_state: "file_materialized".to_owned(),
                 status: "ready".to_owned(),
                 serving_ready: true,
-                mapped_bytes: 42,
-                max_mapped_bytes: 42,
+                mapped_bytes: mmap_bytes,
+                max_mapped_bytes: mmap_bytes,
                 detail: "artifact file matches catalog metadata and memory budget".to_owned(),
             },
         ]
     );
 
-    let budget_rows = artifact_serving_rows(
+    let below_mmap_bytes = mmap_bytes - 1;
+    let budget_rows = artifact_serving_rows(&format!(
         "SELECT artifact_kind,
                 artifact_name,
                 target_name,
@@ -90,14 +96,16 @@ fn artifact_segment_serving_readiness_gates_mmap_files_by_budget() {
                 mapped_bytes,
                 max_mapped_bytes,
                 detail
-           FROM pgcontext.artifact_segment_serving_readiness('m10_artifact_serving', 41)
-          WHERE artifact_kind = 'mmap'",
-    );
+           FROM pgcontext.artifact_segment_serving_readiness(
+               'm10_artifact_serving', {below_mmap_bytes}
+           )
+          WHERE artifact_kind = 'mmap'"
+    ));
     assert_eq!(budget_rows.len(), 1);
     assert_eq!(budget_rows[0].status, "memory_budget_exceeded");
     assert!(!budget_rows[0].serving_ready);
-    assert_eq!(budget_rows[0].mapped_bytes, 42);
-    assert_eq!(budget_rows[0].max_mapped_bytes, 41);
+    assert_eq!(budget_rows[0].mapped_bytes, mmap_bytes);
+    assert_eq!(budget_rows[0].max_mapped_bytes, below_mmap_bytes);
 }
 
 #[pg_test]
@@ -123,7 +131,8 @@ fn artifact_segment_mmap_payload_serves_only_ready_mmap_files() {
            )"
     ));
 
-    let rows = artifact_mmap_payload_rows(
+    let mapped_bytes = ARTIFACT_HEADER_BYTES + 3;
+    let rows = artifact_mmap_payload_rows(&format!(
         "SELECT artifact_kind,
                 artifact_name,
                 target_name,
@@ -132,16 +141,16 @@ fn artifact_segment_mmap_payload_serves_only_ready_mmap_files() {
            FROM pgcontext.artifact_segment_mmap_payload(
                 'm10_artifact_mmap_payload',
                 'view-a',
-                43
-           )",
-    );
+                {mapped_bytes}
+           )"
+    ));
     assert_eq!(
         rows,
         vec![ArtifactMmapPayloadRow {
             artifact_kind: "mmap".to_owned(),
             artifact_name: "view-a".to_owned(),
             target_name: "public.m10_artifact_mmap_payload".to_owned(),
-            mapped_bytes: 43,
+            mapped_bytes,
             payload: vec![1, 2, 3],
         }]
     );
@@ -190,7 +199,8 @@ fn artifact_segment_mmap_payload_prefers_mmap_when_names_collide() {
            )"
     ));
 
-    let rows = artifact_mmap_payload_rows(
+    let mapped_bytes = ARTIFACT_HEADER_BYTES + 2;
+    let rows = artifact_mmap_payload_rows(&format!(
         "SELECT artifact_kind,
                 artifact_name,
                 target_name,
@@ -199,9 +209,9 @@ fn artifact_segment_mmap_payload_prefers_mmap_when_names_collide() {
            FROM pgcontext.artifact_segment_mmap_payload(
                 'm10_artifact_mmap_payload_collision',
                 'shared',
-                42
-           )",
-    );
+                {mapped_bytes}
+           )"
+    ));
 
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].artifact_kind, "mmap");

@@ -17,8 +17,8 @@ fn lexical_query_scores(sql: &str) -> Vec<(String, f64)> {
         rows.into_iter()
             .filter_map(|row| {
                 let source_key = row.get::<String>(2).ok().flatten()?;
-                let score = row.get::<f64>(3).ok().flatten()?;
-                Some((source_key, score))
+                let score = row.get::<f32>(3).ok().flatten()?;
+                Some((source_key, f64::from(score)))
             })
             .collect::<Vec<_>>()
     })
@@ -47,6 +47,7 @@ fn lexical_corpus(collection_name: &str) {
             SET saved_query = pg_catalog.plainto_tsquery('pg_catalog.simple', 'storage');
          SELECT pgcontext.create_collection('{collection_name}', 'public.{collection_name}');
          SELECT pgcontext.backfill_points('{collection_name}', 100);
+         SELECT pgcontext.register_filter_column('{collection_name}', 'tenant', 'tenant');
          SELECT pgcontext.register_lexical_source(
              '{collection_name}', 'article', ARRAY['title', 'body'],
              'pg_catalog.simple', ARRAY['A', 'D']
@@ -139,7 +140,7 @@ fn every_lexical_form_matches_its_native_constructor() {
         (
             "phrase",
             "jsonb_build_object('form', 'phrase', 'text', 'postgres storage')",
-            vec!["1"],
+            vec!["1", "4"],
         ),
         (
             "web_search",
@@ -154,7 +155,7 @@ fn every_lexical_form_matches_its_native_constructor() {
         (
             "distance",
             "jsonb_build_object('form', 'distance', 'left', 'postgres', 'right', 'storage', 'distance', 1)",
-            vec!["1"],
+            vec!["1", "4"],
         ),
         (
             "boolean",
@@ -296,6 +297,27 @@ fn lexical_leaves_apply_q1_filters_and_exclude_deleted_points() {
 }
 
 #[pg_test]
+fn lexical_filter_parameter_projection_has_an_inclusive_memory_boundary() {
+    let one = crate::retrieval::lexical_filter_parameter_memory(1)
+        .expect("one filter point should project");
+    let two = crate::retrieval::lexical_filter_parameter_memory(2)
+        .expect("two filter points should project");
+    assert!(two > one);
+    let per_point = two - one;
+    let fixed = one - per_point;
+    let maximum = context_query::DEFAULT_QUERY_MEMORY_BYTES;
+    let boundary = (maximum - fixed) / per_point;
+    assert!(
+        crate::retrieval::lexical_filter_parameter_memory(boundary)
+            .is_ok_and(|bytes| bytes <= maximum)
+    );
+    assert!(
+        crate::retrieval::lexical_filter_parameter_memory(boundary + 1)
+            .is_ok_and(|bytes| bytes > maximum)
+    );
+}
+
+#[pg_test]
 fn lexical_recheck_drops_rows_that_no_longer_match_the_registered_predicate() {
     lexical_corpus("lex_query_recheck");
     Spi::run("UPDATE public.lex_query_recheck SET body = 'no longer relevant' WHERE id = 2")
@@ -344,7 +366,7 @@ fn unregistered_lexical_sources_fail_closed() {
                  'absent', jsonb_build_object('form', 'plain', 'text', 'postgres'), NULL, 5
              )
          )",
-        "XX000",
+        "42704",
         "lexical source is not registered or not visible: absent",
         "unregistered lexical source",
     );

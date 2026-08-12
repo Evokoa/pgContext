@@ -481,6 +481,8 @@ fn projected_parallel_segment_scan_bytes(
     filtered: bool,
 ) -> Option<u64> {
     let search_width = ef_search.max(requested_limit);
+    let overlay = projected_mutation_overlay_bytes(meta)?;
+    let mutation_count = projected_mutation_record_count(meta)?;
     let graph_copies = projected_parallel_segment_bytes(meta)?;
     let traversals = meta.segments().iter().try_fold(0_u64, |total, segment| {
         total.checked_add(projected_graph_traversal_bytes(
@@ -489,12 +491,24 @@ fn projected_parallel_segment_scan_bytes(
             filtered,
         )?)
     })?;
-    checked_projection_sum([
+    let mask = projected_mask_bytes(mask_point_count)?
+        .checked_mul(if filtered { 2 } else { 1 })?;
+    let retained_hits = projected_retained_hit_bytes(meta, requested_limit)?;
+    let traversal_peak = checked_projection_sum([
+        overlay,
         graph_copies,
         traversals,
-        projected_mask_bytes(mask_point_count)?.checked_mul(if filtered { 2 } else { 1 })?,
-        projected_retained_hit_bytes(meta, requested_limit)?,
-    ])
+        mask,
+        retained_hits,
+    ])?;
+    let retained_point_count = u64::try_from(meta.segments().len())
+        .ok()?
+        .checked_mul(u64::try_from(requested_limit).ok()?)?;
+    let merge_entries = retained_point_count
+        .checked_add(mutation_count)?
+        .checked_mul(HNSW_TREE_ENTRY_PEAK_BYTES)?;
+    let merge_peak = checked_projection_sum([overlay, mask, retained_hits, merge_entries])?;
+    Some(traversal_peak.max(merge_peak))
 }
 
 #[cfg(test)]
@@ -813,6 +827,22 @@ fn parallel_segment_memory_admitted(
     admitted
 }
 
+fn parallel_segment_comparisons_admitted(
+    meta: HnswMetaPage,
+    expanded_limit: SearchLimit,
+    comparison_budget: &HnswComparisonBudget,
+) -> bool {
+    let minimum = meta
+        .segments()
+        .len()
+        .checked_mul(expanded_limit.get());
+    let admitted = minimum.is_some_and(|minimum| minimum <= comparison_budget.remaining());
+    if !admitted {
+        record_hnsw_parallel_admission_denial();
+    }
+    admitted
+}
+
 unsafe fn try_parallel_segment_search(
     index_relation: pg_sys::Relation,
     meta: HnswMetaPage,
@@ -1052,16 +1082,34 @@ unsafe fn hnsw_page_graph_scan_candidates(
     let mut node_reads = 0_usize;
     // SAFETY: parallel admission copies every segment into an owned pure
     // adapter before any worker starts and returns None without publication.
-    let parallel_projection = projected_parallel_segment_scan_bytes(
-        meta,
-        limit.get(),
-        config.ef_search(),
-        0,
-        false,
-    );
+    // Parallel workers cannot share PostgreSQL-backed retirement state. Scan
+    // enough additional immutable candidates to replace every bounded delta
+    // mutation, then apply the authoritative chronological overlay below.
+    // If the expanded search would exceed the frozen HNSW limit, preserve the
+    // segment-specific retirement-mask behavior by degrading to serial.
+    let parallel_limit = limit
+        .get()
+        .checked_add(overlay.record_count())
+        .and_then(|limit| SearchLimit::new(limit).ok());
+    let parallel_projection = parallel_limit.and_then(|parallel_limit| {
+        projected_parallel_segment_scan_bytes(
+            meta,
+            parallel_limit.get(),
+            config.ef_search(),
+            0,
+            false,
+        )
+    });
     let parallel_memory_admitted =
         parallel_segment_memory_admitted(meta, parallel_projection, max_memory_bytes);
-    let parallel = if overlay.record_count() == 0 && parallel_memory_admitted {
+    let parallel_comparisons_admitted = parallel_limit.is_some_and(|parallel_limit| {
+        parallel_segment_comparisons_admitted(meta, parallel_limit, comparison_budget)
+    });
+    let parallel = if let (true, true, Some(parallel_limit)) = (
+        parallel_memory_admitted,
+        parallel_comparisons_admitted,
+        parallel_limit,
+    ) {
         unsafe {
             try_parallel_segment_search(
                 index_relation,
@@ -1069,7 +1117,7 @@ unsafe fn hnsw_page_graph_scan_candidates(
                 metric,
                 query,
                 config,
-                limit,
+                parallel_limit,
                 None,
                 0,
                 comparison_budget,
@@ -1261,16 +1309,29 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
     let mut node_reads = 0_usize;
     // SAFETY: as the unmasked path; the mask is cloned into immutable owned
     // state before the scoped workers start.
-    let parallel_projection = projected_parallel_segment_scan_bytes(
-        meta,
-        limit.get(),
-        config.ef_search(),
-        mask_point_count,
-        true,
-    );
+    let parallel_limit = limit
+        .get()
+        .checked_add(overlay.record_count())
+        .and_then(|limit| SearchLimit::new(limit).ok());
+    let parallel_projection = parallel_limit.and_then(|parallel_limit| {
+        projected_parallel_segment_scan_bytes(
+            meta,
+            parallel_limit.get(),
+            config.ef_search(),
+            mask_point_count,
+            true,
+        )
+    });
     let parallel_memory_admitted =
         parallel_segment_memory_admitted(meta, parallel_projection, max_memory_bytes);
-    let parallel = if overlay.record_count() == 0 && parallel_memory_admitted {
+    let parallel_comparisons_admitted = parallel_limit.is_some_and(|parallel_limit| {
+        parallel_segment_comparisons_admitted(meta, parallel_limit, comparison_budget)
+    });
+    let parallel = if let (true, true, Some(parallel_limit)) = (
+        parallel_memory_admitted,
+        parallel_comparisons_admitted,
+        parallel_limit,
+    ) {
         unsafe {
             try_parallel_segment_search(
                 index_relation,
@@ -1278,7 +1339,7 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
                 metric,
                 query,
                 config,
-                limit,
+                parallel_limit,
                 Some(mask),
                 mask_budget,
                 comparison_budget,

@@ -67,7 +67,7 @@ fn stable_contract_registry_marks_search_and_query_as_distinct_surfaces() {
     )));
     assert!(stable_functions.contains(&(
         "query".to_owned(),
-        "collection text, vector vector, text_query text, text_column text, \"limit\" integer"
+        "collection text, vector vector, text_query text, lexical_source text, \"limit\" integer"
             .to_owned(),
     )));
     assert!(stable_functions.contains(&(

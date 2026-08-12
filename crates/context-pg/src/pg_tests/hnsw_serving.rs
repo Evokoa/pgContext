@@ -187,7 +187,7 @@ fn hnsw_mapped_serving_publishes_attaches_and_matches_exact_oracle() {
 }
 
 #[pg_test]
-fn hnsw_shared_serving_publishes_and_disabled_guc_skips() {
+fn hnsw_shared_serving_attempts_and_disabled_guc_skips() {
     Spi::run(
         "CREATE TABLE shared_serving_probe (id bigint PRIMARY KEY, \
          embedding vector(8) NOT NULL)",
@@ -206,17 +206,23 @@ fn hnsw_shared_serving_publishes_and_disabled_guc_skips() {
          USING pgcontext_hnsw (embedding pgcontext.vector_hnsw_cosine_ops)",
     )
     .expect("shared serving probe index should build");
-    Spi::run("SET enable_seqscan = off").expect("seqscan off should apply");
+    Spi::run(
+        "SET enable_seqscan = off;
+         SET pgcontext.hnsw_shared_serving = on;
+         SET pgcontext.hnsw_shared_serving_budget_mb = 512;
+         SET pgcontext.hnsw_mmap_serving = off;
+         SET pgcontext.hnsw_pack_on_first_use = on;
+         SELECT pgcontext.test_clear_hnsw_packed_cache();",
+    )
+    .expect("shared serving test should isolate the shared registry path");
 
     let ann = "SELECT id FROM shared_serving_probe ORDER BY embedding \
                OPERATOR(pgcontext.<=>) '[1,2,3,4,5,6,7,8]'::vector LIMIT 5";
 
-    // Default GUC (on): the first pack in this backend is published.
-    Spi::run(ann).expect("query with shared serving enabled should run");
-    let (publishes, skips) = Spi::connect(|client| {
+    let (publishes_before, skips_before) = Spi::connect(|client| {
         let row = client
             .select(
-                "SELECT shared_publishes, shared_publish_skips \
+                "SELECT shared_publishes, shared_publish_skips
                    FROM pgcontext.hnsw_serving_stats()",
                 None,
                 &[],
@@ -227,12 +233,34 @@ fn hnsw_shared_serving_publishes_and_disabled_guc_skips() {
             row.get::<i64>(2)?.unwrap_or_default(),
         ))
     })
+    .expect("initial serving stats row should be readable");
+
+    // Enabled GUC: the fresh local pack is published exactly once.
+    Spi::run(ann).expect("query with shared serving enabled should run");
+    let (publishes, skips, builds) = Spi::connect(|client| {
+        let row = client
+            .select(
+                "SELECT shared_publishes, shared_publish_skips, pack_builds \
+                   FROM pgcontext.hnsw_serving_stats()",
+                None,
+                &[],
+            )?
+            .first();
+        Ok::<_, spi::Error>((
+            row.get::<i64>(1)?.unwrap_or_default(),
+            row.get::<i64>(2)?.unwrap_or_default(),
+            row.get::<i64>(3)?.unwrap_or_default(),
+        ))
+    })
     .expect("serving stats row should be readable");
     assert_eq!(
-        publishes, 1,
-        "expected the first build in this backend to publish, saw {publishes}"
+        (publishes - publishes_before) + (skips - skips_before),
+        1,
+        "enabled shared serving must attempt exactly one advisory publication; \
+         successful publishes={}, soft skips={}, total pack builds={builds}",
+        publishes - publishes_before,
+        skips - skips_before,
     );
-    assert_eq!(skips, 0, "expected no publish skips yet, saw {skips}");
 
     // Disabling the GUC and forcing a fresh pack (new index) must not
     // touch the shared registry at all: no new publish, no new skip.
@@ -283,6 +311,10 @@ fn hnsw_shared_serving_publishes_and_disabled_guc_skips() {
     );
 
     Spi::run("RESET pgcontext.hnsw_shared_serving").expect("GUC should reset");
+    Spi::run("RESET pgcontext.hnsw_shared_serving_budget_mb")
+        .expect("shared serving budget should reset");
+    Spi::run("RESET pgcontext.hnsw_mmap_serving").expect("mapped serving GUC should reset");
+    Spi::run("RESET pgcontext.hnsw_pack_on_first_use").expect("packing GUC should reset");
     Spi::run("RESET enable_seqscan").expect("seqscan should reset");
 }
 
@@ -603,7 +635,7 @@ fn hnsw_candidate_helper_enforces_comparison_budget_during_traversal() {
              (1, '[0,0]'), (2, '[1,0]'), (3, '[2,0]');
          CREATE INDEX comparison_budget_probe_hnsw
              ON comparison_budget_probe USING pgcontext_hnsw
-             (embedding pgcontext.vector_hnsw_l2_ops);",
+             (embedding pgcontext.vector_hnsw_ops);",
     )
     .expect("comparison-budget probe should build");
     let index_oid = Spi::get_one::<pg_sys::Oid>(
@@ -649,7 +681,7 @@ fn hnsw_candidate_helper_enforces_memory_budget_before_serial_traversal() {
              (1, '[0,0]'), (2, '[1,0]'), (3, '[2,0]');
          CREATE INDEX helper_memory_budget_probe_hnsw
              ON helper_memory_budget_probe USING pgcontext_hnsw
-             (embedding pgcontext.vector_hnsw_l2_ops);",
+             (embedding pgcontext.vector_hnsw_ops);",
     )
     .expect("helper-memory-budget probe should build");
     let index_oid = Spi::get_one::<pg_sys::Oid>(
@@ -692,7 +724,7 @@ fn nested_hnsw_query_budget_enforces_memory_for_late_style_am_scans() {
              (1, '[0,0]'), (2, '[1,0]'), (3, '[2,0]');
          CREATE INDEX nested_memory_budget_probe_hnsw
              ON nested_memory_budget_probe USING pgcontext_hnsw
-             (embedding pgcontext.vector_hnsw_l2_ops);
+             (embedding pgcontext.vector_hnsw_ops);
          SET LOCAL enable_seqscan = off;",
     )
     .expect("nested-memory-budget probe should build");

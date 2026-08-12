@@ -9,11 +9,12 @@
 use context_core::{ConfigurationRevision, PointId, ScoreOrder, SourceAuthority, SourceKey};
 use context_query::{
     Candidate, CandidateBranch, CandidateDiagnostics, CandidatePage, CandidateSourceKind,
-    FuzzyMode, FuzzyQuery, HydratedCandidate, LexicalBooleanOperator, LexicalQuery, PortBudget,
-    QueryError, QueryIr, QueryKind, Result, SourceReadiness,
+    FilterCandidateBatch, FuzzyMode, FuzzyQuery, HydratedCandidate, LexicalBooleanOperator,
+    LexicalQuery, PortBudget, QueryError, QueryIr, QueryKind, Result, SourceReadiness,
 };
 use pgrx::datum::DatumWithOid;
 use pgrx::prelude::*;
+use std::mem::size_of;
 
 use super::{port_failure, spi_column, spi_optional_result_column, spi_point_id, sql_limit};
 use crate::lexical_catalog::{
@@ -93,6 +94,7 @@ enum LexicalParam {
     Int(i32),
     Big(i64),
     Double(f64),
+    BigArray(Vec<i64>),
 }
 
 /// Accumulates bound parameters while rendering lexical SQL.
@@ -124,6 +126,7 @@ impl BoundParams {
                 LexicalParam::Int(value) => (*value).into(),
                 LexicalParam::Big(value) => (*value).into(),
                 LexicalParam::Double(value) => (*value).into(),
+                LexicalParam::BigArray(values) => values.as_slice().into(),
             })
             .collect()
     }
@@ -284,6 +287,59 @@ fn point_id_array(candidates: &[Candidate], stage: &'static str) -> Result<Strin
     Ok(format!("ARRAY[{}]::bigint[]", ids.join(", ")))
 }
 
+fn filter_point_id_predicate(
+    filter: Option<&FilterCandidateBatch>,
+    params: &mut BoundParams,
+    points_alias: &str,
+    stage: &'static str,
+    max_memory_bytes: usize,
+) -> Result<String> {
+    let Some(filter) = filter else {
+        return Ok(String::new());
+    };
+    if filter.point_ids().is_empty() {
+        return Ok("AND false".to_owned());
+    }
+    let point_count = filter.point_ids().len();
+    // Peak admission includes the retained Rust vector, PostgreSQL's datum and
+    // null builder arrays, and the completed bigint[] datum. The five-value
+    // multiplier conservatively covers those simultaneous per-element slots;
+    // the fixed reserve covers ArrayBuildState, varlena, Vec, enum, and palloc
+    // headers. `as_datums` borrows this slice, so it creates no second Rust
+    // vector.
+    let projected_bytes = lexical_filter_parameter_memory(point_count)?;
+    if projected_bytes > max_memory_bytes {
+        return Err(QueryError::WorkBudgetExceeded {
+            budget: "lexical_filter_parameter_memory",
+            actual: projected_bytes,
+            maximum: max_memory_bytes,
+        });
+    }
+    let mut ids = Vec::with_capacity(point_count);
+    for point_id in filter.point_ids() {
+        let point_id = i64::try_from(point_id.get()).map_err(|_| QueryError::PortFailure {
+            stage,
+            message: "filter point ID exceeds PostgreSQL bigint".to_owned(),
+        })?;
+        ids.push(point_id);
+    }
+    let ids = params.push(LexicalParam::BigArray(ids));
+    Ok(format!(
+        "AND {points_alias}.point_id = ANY ({ids}::bigint[])"
+    ))
+}
+
+pub(crate) fn lexical_filter_parameter_memory(point_count: usize) -> Result<usize> {
+    point_count
+        .checked_mul(size_of::<i64>())
+        .and_then(|bytes| bytes.checked_mul(5))
+        .and_then(|bytes| bytes.checked_add(size_of::<LexicalParam>()))
+        .and_then(|bytes| bytes.checked_add(512))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "lexical_filter_parameter_memory",
+        })
+}
+
 /// Registered lexical candidate source prepared once per execution.
 #[derive(Clone, Debug)]
 pub(super) struct CompositeLexicalSource {
@@ -323,17 +379,26 @@ impl CompositeLexicalSource {
     pub(super) fn candidates(
         &self,
         query: &QueryIr,
+        filter: Option<&FilterCandidateBatch>,
         limit: usize,
         budget: PortBudget,
     ) -> Result<CandidatePage> {
         let lexical_query = lexical_query_of(query, "lexical_candidate_source")?;
         let (rows, scored_count, exhausted) = match self.strategy {
-            LexicalStrategy::Exact => {
-                self.exact_rows(lexical_query, limit, budget.max_comparisons())?
-            }
-            LexicalStrategy::Indexed { .. } => {
-                self.indexed_rows(lexical_query, limit, budget.max_comparisons())?
-            }
+            LexicalStrategy::Exact => self.exact_rows(
+                lexical_query,
+                filter,
+                limit,
+                budget.max_comparisons(),
+                budget.max_memory_bytes(),
+            )?,
+            LexicalStrategy::Indexed { .. } => self.indexed_rows(
+                lexical_query,
+                filter,
+                limit,
+                budget.max_comparisons(),
+                budget.max_memory_bytes(),
+            )?,
         };
         let candidates = build_candidates(
             &rows,
@@ -352,8 +417,10 @@ impl CompositeLexicalSource {
     fn exact_rows(
         &self,
         query: &LexicalQuery,
+        filter: Option<&FilterCandidateBatch>,
         limit: usize,
         max_comparisons: usize,
+        max_memory_bytes: usize,
     ) -> Result<LexicalRows> {
         const STAGE: &str = "lexical_candidate_source";
         let mut params = BoundParams::new();
@@ -363,6 +430,8 @@ impl CompositeLexicalSource {
         let visible_limit = params.big(max_comparisons, STAGE)?;
         let result_limit = params.big(limit, STAGE)?;
         let restricted = rendering.restrict("visible.document");
+        let filter_sql =
+            filter_point_id_predicate(filter, &mut params, "points", STAGE, max_memory_bytes)?;
         let rank = rank_sql(&self.prepared, &restricted, &rendering.tsquery);
         let row_query_select = self
             .prepared
@@ -380,6 +449,7 @@ impl CompositeLexicalSource {
                    JOIN {table} AS source ON source.id::text = points.source_key
                   WHERE points.collection_id = {collection}
                     AND points.deleted_at IS NULL
+                    {filter_sql}
                   LIMIT {probe}
              ),
              admission AS (SELECT count(*)::bigint AS visible_count FROM visible),
@@ -419,8 +489,10 @@ impl CompositeLexicalSource {
     fn indexed_rows(
         &self,
         query: &LexicalQuery,
+        filter: Option<&FilterCandidateBatch>,
         limit: usize,
         max_comparisons: usize,
+        max_memory_bytes: usize,
     ) -> Result<LexicalRows> {
         const STAGE: &str = "lexical_candidate_source";
         let mut params = BoundParams::new();
@@ -440,6 +512,8 @@ impl CompositeLexicalSource {
         // would silently drop rows the exact path returns.
         let restricted = rendering.restrict(self.prepared.document_sql());
         let rank = rank_sql(&self.prepared, "candidates.document", "candidates.tsquery");
+        let filter_sql =
+            filter_point_id_predicate(filter, &mut params, "points", STAGE, max_memory_bytes)?;
         let sql = format!(
             "WITH candidates AS (
                  SELECT points.point_id,
@@ -450,6 +524,7 @@ impl CompositeLexicalSource {
                    JOIN {table} AS source ON source.id::text = points.source_key
                   WHERE points.collection_id = {collection}
                     AND points.deleted_at IS NULL
+                    {filter_sql}
                     AND {restricted} OPERATOR(pg_catalog.@@) {tsquery}
                   LIMIT {probe}
              )
@@ -555,17 +630,26 @@ impl CompositeFuzzySource {
     pub(super) fn candidates(
         &self,
         query: &QueryIr,
+        filter: Option<&FilterCandidateBatch>,
         limit: usize,
         budget: PortBudget,
     ) -> Result<CandidatePage> {
         let fuzzy_query = fuzzy_query_of(query, "fuzzy_candidate_source")?;
         let (rows, scored_count, exhausted) = match self.strategy {
-            LexicalStrategy::Exact => {
-                self.exact_rows(fuzzy_query, limit, budget.max_comparisons())?
-            }
-            LexicalStrategy::Indexed { .. } => {
-                self.indexed_rows(fuzzy_query, limit, budget.max_comparisons())?
-            }
+            LexicalStrategy::Exact => self.exact_rows(
+                fuzzy_query,
+                filter,
+                limit,
+                budget.max_comparisons(),
+                budget.max_memory_bytes(),
+            )?,
+            LexicalStrategy::Indexed { .. } => self.indexed_rows(
+                fuzzy_query,
+                filter,
+                limit,
+                budget.max_comparisons(),
+                budget.max_memory_bytes(),
+            )?,
         };
         let candidates = build_candidates(
             &rows,
@@ -594,8 +678,10 @@ impl CompositeFuzzySource {
     fn exact_rows(
         &self,
         query: &FuzzyQuery,
+        filter: Option<&FilterCandidateBatch>,
         limit: usize,
         max_comparisons: usize,
+        max_memory_bytes: usize,
     ) -> Result<LexicalRows> {
         const STAGE: &str = "fuzzy_candidate_source";
         let mut params = BoundParams::new();
@@ -610,6 +696,8 @@ impl CompositeFuzzySource {
         let probe = params.big(max_comparisons.saturating_add(1), STAGE)?;
         let visible_limit = params.big(max_comparisons, STAGE)?;
         let result_limit = params.big(limit, STAGE)?;
+        let filter_sql =
+            filter_point_id_predicate(filter, &mut params, "points", STAGE, max_memory_bytes)?;
         let sql = format!(
             "WITH visible AS MATERIALIZED (
                  SELECT points.point_id,
@@ -619,6 +707,7 @@ impl CompositeFuzzySource {
                    JOIN {table} AS source ON source.id::text = points.source_key
                   WHERE points.collection_id = {collection}
                     AND points.deleted_at IS NULL
+                    {filter_sql}
                   LIMIT {probe}
              ),
              admission AS (SELECT count(*)::bigint AS visible_count FROM visible),
@@ -654,8 +743,10 @@ impl CompositeFuzzySource {
     fn indexed_rows(
         &self,
         query: &FuzzyQuery,
+        filter: Option<&FilterCandidateBatch>,
         limit: usize,
         max_comparisons: usize,
+        max_memory_bytes: usize,
     ) -> Result<LexicalRows> {
         const STAGE: &str = "fuzzy_candidate_source";
         let mut params = BoundParams::new();
@@ -672,6 +763,8 @@ impl CompositeFuzzySource {
         let similarity = self.similarity_sql(query.mode(), "candidates.haystack", &needle);
         let allowance = limit.min(max_comparisons);
         let probe = params.big(allowance.saturating_add(1), STAGE)?;
+        let filter_sql =
+            filter_point_id_predicate(filter, &mut params, "points", STAGE, max_memory_bytes)?;
         let sql = format!(
             "WITH candidates AS (
                  SELECT points.point_id,
@@ -681,6 +774,7 @@ impl CompositeFuzzySource {
                    JOIN {table} AS source ON source.id::text = points.source_key
                   WHERE points.collection_id = {collection}
                     AND points.deleted_at IS NULL
+                    {filter_sql}
                     AND {predicate}
                   LIMIT {probe}
              )

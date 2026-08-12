@@ -2,6 +2,8 @@
 
 mod lexical;
 mod sparse;
+#[cfg(any(test, feature = "pg_test"))]
+pub(crate) use lexical::lexical_filter_parameter_memory;
 pub(crate) use lexical::{LexicalStrategy, lexical_headline_rows};
 pub(crate) use sparse::{SparseCandidateStrategy, run_sparse_query};
 
@@ -531,7 +533,7 @@ impl CandidateSource for PgCandidateRouter<'_> {
                 .borrow()
                 .get(source.as_str())
                 .ok_or_else(|| lexical_not_prepared("lexical_candidate_source"))?
-                .candidates(query, limit, budget);
+                .candidates(query, filter, limit, budget);
         }
         if let QueryKind::Fuzzy { source, .. } = query.kind() {
             return self
@@ -539,7 +541,7 @@ impl CandidateSource for PgCandidateRouter<'_> {
                 .borrow()
                 .get(source.as_str())
                 .ok_or_else(|| lexical_not_prepared("fuzzy_candidate_source"))?
-                .candidates(query, limit, budget);
+                .candidates(query, filter, limit, budget);
         }
         if filter.is_some() {
             return Err(QueryError::PortFailure {
@@ -3464,10 +3466,10 @@ fn adaptive_prefix_candidates(
         let last = index.saturating_add(1) == widening.steps().len();
         diagnostics.push(
             CandidateStageDiagnostic::new(
-                if index == 0 {
-                    "dense_adaptive_prefix_initial"
-                } else if last {
+                if last {
                     "dense_adaptive_prefix_exhaustive"
+                } else if index == 0 {
+                    "dense_adaptive_prefix_initial"
                 } else {
                     "dense_adaptive_prefix_widened"
                 },

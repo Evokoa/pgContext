@@ -204,7 +204,7 @@ mod tests {
             object.name == "query"
                 && object.identity
                     == Some(
-                        "collection text, vector vector, text_query text, text_column text, \"limit\" integer"
+                        "collection text, vector vector, text_query text, lexical_source text, \"limit\" integer"
                 )
         }));
     }

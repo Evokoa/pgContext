@@ -263,19 +263,22 @@ fn require_migration_owner(migration_id: i64) {
 }
 
 fn resolve_profile(collection_id: i64, profile_name: &str) -> ProfileRef {
-    Spi::get_one_with_args::<i64>(
-        "SELECT embedding_profile_id
-           FROM pgcontext._embedding_profiles
-          WHERE collection_id = $1 AND profile_name = $2",
-        &[collection_id.into(), profile_name.into()],
-    )
+    Spi::connect(|client| {
+        let rows = client.select(
+            "SELECT embedding_profile_id
+               FROM pgcontext._embedding_profiles
+              WHERE collection_id = $1 AND profile_name = $2",
+            Some(1),
+            &[collection_id.into(), profile_name.into()],
+        )?;
+        if rows.is_empty() {
+            undefined_object(format!("embedding profile does not exist: {profile_name}"));
+        }
+        Ok::<_, spi::Error>(ProfileRef {
+            embedding_profile_id: required(rows.first().get::<i64>(1)?, "embedding_profile_id"),
+        })
+    })
     .unwrap_or_else(|error| internal(format!("embedding profile lookup failed: {error}")))
-    .map(|embedding_profile_id| ProfileRef {
-        embedding_profile_id,
-    })
-    .unwrap_or_else(|| {
-        undefined_object(format!("embedding profile does not exist: {profile_name}"))
-    })
 }
 
 fn insert_embedding_migration(

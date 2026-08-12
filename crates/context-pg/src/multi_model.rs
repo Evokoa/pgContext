@@ -8,7 +8,8 @@ use std::mem::size_of;
 use std::rc::Rc;
 
 use context_core::{
-    ConfigurationRevision, PointId, ProfileId, ProfileLifecycle, SourceKey, SourceVersion,
+    BitVector, ConfigurationRevision, DenseVector, HalfVector, Int8Vector, PointId, ProfileId,
+    ProfileLifecycle, SourceKey, SourceVersion, SparseVector, UInt8Vector,
 };
 use context_query::{
     Candidate, CandidateDiagnostics, CandidatePage, CandidateSource, ExecutionBudget,
@@ -111,13 +112,6 @@ struct PreparedProfile {
     metric: String,
     index_oid: pg_sys::Oid,
     plan_indexes: Vec<IndexPlanIdentity>,
-}
-
-#[derive(Clone, Debug)]
-struct CandidateObservation {
-    source_key: String,
-    source_version: i64,
-    approximate_score: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -1140,15 +1134,23 @@ fn reject_duplicate_source_columns(selected: &BTreeMap<ProfileName, PreparedProf
 }
 
 fn validate_profile_query(profile: &PreparedProfile, query: &str) {
-    let cast = query_cast(profile);
-    Spi::get_one_with_args::<String>(&format!("SELECT ({cast})::text"), &[query.into()])
-        .unwrap_or_else(|_| {
-            invalid_parameter(format!(
-                "query does not match profile {}",
-                profile.profile.as_str()
-            ))
-        })
-        .unwrap_or_else(|| data_corrupted("profile query validation returned null"));
+    let dimensions = match profile.representation.as_str() {
+        "dense" => query.parse::<DenseVector>().map(|value| value.dimension()),
+        "half" => query.parse::<HalfVector>().map(|value| value.dimension()),
+        "sparse" => query
+            .parse::<SparseVector>()
+            .map(|value| value.dimensions()),
+        "bit" => query.parse::<BitVector>().map(|value| value.len()),
+        "int8" => query.parse::<Int8Vector>().map(|value| value.dimension()),
+        "uint8" => query.parse::<UInt8Vector>().map(|value| value.dimension()),
+        _ => data_corrupted("stored embedding profile representation is invalid"),
+    };
+    if dimensions.ok() != usize::try_from(profile.dimensions).ok() {
+        invalid_parameter(format!(
+            "query does not match profile {}",
+            profile.profile.as_str()
+        ));
+    }
 }
 
 struct MultiProfileFilterSource;
@@ -1221,20 +1223,16 @@ impl CandidateSource for MultiProfileCandidateSource<'_> {
         let (profile_name, _, provider_query) = profile_leaf(query)?;
         let profile = prepared_profile(self.profiles, profile_name)?;
         self.state.borrow_mut().candidates.clear();
-        let filter = filter_plan_result(query.filter(), self.filter_fields, 2)?;
-        let (observations, candidate_count, hnsw_visits, comparisons, exact_fallback) =
-            candidate_observations(profile, provider_query, limit, filter.as_ref(), budget)?;
-        let observation_count = observations.len();
-        let identities = resolve_candidate_identities(self.collection_id, observations)?;
-        if identities.len() != observation_count {
-            return Err(QueryError::PortFailure {
-                stage: "multi_profile_candidate_mapping",
-                message: format!(
-                    "profile {} candidate mapping changed during execution",
-                    profile.profile.as_str()
-                ),
-            });
-        }
+        let filter = filter_plan_result(query.filter(), self.filter_fields, 3)?;
+        let (identities, candidate_count, hnsw_visits, comparisons, exact_fallback) =
+            candidate_identities(
+                self.collection_id,
+                profile,
+                provider_query,
+                limit,
+                filter.as_ref(),
+                budget,
+            )?;
         let configuration = configuration_revision(profile)?;
         let profile_id = profile_id(profile)?;
         let mut candidates = Vec::with_capacity(query.limit().min(identities.len()));
@@ -1660,13 +1658,14 @@ pub(crate) fn last_filter_field_count_for_test() -> usize {
     LAST_FILTER_FIELD_COUNT.with(Cell::get)
 }
 
-fn candidate_observations(
+fn candidate_identities(
+    collection_id: i64,
     profile: &PreparedProfile,
     query: &str,
     probe_limit: usize,
     filter: Option<&FilterPredicatePlan>,
     budget: PortBudget,
-) -> QueryResult<(Vec<CandidateObservation>, usize, usize, usize, bool)> {
+) -> QueryResult<(Vec<CandidateIdentity>, usize, usize, usize, bool)> {
     let table = quote_qualified_identifier(&profile.source_schema, &profile.source_table);
     let vector = quote_identifier(&profile.vector_column);
     let source_version = quote_identifier(&profile.source_version_column);
@@ -1707,8 +1706,17 @@ fn candidate_observations(
                     THEN source.id::text
                 END AS source_key,
                 source.{source_version} AS source_version,
-                (source.{vector} {operator} {})::double precision AS score
+                (source.{vector} {operator} {})::double precision AS score,
+                points.point_id
            FROM {table} AS source
+           JOIN LATERAL (
+                SELECT visible_points.point_id
+                  FROM pgcontext._visible_collection_points AS visible_points
+                 WHERE visible_points.collection_id = $3
+                   AND visible_points.deleted_at IS NULL
+                   AND visible_points.source_key = source.id::text
+                 LIMIT 1
+           ) AS points ON true
           WHERE source.{vector} IS NOT NULL
             AND {version}
             {filter_sql}
@@ -1723,17 +1731,22 @@ fn candidate_observations(
         reason: "probe limit exceeds bigint".to_owned(),
     })?;
     let parameters = filter.map(|plan| plan.parameters.as_slice()).unwrap_or(&[]);
-    let mut args = Vec::<DatumWithOid<'_>>::with_capacity(2 + parameters.len());
+    let mut args = Vec::<DatumWithOid<'_>>::with_capacity(3 + parameters.len());
     args.push(query.into());
     args.push(sql_limit.into());
+    args.push(collection_id.into());
     push_filter_parameter_args(&mut args, parameters);
-    let (observations, hnsw_visits, mut exact_strategy) = with_hnsw_planner_settings(|| {
+    let force_exact = take_forced_exact_profile(&profile.profile);
+    let (observations, hnsw_visits, exact_strategy) = with_hnsw_planner_settings(|| {
+        if force_exact {
+            return Ok((Vec::new(), 0, true));
+        }
         require_hnsw_query_plan(profile, &sql, &args)?;
         let execute_once = || {
             let (observations, work) = crate::hnsw_am::with_hnsw_query_budget_and_work(
                 traversal_comparisons,
                 budget.max_memory_bytes() - response_bytes,
-                || read_candidate_observations(&sql, &args, sql_limit, probe_limit),
+                || read_candidate_identities(&sql, &args, sql_limit, probe_limit),
             );
             let observations = observations?;
             Ok::<_, QueryError>((
@@ -1744,13 +1757,16 @@ fn candidate_observations(
         };
         execute_once()
     })?;
-    if take_forced_exact_profile(&profile.profile) {
-        exact_strategy = true;
-    }
     if exact_strategy {
-        let visible_rows = bounded_visible_profile_rows(profile, budget.max_comparisons())?;
+        let visible_rows = bounded_visible_profile_rows(
+            collection_id,
+            profile,
+            query,
+            filter,
+            budget.max_comparisons(),
+        )?;
         let observations = with_exact_planner_settings(|| {
-            read_candidate_observations(&sql, &args, sql_limit, probe_limit)
+            read_candidate_identities(&sql, &args, sql_limit, probe_limit)
         })?;
         let candidate_count = observations.len();
         return Ok((observations, candidate_count, 0, visible_rows, true));
@@ -1784,7 +1800,7 @@ pub(crate) fn candidate_transient_memory_bytes(count: usize) -> QueryResult<usiz
         .ok_or(QueryError::ArithmeticOverflow {
             operation: "multi_profile_candidate_key_projection",
         })?;
-    let per_candidate = size_of::<CandidateObservation>()
+    let per_candidate = size_of::<CandidateIdentity>()
         .checked_add(size_of::<CandidateIdentity>())
         .and_then(|bytes| bytes.checked_add(size_of::<Candidate>()))
         .and_then(|bytes| bytes.checked_add(size_of::<String>()))
@@ -1810,12 +1826,22 @@ pub(crate) fn hnsw_plan_json_memory_bytes(index_count: usize) -> QueryResult<usi
 }
 
 fn bounded_visible_profile_rows(
+    collection_id: i64,
     profile: &PreparedProfile,
+    query: &str,
+    filter: Option<&FilterPredicatePlan>,
     comparison_budget: usize,
 ) -> QueryResult<usize> {
     let table = quote_qualified_identifier(&profile.source_schema, &profile.source_table);
     let vector = quote_identifier(&profile.vector_column);
     let version = version_predicate(profile);
+    let source_key_type = quote_qualified_identifier(
+        &profile.source_key_type_schema,
+        &profile.source_key_type_name,
+    );
+    let filter_sql = filter
+        .map(|plan| format!(" AND {}", plan.sql))
+        .unwrap_or_default();
     let sentinel = comparison_budget
         .checked_add(1)
         .ok_or(QueryError::ArithmeticOverflow {
@@ -1825,13 +1851,28 @@ fn bounded_visible_profile_rows(
         "SELECT count(*)::bigint
            FROM (
                SELECT 1
-                 FROM {table} AS source
-                WHERE source.{vector} IS NOT NULL
+                 FROM pgcontext._visible_collection_points AS points
+                 JOIN {table} AS source
+                   ON source.id = points.source_key::{source_key_type}
+                WHERE $1::text IS NOT NULL
+                  AND points.collection_id = $3
+                  AND points.deleted_at IS NULL
+                  AND source.{vector} IS NOT NULL
                   AND {version}
-                LIMIT {sentinel}
+                  {filter_sql}
+                LIMIT $2
            ) AS bounded_visible"
     );
-    let visible_rows = Spi::get_one::<i64>(&sql)
+    let sentinel = i64::try_from(sentinel).map_err(|_| QueryError::ArithmeticOverflow {
+        operation: "multi_profile_exact_fallback_sentinel_bigint",
+    })?;
+    let parameters = filter.map(|plan| plan.parameters.as_slice()).unwrap_or(&[]);
+    let mut args = Vec::<DatumWithOid<'_>>::with_capacity(3 + parameters.len());
+    args.push(query.into());
+    args.push(sentinel.into());
+    args.push(collection_id.into());
+    push_filter_parameter_args(&mut args, parameters);
+    let visible_rows = Spi::get_one_with_args::<i64>(&sql, &args)
         .map_err(|_| QueryError::PortFailure {
             stage: "multi_profile_exact_fallback",
             message: "failed to bound the invoker-visible exact corpus".to_owned(),
@@ -1851,12 +1892,12 @@ fn bounded_visible_profile_rows(
     Ok(visible_rows)
 }
 
-fn read_candidate_observations(
+fn read_candidate_identities(
     sql: &str,
     args: &[DatumWithOid<'_>],
     sql_limit: i64,
     probe_limit: usize,
-) -> QueryResult<Vec<CandidateObservation>> {
+) -> QueryResult<Vec<CandidateIdentity>> {
     Spi::connect(|client| {
         let rows = client
             .select(sql, Some(sql_limit.max(1)), args)
@@ -1894,7 +1935,17 @@ fn read_candidate_observations(
                     stage: "multi_profile_candidate_source",
                     message: "candidate source identity is null".to_owned(),
                 })?;
-            observations.push(CandidateObservation {
+            observations.push(CandidateIdentity {
+                point_id: row
+                    .get::<i64>(5)
+                    .map_err(|_| QueryError::PortFailure {
+                        stage: "multi_profile_candidate_source",
+                        message: "failed to read candidate point identity".to_owned(),
+                    })?
+                    .ok_or(QueryError::PortFailure {
+                        stage: "multi_profile_candidate_source",
+                        message: "candidate point identity is null".to_owned(),
+                    })?,
                 source_key,
                 source_version: row
                     .get::<i64>(3)
@@ -1993,7 +2044,7 @@ fn json_plan_uses_only_attached_indexes(value: &Value, attached: &[IndexPlanIden
                     let Some(schema) = object.get("Schema").and_then(Value::as_str) else {
                         return false;
                     };
-                    if attached
+                    let attached_index = attached
                         .binary_search_by(|identity| {
                             identity
                                 .schema
@@ -2001,11 +2052,16 @@ fn json_plan_uses_only_attached_indexes(value: &Value, attached: &[IndexPlanIden
                                 .cmp(schema)
                                 .then_with(|| identity.name.as_str().cmp(index_name))
                         })
-                        .is_err()
-                    {
+                        .is_ok();
+                    let trusted_mapping_index = schema == "pgcontext"
+                        && matches!(
+                            index_name,
+                            "_collection_points_collection_id_source_key_key" | "_collections_pkey"
+                        );
+                    if !attached_index && !trusted_mapping_index {
                         return false;
                     }
-                    found_index = true;
+                    found_index |= attached_index;
                 }
                 work.extend(object.values().filter_map(|child| {
                     matches!(child, Value::Object(_) | Value::Array(_))
@@ -2108,83 +2164,6 @@ fn set_local_setting(setting: &str, value: &str) -> QueryResult<()> {
         stage: "multi_profile_candidate_source",
         message: "failed to scope planner settings".to_owned(),
     })
-}
-
-fn resolve_candidate_identities(
-    collection_id: i64,
-    observations: Vec<CandidateObservation>,
-) -> QueryResult<Vec<CandidateIdentity>> {
-    if observations.is_empty() {
-        return Ok(Vec::new());
-    }
-    let source_keys = observations
-        .iter()
-        .map(|observation| observation.source_key.clone())
-        .collect::<Vec<_>>();
-    let row_limit = i64::try_from(source_keys.len()).map_err(|_| QueryError::PortFailure {
-        stage: "multi_profile_candidate_mapping",
-        message: "candidate mapping limit exceeds bigint".to_owned(),
-    })?;
-    let mut point_ids = Spi::connect(|client| {
-        let rows = client
-            .select(
-                "SELECT points.point_id, points.source_key
-               FROM pgcontext._visible_collection_points AS points
-              WHERE points.collection_id = $1
-                AND points.deleted_at IS NULL
-                AND points.source_key = ANY($2::text[])",
-                Some(row_limit),
-                &[collection_id.into(), source_keys.into()],
-            )
-            .map_err(|_| QueryError::PortFailure {
-                stage: "multi_profile_candidate_mapping",
-                message: "bounded point-identity lookup failed".to_owned(),
-            })?;
-        rows.into_iter()
-            .map(|row| {
-                let point_id = row
-                    .get::<i64>(1)
-                    .map_err(|_| QueryError::PortFailure {
-                        stage: "multi_profile_candidate_mapping",
-                        message: "failed to read point identity".to_owned(),
-                    })?
-                    .ok_or(QueryError::PortFailure {
-                        stage: "multi_profile_candidate_mapping",
-                        message: "point identity is null".to_owned(),
-                    })?;
-                let source_key = row
-                    .get::<String>(2)
-                    .map_err(|_| QueryError::PortFailure {
-                        stage: "multi_profile_candidate_mapping",
-                        message: "failed to read point source identity".to_owned(),
-                    })?
-                    .ok_or(QueryError::PortFailure {
-                        stage: "multi_profile_candidate_mapping",
-                        message: "point source identity is null".to_owned(),
-                    })?;
-                Ok((source_key, point_id))
-            })
-            .collect::<QueryResult<Vec<_>>>()
-    })
-    .map_err(|_| QueryError::PortFailure {
-        stage: "multi_profile_candidate_mapping",
-        message: "bounded point-identity lookup failed".to_owned(),
-    })?;
-    point_ids.sort_unstable_by(|left, right| left.0.cmp(&right.0));
-    Ok(observations
-        .into_iter()
-        .filter_map(|observation| {
-            point_ids
-                .binary_search_by(|(source_key, _)| source_key.cmp(&observation.source_key))
-                .ok()
-                .map(|index| CandidateIdentity {
-                    point_id: point_ids[index].1,
-                    source_key: observation.source_key,
-                    source_version: observation.source_version,
-                    approximate_score: observation.approximate_score,
-                })
-        })
-        .collect::<Vec<_>>())
 }
 
 fn authoritative_recheck(
