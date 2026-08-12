@@ -88,7 +88,7 @@ exact_dependencies(
 exact_dependencies("context-build", {"context-core"}, {"proptest"})
 exact_dependencies(
     "pgcontext-worker",
-    {"context-core", "context-query", "serde", "serde_json", "sha2", "tokio"},
+    {"context-build", "context-core", "context-query", "serde", "serde_json", "sha2", "tokio"},
     {"proptest"},
 )
 
@@ -192,7 +192,7 @@ source_forbidden = {
     "context-index": re.compile(r"\bcontext_(?:storage|query|build)\b"),
     "context-storage": re.compile(r"\bcontext_(?:index|query|build)\b"),
     "context-build": re.compile(r"\bcontext_(?:filter|hybrid|index|storage|query)\b"),
-    "pgcontext-worker": re.compile(r"\bcontext_(?:codec|filter|hybrid|index|storage|build|pg|test)\b"),
+    "pgcontext-worker": re.compile(r"\bcontext_(?:codec|filter|hybrid|index|storage|pg|test)\b"),
 }
 source_messages = {
     "context-codec": "context-codec source imports a sibling crate",
@@ -200,7 +200,7 @@ source_messages = {
     "context-index": "context-index source imports a forbidden sibling crate",
     "context-storage": "context-storage source imports a forbidden sibling crate",
     "context-build": "context-build source imports a crate other than context-core",
-    "pgcontext-worker": "pgcontext-worker source imports a crate other than context-core/context-query",
+    "pgcontext-worker": "pgcontext-worker source imports a crate other than context-build/context-core/context-query",
 }
 for crate, pattern in source_forbidden.items():
     for path in rust_sources(crate):

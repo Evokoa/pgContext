@@ -5,18 +5,25 @@
 //! validation, publication, pin, and retirement state machines.
 
 use std::collections::BTreeSet;
-use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 pub use context_core::{ConfigurationRevision, GenerationId, PointId, SourceVersion};
 
 mod chunking;
+mod document_chunk_job;
 mod external;
 mod findings;
+mod lifecycle_types;
 mod rowset;
+mod token_chunking;
 
 pub use chunking::{
-    Chunk, ChunkError, ChunkProfile, MAX_CHUNK_CHARS, MAX_CHUNK_SOURCE_CHARS, chunk_document,
+    Chunk, ChunkError, ChunkProfile, MAX_CHUNK_CHARS, MAX_CHUNK_SOURCE_CHARS,
+    MAX_CHUNKS_PER_DOCUMENT, chunk_document,
+};
+pub use document_chunk_job::{
+    DocumentChunkJob, DocumentChunkJobError, DocumentChunkJobStatus, DocumentChunkLease,
+    MAX_DOCUMENT_CHUNK_JOB_ATTEMPTS, MAX_DOCUMENT_CHUNK_LEASE_TICKS,
 };
 pub use external::{
     KmeansResult, MemoryBudget, SpillError, SpillRun, TrainingError, deterministic_kmeans,
@@ -24,114 +31,20 @@ pub use external::{
     deterministic_sample,
 };
 pub use findings::{FindingCode, FindingLocation, FindingSeverity, StructuralFinding};
+pub use lifecycle_types::{ArtifactKind, BuildJobKind, build_contract_version};
 pub use rowset::{OrderedRow, OrderedRowset, RowsetError};
+pub use token_chunking::{
+    ChunkIdentityContext, ChunkOccurrenceId, DocumentParser, MAX_CERTIFIED_PROFILE_OVERLAP_TOKENS,
+    MAX_CONTEXT_PREFIX_TOKENS, MAX_STRUCTURE_DEPTH, MAX_STRUCTURE_SEGMENT_BYTES,
+    MAX_TOKEN_CHUNK_DOCUMENT_BYTES, MAX_TOKEN_CHUNK_OUTPUT_BYTES, MAX_TOKENS_PER_CHUNK,
+    MAX_TOKENS_PER_DOCUMENT, StructureKind, TokenChunk, TokenChunkError, TokenChunkProfile,
+    TokenizerRevision, WordToken, bounded_unicode_word_context_prefix, chunk_document_tokens,
+    chunk_document_tokens_with_identity, chunk_document_tokens_with_identity_and_checkpoint,
+    unicode_word_token_count_up_to, unicode_word_tokens,
+};
 
 const MAX_PUBLICATION_ALIAS_BYTES: usize = 128;
 const MAX_ARTIFACT_NAME_BYTES: usize = 255;
-
-/// Operation performed by one supervised generation job.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuildJobKind {
-    /// Build a new immutable artifact inventory.
-    ArtifactBuild,
-    /// Compact bounded existing artifacts into a replacement inventory.
-    Compaction,
-    /// Backfill a derived projection from authoritative source rows.
-    ProjectionBackfill,
-    /// Produce reproducible certification evidence.
-    Certification,
-}
-
-impl BuildJobKind {
-    /// Parses the stable catalog representation.
-    #[must_use]
-    pub const fn from_catalog(value: &str) -> Option<Self> {
-        match value.as_bytes() {
-            b"artifact_build" => Some(Self::ArtifactBuild),
-            b"compaction" => Some(Self::Compaction),
-            b"projection_backfill" => Some(Self::ProjectionBackfill),
-            b"certification" => Some(Self::Certification),
-            _ => None,
-        }
-    }
-
-    /// Returns the stable catalog representation.
-    #[must_use]
-    pub const fn as_catalog(self) -> &'static str {
-        match self {
-            Self::ArtifactBuild => "artifact_build",
-            Self::Compaction => "compaction",
-            Self::ProjectionBackfill => "projection_backfill",
-            Self::Certification => "certification",
-        }
-    }
-}
-
-/// Typed derived output produced by the shared lifecycle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ArtifactKind {
-    /// Immutable HNSW search segment.
-    HnswSegment,
-    /// Mutable or frozen HNSW delta segment.
-    HnswDelta,
-    /// HNSW segment directory and routing metadata.
-    HnswDirectory,
-    /// IVFFlat centroid inventory.
-    IvfCentroids,
-    /// IVFFlat posting inventory.
-    IvfPostings,
-    /// Quantized vector code inventory.
-    QuantizedCodes,
-    /// Derived document chunk projection.
-    ChunkProjection,
-    /// Derived vector projection.
-    VectorProjection,
-    /// Derived graph projection.
-    GraphProjection,
-    /// Derived graph community summaries.
-    CommunitySummary,
-    /// Reproducible benchmark or certification evidence.
-    CertificationEvidence,
-}
-
-impl ArtifactKind {
-    /// Parses the stable catalog representation.
-    #[must_use]
-    pub const fn from_catalog(value: &str) -> Option<Self> {
-        match value.as_bytes() {
-            b"hnsw_segment" => Some(Self::HnswSegment),
-            b"hnsw_delta" => Some(Self::HnswDelta),
-            b"hnsw_directory" => Some(Self::HnswDirectory),
-            b"ivf_centroids" => Some(Self::IvfCentroids),
-            b"ivf_postings" => Some(Self::IvfPostings),
-            b"quantized_codes" => Some(Self::QuantizedCodes),
-            b"chunk_projection" => Some(Self::ChunkProjection),
-            b"vector_projection" => Some(Self::VectorProjection),
-            b"graph_projection" => Some(Self::GraphProjection),
-            b"community_summary" => Some(Self::CommunitySummary),
-            b"certification_evidence" => Some(Self::CertificationEvidence),
-            _ => None,
-        }
-    }
-
-    /// Returns the stable catalog representation.
-    #[must_use]
-    pub const fn as_catalog(self) -> &'static str {
-        match self {
-            Self::HnswSegment => "hnsw_segment",
-            Self::HnswDelta => "hnsw_delta",
-            Self::HnswDirectory => "hnsw_directory",
-            Self::IvfCentroids => "ivf_centroids",
-            Self::IvfPostings => "ivf_postings",
-            Self::QuantizedCodes => "quantized_codes",
-            Self::ChunkProjection => "chunk_projection",
-            Self::VectorProjection => "vector_projection",
-            Self::GraphProjection => "graph_projection",
-            Self::CommunitySummary => "community_summary",
-            Self::CertificationEvidence => "certification_evidence",
-        }
-    }
-}
 
 /// Durable lifecycle state for a resumable generation job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1083,49 +996,5 @@ impl Display for BuildError {
         })
     }
 }
-
-impl Error for BuildError {}
-
-/// Returns the version of the pure build boundary.
-#[must_use]
-pub const fn build_contract_version() -> u16 {
-    3
-}
-
 #[cfg(test)]
-mod tests {
-    use proptest::prelude::*;
-
-    use super::{
-        ArtifactKind, BuildError, BuildJobKind, BuildJobState, BuildJobStatus, WorkerId,
-        build_contract_version,
-    };
-
-    #[test]
-    fn build_boundary_uses_logical_point_ids() {
-        let point_id = super::PointId::new(11);
-        assert_eq!(point_id.get(), 11);
-        assert_eq!(build_contract_version(), 3);
-    }
-
-    proptest! {
-        #[test]
-        fn absolute_checkpoints_never_regress_or_exceed_total(
-            total in 1_u64..128,
-            first in 0_u64..128,
-            replay in 0_u64..128,
-        ) {
-            prop_assume!(first <= total);
-            let worker = WorkerId::new(1).ok_or(BuildError::ZeroIdentity)?;
-            let state = BuildJobState::planned(
-                BuildJobKind::ArtifactBuild,
-                ArtifactKind::HnswSegment,
-                total,
-            ).claim(worker, 0, 10)?.checkpoint_to(first)?;
-            if state.status() == BuildJobStatus::Running {
-                let replayed = state.checkpoint_to(replay.min(first))?;
-                prop_assert_eq!(replayed.checkpoint().processed_units(), first);
-            }
-        }
-    }
-}
+mod lib_tests;

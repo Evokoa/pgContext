@@ -23,6 +23,7 @@ and the [0.2.0 release notes](release_notes.md).
 - [Hybrid retrieval](user_guide/hybrid_retrieval.md)
 - [Multi-model retrieval](user_guide/multi_model.md)
 - [Semantic reranking](user_guide/semantic_reranking.md)
+- [Automatic document chunking](user_guide/automatic_chunking.md)
 - [pgContext vs. pgvector vs. Qdrant](pgcontext-vs-pgvector-vs-qdrant.md)
 - [pgContext vs. pgvector benchmark](benchmarks/pgvector.md)
 - [Owned late-interaction storage and write amplification](benchmarks/late_interaction_owned.md)

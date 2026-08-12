@@ -17,10 +17,15 @@ name = "pgcontext_worker"
 name = "pgcontext-worker"
 path = "src/main.rs"
 
+[[bin]]
+name = "pgcontext-chunk-worker"
+path = "src/bin/pgcontext-chunk-worker.rs"
+
 [features]
 worker-test-hooks = []
 
 [dependencies]
+context-build = { path = "../context-build", version = "0.1.0" }
 context-core = { path = "../context-core", version = "0.1.0" }
 context-query = { path = "../context-query", version = "0.1.0" }
 serde = { workspace = true, features = ["derive"] }

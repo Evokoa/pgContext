@@ -1,4 +1,35 @@
 #[pg_test]
+fn semantic_rerank_identical_source_registration_preserves_revision() {
+    Spi::run(
+        "CREATE TABLE semantic_rerank_idempotent (
+             id text PRIMARY KEY, body text NOT NULL, source_version bigint NOT NULL
+         );
+         GRANT SELECT ON semantic_rerank_idempotent TO PUBLIC;
+         SELECT pgcontext.create_collection(
+             'semantic_rerank_idempotent','public.semantic_rerank_idempotent'
+         );
+         SELECT pgcontext.register_semantic_rerank_source(
+             'semantic_rerank_idempotent','body','body','source_version'
+         );
+         CREATE TEMP TABLE semantic_rerank_idempotent_revision AS
+         SELECT registration_revision FROM pgcontext._visible_semantic_rerank_sources;
+         SELECT pgcontext.register_semantic_rerank_source(
+             'semantic_rerank_idempotent','body','body','source_version'
+         );"
+    )
+    .expect("idempotent semantic source registration");
+    assert_eq!(
+        Spi::get_one::<bool>(
+            "SELECT sources.registration_revision = frozen.registration_revision
+               FROM pgcontext._visible_semantic_rerank_sources AS sources,
+                    semantic_rerank_idempotent_revision AS frozen"
+        )
+        .expect("semantic registration revision"),
+        Some(true)
+    );
+}
+
+#[pg_test]
 fn semantic_rerank_registration_enforces_collection_owner_and_source_select() {
     sql_test_create_role("semantic_register_owner");
     sql_test_create_role("semantic_register_outsider");

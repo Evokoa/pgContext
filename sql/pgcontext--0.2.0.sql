@@ -7,7 +7,7 @@ The ordering of items is not stable, it is driven by a dependency graph.
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/lib.rs:104
+-- crates/context-pg/src/lib.rs:112
 
 DO $pgcontext_schema_guard$
 DECLARE
@@ -2127,6 +2127,7 @@ CREATE TABLE pgcontext._semantic_rerank_sources (
     source_table_name text NOT NULL,
     source_key_attnum int2 NOT NULL CHECK (source_key_attnum > 0),
     source_key_type_oid oid NOT NULL,
+    source_key_collation_oid oid NOT NULL DEFAULT 0,
     source_key_type_schema text NOT NULL,
     source_key_type_name text NOT NULL,
     text_column_name text NOT NULL,
@@ -2284,6 +2285,7 @@ BEGIN
 
     SELECT attribute.attnum,
            attribute.atttypid,
+           attribute.attcollation,
            type_namespace.nspname AS type_schema,
            type.typname AS type_name
       INTO key_row
@@ -2345,7 +2347,7 @@ BEGIN
     INSERT INTO pgcontext._semantic_rerank_sources (
         collection_id, source_name, source_table_oid,
         source_schema_name, source_table_name,
-        source_key_attnum, source_key_type_oid,
+        source_key_attnum, source_key_type_oid, source_key_collation_oid,
         source_key_type_schema, source_key_type_name,
         text_column_name, text_attnum, text_type_oid, text_collation_oid,
         text_collation_schema, text_collation_name,
@@ -2354,7 +2356,7 @@ BEGIN
     ) VALUES (
         p_collection_id, p_source_name, source_oid,
         source_schema, source_table,
-        key_row.attnum, key_row.atttypid,
+        key_row.attnum, key_row.atttypid, key_row.attcollation,
         key_row.type_schema, key_row.type_name,
         p_text_column, text_row.attnum, text_row.atttypid, text_row.attcollation,
         text_row.collation_schema, text_row.collation_name,
@@ -2367,6 +2369,7 @@ BEGIN
            source_table_name = EXCLUDED.source_table_name,
            source_key_attnum = EXCLUDED.source_key_attnum,
            source_key_type_oid = EXCLUDED.source_key_type_oid,
+           source_key_collation_oid = EXCLUDED.source_key_collation_oid,
            source_key_type_schema = EXCLUDED.source_key_type_schema,
            source_key_type_name = EXCLUDED.source_key_type_name,
            text_column_name = EXCLUDED.text_column_name,
@@ -2379,7 +2382,31 @@ BEGIN
            source_version_attnum = EXCLUDED.source_version_attnum,
            source_version_type_oid = EXCLUDED.source_version_type_oid,
            content_hash_rule = EXCLUDED.content_hash_rule,
-           registration_revision = pgcontext._semantic_rerank_sources.registration_revision + 1,
+           registration_revision = pgcontext._semantic_rerank_sources.registration_revision +
+               CASE WHEN
+                   pgcontext._semantic_rerank_sources.source_table_oid IS DISTINCT FROM
+                       EXCLUDED.source_table_oid
+                   OR pgcontext._semantic_rerank_sources.source_key_attnum IS DISTINCT FROM
+                       EXCLUDED.source_key_attnum
+                   OR pgcontext._semantic_rerank_sources.source_key_type_oid IS DISTINCT FROM
+                       EXCLUDED.source_key_type_oid
+                   OR pgcontext._semantic_rerank_sources.source_key_collation_oid IS DISTINCT FROM
+                       EXCLUDED.source_key_collation_oid
+                   OR pgcontext._semantic_rerank_sources.text_column_name IS DISTINCT FROM
+                       EXCLUDED.text_column_name
+                   OR pgcontext._semantic_rerank_sources.text_attnum IS DISTINCT FROM
+                       EXCLUDED.text_attnum
+                   OR pgcontext._semantic_rerank_sources.text_type_oid IS DISTINCT FROM
+                       EXCLUDED.text_type_oid
+                   OR pgcontext._semantic_rerank_sources.text_collation_oid IS DISTINCT FROM
+                       EXCLUDED.text_collation_oid
+                   OR pgcontext._semantic_rerank_sources.source_version_column_name IS DISTINCT FROM
+                       EXCLUDED.source_version_column_name
+                   OR pgcontext._semantic_rerank_sources.source_version_attnum IS DISTINCT FROM
+                       EXCLUDED.source_version_attnum
+                   OR pgcontext._semantic_rerank_sources.source_version_type_oid IS DISTINCT FROM
+                       EXCLUDED.source_version_type_oid
+               THEN 1 ELSE 0 END,
            status = 'ready',
            updated_at = pg_catalog.now()
     RETURNING rerank_source_id INTO registered_id;
@@ -2412,6 +2439,7 @@ BEGIN
        SET source_table_oid = source_class.oid,
            source_key_attnum = key_attribute.attnum,
            source_key_type_oid = key_attribute.atttypid,
+           source_key_collation_oid = key_attribute.attcollation,
            source_key_type_schema = key_type_namespace.nspname,
            source_key_type_name = key_type.typname,
            text_attnum = text_attribute.attnum,
@@ -2423,6 +2451,7 @@ BEGIN
                CASE WHEN source_class.oid IS DISTINCT FROM registration.source_table_oid
                           OR key_attribute.attnum IS DISTINCT FROM registration.source_key_attnum
                           OR key_attribute.atttypid IS DISTINCT FROM registration.source_key_type_oid
+                          OR key_attribute.attcollation IS DISTINCT FROM registration.source_key_collation_oid
                           OR text_attribute.attnum IS DISTINCT FROM registration.text_attnum
                           OR text_attribute.atttypid IS DISTINCT FROM registration.text_type_oid
                           OR text_attribute.attcollation IS DISTINCT FROM registration.text_collation_oid
@@ -2882,6 +2911,2357 @@ AS 'MODULE_PATHNAME', 'hnsw_compact_segment_pair_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/permit.rs:65
+-- pgcontext::document_chunking::permit::_consume_document_chunk_permit
+CREATE  FUNCTION "_consume_document_chunk_permit"(
+	"operation" INT, /* i32 */
+	"identity_a" bigint, /* i64 */
+	"identity_b" bigint /* i64 */
+) RETURNS bool /* bool */
+STRICT 
+SET search_path TO pg_catalog, pgcontext
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'consume_document_chunk_permit_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/datum.rs:12
+-- pgcontext::document_chunking::datum::_document_chunk_raw_datum_bytes
+CREATE  FUNCTION "_document_chunk_raw_datum_bytes"(
+	"value" anyelement /* AnyElement */
+) RETURNS bigint /* i64 */
+STRICT 
+SET search_path TO pg_catalog, pgcontext
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'document_chunk_raw_datum_bytes_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:43
+-- pgcontext::document_chunking::_document_chunk_source_key_visible
+CREATE  FUNCTION "_document_chunk_source_key_visible"(
+	"document_source_id" bigint, /* i64 */
+	"source_key" TEXT /* String */
+) RETURNS bool /* bool */
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'document_chunk_source_key_visible_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking_catalog_schema.rs:9
+-- requires:
+--   document_chunk_source_key_visible
+--   create_semantic_rerank_catalog_tables
+
+
+CREATE TABLE pgcontext._chunking_profiles (
+    chunking_profile_id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    owner_role oid NOT NULL,
+    profile_name text NOT NULL CHECK (pg_catalog.octet_length(profile_name) BETWEEN 1 AND 128
+        AND pg_catalog.btrim(profile_name) <> '' AND profile_name !~ '[[:cntrl:]]'),
+    profile_revision bigint NOT NULL DEFAULT 1 CHECK (profile_revision > 0),
+    parser_revision text NOT NULL CHECK (
+        parser_revision IN ('plain_text_v1', 'markdown_v1', 'html_v1')),
+    tokenizer_revision text NOT NULL DEFAULT 'unicode_words_v1'
+        CHECK (tokenizer_revision = 'unicode_words_v1'),
+    target_tokens int4 NOT NULL CHECK (target_tokens BETWEEN 1 AND 512),
+    max_tokens int4 NOT NULL CHECK (max_tokens BETWEEN target_tokens AND 512),
+    min_tokens int4 NOT NULL CHECK (min_tokens BETWEEN 1 AND target_tokens),
+    overlap_tokens int4 NOT NULL CHECK (
+        overlap_tokens BETWEEN 0 AND 64 AND overlap_tokens < target_tokens),
+    max_document_bytes bigint NOT NULL CHECK (max_document_bytes BETWEEN 1 AND 8388608),
+    include_structure_context boolean NOT NULL DEFAULT false,
+    configuration_sha256 bytea NOT NULL CHECK (
+        pg_catalog.octet_length(configuration_sha256) = 32),
+    status text NOT NULL DEFAULT 'ready'
+        CHECK (status IN ('ready', 'retired')),
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    retired_at timestamptz,
+    UNIQUE (owner_role, profile_name),
+    CHECK ((status = 'retired') = (retired_at IS NOT NULL))
+);
+CREATE TABLE pgcontext._chunking_profile_aliases (
+    chunking_profile_alias_id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    owner_role oid NOT NULL,
+    alias_name text NOT NULL CHECK (pg_catalog.octet_length(alias_name) BETWEEN 1 AND 128
+        AND pg_catalog.btrim(alias_name) <> '' AND alias_name !~ '[[:cntrl:]]'),
+    chunking_profile_id bigint NOT NULL
+        REFERENCES pgcontext._chunking_profiles(chunking_profile_id),
+    shadow_chunking_profile_id bigint
+        REFERENCES pgcontext._chunking_profiles(chunking_profile_id),
+    alias_revision bigint NOT NULL DEFAULT 1 CHECK (alias_revision > 0),
+    status text NOT NULL DEFAULT 'ready' CHECK (status IN ('ready','retired')),
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    updated_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    UNIQUE (owner_role, alias_name)
+);
+CREATE TABLE pgcontext._chunking_profile_alias_history (
+    chunking_profile_alias_id bigint NOT NULL
+        REFERENCES pgcontext._chunking_profile_aliases(chunking_profile_alias_id)
+        ON DELETE CASCADE,
+    alias_revision bigint NOT NULL CHECK (alias_revision > 0),
+    chunking_profile_id bigint NOT NULL
+        REFERENCES pgcontext._chunking_profiles(chunking_profile_id),
+    promoted_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    PRIMARY KEY (chunking_profile_alias_id, alias_revision)
+);
+CREATE TABLE pgcontext._document_sources (
+    document_source_id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    collection_id bigint NOT NULL
+        REFERENCES pgcontext._collections(collection_id) ON DELETE CASCADE,
+    source_name text NOT NULL CHECK (pg_catalog.octet_length(source_name) BETWEEN 1 AND 128
+        AND pg_catalog.btrim(source_name) <> '' AND source_name !~ '[[:cntrl:]]'),
+    rerank_source_id bigint NOT NULL
+        REFERENCES pgcontext._semantic_rerank_sources(rerank_source_id) ON DELETE CASCADE,
+    rerank_registration_revision bigint NOT NULL CHECK (rerank_registration_revision > 0),
+    chunking_profile_alias_id bigint NOT NULL
+        REFERENCES pgcontext._chunking_profile_aliases(chunking_profile_alias_id),
+    projection_table_oid oid NOT NULL,
+    projection_schema_name text NOT NULL,
+    projection_table_name text NOT NULL,
+    projection_column_attnums int2[] NOT NULL CHECK (
+        pg_catalog.cardinality(projection_column_attnums) = 28),
+    projection_column_type_oids oid[] NOT NULL CHECK (
+        pg_catalog.cardinality(projection_column_type_oids) = 28),
+    projection_column_collation_oids oid[] NOT NULL CHECK (
+        pg_catalog.cardinality(projection_column_collation_oids) = 28),
+    registration_system_identifier bigint NOT NULL,
+    registration_database_oid oid NOT NULL,
+    registration_revision bigint NOT NULL DEFAULT 1 CHECK (registration_revision > 0),
+    status text NOT NULL DEFAULT 'ready'
+        CHECK (status IN ('ready', 'stale', 'retired', 'failed')),
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    updated_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    UNIQUE (collection_id, source_name)
+);
+CREATE TABLE pgcontext._document_chunk_generations (
+    generation_id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    document_source_id bigint NOT NULL
+        REFERENCES pgcontext._document_sources(document_source_id) ON DELETE CASCADE,
+    source_key text NOT NULL CHECK (pg_catalog.octet_length(source_key) BETWEEN 1 AND 1024),
+    source_version bigint NOT NULL CHECK (source_version > 0),
+    source_sha256 bytea NOT NULL CHECK (pg_catalog.octet_length(source_sha256) = 32),
+    chunking_profile_id bigint NOT NULL
+        REFERENCES pgcontext._chunking_profiles(chunking_profile_id),
+    source_registration_revision bigint NOT NULL CHECK (source_registration_revision > 0),
+    status text NOT NULL DEFAULT 'queued' CHECK (
+        status IN ('queued', 'leased', 'parsing', 'chunking', 'embedding',
+                   'validating', 'publishing', 'ready', 'cancel_requested',
+                   'cancelled', 'failed', 'superseded', 'retired')
+    ),
+    prior_generation_id bigint
+        REFERENCES pgcontext._document_chunk_generations(generation_id),
+    chunk_count int4,
+    token_count bigint,
+    staging_bytes bigint,
+    publication_sha256 bytea,
+    projection_sha256 bytea,
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    published_at timestamptz,
+    UNIQUE (document_source_id, source_key, source_version, chunking_profile_id,
+        source_registration_revision),
+    CHECK (publication_sha256 IS NULL OR pg_catalog.octet_length(publication_sha256) = 32),
+    CHECK (projection_sha256 IS NULL OR pg_catalog.octet_length(projection_sha256) = 32),
+    CHECK ((status IN ('ready', 'retired')) = (published_at IS NOT NULL))
+);
+CREATE TABLE pgcontext._document_chunk_jobs (
+    job_id bigint GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    generation_id bigint NOT NULL UNIQUE
+        REFERENCES pgcontext._document_chunk_generations(generation_id) ON DELETE CASCADE,
+    status text NOT NULL DEFAULT 'queued' CHECK (
+        status IN ('queued', 'leased', 'parsing', 'chunking', 'embedding',
+                   'validating', 'publishing', 'ready', 'cancel_requested',
+                   'cancelled', 'failed', 'superseded', 'retired')
+    ),
+    attempt int4 NOT NULL DEFAULT 0 CHECK (attempt BETWEEN 0 AND 3),
+    lease_worker text,
+    lease_token bigint NOT NULL DEFAULT 0 CHECK (lease_token >= 0),
+    lease_expires_at timestamptz,
+    processed_units bigint NOT NULL DEFAULT 0 CHECK (processed_units >= 0),
+    total_units bigint NOT NULL DEFAULT 1 CHECK (total_units > 0),
+    error_code text CHECK (error_code IS NULL OR (
+        pg_catalog.octet_length(error_code) BETWEEN 1 AND 64
+        AND error_code ~ '^[a-z0-9_]+$')),
+    created_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    updated_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    CHECK ((lease_worker IS NULL) = (lease_expires_at IS NULL))
+);
+CREATE TABLE pgcontext._document_chunk_staging (
+    job_id bigint PRIMARY KEY
+        REFERENCES pgcontext._document_chunk_jobs(job_id) ON DELETE CASCADE,
+    lease_token bigint NOT NULL CHECK (lease_token > 0),
+    response_json jsonb NOT NULL,
+    response_sha256 bytea NOT NULL CHECK (pg_catalog.octet_length(response_sha256) = 32),
+    chunk_count int4 NOT NULL CHECK (chunk_count BETWEEN 0 AND 16384),
+    token_count bigint NOT NULL CHECK (token_count >= 0),
+    staging_bytes bigint NOT NULL CHECK (staging_bytes BETWEEN 1 AND 33554432),
+    staged_at timestamptz NOT NULL DEFAULT pg_catalog.now()
+);
+CREATE TABLE pgcontext._current_document_chunk_generations (
+    document_source_id bigint NOT NULL
+        REFERENCES pgcontext._document_sources(document_source_id) ON DELETE CASCADE,
+    source_key text NOT NULL,
+    chunking_profile_id bigint NOT NULL
+        REFERENCES pgcontext._chunking_profiles(chunking_profile_id),
+    generation_id bigint NOT NULL
+        REFERENCES pgcontext._document_chunk_generations(generation_id),
+    publication_revision bigint NOT NULL DEFAULT 1 CHECK (publication_revision > 0),
+    updated_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    PRIMARY KEY (document_source_id, source_key, chunking_profile_id)
+);
+CREATE TABLE pgcontext._document_embedding_jobs (
+    generation_id bigint NOT NULL
+        REFERENCES pgcontext._document_chunk_generations(generation_id) ON DELETE CASCADE,
+    occurrence_id bigint NOT NULL CHECK (occurrence_id > 0),
+    content_hash bigint NOT NULL,
+    embedding_profile_id bigint NOT NULL DEFAULT 0 CHECK (embedding_profile_id >= 0),
+    status text NOT NULL DEFAULT 'ready' CHECK (status IN ('queued', 'ready', 'failed')),
+    fake_embedding jsonb NOT NULL CHECK (pg_catalog.jsonb_typeof(fake_embedding) = 'array'),
+    PRIMARY KEY (generation_id, occurrence_id, embedding_profile_id)
+);
+REVOKE ALL ON TABLE pgcontext._chunking_profiles FROM PUBLIC;
+REVOKE ALL ON TABLE pgcontext._chunking_profile_aliases FROM PUBLIC;
+REVOKE ALL ON TABLE pgcontext._chunking_profile_alias_history FROM PUBLIC;
+REVOKE ALL ON TABLE pgcontext._document_sources FROM PUBLIC;
+REVOKE ALL ON TABLE pgcontext._document_chunk_generations FROM PUBLIC;
+REVOKE ALL ON TABLE pgcontext._document_chunk_jobs FROM PUBLIC;
+REVOKE ALL ON TABLE pgcontext._document_chunk_staging FROM PUBLIC;
+REVOKE ALL ON TABLE pgcontext._current_document_chunk_generations FROM PUBLIC;
+REVOKE ALL ON TABLE pgcontext._document_embedding_jobs FROM PUBLIC;
+CREATE VIEW pgcontext._visible_chunking_profiles
+WITH (security_barrier = true) AS
+SELECT profiles.*
+  FROM pgcontext._chunking_profiles AS profiles
+ WHERE pg_catalog.pg_has_role(SESSION_USER, profiles.owner_role, 'MEMBER');
+CREATE VIEW pgcontext._visible_chunking_profile_aliases
+WITH (security_barrier = true) AS
+SELECT aliases.*
+  FROM pgcontext._chunking_profile_aliases AS aliases
+ WHERE pg_catalog.pg_has_role(SESSION_USER, aliases.owner_role, 'MEMBER');
+CREATE VIEW pgcontext._visible_document_sources
+WITH (security_barrier = true) AS
+SELECT sources.document_source_id, sources.collection_id, sources.source_name,
+       sources.rerank_source_id, sources.rerank_registration_revision,
+       aliases.chunking_profile_id, sources.chunking_profile_alias_id,
+       sources.projection_table_oid, sources.projection_schema_name,
+       sources.projection_table_name, sources.projection_column_attnums,
+       sources.projection_column_type_oids, sources.projection_column_collation_oids,
+       sources.registration_revision, sources.status, sources.created_at,
+       sources.updated_at
+  FROM pgcontext._document_sources AS sources
+  JOIN pgcontext._chunking_profile_aliases AS aliases USING (chunking_profile_alias_id)
+  JOIN pgcontext._collections AS collections USING (collection_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER');
+CREATE VIEW pgcontext._visible_document_chunk_generations
+WITH (security_barrier = true) AS
+SELECT generations.*
+  FROM pgcontext._document_chunk_generations AS generations
+ JOIN pgcontext._document_sources AS sources USING (document_source_id)
+ JOIN pgcontext._collections AS collections USING (collection_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+   AND pgcontext._document_chunk_source_key_visible(
+           generations.document_source_id, generations.source_key
+       );
+CREATE VIEW pgcontext._visible_document_chunk_jobs
+WITH (security_barrier = true) AS
+SELECT jobs.job_id, jobs.generation_id, jobs.status, jobs.attempt,
+       jobs.processed_units, jobs.total_units, jobs.error_code,
+       jobs.created_at, jobs.updated_at,
+       generations.document_source_id, generations.source_version,
+       generations.chunking_profile_id
+  FROM pgcontext._document_chunk_jobs AS jobs
+  JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+ JOIN pgcontext._document_sources AS sources USING (document_source_id)
+ JOIN pgcontext._collections AS collections USING (collection_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+   AND pgcontext._document_chunk_source_key_visible(
+           generations.document_source_id, generations.source_key
+       );
+CREATE VIEW pgcontext._visible_current_document_chunk_generations
+WITH (security_barrier = true) AS
+SELECT aliases.*, sources.collection_id, sources.source_name,
+       sources.projection_table_oid, sources.projection_schema_name,
+       sources.projection_table_name
+  FROM pgcontext._current_document_chunk_generations AS aliases
+ JOIN pgcontext._document_sources AS sources USING (document_source_id)
+ JOIN pgcontext._collections AS collections USING (collection_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+   AND pgcontext._document_chunk_source_key_visible(
+           aliases.document_source_id, aliases.source_key
+       );
+CREATE VIEW pgcontext._visible_document_chunk_staging
+WITH (security_barrier = true) AS
+SELECT staging.job_id, staging.chunk_count, staging.token_count,
+       staging.staging_bytes, staging.staged_at
+  FROM pgcontext._document_chunk_staging AS staging
+  JOIN pgcontext._document_chunk_jobs AS jobs USING (job_id)
+  JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+ JOIN pgcontext._document_sources AS sources USING (document_source_id)
+ JOIN pgcontext._collections AS collections USING (collection_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+   AND pgcontext._document_chunk_source_key_visible(
+           generations.document_source_id, generations.source_key
+       );
+CREATE VIEW pgcontext._visible_document_embedding_jobs
+WITH (security_barrier = true) AS
+SELECT embedding.*
+  FROM pgcontext._document_embedding_jobs AS embedding
+  JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+ JOIN pgcontext._document_sources AS sources USING (document_source_id)
+ JOIN pgcontext._collections AS collections USING (collection_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+   AND pgcontext._document_chunk_source_key_visible(
+           generations.document_source_id, generations.source_key
+       );
+GRANT SELECT ON pgcontext._visible_chunking_profiles,
+    pgcontext._visible_chunking_profile_aliases,
+    pgcontext._visible_document_sources,
+    pgcontext._visible_document_chunk_generations,
+    pgcontext._visible_document_chunk_jobs,
+    pgcontext._visible_current_document_chunk_generations,
+    pgcontext._visible_document_chunk_staging,
+    pgcontext._visible_document_embedding_jobs TO PUBLIC;
+CREATE FUNCTION pgcontext._register_document_source(
+    p_collection_id bigint,
+    p_source_name text,
+    p_rerank_source_id bigint,
+    p_chunking_profile_id bigint,
+    p_chunking_profile_alias_id bigint,
+    p_projection_table_oid oid,
+    p_projection_schema_name text,
+    p_projection_table_name text,
+    p_projection_column_attnums int2[],
+    p_projection_column_type_oids oid[],
+    p_projection_column_collation_oids bigint[]
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    source_id bigint;
+    rerank_revision bigint;
+    changed boolean;
+    projection_collation_oids oid[];
+    alias_profile_id bigint;
+    origin_system_identifier bigint;
+    origin_database_oid oid;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(
+        4, p_collection_id, p_rerank_source_id
+    );
+    PERFORM pgcontext._require_collection_owner(p_collection_id);
+    SELECT pg_catalog.array_agg(value::oid ORDER BY ordinal)
+      INTO projection_collation_oids
+      FROM pg_catalog.unnest(p_projection_column_collation_oids)
+           WITH ORDINALITY AS collations(value, ordinal);
+    SELECT system_identifier INTO origin_system_identifier
+      FROM pg_catalog.pg_control_system();
+    SELECT oid INTO origin_database_oid
+      FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database();
+    SELECT registration_revision INTO rerank_revision
+      FROM pgcontext._semantic_rerank_sources
+     WHERE rerank_source_id = p_rerank_source_id
+       AND collection_id = p_collection_id
+       AND status = 'ready';
+    IF rerank_revision IS NULL THEN
+        RAISE EXCEPTION 'semantic rerank source does not match the document collection'
+            USING ERRCODE = '42704';
+    END IF;
+    SELECT aliases.chunking_profile_id INTO alias_profile_id
+      FROM pgcontext._chunking_profile_aliases AS aliases
+      JOIN pgcontext._chunking_profiles AS profiles USING (chunking_profile_id)
+     WHERE aliases.chunking_profile_alias_id = p_chunking_profile_alias_id
+       AND aliases.status = 'ready' AND profiles.status = 'ready'
+       AND pg_catalog.pg_has_role(SESSION_USER, aliases.owner_role, 'MEMBER')
+     FOR SHARE OF aliases;
+    IF alias_profile_id IS DISTINCT FROM p_chunking_profile_id THEN
+        RAISE EXCEPTION 'chunking profile does not exist or is not ready'
+            USING ERRCODE = '42704';
+    END IF;
+    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+        p_collection_id::text || E'\x1fdocument\x1f' || p_source_name, 0
+    ));
+    PERFORM 1
+      FROM pgcontext._document_sources AS existing
+     WHERE existing.collection_id = p_collection_id
+       AND existing.source_name = p_source_name
+     FOR UPDATE;
+    SELECT EXISTS (
+        SELECT 1 FROM pgcontext._document_sources AS existing
+         WHERE existing.collection_id = p_collection_id
+           AND existing.source_name = p_source_name
+           AND (
+               existing.rerank_source_id IS DISTINCT FROM p_rerank_source_id
+               OR existing.rerank_registration_revision IS DISTINCT FROM rerank_revision
+               OR existing.chunking_profile_alias_id IS DISTINCT FROM p_chunking_profile_alias_id
+               OR existing.projection_table_oid IS DISTINCT FROM p_projection_table_oid
+               OR existing.projection_schema_name IS DISTINCT FROM p_projection_schema_name
+               OR existing.projection_table_name IS DISTINCT FROM p_projection_table_name
+               OR existing.projection_column_attnums IS DISTINCT FROM p_projection_column_attnums
+               OR existing.projection_column_type_oids IS DISTINCT FROM p_projection_column_type_oids
+               OR existing.projection_column_collation_oids IS DISTINCT FROM projection_collation_oids
+           )
+    ) INTO changed;
+    INSERT INTO pgcontext._document_sources (
+        collection_id, source_name, rerank_source_id, rerank_registration_revision,
+        chunking_profile_alias_id,
+        projection_table_oid, projection_schema_name, projection_table_name,
+        projection_column_attnums, projection_column_type_oids,
+        projection_column_collation_oids,
+        registration_system_identifier, registration_database_oid
+    ) VALUES (
+        p_collection_id, p_source_name, p_rerank_source_id, rerank_revision,
+        p_chunking_profile_alias_id,
+        p_projection_table_oid, p_projection_schema_name, p_projection_table_name,
+        p_projection_column_attnums, p_projection_column_type_oids,
+        projection_collation_oids, origin_system_identifier, origin_database_oid
+    )
+    ON CONFLICT (collection_id, source_name) DO UPDATE
+       SET rerank_source_id = EXCLUDED.rerank_source_id,
+           rerank_registration_revision = EXCLUDED.rerank_registration_revision,
+           chunking_profile_alias_id = EXCLUDED.chunking_profile_alias_id,
+           projection_table_oid = EXCLUDED.projection_table_oid,
+           projection_schema_name = EXCLUDED.projection_schema_name,
+           projection_table_name = EXCLUDED.projection_table_name,
+           projection_column_attnums = EXCLUDED.projection_column_attnums,
+           projection_column_type_oids = EXCLUDED.projection_column_type_oids,
+           projection_column_collation_oids = EXCLUDED.projection_column_collation_oids,
+           registration_system_identifier = EXCLUDED.registration_system_identifier,
+           registration_database_oid = EXCLUDED.registration_database_oid,
+           registration_revision = pgcontext._document_sources.registration_revision +
+               CASE WHEN changed THEN 1 ELSE 0 END,
+           status = 'ready', updated_at = pg_catalog.now()
+    RETURNING document_source_id INTO source_id;
+    IF changed THEN
+        PERFORM 1
+          FROM pgcontext._document_chunk_jobs AS jobs
+          JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+         WHERE generations.document_source_id = source_id
+         ORDER BY jobs.job_id FOR UPDATE OF jobs;
+        UPDATE pgcontext._document_chunk_generations
+           SET status = 'retired'
+         WHERE document_source_id = source_id AND status = 'ready';
+        UPDATE pgcontext._document_chunk_jobs AS jobs
+           SET status = CASE
+                   WHEN generations.status = 'retired' THEN 'retired'
+                   ELSE 'superseded'
+               END,
+               lease_worker = NULL, lease_expires_at = NULL,
+               updated_at = pg_catalog.now()
+          FROM pgcontext._document_chunk_generations AS generations
+         WHERE jobs.generation_id = generations.generation_id
+           AND generations.document_source_id = source_id
+           AND jobs.status NOT IN ('retired','superseded');
+        UPDATE pgcontext._document_chunk_generations
+           SET status = 'superseded'
+         WHERE document_source_id = source_id
+           AND status NOT IN ('ready','retired','superseded');
+        DELETE FROM pgcontext._document_chunk_staging AS staging
+         USING pgcontext._document_chunk_jobs AS jobs,
+               pgcontext._document_chunk_generations AS generations
+         WHERE staging.job_id = jobs.job_id AND jobs.generation_id = generations.generation_id
+           AND generations.document_source_id = source_id
+           AND generations.status = 'superseded';
+        DELETE FROM pgcontext._current_document_chunk_generations
+         WHERE document_source_id = source_id;
+    END IF;
+    RETURN source_id;
+END;
+$$;
+CREATE FUNCTION pgcontext._refresh_document_chunk_source(
+    p_collection_id bigint,
+    p_source_name text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    registration pgcontext._document_sources%ROWTYPE;
+    current_projection_oid oid;
+    current_projection_attnums int2[];
+    current_projection_type_oids oid[];
+    current_projection_collation_oids oid[];
+    current_rerank_revision bigint;
+    identity_changed boolean;
+    current_system_identifier bigint;
+    current_database_oid oid;
+    logical_restore boolean;
+BEGIN
+    PERFORM pgcontext._require_collection_owner(p_collection_id);
+    PERFORM pgcontext._refresh_semantic_rerank_source(p_collection_id, p_source_name);
+    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+        p_collection_id::text || E'\x1fdocument\x1f' || p_source_name, 0
+    ));
+    SELECT * INTO registration
+      FROM pgcontext._document_sources
+     WHERE collection_id = p_collection_id AND source_name = p_source_name
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    SELECT system_identifier INTO current_system_identifier
+      FROM pg_catalog.pg_control_system();
+    SELECT oid INTO current_database_oid
+      FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database();
+    logical_restore := registration.registration_system_identifier IS DISTINCT FROM
+            current_system_identifier
+        OR registration.registration_database_oid IS DISTINCT FROM current_database_oid;
+    SELECT rerank.registration_revision
+      INTO current_rerank_revision
+      FROM pgcontext._semantic_rerank_sources AS rerank
+     WHERE rerank.rerank_source_id = registration.rerank_source_id
+       AND rerank.collection_id = p_collection_id
+       AND rerank.status = 'ready';
+    SELECT relation.oid
+      INTO current_projection_oid
+      FROM pg_catalog.pg_namespace AS namespace
+      JOIN pg_catalog.pg_class AS relation ON relation.relnamespace = namespace.oid
+     WHERE namespace.nspname = registration.projection_schema_name
+       AND relation.relname = registration.projection_table_name
+       AND relation.relkind IN ('r', 'p');
+    IF current_projection_oid IS NOT NULL THEN
+        SELECT pg_catalog.array_agg(attribute.attnum ORDER BY required.ordinal),
+               pg_catalog.array_agg(attribute.atttypid ORDER BY required.ordinal),
+               pg_catalog.array_agg(attribute.attcollation ORDER BY required.ordinal)
+          INTO current_projection_attnums, current_projection_type_oids,
+               current_projection_collation_oids
+          FROM pg_catalog.unnest(ARRAY[
+              'document_source_id','source_key','source_version','source_sha256',
+              'profile_revision','generation_id','occurrence_id','ordinal',
+              'original_text','retrieval_text','start_byte','end_byte','start_char',
+              'end_char','token_count','structure_kind','structure_path',
+              'page_number','region',
+              'parent_occurrence_id','previous_occurrence_id','next_occurrence_id',
+              'content_hash','context_prefix','context_prefix_hash','fake_embedding',
+              'ready','provenance'
+          ]::text[]) WITH ORDINALITY AS required(column_name, ordinal)
+          LEFT JOIN pg_catalog.pg_attribute AS attribute
+            ON attribute.attrelid = current_projection_oid
+           AND attribute.attname = required.column_name
+           AND attribute.attnum > 0 AND NOT attribute.attisdropped;
+    END IF;
+    IF current_rerank_revision IS NULL OR current_projection_oid IS NULL
+       OR current_projection_attnums IS NULL
+       OR pg_catalog.cardinality(current_projection_attnums) <> 28
+       OR (NOT logical_restore AND (
+           current_projection_attnums IS DISTINCT FROM registration.projection_column_attnums
+           OR current_projection_type_oids IS DISTINCT FROM registration.projection_column_type_oids
+           OR current_projection_collation_oids IS DISTINCT FROM
+              registration.projection_column_collation_oids
+       )) THEN
+        UPDATE pgcontext._document_sources
+           SET status = 'stale', updated_at = pg_catalog.now()
+         WHERE document_source_id = registration.document_source_id;
+        RETURN;
+    END IF;
+    identity_changed := NOT logical_restore AND (
+        current_projection_oid IS DISTINCT FROM registration.projection_table_oid
+        OR current_rerank_revision IS DISTINCT FROM registration.rerank_registration_revision
+    );
+    UPDATE pgcontext._document_sources AS sources
+       SET projection_table_oid = current_projection_oid,
+           rerank_registration_revision = current_rerank_revision,
+           projection_column_attnums = CASE WHEN logical_restore
+               THEN current_projection_attnums ELSE sources.projection_column_attnums END,
+           projection_column_type_oids = CASE WHEN logical_restore
+               THEN current_projection_type_oids ELSE sources.projection_column_type_oids END,
+           projection_column_collation_oids = CASE WHEN logical_restore
+               THEN current_projection_collation_oids
+               ELSE sources.projection_column_collation_oids END,
+           registration_system_identifier = current_system_identifier,
+           registration_database_oid = current_database_oid,
+           registration_revision = sources.registration_revision +
+               CASE WHEN identity_changed THEN 1 ELSE 0 END,
+           status = 'ready', updated_at = pg_catalog.now()
+     WHERE sources.document_source_id = registration.document_source_id;
+    IF identity_changed THEN
+        PERFORM 1
+          FROM pgcontext._document_chunk_jobs AS jobs
+          JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+         WHERE generations.document_source_id = registration.document_source_id
+         ORDER BY jobs.job_id FOR UPDATE OF jobs;
+        UPDATE pgcontext._document_chunk_generations
+           SET status = CASE WHEN status = 'ready' THEN 'retired' ELSE 'superseded' END
+         WHERE document_source_id = registration.document_source_id
+           AND status NOT IN ('retired','superseded');
+        UPDATE pgcontext._document_chunk_jobs AS jobs
+           SET status = CASE
+                   WHEN generations.status = 'retired' THEN 'retired'
+                   ELSE 'superseded'
+               END,
+               lease_worker = NULL, lease_expires_at = NULL,
+               updated_at = pg_catalog.now()
+          FROM pgcontext._document_chunk_generations AS generations
+         WHERE jobs.generation_id = generations.generation_id
+           AND generations.document_source_id = registration.document_source_id
+           AND jobs.status NOT IN ('retired','superseded');
+        DELETE FROM pgcontext._document_chunk_staging AS staging
+         USING pgcontext._document_chunk_jobs AS jobs,
+               pgcontext._document_chunk_generations AS generations
+         WHERE staging.job_id = jobs.job_id
+           AND jobs.generation_id = generations.generation_id
+           AND generations.document_source_id = registration.document_source_id;
+        DELETE FROM pgcontext._current_document_chunk_generations
+         WHERE document_source_id = registration.document_source_id;
+    END IF;
+END;
+$$;
+CREATE FUNCTION pgcontext._enqueue_document_chunk_job(
+    p_document_source_id bigint,
+    p_source_key text,
+    p_source_version bigint,
+    p_source_sha256 bytea,
+    p_chunking_profile_id bigint
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    source_row pgcontext._document_sources%ROWTYPE;
+    v_generation_id bigint;
+    v_job_id bigint;
+    prior_id bigint;
+    current_profile_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(
+        11, p_document_source_id, p_source_version
+    );
+    SELECT * INTO source_row FROM pgcontext._document_sources
+     WHERE document_source_id = p_document_source_id AND status = 'ready'
+     FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'document source does not exist or is not ready'
+            USING ERRCODE = '42704';
+    END IF;
+    SELECT CASE
+               WHEN p_chunking_profile_id = aliases.chunking_profile_id
+                 OR p_chunking_profile_id = aliases.shadow_chunking_profile_id
+               THEN p_chunking_profile_id
+           END INTO current_profile_id
+      FROM pgcontext._chunking_profile_aliases AS aliases
+     WHERE aliases.chunking_profile_alias_id = source_row.chunking_profile_alias_id
+       AND aliases.status = 'ready'
+     FOR SHARE;
+    IF current_profile_id IS NULL THEN
+        RAISE EXCEPTION 'chunking profile alias is unavailable' USING ERRCODE = '42704';
+    END IF;
+    PERFORM pgcontext._require_collection_owner(source_row.collection_id);
+    SELECT aliases.generation_id INTO prior_id
+      FROM pgcontext._current_document_chunk_generations AS aliases
+     WHERE aliases.document_source_id = p_document_source_id
+       AND aliases.source_key = p_source_key
+       AND aliases.chunking_profile_id = current_profile_id;
+    PERFORM 1
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+     WHERE generations.document_source_id = p_document_source_id
+       AND generations.source_key = p_source_key
+       AND generations.chunking_profile_id = current_profile_id
+     ORDER BY jobs.job_id FOR UPDATE OF jobs;
+    UPDATE pgcontext._document_chunk_generations
+       SET status = 'superseded'
+     WHERE document_source_id = p_document_source_id
+       AND source_key = p_source_key
+       AND chunking_profile_id = current_profile_id
+       AND source_version < p_source_version
+       AND status NOT IN ('ready', 'retired', 'superseded');
+    UPDATE pgcontext._document_chunk_jobs AS jobs
+       SET status = 'superseded', lease_worker = NULL, lease_expires_at = NULL,
+           updated_at = pg_catalog.now()
+      FROM pgcontext._document_chunk_generations AS generations
+     WHERE jobs.generation_id = generations.generation_id
+       AND generations.document_source_id = p_document_source_id
+       AND generations.source_key = p_source_key
+       AND generations.chunking_profile_id = current_profile_id
+       AND generations.source_version < p_source_version
+       AND jobs.status NOT IN ('ready', 'retired', 'superseded');
+    INSERT INTO pgcontext._document_chunk_generations (
+        document_source_id, source_key, source_version, source_sha256,
+        chunking_profile_id, source_registration_revision, prior_generation_id
+    ) VALUES (
+        p_document_source_id, p_source_key, p_source_version, p_source_sha256,
+        current_profile_id, source_row.registration_revision, prior_id
+    )
+    ON CONFLICT (
+        document_source_id, source_key, source_version, chunking_profile_id,
+        source_registration_revision
+    )
+    DO UPDATE SET source_sha256 = pgcontext._document_chunk_generations.source_sha256
+      WHERE pgcontext._document_chunk_generations.source_sha256 = EXCLUDED.source_sha256
+        AND pgcontext._document_chunk_generations.source_registration_revision =
+            EXCLUDED.source_registration_revision
+    RETURNING pgcontext._document_chunk_generations.generation_id INTO v_generation_id;
+    IF v_generation_id IS NULL THEN
+        RAISE EXCEPTION 'document source version identity changed'
+            USING ERRCODE = '55000';
+    END IF;
+    INSERT INTO pgcontext._document_chunk_jobs (generation_id)
+    VALUES (v_generation_id)
+    ON CONFLICT (generation_id) DO UPDATE SET updated_at = pg_catalog.now()
+    RETURNING pgcontext._document_chunk_jobs.job_id INTO v_job_id;
+    RETURN v_job_id;
+END;
+$$;
+CREATE FUNCTION pgcontext._claim_document_chunk_jobs(
+    p_limit int4,
+    p_lease_millis int4,
+    p_worker_id text
+)
+RETURNS TABLE(job_id bigint, lease_token bigint)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(
+        12, p_limit::bigint, p_lease_millis::bigint
+    );
+    IF p_limit NOT BETWEEN 1 AND 256 OR p_lease_millis NOT BETWEEN 1 AND 60000
+       OR pg_catalog.octet_length(p_worker_id) NOT BETWEEN 1 AND 128
+       OR p_worker_id ~ '[[:cntrl:]]' THEN
+        RAISE EXCEPTION 'invalid document chunk claim bounds' USING ERRCODE = '22023';
+    END IF;
+    WITH exhausted_ids AS (
+        SELECT jobs.job_id
+          FROM pgcontext._document_chunk_jobs AS jobs
+          JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+          JOIN pgcontext._document_sources AS sources USING (document_source_id)
+          JOIN pgcontext._collections AS collections USING (collection_id)
+         WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+           AND (jobs.status = 'cancel_requested' OR jobs.attempt >= 3)
+           AND jobs.status IN (
+               'leased','parsing','chunking','embedding','validating','publishing',
+               'cancel_requested'
+           )
+           AND jobs.lease_expires_at <= pg_catalog.clock_timestamp()
+         ORDER BY jobs.updated_at, jobs.job_id
+         LIMIT p_limit
+         FOR UPDATE OF jobs SKIP LOCKED
+    ), exhausted AS (
+        UPDATE pgcontext._document_chunk_jobs AS jobs
+           SET status = CASE
+                   WHEN jobs.status = 'cancel_requested' THEN 'cancelled'
+                   ELSE 'failed'
+               END,
+               lease_worker = NULL, lease_expires_at = NULL,
+               error_code = CASE
+                   WHEN jobs.status = 'cancel_requested' THEN 'cancelled'
+                   ELSE 'attempts_exhausted'
+               END,
+               updated_at = pg_catalog.now()
+          FROM exhausted_ids
+         WHERE jobs.job_id = exhausted_ids.job_id
+        RETURNING jobs.job_id, jobs.generation_id, jobs.status
+    ), updated_generations AS (
+        UPDATE pgcontext._document_chunk_generations AS generations
+           SET status = exhausted.status
+          FROM exhausted
+         WHERE generations.generation_id = exhausted.generation_id
+        RETURNING exhausted.job_id
+    )
+    DELETE FROM pgcontext._document_chunk_staging AS staging
+     USING updated_generations
+    WHERE staging.job_id = updated_generations.job_id;
+    WITH mismatched_ids AS (
+        SELECT jobs.job_id
+          FROM pgcontext._document_chunk_jobs AS jobs
+          JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+          JOIN pgcontext._document_sources AS sources USING (document_source_id)
+          JOIN pgcontext._chunking_profile_aliases AS aliases
+            USING (chunking_profile_alias_id)
+          JOIN pgcontext._collections AS collections USING (collection_id)
+         WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+           AND generations.chunking_profile_id NOT IN (
+               aliases.chunking_profile_id,
+               COALESCE(aliases.shadow_chunking_profile_id, aliases.chunking_profile_id)
+           )
+           AND jobs.status NOT IN ('ready','retired','superseded','cancelled','failed')
+         ORDER BY jobs.updated_at, jobs.job_id
+         LIMIT p_limit
+         FOR SHARE OF aliases
+         FOR UPDATE OF jobs SKIP LOCKED
+    ), mismatched AS (
+        UPDATE pgcontext._document_chunk_jobs AS jobs
+           SET status = 'superseded', lease_worker = NULL, lease_expires_at = NULL,
+               updated_at = pg_catalog.now()
+          FROM mismatched_ids
+         WHERE jobs.job_id = mismatched_ids.job_id
+        RETURNING jobs.job_id, jobs.generation_id
+    ), superseded_generations AS (
+        UPDATE pgcontext._document_chunk_generations AS generations
+           SET status = 'superseded'
+          FROM mismatched
+         WHERE generations.generation_id = mismatched.generation_id
+        RETURNING mismatched.job_id
+    )
+    DELETE FROM pgcontext._document_chunk_staging AS staging
+     USING superseded_generations
+    WHERE staging.job_id = superseded_generations.job_id;
+    /* Cleanup is bounded by p_limit; later claims continue the work. */
+    RETURN QUERY
+    WITH candidates AS (
+        SELECT jobs.job_id
+          FROM pgcontext._document_chunk_jobs AS jobs
+          JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+          JOIN pgcontext._document_sources AS sources USING (document_source_id)
+          JOIN pgcontext._chunking_profile_aliases AS aliases
+            USING (chunking_profile_alias_id)
+          JOIN pgcontext._collections AS collections USING (collection_id)
+         WHERE pg_catalog.pg_has_role(SESSION_USER, collections.owner_role, 'MEMBER')
+           AND jobs.attempt < 3
+           AND generations.chunking_profile_id IN (
+               aliases.chunking_profile_id,
+               COALESCE(aliases.shadow_chunking_profile_id, aliases.chunking_profile_id)
+           )
+           AND (
+               jobs.status = 'queued'
+               OR (jobs.status IN ('leased','parsing','chunking','embedding','validating','publishing')
+                   AND jobs.lease_expires_at <= pg_catalog.clock_timestamp())
+           )
+         ORDER BY jobs.updated_at, jobs.job_id
+         LIMIT p_limit
+         FOR SHARE OF sources, aliases
+         FOR UPDATE OF jobs SKIP LOCKED
+    ), claimed AS (
+        UPDATE pgcontext._document_chunk_jobs AS jobs
+           SET status = 'leased',
+               attempt = jobs.attempt + 1,
+               lease_worker = p_worker_id,
+               lease_token = jobs.lease_token + 1,
+               lease_expires_at = pg_catalog.clock_timestamp()
+                   + pg_catalog.make_interval(secs => p_lease_millis::double precision / 1000.0),
+               processed_units = 0,
+               error_code = NULL,
+               updated_at = pg_catalog.now()
+          FROM candidates
+         WHERE jobs.job_id = candidates.job_id
+        RETURNING jobs.job_id, jobs.lease_token
+    ), reset_generations AS (
+        UPDATE pgcontext._document_chunk_generations AS generations
+           SET status = 'leased'
+          FROM pgcontext._document_chunk_jobs AS jobs, claimed
+         WHERE jobs.job_id = claimed.job_id
+           AND generations.generation_id = jobs.generation_id
+        RETURNING claimed.job_id, claimed.lease_token
+    )
+    SELECT reset_generations.job_id, reset_generations.lease_token
+      FROM reset_generations ORDER BY reset_generations.job_id;
+END;
+$$;
+CREATE FUNCTION pgcontext._stage_document_chunk_response(
+    p_job_id bigint,
+    p_lease_token bigint,
+    p_response_json jsonb,
+    p_response_sha256 bytea,
+    p_chunk_count int4,
+    p_token_count bigint,
+    p_staging_bytes bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    job_row pgcontext._document_chunk_jobs%ROWTYPE;
+    collection_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(
+        1, p_job_id, p_lease_token
+    );
+    SELECT sources.collection_id INTO collection_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id
+     FOR SHARE OF sources;
+    SELECT * INTO job_row FROM pgcontext._document_chunk_jobs WHERE job_id = p_job_id FOR UPDATE;
+    IF NOT FOUND OR job_row.lease_token <> p_lease_token
+       OR job_row.lease_expires_at <= pg_catalog.clock_timestamp()
+       OR job_row.status IN ('cancel_requested','cancelled','failed','superseded','retired','ready') THEN
+        RAISE EXCEPTION 'stale document chunk job lease' USING ERRCODE = '40001';
+    END IF;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    INSERT INTO pgcontext._document_chunk_staging (
+        job_id, lease_token, response_json, response_sha256,
+        chunk_count, token_count, staging_bytes
+    ) VALUES (
+        p_job_id, p_lease_token, p_response_json, p_response_sha256,
+        p_chunk_count, p_token_count, p_staging_bytes
+    )
+    ON CONFLICT (job_id) DO UPDATE
+       SET lease_token = EXCLUDED.lease_token,
+           response_json = EXCLUDED.response_json,
+           response_sha256 = EXCLUDED.response_sha256,
+           chunk_count = EXCLUDED.chunk_count,
+           token_count = EXCLUDED.token_count,
+           staging_bytes = EXCLUDED.staging_bytes,
+           staged_at = pg_catalog.now();
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = 'validating', processed_units = total_units, updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id;
+    UPDATE pgcontext._document_chunk_generations AS generations
+       SET status = 'validating'
+      FROM pgcontext._document_chunk_jobs AS jobs
+     WHERE jobs.job_id = p_job_id AND generations.generation_id = jobs.generation_id;
+END;
+$$;
+CREATE FUNCTION pgcontext._complete_document_chunk_publication(
+    p_job_id bigint,
+    p_lease_token bigint,
+    p_response_sha256 bytea,
+    p_projection_sha256 bytea,
+    p_chunk_count int4,
+    p_token_count bigint,
+    p_staging_bytes bigint
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    job_row pgcontext._document_chunk_jobs%ROWTYPE;
+    generation_row pgcontext._document_chunk_generations%ROWTYPE;
+    source_row pgcontext._document_sources%ROWTYPE;
+    embedding_count bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(
+        2, p_job_id, p_lease_token
+    );
+    SELECT sources.* INTO source_row
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id
+     FOR SHARE OF sources;
+    SELECT * INTO job_row FROM pgcontext._document_chunk_jobs
+     WHERE job_id = p_job_id FOR UPDATE;
+    IF FOUND AND job_row.lease_token = p_lease_token AND job_row.status = 'ready' THEN
+        SELECT * INTO generation_row FROM pgcontext._document_chunk_generations
+         WHERE generation_id = job_row.generation_id FOR UPDATE;
+        IF generation_row.status = 'ready'
+           AND generation_row.publication_sha256 = p_response_sha256
+           AND generation_row.projection_sha256 = p_projection_sha256
+           AND generation_row.chunk_count = p_chunk_count
+           AND generation_row.token_count = p_token_count
+           AND generation_row.staging_bytes = p_staging_bytes THEN
+            RETURN generation_row.generation_id;
+        END IF;
+        RAISE EXCEPTION 'document chunk publication replay differs from ready generation'
+            USING ERRCODE = '55000';
+    END IF;
+    IF NOT FOUND OR job_row.lease_token <> p_lease_token
+       OR job_row.lease_expires_at <= pg_catalog.clock_timestamp()
+       OR job_row.status NOT IN ('validating','publishing') THEN
+        RAISE EXCEPTION 'stale document chunk job lease' USING ERRCODE = '40001';
+    END IF;
+    SELECT * INTO generation_row FROM pgcontext._document_chunk_generations
+     WHERE generation_id = job_row.generation_id FOR UPDATE;
+    PERFORM pgcontext._require_collection_owner(source_row.collection_id);
+    IF source_row.registration_revision <> generation_row.source_registration_revision
+       OR source_row.status <> 'ready' THEN
+        RAISE EXCEPTION 'document source registration changed during chunking'
+            USING ERRCODE = '55000';
+    END IF;
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = 'publishing', updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id;
+    UPDATE pgcontext._document_chunk_generations
+       SET status = 'publishing'
+     WHERE generation_id = generation_row.generation_id;
+    INSERT INTO pgcontext._document_embedding_jobs (
+        generation_id, occurrence_id, content_hash, embedding_profile_id,
+        status, fake_embedding
+    )
+    SELECT generation_row.generation_id, chunk.occurrence_id,
+           chunk.content_hash, 0, 'ready',
+           pg_catalog.jsonb_build_array(
+               ((chunk.content_hash & 65535)::double precision / 65535.0),
+               (((chunk.content_hash >> 16) & 65535)::double precision / 65535.0),
+               (((chunk.content_hash >> 32) & 65535)::double precision / 65535.0)
+           )
+      FROM pgcontext._document_chunk_staging AS staging,
+           pg_catalog.jsonb_to_recordset(staging.response_json->'chunks') AS chunk(
+               occurrence_id bigint, content_hash bigint
+           )
+     WHERE staging.job_id = p_job_id AND staging.lease_token = p_lease_token
+    ON CONFLICT (generation_id, occurrence_id, embedding_profile_id) DO UPDATE
+       SET status = 'ready', fake_embedding = EXCLUDED.fake_embedding
+     WHERE pgcontext._document_embedding_jobs.content_hash = EXCLUDED.content_hash;
+    GET DIAGNOSTICS embedding_count = ROW_COUNT;
+    IF embedding_count <> p_chunk_count THEN
+        RAISE EXCEPTION 'document embedding generation is incomplete'
+            USING ERRCODE = '55000';
+    END IF;
+    INSERT INTO pgcontext._current_document_chunk_generations (
+        document_source_id, source_key, chunking_profile_id, generation_id
+    ) VALUES (
+        generation_row.document_source_id, generation_row.source_key,
+        generation_row.chunking_profile_id, generation_row.generation_id
+    )
+    ON CONFLICT (document_source_id, source_key, chunking_profile_id) DO UPDATE
+       SET generation_id = EXCLUDED.generation_id,
+           publication_revision =
+               pgcontext._current_document_chunk_generations.publication_revision + 1,
+           updated_at = pg_catalog.now();
+    UPDATE pgcontext._document_chunk_generations
+       SET status = 'retired'
+     WHERE generation_id = generation_row.prior_generation_id
+       AND status = 'ready';
+    UPDATE pgcontext._document_chunk_jobs AS jobs
+       SET status = 'retired', updated_at = pg_catalog.now()
+      FROM pgcontext._document_chunk_generations AS generations
+     WHERE jobs.generation_id = generations.generation_id
+       AND generations.generation_id = generation_row.prior_generation_id
+       AND generations.status = 'retired';
+    UPDATE pgcontext._document_chunk_generations
+       SET status = 'ready', chunk_count = p_chunk_count,
+           token_count = p_token_count, staging_bytes = p_staging_bytes,
+           publication_sha256 = p_response_sha256,
+           projection_sha256 = p_projection_sha256,
+           published_at = pg_catalog.now()
+     WHERE generation_id = generation_row.generation_id;
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = 'ready', lease_worker = NULL, lease_expires_at = NULL,
+           updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id;
+    DELETE FROM pgcontext._document_chunk_staging WHERE job_id = p_job_id;
+    RETURN generation_row.generation_id;
+END;
+$$;
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking_rollback_schema.rs:3
+-- requires:
+--   create_document_chunking_catalog_tables
+
+
+CREATE FUNCTION pgcontext._rollback_document_chunk_generation(
+    p_document_source_id bigint,
+    p_source_key text,
+    p_generation_id bigint
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    source_row record;
+    target_row pgcontext._document_chunk_generations%ROWTYPE;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(
+        6, p_document_source_id, p_generation_id
+    );
+    SELECT sources.*, aliases.chunking_profile_id AS current_profile_id
+      INTO source_row
+      FROM pgcontext._document_sources AS sources
+      JOIN pgcontext._chunking_profile_aliases AS aliases
+        USING (chunking_profile_alias_id)
+     WHERE sources.document_source_id = p_document_source_id
+       AND sources.status = 'ready' AND aliases.status = 'ready'
+     FOR SHARE OF sources, aliases;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'document source does not exist or is not ready'
+            USING ERRCODE = '42704';
+    END IF;
+    PERFORM pgcontext._require_collection_owner(source_row.collection_id);
+    PERFORM 1
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+     WHERE generations.document_source_id = p_document_source_id
+       AND generations.source_key = p_source_key
+     ORDER BY jobs.job_id FOR UPDATE OF jobs;
+    SELECT * INTO target_row FROM pgcontext._document_chunk_generations
+     WHERE generation_id = p_generation_id
+       AND document_source_id = p_document_source_id
+       AND source_key = p_source_key
+       AND chunking_profile_id = source_row.current_profile_id
+       AND published_at IS NOT NULL
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'document chunk rollback generation is unavailable'
+            USING ERRCODE = '42704';
+    END IF;
+    UPDATE pgcontext._document_chunk_generations AS generations
+       SET status = 'retired'
+     WHERE generations.generation_id IN (
+        SELECT aliases.generation_id
+          FROM pgcontext._current_document_chunk_generations AS aliases
+         WHERE aliases.document_source_id = p_document_source_id
+           AND aliases.source_key = p_source_key
+           AND aliases.chunking_profile_id = target_row.chunking_profile_id
+     )
+       AND generations.generation_id <> p_generation_id
+       AND generations.status = 'ready';
+    UPDATE pgcontext._document_chunk_jobs AS jobs
+       SET status = 'retired', updated_at = pg_catalog.now()
+      FROM pgcontext._document_chunk_generations AS generations
+     WHERE jobs.generation_id = generations.generation_id
+       AND generations.document_source_id = p_document_source_id
+       AND generations.source_key = p_source_key
+       AND generations.chunking_profile_id = target_row.chunking_profile_id
+       AND generations.status = 'retired'
+       AND generations.generation_id <> p_generation_id;
+    UPDATE pgcontext._document_chunk_generations
+       SET status = 'ready' WHERE generation_id = p_generation_id;
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = 'ready', updated_at = pg_catalog.now()
+     WHERE generation_id = p_generation_id;
+    INSERT INTO pgcontext._current_document_chunk_generations (
+        document_source_id, source_key, chunking_profile_id, generation_id
+    ) VALUES (
+        p_document_source_id, p_source_key, target_row.chunking_profile_id,
+        p_generation_id
+    )
+    ON CONFLICT (document_source_id, source_key, chunking_profile_id) DO UPDATE
+       SET generation_id = EXCLUDED.generation_id,
+           publication_revision =
+               pgcontext._current_document_chunk_generations.publication_revision + 1,
+           updated_at = pg_catalog.clock_timestamp();
+    RETURN p_generation_id;
+END;
+$$;
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking_dump_schema.rs:3
+-- requires:
+--   create_document_chunking_catalog_tables
+
+
+CREATE INDEX _document_chunk_jobs_claimable_idx
+    ON pgcontext._document_chunk_jobs (updated_at, job_id)
+    WHERE status IN (
+        'queued','leased','parsing','chunking','embedding','validating',
+        'publishing','cancel_requested'
+    );
+CREATE INDEX _document_chunk_generations_lifecycle_idx
+    ON pgcontext._document_chunk_generations (
+        document_source_id, source_key, chunking_profile_id, status, generation_id
+    );
+SELECT pg_catalog.pg_extension_config_dump('pgcontext._chunking_profiles', '');
+SELECT pg_catalog.pg_extension_config_dump('pgcontext._chunking_profiles_chunking_profile_id_seq', '');
+SELECT pg_catalog.pg_extension_config_dump('pgcontext._chunking_profile_aliases', '');
+SELECT pg_catalog.pg_extension_config_dump('pgcontext._chunking_profile_aliases_chunking_profile_alias_id_seq', '');
+SELECT pg_catalog.pg_extension_config_dump('pgcontext._chunking_profile_alias_history', '');
+SELECT pg_catalog.pg_extension_config_dump('pgcontext._document_sources', '');
+SELECT pg_catalog.pg_extension_config_dump('pgcontext._document_sources_document_source_id_seq', '');
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking_profile_state_schema.rs:3
+-- requires:
+--   create_document_chunking_catalog_tables
+
+
+CREATE TABLE pgcontext._chunking_profile_alias_retained (
+    chunking_profile_alias_id bigint NOT NULL
+        REFERENCES pgcontext._chunking_profile_aliases(chunking_profile_alias_id)
+        ON DELETE CASCADE,
+    chunking_profile_id bigint NOT NULL
+        REFERENCES pgcontext._chunking_profiles(chunking_profile_id),
+    retained_revision bigint NOT NULL CHECK (retained_revision > 0),
+    retained_at timestamptz NOT NULL DEFAULT pg_catalog.now(),
+    PRIMARY KEY (chunking_profile_alias_id, chunking_profile_id)
+);
+REVOKE ALL ON TABLE pgcontext._chunking_profile_alias_retained FROM PUBLIC;
+CREATE VIEW pgcontext._visible_chunking_profile_alias_retained
+WITH (security_barrier = true) AS
+SELECT retained.*
+  FROM pgcontext._chunking_profile_alias_retained AS retained
+  JOIN pgcontext._chunking_profile_aliases AS aliases USING (chunking_profile_alias_id)
+ WHERE pg_catalog.pg_has_role(SESSION_USER, aliases.owner_role, 'MEMBER');
+GRANT SELECT ON pgcontext._visible_chunking_profile_alias_retained TO PUBLIC;
+SELECT pg_catalog.pg_extension_config_dump(
+    'pgcontext._chunking_profile_alias_retained', ''
+);
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking_profile_schema.rs:3
+-- requires:
+--   create_document_chunking_profile_state
+
+
+CREATE FUNCTION pgcontext._register_chunking_profile(
+    p_profile_name text,
+    p_parser_revision text,
+    p_target_tokens int4,
+    p_max_tokens int4,
+    p_min_tokens int4,
+    p_overlap_tokens int4,
+    p_max_document_bytes bigint,
+    p_include_structure_context boolean,
+    p_configuration_sha256 bytea
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    existing pgcontext._chunking_profiles%ROWTYPE;
+    profile_id bigint;
+    alias_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(3, 0, 0);
+    PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+        SESSION_USER::text || E'\x1fprofile\x1f' || p_profile_name, 0
+    ));
+    SELECT * INTO existing
+      FROM pgcontext._chunking_profiles
+     WHERE owner_role = SESSION_USER::pg_catalog.regrole::oid
+       AND profile_name = p_profile_name;
+    IF FOUND THEN
+        IF existing.parser_revision = p_parser_revision
+           AND existing.target_tokens = p_target_tokens
+           AND existing.max_tokens = p_max_tokens
+           AND existing.min_tokens = p_min_tokens
+           AND existing.overlap_tokens = p_overlap_tokens
+           AND existing.max_document_bytes = p_max_document_bytes
+           AND existing.include_structure_context = p_include_structure_context
+           AND existing.configuration_sha256 = p_configuration_sha256
+           AND existing.status = 'ready' THEN
+            profile_id := existing.chunking_profile_id;
+        ELSE
+            RAISE EXCEPTION 'chunking profile name already identifies a different immutable contract'
+                USING ERRCODE = '42710';
+        END IF;
+    ELSE
+        INSERT INTO pgcontext._chunking_profiles (
+            owner_role, profile_name, parser_revision, target_tokens, max_tokens,
+            min_tokens, overlap_tokens, max_document_bytes,
+            include_structure_context, configuration_sha256
+        ) VALUES (
+            SESSION_USER::pg_catalog.regrole::oid, p_profile_name, p_parser_revision,
+            p_target_tokens, p_max_tokens, p_min_tokens, p_overlap_tokens,
+            p_max_document_bytes, p_include_structure_context, p_configuration_sha256
+        ) RETURNING chunking_profile_id INTO profile_id;
+        UPDATE pgcontext._chunking_profiles
+           SET profile_revision = profile_id
+         WHERE chunking_profile_id = profile_id;
+    END IF;
+    INSERT INTO pgcontext._chunking_profile_aliases (
+        owner_role, alias_name, chunking_profile_id
+    ) VALUES (
+        SESSION_USER::pg_catalog.regrole::oid, p_profile_name, profile_id
+    )
+    ON CONFLICT (owner_role, alias_name) DO NOTHING
+    RETURNING chunking_profile_alias_id INTO alias_id;
+    IF alias_id IS NULL THEN
+        SELECT aliases.chunking_profile_alias_id INTO alias_id
+          FROM pgcontext._chunking_profile_aliases AS aliases
+         WHERE aliases.owner_role = SESSION_USER::pg_catalog.regrole::oid
+           AND aliases.alias_name = p_profile_name;
+    END IF;
+    INSERT INTO pgcontext._chunking_profile_alias_history (
+        chunking_profile_alias_id, alias_revision, chunking_profile_id
+    ) VALUES (alias_id, 1, profile_id)
+    ON CONFLICT DO NOTHING;
+    RETURN profile_id;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._promote_chunking_profile_alias(
+    p_alias_id bigint,
+    p_profile_id bigint
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    alias_row pgcontext._chunking_profile_aliases%ROWTYPE;
+    next_revision bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(20, p_alias_id, p_profile_id);
+    SELECT * INTO alias_row FROM pgcontext._chunking_profile_aliases
+     WHERE chunking_profile_alias_id = p_alias_id FOR UPDATE;
+    IF NOT FOUND OR NOT pg_catalog.pg_has_role(SESSION_USER, alias_row.owner_role, 'MEMBER')
+       OR NOT EXISTS (
+           SELECT 1 FROM pgcontext._chunking_profiles AS profiles
+            WHERE profiles.chunking_profile_id = p_profile_id
+              AND profiles.status = 'ready'
+              AND pg_catalog.pg_has_role(SESSION_USER, profiles.owner_role, 'MEMBER')
+       ) THEN
+        RAISE EXCEPTION 'chunking profile alias or target is unavailable'
+            USING ERRCODE = '42704';
+    END IF;
+    IF alias_row.chunking_profile_id = p_profile_id THEN
+        RETURN alias_row.alias_revision;
+    END IF;
+    IF alias_row.shadow_chunking_profile_id IS DISTINCT FROM p_profile_id THEN
+        RAISE EXCEPTION 'chunking profile target is not prepared as shadow'
+            USING ERRCODE = '55000';
+    END IF;
+    next_revision := alias_row.alias_revision + 1;
+    IF NOT EXISTS (
+           SELECT 1 FROM pgcontext._chunking_profile_alias_retained
+            WHERE chunking_profile_alias_id = p_alias_id
+              AND chunking_profile_id = alias_row.chunking_profile_id
+       ) AND (SELECT pg_catalog.count(*)
+                FROM pgcontext._chunking_profile_alias_retained
+               WHERE chunking_profile_alias_id = p_alias_id
+                 AND chunking_profile_id <> p_profile_id) >= 8 THEN
+        RAISE EXCEPTION 'chunking profile alias retained-profile limit reached'
+            USING ERRCODE = '54000';
+    END IF;
+    INSERT INTO pgcontext._chunking_profile_alias_retained (
+        chunking_profile_alias_id, chunking_profile_id, retained_revision
+    ) VALUES (p_alias_id, alias_row.chunking_profile_id, next_revision)
+    ON CONFLICT (chunking_profile_alias_id, chunking_profile_id) DO UPDATE
+       SET retained_revision = EXCLUDED.retained_revision,
+           retained_at = pg_catalog.now();
+    DELETE FROM pgcontext._chunking_profile_alias_retained
+     WHERE chunking_profile_alias_id = p_alias_id
+       AND chunking_profile_id = p_profile_id;
+    UPDATE pgcontext._chunking_profile_aliases
+       SET chunking_profile_id = p_profile_id,
+           shadow_chunking_profile_id = NULL,
+           alias_revision = next_revision,
+           updated_at = pg_catalog.now()
+     WHERE chunking_profile_alias_id = p_alias_id;
+    INSERT INTO pgcontext._chunking_profile_alias_history (
+        chunking_profile_alias_id, alias_revision, chunking_profile_id
+    ) VALUES (p_alias_id, next_revision, p_profile_id);
+    RETURN next_revision;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._rollback_chunking_profile_alias(p_alias_id bigint)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    alias_row pgcontext._chunking_profile_aliases%ROWTYPE;
+    target_profile_id bigint;
+    next_revision bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(21, p_alias_id, 0);
+    SELECT * INTO alias_row FROM pgcontext._chunking_profile_aliases
+     WHERE chunking_profile_alias_id = p_alias_id FOR UPDATE;
+    IF NOT FOUND OR NOT pg_catalog.pg_has_role(SESSION_USER, alias_row.owner_role, 'MEMBER') THEN
+        RAISE EXCEPTION 'chunking profile alias is unavailable' USING ERRCODE = '42704';
+    END IF;
+    SELECT retained.chunking_profile_id INTO target_profile_id
+      FROM pgcontext._chunking_profile_alias_retained AS retained
+     WHERE retained.chunking_profile_alias_id = p_alias_id
+     ORDER BY retained.retained_revision DESC LIMIT 1;
+    IF target_profile_id IS NULL THEN
+        RAISE EXCEPTION 'chunking profile alias has no rollback target'
+            USING ERRCODE = '55000';
+    END IF;
+    next_revision := alias_row.alias_revision + 1;
+    INSERT INTO pgcontext._chunking_profile_alias_retained (
+        chunking_profile_alias_id, chunking_profile_id, retained_revision
+    ) VALUES (p_alias_id, alias_row.chunking_profile_id, next_revision)
+    ON CONFLICT (chunking_profile_alias_id, chunking_profile_id) DO UPDATE
+       SET retained_revision = EXCLUDED.retained_revision,
+           retained_at = pg_catalog.now();
+    DELETE FROM pgcontext._chunking_profile_alias_retained
+     WHERE chunking_profile_alias_id = p_alias_id
+       AND chunking_profile_id = target_profile_id;
+    UPDATE pgcontext._chunking_profile_aliases
+       SET chunking_profile_id = target_profile_id,
+           shadow_chunking_profile_id = NULL,
+           alias_revision = next_revision,
+           updated_at = pg_catalog.now()
+     WHERE chunking_profile_alias_id = p_alias_id;
+    INSERT INTO pgcontext._chunking_profile_alias_history (
+        chunking_profile_alias_id, alias_revision, chunking_profile_id
+    ) VALUES (p_alias_id, next_revision, target_profile_id);
+    RETURN next_revision;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._prepare_chunking_profile_alias(
+    p_alias_id bigint,
+    p_profile_id bigint
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE alias_row pgcontext._chunking_profile_aliases%ROWTYPE;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(22, p_alias_id, p_profile_id);
+    SELECT * INTO alias_row FROM pgcontext._chunking_profile_aliases
+     WHERE chunking_profile_alias_id = p_alias_id FOR UPDATE;
+    IF NOT FOUND OR NOT pg_catalog.pg_has_role(SESSION_USER, alias_row.owner_role, 'MEMBER')
+       OR NOT EXISTS (
+           SELECT 1 FROM pgcontext._chunking_profiles AS profiles
+            WHERE profiles.chunking_profile_id = p_profile_id
+              AND profiles.owner_role = alias_row.owner_role
+              AND profiles.status = 'ready'
+       ) THEN
+        RAISE EXCEPTION 'chunking profile alias or shadow target is unavailable'
+            USING ERRCODE = '42704';
+    END IF;
+    IF p_profile_id = alias_row.chunking_profile_id THEN
+        RAISE EXCEPTION 'chunking profile shadow must differ from current target'
+            USING ERRCODE = '22023';
+    END IF;
+    UPDATE pgcontext._chunking_profile_aliases
+       SET shadow_chunking_profile_id = p_profile_id, updated_at = pg_catalog.now()
+     WHERE chunking_profile_alias_id = p_alias_id;
+    RETURN alias_row.alias_revision;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._drain_chunking_profile_alias(
+    p_alias_id bigint,
+    p_profile_id bigint
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE alias_row pgcontext._chunking_profile_aliases%ROWTYPE;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(23, p_alias_id, p_profile_id);
+    SELECT * INTO alias_row FROM pgcontext._chunking_profile_aliases
+     WHERE chunking_profile_alias_id = p_alias_id FOR UPDATE;
+    IF NOT FOUND OR NOT pg_catalog.pg_has_role(SESSION_USER, alias_row.owner_role, 'MEMBER') THEN
+        RAISE EXCEPTION 'chunking profile alias is unavailable' USING ERRCODE = '42704';
+    END IF;
+    IF p_profile_id IN (
+        alias_row.chunking_profile_id,
+        COALESCE(alias_row.shadow_chunking_profile_id, alias_row.chunking_profile_id)
+    ) THEN
+        RAISE EXCEPTION 'current or prepared chunking profile cannot be drained'
+            USING ERRCODE = '55000';
+    END IF;
+    DELETE FROM pgcontext._chunking_profile_alias_retained
+     WHERE chunking_profile_alias_id = p_alias_id
+       AND chunking_profile_id = p_profile_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'chunking profile is not retained by this alias'
+            USING ERRCODE = '55000';
+    END IF;
+    RETURN true;
+END;
+$$;
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking_lifecycle_schema.rs:3
+-- requires:
+--   create_document_chunking_catalog_tables
+--   create_document_chunking_profile_state
+
+
+CREATE FUNCTION pgcontext._load_document_chunk_staging(
+    p_job_id bigint, p_lease_token bigint
+)
+RETURNS TABLE(
+    response_json jsonb, response_sha256 bytea, chunk_count int4,
+    token_count bigint, staging_bytes bigint
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(5, p_job_id, p_lease_token);
+    SELECT sources.collection_id INTO collection_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id AND jobs.lease_token = p_lease_token;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    RETURN QUERY
+    SELECT staging.response_json, staging.response_sha256, staging.chunk_count,
+           staging.token_count, staging.staging_bytes
+      FROM pgcontext._document_chunk_staging AS staging
+     WHERE staging.job_id = p_job_id AND staging.lease_token = p_lease_token;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._invalidate_document_chunk_aliases(
+    p_document_source_id bigint, p_source_keys text[]
+)
+RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint; deleted bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(
+        17, p_document_source_id, pg_catalog.cardinality(p_source_keys)
+    );
+    SELECT sources.collection_id INTO collection_id FROM pgcontext._document_sources AS sources
+     WHERE sources.document_source_id = p_document_source_id FOR SHARE;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    PERFORM 1
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+     WHERE generations.document_source_id = p_document_source_id
+       AND generations.source_key = ANY(p_source_keys)
+     ORDER BY jobs.job_id FOR UPDATE OF jobs;
+    UPDATE pgcontext._document_chunk_generations AS generations SET status = 'retired'
+     WHERE generations.generation_id IN (
+        SELECT aliases.generation_id FROM pgcontext._current_document_chunk_generations AS aliases
+         WHERE aliases.document_source_id = p_document_source_id
+           AND aliases.source_key = ANY(p_source_keys));
+    GET DIAGNOSTICS deleted = ROW_COUNT;
+    UPDATE pgcontext._document_chunk_jobs AS jobs
+       SET status = 'retired', lease_worker = NULL, lease_expires_at = NULL,
+           updated_at = pg_catalog.now()
+      FROM pgcontext._document_chunk_generations AS generations
+     WHERE jobs.generation_id = generations.generation_id
+       AND generations.document_source_id = p_document_source_id
+       AND generations.source_key = ANY(p_source_keys) AND generations.status = 'retired';
+    UPDATE pgcontext._document_chunk_generations SET status = 'superseded'
+     WHERE document_source_id = p_document_source_id AND source_key = ANY(p_source_keys)
+       AND status NOT IN ('ready','retired','superseded');
+    UPDATE pgcontext._document_chunk_jobs AS jobs
+       SET status = 'superseded', lease_worker = NULL, lease_expires_at = NULL,
+           updated_at = pg_catalog.now()
+      FROM pgcontext._document_chunk_generations AS generations
+     WHERE jobs.generation_id = generations.generation_id
+       AND generations.document_source_id = p_document_source_id
+       AND generations.source_key = ANY(p_source_keys) AND generations.status = 'superseded'
+       AND jobs.status NOT IN ('ready','retired','superseded');
+    DELETE FROM pgcontext._document_chunk_staging AS staging
+     USING pgcontext._document_chunk_jobs AS jobs,
+           pgcontext._document_chunk_generations AS generations
+     WHERE staging.job_id = jobs.job_id AND jobs.generation_id = generations.generation_id
+       AND generations.document_source_id = p_document_source_id
+       AND generations.source_key = ANY(p_source_keys);
+    DELETE FROM pgcontext._current_document_chunk_generations
+     WHERE document_source_id = p_document_source_id AND source_key = ANY(p_source_keys);
+    RETURN deleted;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._release_document_chunk_claim(
+    p_job_id bigint, p_lease_token bigint
+)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(8, p_job_id, p_lease_token);
+    SELECT sources.collection_id INTO collection_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id AND jobs.lease_token = p_lease_token;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = 'queued', attempt = GREATEST(attempt - 1, 0),
+           lease_worker = NULL, lease_expires_at = NULL,
+           updated_at = pg_catalog.clock_timestamp()
+     WHERE job_id = p_job_id AND lease_token = p_lease_token
+       AND status IN ('leased','parsing','chunking','embedding','validating','publishing');
+    IF FOUND THEN
+        DELETE FROM pgcontext._document_chunk_staging WHERE job_id = p_job_id;
+        UPDATE pgcontext._document_chunk_generations AS generations SET status = 'queued'
+          FROM pgcontext._document_chunk_jobs AS jobs
+         WHERE jobs.job_id = p_job_id AND generations.generation_id = jobs.generation_id;
+        RETURN true;
+    END IF;
+    RETURN false;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._load_document_chunk_lease_expiry(
+    p_job_id bigint, p_lease_token bigint
+)
+RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint; expires_micros bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(10, p_job_id, p_lease_token);
+    SELECT sources.collection_id,
+           COALESCE(
+               pg_catalog.floor(pg_catalog.extract('epoch', jobs.lease_expires_at) * 1000000)::bigint,
+               9223372036854775807::bigint
+           )
+      INTO collection_id, expires_micros
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id AND jobs.lease_token = p_lease_token
+       AND (jobs.lease_expires_at > pg_catalog.clock_timestamp() OR jobs.status = 'ready');
+    IF expires_micros IS NULL THEN
+        RAISE EXCEPTION 'stale document chunk job lease' USING ERRCODE = '40001';
+    END IF;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    RETURN expires_micros;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._load_document_chunk_claim_source(
+    p_job_id bigint, p_lease_token bigint
+)
+RETURNS TABLE(document_source_id bigint, source_table_oid oid, source_key text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(24, p_job_id, p_lease_token);
+    SELECT sources.collection_id
+      INTO collection_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+      JOIN pgcontext._semantic_rerank_sources AS rerank USING (rerank_source_id)
+     WHERE jobs.job_id = p_job_id AND jobs.lease_token = p_lease_token
+       AND jobs.lease_expires_at > pg_catalog.clock_timestamp()
+       AND jobs.status IN ('leased','parsing','chunking','embedding','validating','publishing');
+    IF collection_id IS NULL THEN
+        RAISE EXCEPTION 'stale document chunk job lease' USING ERRCODE = '40001';
+    END IF;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    RETURN QUERY
+    SELECT generations.document_source_id, rerank.source_table_oid,
+           generations.source_key
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+      JOIN pgcontext._semantic_rerank_sources AS rerank USING (rerank_source_id)
+     WHERE jobs.job_id = p_job_id AND jobs.lease_token = p_lease_token
+       AND jobs.lease_expires_at > pg_catalog.clock_timestamp()
+       AND jobs.status IN ('leased','parsing','chunking','embedding','validating','publishing');
+END;
+$$;
+
+CREATE FUNCTION pgcontext._lock_document_chunk_source(
+    p_document_source_id bigint, p_source_key text,
+    p_source_version bigint, p_source_bytes bigint,
+    p_max_document_bytes bigint
+)
+RETURNS bytea
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    source_schema text;
+    source_table text;
+    source_key_column text;
+    source_key_type_schema text;
+    source_key_type_name text;
+    source_text_column text;
+    source_version_column text;
+    locked_version bigint;
+    locked_bytes bigint;
+    locked_sha256 bytea;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(
+        25, p_document_source_id, p_source_version
+    );
+    SELECT rerank.source_schema_name, rerank.source_table_name,
+           key_attribute.attname, rerank.source_key_type_schema,
+           rerank.source_key_type_name, rerank.text_column_name,
+           rerank.source_version_column_name
+      INTO source_schema, source_table, source_key_column,
+           source_key_type_schema, source_key_type_name,
+           source_text_column, source_version_column
+      FROM pgcontext._document_sources AS sources
+      JOIN pgcontext._semantic_rerank_sources AS rerank USING (rerank_source_id)
+      JOIN pg_catalog.pg_attribute AS key_attribute
+        ON key_attribute.attrelid = rerank.source_table_oid
+       AND key_attribute.attnum = rerank.source_key_attnum
+       AND NOT key_attribute.attisdropped
+     WHERE sources.document_source_id = p_document_source_id
+       AND sources.status = 'ready' AND rerank.status = 'ready';
+    IF source_key_column IS NULL THEN
+        RETURN NULL;
+    END IF;
+    IF p_max_document_bytes NOT BETWEEN 1 AND 8388608
+       OR p_source_bytes NOT BETWEEN 0 AND p_max_document_bytes THEN
+        RETURN NULL;
+    END IF;
+    EXECUTE pg_catalog.format(
+        'SELECT source.%1$I, pg_catalog.octet_length(source.%2$I)::bigint
+           FROM %3$I.%4$I AS source
+          WHERE source.%5$I = $1::text::%6$I.%7$I
+          FOR SHARE OF source',
+        source_version_column, source_text_column, source_schema, source_table,
+        source_key_column, source_key_type_schema, source_key_type_name
+    )
+    INTO locked_version, locked_bytes
+    USING p_source_key;
+    IF locked_version IS DISTINCT FROM p_source_version
+       OR locked_bytes IS DISTINCT FROM p_source_bytes
+       OR locked_bytes > p_max_document_bytes THEN
+        RETURN NULL;
+    END IF;
+    EXECUTE pg_catalog.format(
+        'SELECT pg_catalog.sha256(
+                    pg_catalog.convert_to(source.%1$I, ''UTF8'')
+                )
+           FROM %2$I.%3$I AS source
+          WHERE source.%4$I = $1::text::%5$I.%6$I',
+        source_text_column, source_schema, source_table, source_key_column,
+        source_key_type_schema, source_key_type_name
+    )
+    INTO locked_sha256
+    USING p_source_key;
+    RETURN locked_sha256;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._lock_document_chunk_job_alias(
+    p_job_id bigint, p_lease_token bigint, p_allow_ready_retained boolean
+)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint; alias_matches boolean;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(26, p_job_id, p_lease_token);
+    SELECT sources.collection_id,
+           generations.chunking_profile_id IN (
+               aliases.chunking_profile_id,
+               COALESCE(aliases.shadow_chunking_profile_id, aliases.chunking_profile_id)
+           ) OR (
+               p_allow_ready_retained AND jobs.status = 'ready' AND EXISTS (
+                   SELECT 1
+                     FROM pgcontext._chunking_profile_alias_retained AS retained
+                    WHERE retained.chunking_profile_alias_id =
+                              aliases.chunking_profile_alias_id
+                      AND retained.chunking_profile_id = generations.chunking_profile_id
+               )
+           )
+      INTO collection_id, alias_matches
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+      JOIN pgcontext._chunking_profile_aliases AS aliases
+        USING (chunking_profile_alias_id)
+     WHERE jobs.job_id = p_job_id
+       AND (
+           p_lease_token = 0
+           OR (
+               jobs.lease_token = p_lease_token
+               AND (
+                   jobs.lease_expires_at > pg_catalog.clock_timestamp()
+                   OR jobs.status = 'ready'
+               )
+           )
+       )
+     FOR SHARE OF aliases;
+    IF collection_id IS NULL THEN RETURN false; END IF;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    RETURN COALESCE(alias_matches, false);
+END;
+$$;
+
+CREATE FUNCTION pgcontext._lock_document_chunk_read_alias(
+    p_document_source_id bigint
+)
+RETURNS bigint
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint; profile_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(
+        27, p_document_source_id, 0
+    );
+    SELECT sources.collection_id, aliases.chunking_profile_id
+      INTO collection_id, profile_id
+      FROM pgcontext._document_sources AS sources
+      JOIN pgcontext._chunking_profile_aliases AS aliases
+        USING (chunking_profile_alias_id)
+     WHERE sources.document_source_id = p_document_source_id
+       AND sources.status = 'ready' AND aliases.status = 'ready'
+     FOR SHARE OF aliases;
+    IF profile_id IS NULL THEN RETURN NULL; END IF;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    RETURN profile_id;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._checkpoint_document_chunk_job(
+    p_job_id bigint, p_lease_token bigint, p_status text,
+    p_processed_units bigint, p_total_units bigint
+)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    collection_id bigint;
+    current_status text;
+    current_processed bigint;
+    current_total bigint;
+    current_rank int4;
+    next_rank int4;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(9, p_job_id, p_lease_token);
+    IF p_status NOT IN ('parsing','chunking','embedding')
+       OR p_total_units NOT BETWEEN 1 AND 1000000
+       OR p_processed_units NOT BETWEEN 0 AND p_total_units THEN
+        RAISE EXCEPTION 'invalid document chunk progress checkpoint' USING ERRCODE = '22023';
+    END IF;
+    SELECT sources.collection_id, jobs.status, jobs.processed_units, jobs.total_units
+      INTO collection_id, current_status, current_processed, current_total
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id AND jobs.lease_token = p_lease_token
+       AND jobs.lease_expires_at > pg_catalog.clock_timestamp()
+     FOR UPDATE OF jobs;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    current_rank := CASE current_status WHEN 'leased' THEN 0 WHEN 'parsing' THEN 1
+        WHEN 'chunking' THEN 2 WHEN 'embedding' THEN 3 ELSE -1 END;
+    next_rank := CASE p_status WHEN 'parsing' THEN 1 WHEN 'chunking' THEN 2 ELSE 3 END;
+    IF current_rank < 0 OR next_rank < current_rank OR next_rank > current_rank + 1 THEN
+        RAISE EXCEPTION 'invalid document chunk progress transition' USING ERRCODE = '55000';
+    END IF;
+    IF p_total_units < current_total OR p_processed_units < current_processed THEN
+        RAISE EXCEPTION 'document chunk progress cannot regress' USING ERRCODE = '55000';
+    END IF;
+    UPDATE pgcontext._document_chunk_jobs SET status = p_status,
+           processed_units = p_processed_units, total_units = p_total_units,
+           updated_at = pg_catalog.now() WHERE job_id = p_job_id;
+    UPDATE pgcontext._document_chunk_generations AS generations SET status = p_status
+      FROM pgcontext._document_chunk_jobs AS jobs
+     WHERE jobs.job_id = p_job_id AND generations.generation_id = jobs.generation_id;
+    RETURN true;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._fail_document_chunk_job(
+    p_job_id bigint, p_lease_token bigint, p_error_code text
+)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(7, p_job_id, p_lease_token);
+    IF pg_catalog.octet_length(p_error_code) NOT BETWEEN 1 AND 64
+       OR p_error_code !~ '^[a-z0-9_]+$' THEN
+        RAISE EXCEPTION 'invalid document chunk failure code' USING ERRCODE = '22023';
+    END IF;
+    SELECT sources.collection_id INTO collection_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id AND jobs.lease_token = p_lease_token
+       AND jobs.lease_expires_at > pg_catalog.clock_timestamp()
+     FOR UPDATE OF jobs;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    UPDATE pgcontext._document_chunk_jobs SET status = 'failed', lease_worker = NULL,
+           lease_expires_at = NULL, error_code = p_error_code, updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id AND lease_token = p_lease_token
+       AND status IN ('leased','parsing','chunking','embedding','validating','publishing');
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'stale document chunk job lease' USING ERRCODE = '40001';
+    END IF;
+    UPDATE pgcontext._document_chunk_generations AS generations SET status = 'failed'
+      FROM pgcontext._document_chunk_jobs AS jobs
+     WHERE jobs.job_id = p_job_id AND generations.generation_id = jobs.generation_id;
+    DELETE FROM pgcontext._document_chunk_staging WHERE job_id = p_job_id;
+    RETURN true;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._retry_document_chunk_job(p_job_id bigint)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(16, p_job_id, 0);
+    SELECT sources.collection_id INTO collection_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+      JOIN pgcontext._chunking_profile_aliases AS aliases
+        USING (chunking_profile_alias_id)
+     WHERE jobs.job_id = p_job_id
+       AND generations.chunking_profile_id IN (
+           aliases.chunking_profile_id,
+           COALESCE(aliases.shadow_chunking_profile_id, aliases.chunking_profile_id)
+       )
+     FOR UPDATE OF jobs FOR SHARE OF aliases;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = 'queued', lease_worker = NULL, lease_expires_at = NULL,
+           error_code = NULL, processed_units = 0, updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id AND status IN ('cancelled','failed') AND attempt < 3;
+    IF FOUND THEN
+        DELETE FROM pgcontext._document_chunk_staging WHERE job_id = p_job_id;
+        UPDATE pgcontext._document_chunk_generations AS generations
+           SET status = 'queued'
+          FROM pgcontext._document_chunk_jobs AS jobs
+         WHERE jobs.job_id = p_job_id AND generations.generation_id = jobs.generation_id;
+        RETURN true;
+    END IF;
+    RETURN false;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._supersede_document_chunk_claim(
+    p_job_id bigint, p_lease_token bigint
+)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(19, p_job_id, p_lease_token);
+    SELECT sources.collection_id INTO collection_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id AND jobs.lease_token = p_lease_token
+       AND jobs.lease_expires_at > pg_catalog.clock_timestamp()
+     FOR SHARE OF sources;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = 'superseded', lease_worker = NULL, lease_expires_at = NULL,
+           error_code = NULL, updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id AND lease_token = p_lease_token
+       AND status IN ('leased','parsing','chunking','embedding','validating','publishing');
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'stale document chunk job lease' USING ERRCODE = '40001';
+    END IF;
+    UPDATE pgcontext._document_chunk_generations AS generations SET status = 'superseded'
+      FROM pgcontext._document_chunk_jobs AS jobs
+     WHERE jobs.job_id = p_job_id AND generations.generation_id = jobs.generation_id;
+    DELETE FROM pgcontext._document_chunk_staging WHERE job_id = p_job_id;
+    RETURN true;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._heartbeat_document_chunk_job(
+    p_job_id bigint, p_lease_token bigint, p_lease_millis int4
+)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(14, p_job_id, p_lease_token);
+    IF p_lease_millis NOT BETWEEN 1 AND 60000 THEN
+        RAISE EXCEPTION 'invalid document chunk heartbeat lease' USING ERRCODE = '22023';
+    END IF;
+    SELECT sources.collection_id INTO collection_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = 'cancelled', lease_worker = NULL, lease_expires_at = NULL,
+           error_code = 'cancelled', updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id AND lease_token = p_lease_token
+       AND status = 'cancel_requested';
+    IF FOUND THEN
+        UPDATE pgcontext._document_chunk_generations AS generations SET status = 'cancelled'
+          FROM pgcontext._document_chunk_jobs AS jobs
+         WHERE jobs.job_id = p_job_id AND generations.generation_id = jobs.generation_id;
+        RETURN false;
+    END IF;
+    UPDATE pgcontext._document_chunk_jobs
+       SET lease_expires_at = pg_catalog.clock_timestamp()
+               + pg_catalog.make_interval(secs => p_lease_millis::double precision / 1000.0),
+           updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id AND lease_token = p_lease_token
+       AND lease_expires_at > pg_catalog.clock_timestamp()
+       AND status IN ('leased','parsing','chunking','embedding','validating','publishing');
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'stale document chunk job lease' USING ERRCODE = '40001';
+    END IF;
+    RETURN true;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._cancel_document_chunk_job(p_job_id bigint)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE collection_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(15, p_job_id, 0);
+    SELECT sources.collection_id INTO collection_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+     WHERE jobs.job_id = p_job_id;
+    PERFORM pgcontext._require_collection_owner(collection_id);
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = CASE WHEN status = 'queued' THEN 'cancelled' ELSE 'cancel_requested' END,
+           lease_worker = CASE WHEN status = 'queued' THEN NULL ELSE lease_worker END,
+           lease_expires_at = CASE WHEN status = 'queued' THEN NULL ELSE lease_expires_at END,
+           error_code = 'cancelled', updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id
+       AND status IN ('queued','leased','parsing','chunking','embedding','validating','publishing');
+    IF NOT FOUND THEN RETURN false; END IF;
+    DELETE FROM pgcontext._document_chunk_staging WHERE job_id = p_job_id;
+    UPDATE pgcontext._document_chunk_generations AS generations SET status = jobs.status
+      FROM pgcontext._document_chunk_jobs AS jobs
+     WHERE jobs.job_id = p_job_id AND generations.generation_id = jobs.generation_id;
+    RETURN true;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._rebuild_document_chunk_job(p_job_id bigint)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE v_collection_id bigint; v_generation_id bigint;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(18, p_job_id, 0);
+    SELECT sources.collection_id, jobs.generation_id
+      INTO v_collection_id, v_generation_id
+      FROM pgcontext._document_chunk_jobs AS jobs
+      JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+      JOIN pgcontext._document_sources AS sources USING (document_source_id)
+      JOIN pgcontext._chunking_profile_aliases AS aliases
+        USING (chunking_profile_alias_id)
+     WHERE jobs.job_id = p_job_id AND jobs.status IN ('ready','retired')
+       AND generations.chunking_profile_id IN (
+           aliases.chunking_profile_id,
+           COALESCE(aliases.shadow_chunking_profile_id, aliases.chunking_profile_id)
+       )
+     FOR UPDATE OF jobs FOR SHARE OF aliases;
+    PERFORM pgcontext._require_collection_owner(v_collection_id);
+    IF v_generation_id IS NULL THEN RETURN false; END IF;
+    DELETE FROM pgcontext._current_document_chunk_generations
+     WHERE generation_id = v_generation_id;
+    DELETE FROM pgcontext._document_embedding_jobs
+     WHERE generation_id = v_generation_id;
+    DELETE FROM pgcontext._document_chunk_staging WHERE job_id = p_job_id;
+    UPDATE pgcontext._document_chunk_generations
+       SET status = 'queued', chunk_count = NULL, token_count = NULL,
+           staging_bytes = NULL, publication_sha256 = NULL,
+           projection_sha256 = NULL, published_at = NULL
+     WHERE generation_id = v_generation_id;
+    UPDATE pgcontext._document_chunk_jobs
+       SET status = 'queued', attempt = 0, lease_worker = NULL,
+           lease_expires_at = NULL, processed_units = 0, error_code = NULL,
+           updated_at = pg_catalog.now()
+     WHERE job_id = p_job_id;
+    RETURN true;
+END;
+$$;
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking_outbox_schema.rs:3
+-- requires:
+--   create_document_chunking_profile_state
+
+
+CREATE FUNCTION pgcontext._document_chunk_outbox_trigger()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    source_row record;
+    v_source_key text;
+    old_source_key text;
+    new_source_key text;
+    v_source_version bigint;
+    source_text text;
+    source_text_bytes bigint;
+    source_digest bytea;
+    prior_id bigint;
+    v_generation_id bigint;
+BEGIN
+    SELECT sources.*, aliases.chunking_profile_id AS current_profile_id,
+           aliases.shadow_chunking_profile_id,
+           rerank.source_table_oid, rerank.text_column_name,
+           rerank.source_version_column_name, profiles.max_document_bytes
+      INTO source_row
+      FROM pgcontext._document_sources AS sources
+      JOIN pgcontext._semantic_rerank_sources AS rerank USING (rerank_source_id)
+      JOIN pgcontext._chunking_profile_aliases AS aliases
+        USING (chunking_profile_alias_id)
+      JOIN pgcontext._chunking_profiles AS profiles
+        ON profiles.chunking_profile_id = aliases.chunking_profile_id
+     WHERE sources.document_source_id = TG_ARGV[0]::bigint
+       AND sources.status = 'ready' AND rerank.status = 'ready'
+     FOR SHARE OF sources, aliases;
+    IF NOT FOUND OR source_row.source_table_oid <> TG_RELID THEN
+        RAISE EXCEPTION 'document chunk outbox source identity changed'
+            USING ERRCODE = '55000';
+    END IF;
+    IF TG_OP <> 'INSERT' THEN old_source_key := OLD.id::text; END IF;
+    IF TG_OP <> 'DELETE' THEN new_source_key := NEW.id::text; END IF;
+    IF TG_OP = 'UPDATE' AND old_source_key IS DISTINCT FROM new_source_key THEN
+        v_source_key := old_source_key;
+        UPDATE pgcontext._document_chunk_generations SET status = 'retired'
+         WHERE generation_id IN (
+             SELECT generation_id FROM pgcontext._current_document_chunk_generations
+              WHERE document_source_id = source_row.document_source_id
+                AND source_key = v_source_key
+                AND chunking_profile_id IN (
+                    SELECT source_row.current_profile_id
+                    UNION ALL
+                    SELECT retained.chunking_profile_id
+                      FROM pgcontext._chunking_profile_alias_retained AS retained
+                     WHERE retained.chunking_profile_alias_id =
+                           source_row.chunking_profile_alias_id
+                )
+         );
+        UPDATE pgcontext._document_chunk_jobs AS jobs
+           SET status = 'retired',
+               lease_worker = NULL, lease_expires_at = NULL, updated_at = pg_catalog.now()
+          FROM pgcontext._document_chunk_generations AS generations
+         WHERE jobs.generation_id = generations.generation_id
+           AND generations.document_source_id = source_row.document_source_id
+           AND generations.source_key = v_source_key
+           AND generations.status = 'retired';
+        WITH target_jobs AS (
+            SELECT jobs.job_id, jobs.generation_id
+              FROM pgcontext._document_chunk_jobs AS jobs
+              JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+             WHERE generations.document_source_id = source_row.document_source_id
+               AND generations.source_key = v_source_key
+               AND generations.chunking_profile_id IN (
+                   source_row.current_profile_id,
+                   COALESCE(source_row.shadow_chunking_profile_id,
+                            source_row.current_profile_id)
+               )
+               AND jobs.status IN (
+                   'queued','leased','parsing','chunking','embedding','validating',
+                   'publishing','cancel_requested'
+               )
+             ORDER BY jobs.job_id LIMIT 256 FOR UPDATE OF jobs
+        ), updated_jobs AS (
+            UPDATE pgcontext._document_chunk_jobs AS jobs
+               SET status = 'superseded', lease_worker = NULL,
+                   lease_expires_at = NULL, updated_at = pg_catalog.now()
+              FROM target_jobs
+             WHERE jobs.job_id = target_jobs.job_id
+            RETURNING jobs.job_id, jobs.generation_id
+        ), updated_generations AS (
+            UPDATE pgcontext._document_chunk_generations AS generations
+               SET status = 'superseded'
+              FROM updated_jobs
+             WHERE generations.generation_id = updated_jobs.generation_id
+            RETURNING updated_jobs.job_id
+        )
+        DELETE FROM pgcontext._document_chunk_staging AS staging
+         USING updated_generations
+         WHERE staging.job_id = updated_generations.job_id;
+        DELETE FROM pgcontext._current_document_chunk_generations
+         WHERE document_source_id = source_row.document_source_id
+           AND source_key = v_source_key
+           AND chunking_profile_id IN (
+               SELECT source_row.current_profile_id
+               UNION ALL
+               SELECT retained.chunking_profile_id
+                 FROM pgcontext._chunking_profile_alias_retained AS retained
+                WHERE retained.chunking_profile_alias_id =
+                      source_row.chunking_profile_alias_id
+           );
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        v_source_key := old_source_key;
+        UPDATE pgcontext._document_chunk_generations AS generations
+           SET status = 'retired'
+         WHERE generations.generation_id IN (
+            SELECT aliases.generation_id
+              FROM pgcontext._current_document_chunk_generations AS aliases
+             WHERE aliases.document_source_id = source_row.document_source_id
+               AND aliases.source_key = v_source_key
+               AND aliases.chunking_profile_id IN (
+                   SELECT source_row.current_profile_id
+                   UNION ALL
+                   SELECT retained.chunking_profile_id
+                     FROM pgcontext._chunking_profile_alias_retained AS retained
+                    WHERE retained.chunking_profile_alias_id =
+                          source_row.chunking_profile_alias_id
+               )
+         );
+        UPDATE pgcontext._document_chunk_jobs AS jobs
+           SET status = 'retired', lease_worker = NULL, lease_expires_at = NULL,
+               updated_at = pg_catalog.now()
+          FROM pgcontext._document_chunk_generations AS generations
+         WHERE jobs.generation_id = generations.generation_id
+           AND generations.document_source_id = source_row.document_source_id
+           AND generations.source_key = v_source_key
+           AND generations.status = 'retired';
+        DELETE FROM pgcontext._current_document_chunk_generations
+         WHERE document_source_id = source_row.document_source_id
+           AND pgcontext._current_document_chunk_generations.source_key = v_source_key
+           AND chunking_profile_id IN (
+               SELECT source_row.current_profile_id
+               UNION ALL
+               SELECT retained.chunking_profile_id
+                 FROM pgcontext._chunking_profile_alias_retained AS retained
+                WHERE retained.chunking_profile_alias_id =
+                      source_row.chunking_profile_alias_id
+           );
+        WITH target_jobs AS (
+            SELECT jobs.job_id, jobs.generation_id
+              FROM pgcontext._document_chunk_jobs AS jobs
+              JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+             WHERE generations.document_source_id = source_row.document_source_id
+               AND generations.source_key = v_source_key
+               AND generations.chunking_profile_id IN (
+                   source_row.current_profile_id,
+                   COALESCE(source_row.shadow_chunking_profile_id,
+                            source_row.current_profile_id)
+               )
+               AND jobs.status IN (
+                   'queued','leased','parsing','chunking','embedding','validating',
+                   'publishing','cancel_requested'
+               )
+             ORDER BY jobs.job_id LIMIT 256 FOR UPDATE OF jobs
+        ), updated_jobs AS (
+            UPDATE pgcontext._document_chunk_jobs AS jobs
+               SET status = 'superseded', lease_worker = NULL,
+                   lease_expires_at = NULL, updated_at = pg_catalog.now()
+              FROM target_jobs
+             WHERE jobs.job_id = target_jobs.job_id
+            RETURNING jobs.job_id, jobs.generation_id
+        ), updated_generations AS (
+            UPDATE pgcontext._document_chunk_generations AS generations
+               SET status = 'superseded'
+              FROM updated_jobs
+             WHERE generations.generation_id = updated_jobs.generation_id
+            RETURNING updated_jobs.job_id
+        )
+        DELETE FROM pgcontext._document_chunk_staging AS staging
+         USING updated_generations
+         WHERE staging.job_id = updated_generations.job_id;
+        RETURN OLD;
+    END IF;
+    v_source_key := new_source_key;
+    EXECUTE pg_catalog.format(
+        'SELECT pg_catalog.octet_length(($1).%1$I), (($1).%2$I)::bigint',
+        source_row.text_column_name, source_row.source_version_column_name
+    ) INTO source_text_bytes, v_source_version USING NEW;
+    IF source_text_bytes IS NULL OR source_text_bytes > source_row.max_document_bytes THEN
+        RAISE EXCEPTION 'document source text exceeds the registered profile byte limit'
+            USING ERRCODE = '54000';
+    END IF;
+    EXECUTE pg_catalog.format('SELECT (($1).%I)::text', source_row.text_column_name)
+       INTO source_text USING NEW;
+    IF v_source_key IS NULL OR source_text IS NULL OR v_source_version IS NULL
+       OR v_source_version <= 0 THEN
+        RAISE EXCEPTION 'document chunk outbox source row is invalid'
+            USING ERRCODE = '22023';
+    END IF;
+    source_digest := pg_catalog.sha256(pg_catalog.convert_to(source_text, 'UTF8'));
+    SELECT aliases.generation_id INTO prior_id
+      FROM pgcontext._current_document_chunk_generations AS aliases
+     WHERE aliases.document_source_id = source_row.document_source_id
+       AND aliases.source_key = v_source_key
+       AND aliases.chunking_profile_id = source_row.current_profile_id;
+    WITH target_jobs AS (
+        SELECT jobs.job_id, jobs.generation_id
+          FROM pgcontext._document_chunk_jobs AS jobs
+          JOIN pgcontext._document_chunk_generations AS generations USING (generation_id)
+         WHERE generations.document_source_id = source_row.document_source_id
+           AND generations.source_key = v_source_key
+           AND generations.chunking_profile_id = source_row.current_profile_id
+           AND generations.source_version < v_source_version
+           AND jobs.status IN (
+               'queued','leased','parsing','chunking','embedding','validating',
+               'publishing','cancel_requested'
+           )
+         ORDER BY jobs.job_id LIMIT 256 FOR UPDATE OF jobs
+    ), updated_jobs AS (
+        UPDATE pgcontext._document_chunk_jobs AS jobs
+           SET status = 'superseded', lease_worker = NULL,
+               lease_expires_at = NULL, updated_at = pg_catalog.now()
+          FROM target_jobs
+         WHERE jobs.job_id = target_jobs.job_id
+        RETURNING jobs.job_id, jobs.generation_id
+    ), updated_generations AS (
+        UPDATE pgcontext._document_chunk_generations AS generations
+           SET status = 'superseded'
+          FROM updated_jobs
+         WHERE generations.generation_id = updated_jobs.generation_id
+        RETURNING updated_jobs.job_id
+    )
+    DELETE FROM pgcontext._document_chunk_staging AS staging
+     USING updated_generations
+     WHERE staging.job_id = updated_generations.job_id;
+    INSERT INTO pgcontext._document_chunk_generations (
+        document_source_id, source_key, source_version, source_sha256,
+        chunking_profile_id, source_registration_revision, prior_generation_id
+    ) VALUES (
+        source_row.document_source_id, v_source_key, v_source_version, source_digest,
+        source_row.current_profile_id, source_row.registration_revision, prior_id
+    )
+    ON CONFLICT (
+        document_source_id, source_key, source_version, chunking_profile_id,
+        source_registration_revision
+    )
+    DO UPDATE SET source_sha256 = pgcontext._document_chunk_generations.source_sha256
+      WHERE pgcontext._document_chunk_generations.source_sha256 = EXCLUDED.source_sha256
+        AND pgcontext._document_chunk_generations.source_registration_revision =
+            EXCLUDED.source_registration_revision
+    RETURNING generation_id INTO v_generation_id;
+    IF v_generation_id IS NULL THEN
+        RAISE EXCEPTION 'document source version identity changed'
+            USING ERRCODE = '55000';
+    END IF;
+    INSERT INTO pgcontext._document_chunk_jobs (generation_id)
+    VALUES (v_generation_id)
+    ON CONFLICT (generation_id) DO NOTHING;
+    RETURN NEW;
+END;
+$$;
+
+CREATE FUNCTION pgcontext._install_document_chunk_outbox_trigger(p_document_source_id bigint)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pgcontext
+AS $$
+DECLARE
+    source_row record;
+    trigger_name text;
+BEGIN
+    PERFORM pgcontext._consume_document_chunk_permit(13, p_document_source_id, 0);
+    SELECT sources.collection_id, rerank.source_schema_name, rerank.source_table_name,
+           rerank.text_column_name, rerank.source_version_column_name
+      INTO source_row
+      FROM pgcontext._document_sources AS sources
+      JOIN pgcontext._semantic_rerank_sources AS rerank USING (rerank_source_id)
+     WHERE sources.document_source_id = p_document_source_id
+       AND sources.status = 'ready' AND rerank.status = 'ready';
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'document source does not exist or is not ready'
+            USING ERRCODE = '42704';
+    END IF;
+    PERFORM pgcontext._require_collection_owner(source_row.collection_id);
+    trigger_name := pg_catalog.format('pgcontext_document_chunk_outbox_%s', p_document_source_id);
+    EXECUTE pg_catalog.format(
+        'DROP TRIGGER IF EXISTS %I ON %I.%I',
+        trigger_name, source_row.source_schema_name, source_row.source_table_name
+    );
+    EXECUTE pg_catalog.format(
+        'CREATE TRIGGER %I AFTER INSERT OR DELETE OR UPDATE OF id, %I, %I ON %I.%I
+         FOR EACH ROW EXECUTE FUNCTION pgcontext._document_chunk_outbox_trigger(%L)',
+        trigger_name, source_row.text_column_name, source_row.source_version_column_name,
+        source_row.source_schema_name, source_row.source_table_name,
+        p_document_source_id::text
+    );
+    RETURN trigger_name;
+END;
+$$;
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/build_jobs.rs:302
 -- pgcontext::build_jobs::_enqueue_ivfflat_compaction_debt
 CREATE  FUNCTION "_enqueue_ivfflat_compaction_debt"(
@@ -3152,14 +5532,38 @@ CREATE TYPE pgcontext.bitvec (
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1199
--- pgcontext::pgcontext::vector_variants::bitvec
-CREATE  FUNCTION "bitvec"(
-	"input" TEXT /* & str */
+-- crates/context-pg/src/vector_variant_ordering.rs:338
+-- pgcontext::vector_variant_ordering::bitvec_ge
+CREATE  FUNCTION "bitvec_ge"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_ge_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:333
+-- pgcontext::vector_variant_ordering::bitvec_ne
+CREATE  FUNCTION "bitvec_ne"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_ne_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1671
+-- pgcontext::pgcontext::vector_variants::bitvec_bits_final
+CREATE  FUNCTION "bitvec_bits_final"(
+	"state" bool[] /* Vec < bool > */
 ) RETURNS BitVec /* BitVec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_wrapper';
+AS 'MODULE_PATHNAME', 'bitvec_bits_final_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3186,77 +5590,6 @@ AS 'MODULE_PATHNAME', 'bitvec_dims_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1671
--- pgcontext::pgcontext::vector_variants::bitvec_bits_final
-CREATE  FUNCTION "bitvec_bits_final"(
-	"state" bool[] /* Vec < bool > */
-) RETURNS BitVec /* BitVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_bits_final_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:318
--- pgcontext::vector_variant_ordering::bitvec_lt
-CREATE  FUNCTION "bitvec_lt"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_lt_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:338
--- pgcontext::vector_variant_ordering::bitvec_ge
-CREATE  FUNCTION "bitvec_ge"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_ge_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1661
--- pgcontext::pgcontext::vector_variants::bitvec_or_transition
-CREATE  FUNCTION "bitvec_or_transition"(
-	"state" bool[], /* :: std :: option :: Option < Vec < bool > > */
-	"value" BitVec /* Option < BitVec > */
-) RETURNS bool[] /* :: std :: option :: Option < Vec < bool > > */
-IMMUTABLE PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_or_transition_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:323
--- pgcontext::vector_variant_ordering::bitvec_le
-CREATE  FUNCTION "bitvec_le"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_le_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1447
--- pgcontext::pgcontext::vector_variants::bitvec_hamming_distance
-CREATE  FUNCTION "bitvec_hamming_distance"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_hamming_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:1459
 -- pgcontext::pgcontext::vector_variants::bitvec_jaccard_distance
 CREATE  FUNCTION "bitvec_jaccard_distance"(
@@ -3269,15 +5602,14 @@ AS 'MODULE_PATHNAME', 'bitvec_jaccard_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:333
--- pgcontext::vector_variant_ordering::bitvec_ne
-CREATE  FUNCTION "bitvec_ne"(
-	"left" BitVec, /* BitVec */
-	"right" BitVec /* BitVec */
-) RETURNS bool /* bool */
+-- crates/context-pg/src/vector_variants.rs:1199
+-- pgcontext::pgcontext::vector_variants::bitvec
+CREATE  FUNCTION "bitvec"(
+	"input" TEXT /* & str */
+) RETURNS BitVec /* BitVec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_ne_wrapper';
+AS 'MODULE_PATHNAME', 'bitvec_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3305,14 +5637,17 @@ AS 'MODULE_PATHNAME', 'bitvec_cmp_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:868
--- pgcontext::pgcontext::vector_variants::bitvec_from_bool_array
-CREATE  FUNCTION "bitvec_from_bool_array"(
-	"bits" bool[] /* Vec < bool > */
+-- crates/context-pg/src/vector_variants.rs:886
+-- pgcontext::pgcontext::vector_variants::bitvec_from_provider_bytes
+CREATE  FUNCTION "bitvec_from_provider_bytes"(
+	"collection" TEXT, /* String */
+	"profile_name" TEXT, /* String */
+	"payload" bytea /* Vec < u8 > */
 ) RETURNS BitVec /* BitVec */
-IMMUTABLE STRICT PARALLEL SAFE
+STRICT SECURITY DEFINER
+SET search_path TO pg_catalog, pgcontext
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_from_bool_array_wrapper';
+AS 'MODULE_PATHNAME', 'bitvec_from_provider_bytes_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3329,17 +5664,26 @@ AS 'MODULE_PATHNAME', 'bitvec_enforce_typmod_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:886
--- pgcontext::pgcontext::vector_variants::bitvec_from_provider_bytes
-CREATE  FUNCTION "bitvec_from_provider_bytes"(
-	"collection" TEXT, /* String */
-	"profile_name" TEXT, /* String */
-	"payload" bytea /* Vec < u8 > */
+-- crates/context-pg/src/vector_variants.rs:868
+-- pgcontext::pgcontext::vector_variants::bitvec_from_bool_array
+CREATE  FUNCTION "bitvec_from_bool_array"(
+	"bits" bool[] /* Vec < bool > */
 ) RETURNS BitVec /* BitVec */
-STRICT SECURITY DEFINER
-SET search_path TO pg_catalog, pgcontext
+IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'bitvec_from_provider_bytes_wrapper';
+AS 'MODULE_PATHNAME', 'bitvec_from_bool_array_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1447
+-- pgcontext::pgcontext::vector_variants::bitvec_hamming_distance
+CREATE  FUNCTION "bitvec_hamming_distance"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_hamming_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3352,6 +5696,42 @@ CREATE  FUNCTION "bitvec_gt"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'bitvec_gt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1661
+-- pgcontext::pgcontext::vector_variants::bitvec_or_transition
+CREATE  FUNCTION "bitvec_or_transition"(
+	"state" bool[], /* :: std :: option :: Option < Vec < bool > > */
+	"value" BitVec /* Option < BitVec > */
+) RETURNS bool[] /* :: std :: option :: Option < Vec < bool > > */
+IMMUTABLE PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_or_transition_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:318
+-- pgcontext::vector_variant_ordering::bitvec_lt
+CREATE  FUNCTION "bitvec_lt"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_lt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:323
+-- pgcontext::vector_variant_ordering::bitvec_le
+CREATE  FUNCTION "bitvec_le"(
+	"left" BitVec, /* BitVec */
+	"right" BitVec /* BitVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'bitvec_le_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3506,6 +5886,52 @@ STRICT SECURITY DEFINER
 SET search_path TO pg_catalog, pgcontext
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'bulk_upsert_points_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:697
+-- pgcontext::document_chunking::cancel_document_chunk_job
+CREATE  FUNCTION "cancel_document_chunk_job"(
+	"job_id" bigint /* i64 */
+) RETURNS bool /* bool */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'cancel_document_chunk_job_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:423
+-- pgcontext::document_chunking::checkpoint_document_chunk_job
+CREATE  FUNCTION "checkpoint_document_chunk_job"(
+	"job_id" bigint, /* i64 */
+	"lease_token" bigint, /* i64 */
+	"status" TEXT, /* String */
+	"processed_units" bigint, /* i64 */
+	"total_units" bigint /* i64 */
+) RETURNS bool /* bool */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'checkpoint_document_chunk_job_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:349
+-- pgcontext::document_chunking::claim_document_chunk_jobs
+CREATE  FUNCTION "claim_document_chunk_jobs"(
+	"limit" INT, /* i32 */
+	"lease_millis" INT, /* i32 */
+	"worker_id" TEXT /* String */
+) RETURNS TABLE (
+	"job_id" bigint,  /* i64 */
+	"lease_token" bigint,  /* i64 */
+	"request" jsonb  /* JsonB */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'claim_document_chunk_jobs_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -3871,6 +6297,18 @@ AS 'MODULE_PATHNAME', 'create_collection_alias_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:100
+-- pgcontext::document_chunking::create_document_chunk_projection
+CREATE  FUNCTION "create_document_chunk_projection"(
+	"table_name" TEXT /* String */
+) RETURNS TEXT /* String */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'create_document_chunk_projection_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/embedding_migrations.rs:51
 -- pgcontext::embedding_migrations::create_embedding_migration
 CREATE  FUNCTION "create_embedding_migration"(
@@ -3919,6 +6357,44 @@ STRICT
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'create_lexical_index_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/query.rs:101
+-- pgcontext::document_chunking::query::current_document_chunks
+CREATE  FUNCTION "current_document_chunks"(
+	"collection" TEXT, /* String */
+	"source_name" TEXT, /* String */
+	"source_keys" text[] /* BoundedSourceKeys */
+) RETURNS TABLE (
+	"source_key" TEXT,  /* String */
+	"source_version" bigint,  /* i64 */
+	"profile_revision" bigint,  /* i64 */
+	"generation_id" bigint,  /* i64 */
+	"occurrence_id" bigint,  /* i64 */
+	"ordinal" INT,  /* i32 */
+	"original_text" TEXT,  /* String */
+	"retrieval_text" TEXT,  /* String */
+	"start_byte" bigint,  /* i64 */
+	"end_byte" bigint,  /* i64 */
+	"start_char" bigint,  /* i64 */
+	"end_char" bigint,  /* i64 */
+	"token_count" INT,  /* i32 */
+	"structure_kind" TEXT,  /* String */
+	"structure_path" TEXT[],  /* Vec < String > */
+	"page_number" INT,  /* Option < i32 > */
+	"region" jsonb,  /* Option < JsonB > */
+	"parent_occurrence_id" bigint,  /* Option < i64 > */
+	"previous_occurrence_id" bigint,  /* Option < i64 > */
+	"next_occurrence_id" bigint,  /* Option < i64 > */
+	"content_hash" bigint,  /* i64 */
+	"context_prefix" TEXT,  /* Option < String > */
+	"fake_embedding" jsonb  /* JsonB */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'current_document_chunks_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4043,6 +6519,32 @@ STRICT
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'discover_collection_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/query.rs:8
+-- pgcontext::document_chunking::query::document_chunking_progress
+CREATE  FUNCTION "document_chunking_progress"(
+	"collection" TEXT, /* String */
+	"source_name" TEXT /* String */
+) RETURNS jsonb /* JsonB */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'document_chunking_progress_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/profile_api.rs:129
+-- pgcontext::document_chunking::profile_api::drain_chunking_profile_alias
+CREATE  FUNCTION "drain_chunking_profile_alias"(
+	"alias_name" TEXT, /* String */
+	"profile_name" TEXT /* String */
+) RETURNS bool /* bool */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'drain_chunking_profile_alias_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4222,6 +6724,35 @@ AS 'MODULE_PATHNAME', 'enqueue_build_job_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/enqueue_api.rs:6
+-- pgcontext::document_chunking::enqueue_api::enqueue_document_chunking
+CREATE  FUNCTION "enqueue_document_chunking"(
+	"collection" TEXT, /* String */
+	"source_name" TEXT, /* String */
+	"source_keys" text[] /* BoundedSourceKeys */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'enqueue_document_chunking_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/enqueue_api.rs:19
+-- pgcontext::document_chunking::enqueue_api::enqueue_document_chunking_profile
+CREATE  FUNCTION "enqueue_document_chunking_profile"(
+	"collection" TEXT, /* String */
+	"source_name" TEXT, /* String */
+	"profile_name" TEXT, /* String */
+	"source_keys" text[] /* BoundedSourceKeys */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'enqueue_document_chunking_profile_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/build_jobs.rs:221
 -- pgcontext::build_jobs::enqueue_hnsw_compaction
 CREATE  FUNCTION "enqueue_hnsw_compaction"(
@@ -4372,6 +6903,33 @@ AS 'MODULE_PATHNAME', 'facet_collection_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:464
+-- pgcontext::document_chunking::fail_document_chunk_job
+CREATE  FUNCTION "fail_document_chunk_job"(
+	"job_id" bigint, /* i64 */
+	"lease_token" bigint, /* i64 */
+	"error_code" TEXT /* String */
+) RETURNS bool /* bool */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'fail_document_chunk_job_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:665
+-- pgcontext::document_chunking::fake_process_document_chunk_job
+CREATE  FUNCTION "fake_process_document_chunk_job"(
+	"job_id" bigint, /* i64 */
+	"lease_token" bigint /* i64 */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'fake_process_document_chunk_job_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/pgvector_ownership.rs:277
 -- pgcontext::pgvector_ownership::finalize_pgvector_ownership_conversion
 CREATE  FUNCTION "finalize_pgvector_ownership_conversion"(
@@ -4464,37 +7022,14 @@ CREATE TYPE HalfVec (
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1263
--- pgcontext::pgcontext::vector_variants::halfvec_dims
-CREATE  FUNCTION "halfvec_dims"(
-	"vector" HalfVec /* HalfVec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_dims_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1135
--- pgcontext::pgcontext::vector_variants::halfvec
-CREATE  FUNCTION "halfvec"(
-	"input" TEXT /* & str */
+-- crates/context-pg/src/vector_variants.rs:829
+-- pgcontext::pgcontext::vector_variants::halfvec_from_real_array
+CREATE  FUNCTION "halfvec_from_real_array"(
+	"values" real[] /* Vec < f32 > */
 ) RETURNS HalfVec /* HalfVec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1399
--- pgcontext::pgcontext::vector_variants::halfvec_negative_inner_product
-CREATE  FUNCTION "halfvec_negative_inner_product"(
-	"left" HalfVec, /* HalfVec */
-	"right" HalfVec /* HalfVec */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_negative_inner_product_wrapper';
+AS 'MODULE_PATHNAME', 'halfvec_from_real_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4510,6 +7045,18 @@ AS 'MODULE_PATHNAME', 'halfvec_ge_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:241
+-- pgcontext::vector_variant_ordering::halfvec_cmp
+CREATE  FUNCTION "halfvec_cmp"(
+	"left" HalfVec, /* HalfVec */
+	"right" HalfVec /* HalfVec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_cmp_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:1603
 -- pgcontext::pgcontext::vector_variants::halfvec_avg_final
 CREATE  FUNCTION "halfvec_avg_final"(
@@ -4518,6 +7065,18 @@ CREATE  FUNCTION "halfvec_avg_final"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'halfvec_avg_final_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:246
+-- pgcontext::vector_variant_ordering::halfvec_lt
+CREATE  FUNCTION "halfvec_lt"(
+	"left" HalfVec, /* HalfVec */
+	"right" HalfVec /* HalfVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_lt_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4546,18 +7105,6 @@ AS 'MODULE_PATHNAME', 'halfvec_inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:256
--- pgcontext::vector_variant_ordering::halfvec_eq
-CREATE  FUNCTION "halfvec_eq"(
-	"left" HalfVec, /* HalfVec */
-	"right" HalfVec /* HalfVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_eq_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:1387
 -- pgcontext::pgcontext::vector_variants::halfvec_l2_distance
 CREATE  FUNCTION "halfvec_l2_distance"(
@@ -4570,49 +7117,14 @@ AS 'MODULE_PATHNAME', 'halfvec_l2_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1405
--- pgcontext::pgcontext::vector_variants::halfvec_cosine_distance
-CREATE  FUNCTION "halfvec_cosine_distance"(
-	"left" HalfVec, /* HalfVec */
-	"right" HalfVec /* HalfVec */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_cosine_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:837
--- pgcontext::pgcontext::vector_variants::halfvec_from_integer_array
-CREATE  FUNCTION "halfvec_from_integer_array"(
-	"values" INT[] /* Vec < i32 > */
+-- crates/context-pg/src/vector_variants.rs:1135
+-- pgcontext::pgcontext::vector_variants::halfvec
+CREATE  FUNCTION "halfvec"(
+	"input" TEXT /* & str */
 ) RETURNS HalfVec /* HalfVec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_from_integer_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:829
--- pgcontext::pgcontext::vector_variants::halfvec_from_real_array
-CREATE  FUNCTION "halfvec_from_real_array"(
-	"values" real[] /* Vec < f32 > */
-) RETURNS HalfVec /* HalfVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_from_real_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:251
--- pgcontext::vector_variant_ordering::halfvec_le
-CREATE  FUNCTION "halfvec_le"(
-	"left" HalfVec, /* HalfVec */
-	"right" HalfVec /* HalfVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_le_wrapper';
+AS 'MODULE_PATHNAME', 'halfvec_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4628,18 +7140,6 @@ AS 'MODULE_PATHNAME', 'halfvec_l1_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:241
--- pgcontext::vector_variant_ordering::halfvec_cmp
-CREATE  FUNCTION "halfvec_cmp"(
-	"left" HalfVec, /* HalfVec */
-	"right" HalfVec /* HalfVec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_cmp_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/vector_variant_ordering.rs:271
 -- pgcontext::vector_variant_ordering::halfvec_gt
 CREATE  FUNCTION "halfvec_gt"(
@@ -4649,6 +7149,17 @@ CREATE  FUNCTION "halfvec_gt"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'halfvec_gt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:837
+-- pgcontext::pgcontext::vector_variants::halfvec_from_integer_array
+CREATE  FUNCTION "halfvec_from_integer_array"(
+	"values" INT[] /* Vec < i32 > */
+) RETURNS HalfVec /* HalfVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_from_integer_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4663,15 +7174,62 @@ AS 'MODULE_PATHNAME', 'halfvec_from_double_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:246
--- pgcontext::vector_variant_ordering::halfvec_lt
-CREATE  FUNCTION "halfvec_lt"(
+-- crates/context-pg/src/vector_variants.rs:1399
+-- pgcontext::pgcontext::vector_variants::halfvec_negative_inner_product
+CREATE  FUNCTION "halfvec_negative_inner_product"(
+	"left" HalfVec, /* HalfVec */
+	"right" HalfVec /* HalfVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_negative_inner_product_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1263
+-- pgcontext::pgcontext::vector_variants::halfvec_dims
+CREATE  FUNCTION "halfvec_dims"(
+	"vector" HalfVec /* HalfVec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_dims_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1405
+-- pgcontext::pgcontext::vector_variants::halfvec_cosine_distance
+CREATE  FUNCTION "halfvec_cosine_distance"(
+	"left" HalfVec, /* HalfVec */
+	"right" HalfVec /* HalfVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_cosine_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:251
+-- pgcontext::vector_variant_ordering::halfvec_le
+CREATE  FUNCTION "halfvec_le"(
 	"left" HalfVec, /* HalfVec */
 	"right" HalfVec /* HalfVec */
 ) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_lt_wrapper';
+AS 'MODULE_PATHNAME', 'halfvec_le_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:256
+-- pgcontext::vector_variant_ordering::halfvec_eq
+CREATE  FUNCTION "halfvec_eq"(
+	"left" HalfVec, /* HalfVec */
+	"right" HalfVec /* HalfVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_eq_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4740,6 +7298,20 @@ CREATE  FUNCTION "halfvec_typmod_out"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'halfvec_typmod_out_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:678
+-- pgcontext::document_chunking::heartbeat_document_chunk_job
+CREATE  FUNCTION "heartbeat_document_chunk_job"(
+	"job_id" bigint, /* i64 */
+	"lease_token" bigint, /* i64 */
+	"lease_millis" INT /* i32 */
+) RETURNS bool /* bool */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'heartbeat_document_chunk_job_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4903,6 +7475,19 @@ AS 'MODULE_PATHNAME', 'index_status_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:319
+-- pgcontext::document_chunking::install_document_chunk_trigger
+CREATE  FUNCTION "install_document_chunk_trigger"(
+	"collection" TEXT, /* String */
+	"source_name" TEXT /* String */
+) RETURNS TEXT /* String */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'install_document_chunk_trigger_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:104
 -- Int8Vec
 
@@ -4930,15 +7515,52 @@ CREATE TYPE pgcontext.int8vec (
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:359
--- pgcontext::vector_variant_ordering::int8vec_le
-CREATE  FUNCTION "int8vec_le"(
+-- crates/context-pg/src/vector_variant_ordering.rs:349
+-- pgcontext::vector_variant_ordering::int8vec_cmp
+CREATE  FUNCTION "int8vec_cmp"(
+	"left" Int8Vec, /* Int8Vec */
+	"right" Int8Vec /* Int8Vec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'int8vec_cmp_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:369
+-- pgcontext::vector_variant_ordering::int8vec_ne
+CREATE  FUNCTION "int8vec_ne"(
 	"left" Int8Vec, /* Int8Vec */
 	"right" Int8Vec /* Int8Vec */
 ) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_le_wrapper';
+AS 'MODULE_PATHNAME', 'int8vec_ne_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1313
+-- pgcontext::pgcontext::vector_variants::int8vec_dims
+CREATE  FUNCTION "int8vec_dims"(
+	"vector" Int8Vec /* Int8Vec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'int8vec_dims_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:921
+-- pgcontext::pgcontext::vector_variants::int8vec_from_profile
+CREATE  FUNCTION "int8vec_from_profile"(
+	"collection" TEXT, /* String */
+	"profile_name" TEXT, /* String */
+	"values" smallint[] /* Vec < i16 > */
+) RETURNS Int8Vec /* Int8Vec */
+STRICT SECURITY DEFINER
+SET search_path TO pg_catalog, pgcontext
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'int8vec_from_profile_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4954,15 +7576,50 @@ AS 'MODULE_PATHNAME', 'int8vec_negative_inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:364
--- pgcontext::vector_variant_ordering::int8vec_eq
-CREATE  FUNCTION "int8vec_eq"(
+-- crates/context-pg/src/vector_variants.rs:1351
+-- pgcontext::pgcontext::vector_variants::int8vec_l1_distance
+CREATE  FUNCTION "int8vec_l1_distance"(
 	"left" Int8Vec, /* Int8Vec */
 	"right" Int8Vec /* Int8Vec */
-) RETURNS bool /* bool */
+) RETURNS double precision /* f64 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_eq_wrapper';
+AS 'MODULE_PATHNAME', 'int8vec_l1_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:977
+-- pgcontext::pgcontext::vector_variants::int8vec_from_smallint_array
+CREATE  FUNCTION "int8vec_from_smallint_array"(
+	"values" smallint[] /* Vec < i16 > */
+) RETURNS Int8Vec /* Int8Vec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'int8vec_from_smallint_array_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1327
+-- pgcontext::pgcontext::vector_variants::int8vec_l2_distance
+CREATE  FUNCTION "int8vec_l2_distance"(
+	"left" Int8Vec, /* Int8Vec */
+	"right" Int8Vec /* Int8Vec */
+) RETURNS double precision /* f64 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'int8vec_l2_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1345
+-- pgcontext::pgcontext::vector_variants::int8vec_cosine_distance
+CREATE  FUNCTION "int8vec_cosine_distance"(
+	"left" Int8Vec, /* Int8Vec */
+	"right" Int8Vec /* Int8Vec */
+) RETURNS double precision /* f64 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'int8vec_cosine_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -4978,18 +7635,6 @@ AS 'MODULE_PATHNAME', 'int8vec_inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:349
--- pgcontext::vector_variant_ordering::int8vec_cmp
-CREATE  FUNCTION "int8vec_cmp"(
-	"left" Int8Vec, /* Int8Vec */
-	"right" Int8Vec /* Int8Vec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_cmp_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/vector_variant_ordering.rs:374
 -- pgcontext::vector_variant_ordering::int8vec_ge
 CREATE  FUNCTION "int8vec_ge"(
@@ -4999,6 +7644,19 @@ CREATE  FUNCTION "int8vec_ge"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'int8vec_ge_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_typmods.rs:240
+-- pgcontext::vector_variant_typmods::int8vec_enforce_typmod
+CREATE  FUNCTION "int8vec_enforce_typmod"(
+	"vector" Int8Vec, /* Int8Vec */
+	"typmod" INT, /* i32 */
+	"_explicit" bool /* bool */
+) RETURNS Int8Vec /* Int8Vec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'int8vec_enforce_typmod_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5024,88 +7682,15 @@ AS 'MODULE_PATHNAME', 'int8vec_from_integer_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_typmods.rs:240
--- pgcontext::vector_variant_typmods::int8vec_enforce_typmod
-CREATE  FUNCTION "int8vec_enforce_typmod"(
-	"vector" Int8Vec, /* Int8Vec */
-	"typmod" INT, /* i32 */
-	"_explicit" bool /* bool */
-) RETURNS Int8Vec /* Int8Vec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_enforce_typmod_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:921
--- pgcontext::pgcontext::vector_variants::int8vec_from_profile
-CREATE  FUNCTION "int8vec_from_profile"(
-	"collection" TEXT, /* String */
-	"profile_name" TEXT, /* String */
-	"values" smallint[] /* Vec < i16 > */
-) RETURNS Int8Vec /* Int8Vec */
-STRICT SECURITY DEFINER
-SET search_path TO pg_catalog, pgcontext
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_from_profile_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1327
--- pgcontext::pgcontext::vector_variants::int8vec_l2_distance
-CREATE  FUNCTION "int8vec_l2_distance"(
-	"left" Int8Vec, /* Int8Vec */
-	"right" Int8Vec /* Int8Vec */
-) RETURNS double precision /* f64 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_l2_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:977
--- pgcontext::pgcontext::vector_variants::int8vec_from_smallint_array
-CREATE  FUNCTION "int8vec_from_smallint_array"(
-	"values" smallint[] /* Vec < i16 > */
-) RETURNS Int8Vec /* Int8Vec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_from_smallint_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1345
--- pgcontext::pgcontext::vector_variants::int8vec_cosine_distance
-CREATE  FUNCTION "int8vec_cosine_distance"(
-	"left" Int8Vec, /* Int8Vec */
-	"right" Int8Vec /* Int8Vec */
-) RETURNS double precision /* f64 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_cosine_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1313
--- pgcontext::pgcontext::vector_variants::int8vec_dims
-CREATE  FUNCTION "int8vec_dims"(
-	"vector" Int8Vec /* Int8Vec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_dims_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:369
--- pgcontext::vector_variant_ordering::int8vec_ne
-CREATE  FUNCTION "int8vec_ne"(
+-- crates/context-pg/src/vector_variant_ordering.rs:364
+-- pgcontext::vector_variant_ordering::int8vec_eq
+CREATE  FUNCTION "int8vec_eq"(
 	"left" Int8Vec, /* Int8Vec */
 	"right" Int8Vec /* Int8Vec */
 ) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_ne_wrapper';
+AS 'MODULE_PATHNAME', 'int8vec_eq_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5121,6 +7706,18 @@ AS 'MODULE_PATHNAME', 'int8vec_gt_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:359
+-- pgcontext::vector_variant_ordering::int8vec_le
+CREATE  FUNCTION "int8vec_le"(
+	"left" Int8Vec, /* Int8Vec */
+	"right" Int8Vec /* Int8Vec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'int8vec_le_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/vector_variant_ordering.rs:354
 -- pgcontext::vector_variant_ordering::int8vec_lt
 CREATE  FUNCTION "int8vec_lt"(
@@ -5130,18 +7727,6 @@ CREATE  FUNCTION "int8vec_lt"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'int8vec_lt_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1351
--- pgcontext::pgcontext::vector_variants::int8vec_l1_distance
-CREATE  FUNCTION "int8vec_l1_distance"(
-	"left" Int8Vec, /* Int8Vec */
-	"right" Int8Vec /* Int8Vec */
-) RETURNS double precision /* f64 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_l1_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5221,6 +7806,20 @@ CREATE  FUNCTION "integer_vector_sum_final"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'integer_vector_sum_final_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:736
+-- pgcontext::document_chunking::invalidate_document_chunks
+CREATE  FUNCTION "invalidate_document_chunks"(
+	"collection" TEXT, /* String */
+	"source_name" TEXT, /* String */
+	"source_keys" text[] /* BoundedSourceKeys */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'invalidate_document_chunks_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5380,6 +7979,19 @@ AS 'MODULE_PATHNAME', 'pgvector_ownership_conversions_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/profile_api.rs:33
+-- pgcontext::document_chunking::profile_api::prepare_chunking_profile_alias
+CREATE  FUNCTION "prepare_chunking_profile_alias"(
+	"alias_name" TEXT, /* String */
+	"profile_name" TEXT /* String */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'prepare_chunking_profile_alias_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/semantic_rerank/api.rs:126
 -- pgcontext::semantic_rerank::prepare_semantic_rerank
 CREATE  FUNCTION "prepare_semantic_rerank"(
@@ -5397,6 +8009,19 @@ CREATE  FUNCTION "prepare_semantic_rerank"(
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'prepare_semantic_rerank_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/profile_api.rs:62
+-- pgcontext::document_chunking::profile_api::promote_chunking_profile_alias
+CREATE  FUNCTION "promote_chunking_profile_alias"(
+	"alias_name" TEXT, /* String */
+	"profile_name" TEXT /* String */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'promote_chunking_profile_alias_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5448,6 +8073,19 @@ STRICT VOLATILE SECURITY DEFINER
 SET search_path TO pg_catalog, pgcontext
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'publish_artifact_segment_file_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:583
+-- pgcontext::document_chunking::publish_document_chunk_generation
+CREATE  FUNCTION "publish_document_chunk_generation"(
+	"job_id" bigint, /* i64 */
+	"lease_token" bigint /* i64 */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'publish_document_chunk_generation_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -5585,7 +8223,7 @@ AS 'MODULE_PATHNAME', 'query_lookup_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/multi_model.rs:154
+-- crates/context-pg/src/multi_model.rs:147
 -- pgcontext::multi_model::query_multi_model
 CREATE  FUNCTION "query_multi_model"(
 	"collection" TEXT, /* String */
@@ -5716,6 +8354,18 @@ AS 'MODULE_PATHNAME', 'query_weight_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/lifecycle_api.rs:6
+-- pgcontext::document_chunking::lifecycle_api::rebuild_document_chunk_job
+CREATE  FUNCTION "rebuild_document_chunk_job"(
+	"job_id" bigint /* i64 */
+) RETURNS bool /* bool */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'rebuild_document_chunk_job_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/operations.rs:340
 -- pgcontext::operations::recall_check
 CREATE  FUNCTION "recall_check"(
@@ -5803,6 +8453,42 @@ STRICT
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'refresh_lexical_catalog_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:149
+-- pgcontext::document_chunking::register_chunking_profile
+CREATE  FUNCTION "register_chunking_profile"(
+	"profile_name" TEXT, /* String */
+	"parser" TEXT, /* String */
+	"target_tokens" INT, /* i32 */
+	"max_tokens" INT, /* i32 */
+	"min_tokens" INT, /* i32 */
+	"overlap_tokens" INT, /* i32 */
+	"max_document_bytes" bigint, /* i64 */
+	"include_structure_context" bool /* bool */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'register_chunking_profile_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:222
+-- pgcontext::document_chunking::register_document_source
+CREATE  FUNCTION "register_document_source"(
+	"collection" TEXT, /* String */
+	"source_name" TEXT, /* String */
+	"text_column" TEXT, /* String */
+	"source_version_column" TEXT, /* String */
+	"projection_table" TEXT, /* String */
+	"profile_name" TEXT /* String */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'register_document_source_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -6109,6 +8795,45 @@ AS 'MODULE_PATHNAME', 'retry_build_job_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:716
+-- pgcontext::document_chunking::retry_document_chunk_job
+CREATE  FUNCTION "retry_document_chunk_job"(
+	"job_id" bigint /* i64 */
+) RETURNS bool /* bool */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'retry_document_chunk_job_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking/profile_api.rs:91
+-- pgcontext::document_chunking::profile_api::rollback_chunking_profile_alias
+CREATE  FUNCTION "rollback_chunking_profile_alias"(
+	"alias_name" TEXT /* String */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'rollback_chunking_profile_alias_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:766
+-- pgcontext::document_chunking::rollback_document_chunk_generation
+CREATE  FUNCTION "rollback_document_chunk_generation"(
+	"collection" TEXT, /* String */
+	"source_name" TEXT, /* String */
+	"source_key" TEXT, /* String */
+	"generation_id" bigint /* i64 */
+) RETURNS bigint /* i64 */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'rollback_document_chunk_generation_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/pgvector_ownership.rs:313
 -- pgcontext::pgvector_ownership::rollback_pgvector_ownership_conversion
 CREATE  FUNCTION "rollback_pgvector_ownership_conversion"(
@@ -6271,6 +8996,58 @@ CREATE TYPE SparseVec (
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1273
+-- pgcontext::pgcontext::vector_variants::sparsevec_dims
+CREATE  FUNCTION "sparsevec_dims"(
+	"vector" SparseVec /* SparseVec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_dims_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:297
+-- pgcontext::vector_variant_ordering::sparsevec_ne
+CREATE  FUNCTION "sparsevec_ne"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_ne_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hnsw_am.rs:695
+-- pgcontext::hnsw_am::_hnsw_sparse_candidates
+CREATE  FUNCTION "_hnsw_sparse_candidates"(
+	"index_relation" regclass, /* PgRelation */
+	"query" SparseVec, /* SparseVec */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"heap_tid" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'hnsw_sparse_candidates_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1429
+-- pgcontext::pgcontext::vector_variants::sparsevec_negative_inner_product
+CREATE  FUNCTION "sparsevec_negative_inner_product"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_negative_inner_product_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/sparse_search.rs:54
 -- pgcontext::sparse_search::explain_sparse
 CREATE  FUNCTION "explain_sparse"(
@@ -6292,58 +9069,46 @@ AS 'MODULE_PATHNAME', 'explain_sparse_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/query_builders.rs:53
--- pgcontext::query_builders::query_sparse_nearest
-CREATE  FUNCTION "query_sparse_nearest"(
-	"vector_name" TEXT, /* String */
-	"vector" SparseVec, /* SparseVec */
-	"limit" INT /* i32 */
-) RETURNS jsonb /* JsonB */
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'query_sparse_nearest_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:297
--- pgcontext::vector_variant_ordering::sparsevec_ne
-CREATE  FUNCTION "sparsevec_ne"(
+-- crates/context-pg/src/vector_variant_ordering.rs:292
+-- pgcontext::vector_variant_ordering::sparsevec_eq
+CREATE  FUNCTION "sparsevec_eq"(
 	"left" SparseVec, /* SparseVec */
 	"right" SparseVec /* SparseVec */
 ) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_ne_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_eq_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/sparse_search.rs:19
+-- crates/context-pg/src/sparse_search.rs:115
 -- pgcontext::sparse_search::search_sparse
 CREATE  FUNCTION "search_sparse"(
+	"collection" TEXT, /* String */
+	"vector_name" TEXT, /* String */
 	"query" SparseVec, /* SparseVec */
-	"point_ids" bigint[], /* Vec < i64 > */
-	"vectors" SparseVec[], /* Vec < SparseVec > */
-	"metric" TEXT, /* String */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
 	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
 	"score" real  /* f32 */
 )
-IMMUTABLE STRICT PARALLEL SAFE
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_sparse_wrapper';
+AS 'MODULE_PATHNAME', 'search_sparse_collection_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1283
--- pgcontext::pgcontext::vector_variants::sparsevec_indices
-CREATE  FUNCTION "sparsevec_indices"(
-	"vector" SparseVec /* SparseVec */
-) RETURNS INT[] /* Vec < i32 > */
+-- crates/context-pg/src/vector_variant_ordering.rs:277
+-- pgcontext::vector_variant_ordering::sparsevec_cmp
+CREATE  FUNCTION "sparsevec_cmp"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS INT /* i32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_indices_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_cmp_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -6355,6 +9120,24 @@ CREATE  FUNCTION "sparsevec_from_real_array"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'sparsevec_from_real_array_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hnsw_am.rs:783
+-- pgcontext::hnsw_am::_hnsw_sparse_masked_candidates
+CREATE  FUNCTION "_hnsw_sparse_masked_candidates"(
+	"index_relation" regclass, /* PgRelation */
+	"query" SparseVec, /* SparseVec */
+	"allowed_heap_tids" anyarray, /* AnyArray */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"heap_tid" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'hnsw_sparse_masked_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -6378,160 +9161,14 @@ AS 'MODULE_PATHNAME', 'search_sparse_collection_filtered_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:287
--- pgcontext::vector_variant_ordering::sparsevec_le
-CREATE  FUNCTION "sparsevec_le"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS bool /* bool */
+-- crates/context-pg/src/vector_variants.rs:1283
+-- pgcontext::pgcontext::vector_variants::sparsevec_indices
+CREATE  FUNCTION "sparsevec_indices"(
+	"vector" SparseVec /* SparseVec */
+) RETURNS INT[] /* Vec < i32 > */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_le_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/query_builders.rs:68
--- pgcontext::query_builders::query_sparse_nearest
-CREATE  FUNCTION "query_sparse_nearest"(
-	"vector_name" TEXT, /* String */
-	"vector" SparseVec, /* SparseVec */
-	"filter" jsonb, /* Option < JsonB > */
-	"limit" INT /* i32 */
-) RETURNS jsonb /* JsonB */
-
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'query_sparse_nearest_filtered_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:302
--- pgcontext::vector_variant_ordering::sparsevec_ge
-CREATE  FUNCTION "sparsevec_ge"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_ge_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1144
--- pgcontext::pgcontext::vector_variants::sparsevec
-CREATE  FUNCTION "sparsevec"(
-	"input" TEXT /* & str */
-) RETURNS SparseVec /* SparseVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:783
--- pgcontext::hnsw_am::_hnsw_sparse_masked_candidates
-CREATE  FUNCTION "_hnsw_sparse_masked_candidates"(
-	"index_relation" regclass, /* PgRelation */
-	"query" SparseVec, /* SparseVec */
-	"allowed_heap_tids" anyarray, /* AnyArray */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"heap_tid" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'hnsw_sparse_masked_candidates_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:277
--- pgcontext::vector_variant_ordering::sparsevec_cmp
-CREATE  FUNCTION "sparsevec_cmp"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_cmp_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:307
--- pgcontext::vector_variant_ordering::sparsevec_gt
-CREATE  FUNCTION "sparsevec_gt"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_gt_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1435
--- pgcontext::pgcontext::vector_variants::sparsevec_cosine_distance
-CREATE  FUNCTION "sparsevec_cosine_distance"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_cosine_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:292
--- pgcontext::vector_variant_ordering::sparsevec_eq
-CREATE  FUNCTION "sparsevec_eq"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_eq_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1417
--- pgcontext::pgcontext::vector_variants::sparsevec_l2_distance
-CREATE  FUNCTION "sparsevec_l2_distance"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_l2_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1441
--- pgcontext::pgcontext::vector_variants::sparsevec_l1_distance
-CREATE  FUNCTION "sparsevec_l1_distance"(
-	"left" SparseVec, /* SparseVec */
-	"right" SparseVec /* SparseVec */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_l1_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:695
--- pgcontext::hnsw_am::_hnsw_sparse_candidates
-CREATE  FUNCTION "_hnsw_sparse_candidates"(
-	"index_relation" regclass, /* PgRelation */
-	"query" SparseVec, /* SparseVec */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"heap_tid" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'hnsw_sparse_candidates_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_indices_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -6547,6 +9184,85 @@ AS 'MODULE_PATHNAME', 'sparsevec_inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:307
+-- pgcontext::vector_variant_ordering::sparsevec_gt
+CREATE  FUNCTION "sparsevec_gt"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_gt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1144
+-- pgcontext::pgcontext::vector_variants::sparsevec
+CREATE  FUNCTION "sparsevec"(
+	"input" TEXT /* & str */
+) RETURNS SparseVec /* SparseVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/sparse_search.rs:19
+-- pgcontext::sparse_search::search_sparse
+CREATE  FUNCTION "search_sparse"(
+	"query" SparseVec, /* SparseVec */
+	"point_ids" bigint[], /* Vec < i64 > */
+	"vectors" SparseVec[], /* Vec < SparseVec > */
+	"metric" TEXT, /* String */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"score" real  /* f32 */
+)
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_sparse_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1441
+-- pgcontext::pgcontext::vector_variants::sparsevec_l1_distance
+CREATE  FUNCTION "sparsevec_l1_distance"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_l1_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/query_builders.rs:53
+-- pgcontext::query_builders::query_sparse_nearest
+CREATE  FUNCTION "query_sparse_nearest"(
+	"vector_name" TEXT, /* String */
+	"vector" SparseVec, /* SparseVec */
+	"limit" INT /* i32 */
+) RETURNS jsonb /* JsonB */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'query_sparse_nearest_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1417
+-- pgcontext::pgcontext::vector_variants::sparsevec_l2_distance
+CREATE  FUNCTION "sparsevec_l2_distance"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_l2_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:1656
 -- pgcontext::pgcontext::vector_variants::sparsevec_avg_final
 CREATE  FUNCTION "sparsevec_avg_final"(
@@ -6558,15 +9274,27 @@ AS 'MODULE_PATHNAME', 'sparsevec_avg_final_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1429
--- pgcontext::pgcontext::vector_variants::sparsevec_negative_inner_product
-CREATE  FUNCTION "sparsevec_negative_inner_product"(
+-- crates/context-pg/src/vector_variant_ordering.rs:287
+-- pgcontext::vector_variant_ordering::sparsevec_le
+CREATE  FUNCTION "sparsevec_le"(
 	"left" SparseVec, /* SparseVec */
 	"right" SparseVec /* SparseVec */
-) RETURNS real /* f32 */
+) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_negative_inner_product_wrapper';
+AS 'MODULE_PATHNAME', 'sparsevec_le_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:302
+-- pgcontext::vector_variant_ordering::sparsevec_ge
+CREATE  FUNCTION "sparsevec_ge"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_ge_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -6765,46 +9493,30 @@ CREATE OPERATOR CLASS pgcontext.bitvec_ops
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/sparse_search.rs:115
--- pgcontext::sparse_search::search_sparse
-CREATE  FUNCTION "search_sparse"(
-	"collection" TEXT, /* String */
+-- crates/context-pg/src/vector_variants.rs:1435
+-- pgcontext::pgcontext::vector_variants::sparsevec_cosine_distance
+CREATE  FUNCTION "sparsevec_cosine_distance"(
+	"left" SparseVec, /* SparseVec */
+	"right" SparseVec /* SparseVec */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_cosine_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/query_builders.rs:68
+-- pgcontext::query_builders::query_sparse_nearest
+CREATE  FUNCTION "query_sparse_nearest"(
 	"vector_name" TEXT, /* String */
-	"query" SparseVec, /* SparseVec */
+	"vector" SparseVec, /* SparseVec */
+	"filter" jsonb, /* Option < JsonB > */
 	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT 
+) RETURNS jsonb /* JsonB */
+
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_sparse_collection_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1273
--- pgcontext::pgcontext::vector_variants::sparsevec_dims
-CREATE  FUNCTION "sparsevec_dims"(
-	"vector" SparseVec /* SparseVec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_dims_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1153
--- pgcontext::pgcontext::vector_variants::sparsevec_from_arrays
-CREATE  FUNCTION "sparsevec_from_arrays"(
-	"indices" INT[], /* Vec < i32 > */
-	"values" real[], /* Vec < f32 > */
-	"dimensions" INT /* i32 */
-) RETURNS SparseVec /* SparseVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_from_arrays_wrapper';
+AS 'MODULE_PATHNAME', 'query_sparse_nearest_filtered_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -6818,6 +9530,19 @@ CREATE  FUNCTION "sparsevec_enforce_typmod"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'sparsevec_enforce_typmod_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1153
+-- pgcontext::pgcontext::vector_variants::sparsevec_from_arrays
+CREATE  FUNCTION "sparsevec_from_arrays"(
+	"indices" INT[], /* Vec < i32 > */
+	"values" real[], /* Vec < f32 > */
+	"dimensions" INT /* i32 */
+) RETURNS SparseVec /* SparseVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_from_arrays_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -6942,6 +9667,20 @@ AS 'MODULE_PATHNAME', 'sparsevec_values_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/document_chunking.rs:494
+-- pgcontext::document_chunking::stage_document_chunks
+CREATE  FUNCTION "stage_document_chunks"(
+	"job_id" bigint, /* i64 */
+	"lease_token" bigint, /* i64 */
+	"response" jsonb /* BoundedChunkResponse */
+) RETURNS bool /* bool */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'stage_document_chunks_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/build_jobs.rs:102
 -- pgcontext::build_jobs::start_build_job
 CREATE  FUNCTION "start_build_job"(
@@ -7051,62 +9790,14 @@ CREATE TYPE pgcontext.uint8vec (
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1369
--- pgcontext::pgcontext::vector_variants::uint8vec_negative_inner_product
-CREATE  FUNCTION "uint8vec_negative_inner_product"(
-	"left" UInt8Vec, /* UInt8Vec */
-	"right" UInt8Vec /* UInt8Vec */
-) RETURNS double precision /* f64 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_negative_inner_product_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1320
--- pgcontext::pgcontext::vector_variants::uint8vec_dims
-CREATE  FUNCTION "uint8vec_dims"(
-	"vector" UInt8Vec /* UInt8Vec */
-) RETURNS INT /* i32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_dims_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_typmods.rs:251
--- pgcontext::vector_variant_typmods::uint8vec_enforce_typmod
-CREATE  FUNCTION "uint8vec_enforce_typmod"(
-	"vector" UInt8Vec, /* UInt8Vec */
-	"typmod" INT, /* i32 */
-	"_explicit" bool /* bool */
+-- crates/context-pg/src/vector_variants.rs:1214
+-- pgcontext::pgcontext::vector_variants::uint8vec
+CREATE  FUNCTION "uint8vec"(
+	"input" TEXT /* & str */
 ) RETURNS UInt8Vec /* UInt8Vec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_enforce_typmod_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:989
--- pgcontext::pgcontext::vector_variants::uint8vec_from_smallint_array
-CREATE  FUNCTION "uint8vec_from_smallint_array"(
-	"values" smallint[] /* Vec < i16 > */
-) RETURNS UInt8Vec /* UInt8Vec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_from_smallint_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1381
--- pgcontext::pgcontext::vector_variants::uint8vec_l1_distance
-CREATE  FUNCTION "uint8vec_l1_distance"(
-	"left" UInt8Vec, /* UInt8Vec */
-	"right" UInt8Vec /* UInt8Vec */
-) RETURNS double precision /* f64 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_l1_distance_wrapper';
+AS 'MODULE_PATHNAME', 'uint8vec_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -7122,6 +9813,18 @@ AS 'MODULE_PATHNAME', 'uint8vec_le_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:405
+-- pgcontext::vector_variant_ordering::uint8vec_ne
+CREATE  FUNCTION "uint8vec_ne"(
+	"left" UInt8Vec, /* UInt8Vec */
+	"right" UInt8Vec /* UInt8Vec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'uint8vec_ne_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:1363
 -- pgcontext::pgcontext::vector_variants::uint8vec_inner_product
 CREATE  FUNCTION "uint8vec_inner_product"(
@@ -7134,6 +9837,30 @@ AS 'MODULE_PATHNAME', 'uint8vec_inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1369
+-- pgcontext::pgcontext::vector_variants::uint8vec_negative_inner_product
+CREATE  FUNCTION "uint8vec_negative_inner_product"(
+	"left" UInt8Vec, /* UInt8Vec */
+	"right" UInt8Vec /* UInt8Vec */
+) RETURNS double precision /* f64 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'uint8vec_negative_inner_product_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:385
+-- pgcontext::vector_variant_ordering::uint8vec_cmp
+CREATE  FUNCTION "uint8vec_cmp"(
+	"left" UInt8Vec, /* UInt8Vec */
+	"right" UInt8Vec /* UInt8Vec */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'uint8vec_cmp_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:1375
 -- pgcontext::pgcontext::vector_variants::uint8vec_cosine_distance
 CREATE  FUNCTION "uint8vec_cosine_distance"(
@@ -7143,6 +9870,43 @@ CREATE  FUNCTION "uint8vec_cosine_distance"(
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
 AS 'MODULE_PATHNAME', 'uint8vec_cosine_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:400
+-- pgcontext::vector_variant_ordering::uint8vec_eq
+CREATE  FUNCTION "uint8vec_eq"(
+	"left" UInt8Vec, /* UInt8Vec */
+	"right" UInt8Vec /* UInt8Vec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'uint8vec_eq_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_ordering.rs:410
+-- pgcontext::vector_variant_ordering::uint8vec_ge
+CREATE  FUNCTION "uint8vec_ge"(
+	"left" UInt8Vec, /* UInt8Vec */
+	"right" UInt8Vec /* UInt8Vec */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'uint8vec_ge_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variant_typmods.rs:251
+-- pgcontext::vector_variant_typmods::uint8vec_enforce_typmod
+CREATE  FUNCTION "uint8vec_enforce_typmod"(
+	"vector" UInt8Vec, /* UInt8Vec */
+	"typmod" INT, /* i32 */
+	"_explicit" bool /* bool */
+) RETURNS UInt8Vec /* UInt8Vec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'uint8vec_enforce_typmod_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -7160,75 +9924,14 @@ AS 'MODULE_PATHNAME', 'uint8vec_from_profile_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1357
--- pgcontext::pgcontext::vector_variants::uint8vec_l2_distance
-CREATE  FUNCTION "uint8vec_l2_distance"(
-	"left" UInt8Vec, /* UInt8Vec */
-	"right" UInt8Vec /* UInt8Vec */
-) RETURNS double precision /* f64 */
+-- crates/context-pg/src/vector_variants.rs:1320
+-- pgcontext::pgcontext::vector_variants::uint8vec_dims
+CREATE  FUNCTION "uint8vec_dims"(
+	"vector" UInt8Vec /* UInt8Vec */
+) RETURNS INT /* i32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_l2_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:676
--- requires:
---   Int8Vec
---   UInt8Vec
---   int8vec_l2_distance
---   int8vec_negative_inner_product
---   int8vec_cosine_distance
---   int8vec_l1_distance
---   uint8vec_l2_distance
---   uint8vec_negative_inner_product
---   uint8vec_cosine_distance
---   uint8vec_l1_distance
-
-
-CREATE OPERATOR pgcontext.<-> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_l2_distance, COMMUTATOR = OPERATOR(pgcontext.<->));
-CREATE OPERATOR pgcontext.<#> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_negative_inner_product, COMMUTATOR = OPERATOR(pgcontext.<#>));
-CREATE OPERATOR pgcontext.<=> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_cosine_distance, COMMUTATOR = OPERATOR(pgcontext.<=>));
-CREATE OPERATOR pgcontext.<+> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_l1_distance, COMMUTATOR = OPERATOR(pgcontext.<+>));
-CREATE OPERATOR pgcontext.<-> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_l2_distance, COMMUTATOR = OPERATOR(pgcontext.<->));
-CREATE OPERATOR pgcontext.<#> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_negative_inner_product, COMMUTATOR = OPERATOR(pgcontext.<#>));
-CREATE OPERATOR pgcontext.<=> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_cosine_distance, COMMUTATOR = OPERATOR(pgcontext.<=>));
-CREATE OPERATOR pgcontext.<+> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_l1_distance, COMMUTATOR = OPERATOR(pgcontext.<+>));
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:995
--- pgcontext::pgcontext::vector_variants::uint8vec_from_integer_array
-CREATE  FUNCTION "uint8vec_from_integer_array"(
-	"values" INT[] /* Vec < i32 > */
-) RETURNS UInt8Vec /* UInt8Vec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_from_integer_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:405
--- pgcontext::vector_variant_ordering::uint8vec_ne
-CREATE  FUNCTION "uint8vec_ne"(
-	"left" UInt8Vec, /* UInt8Vec */
-	"right" UInt8Vec /* UInt8Vec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_ne_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:400
--- pgcontext::vector_variant_ordering::uint8vec_eq
-CREATE  FUNCTION "uint8vec_eq"(
-	"left" UInt8Vec, /* UInt8Vec */
-	"right" UInt8Vec /* UInt8Vec */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_eq_wrapper';
+AS 'MODULE_PATHNAME', 'uint8vec_dims_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -7244,38 +9947,37 @@ AS 'MODULE_PATHNAME', 'uint8vec_gt_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1214
--- pgcontext::pgcontext::vector_variants::uint8vec
-CREATE  FUNCTION "uint8vec"(
-	"input" TEXT /* & str */
+-- crates/context-pg/src/vector_variants.rs:995
+-- pgcontext::pgcontext::vector_variants::uint8vec_from_integer_array
+CREATE  FUNCTION "uint8vec_from_integer_array"(
+	"values" INT[] /* Vec < i32 > */
 ) RETURNS UInt8Vec /* UInt8Vec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_wrapper';
+AS 'MODULE_PATHNAME', 'uint8vec_from_integer_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:410
--- pgcontext::vector_variant_ordering::uint8vec_ge
-CREATE  FUNCTION "uint8vec_ge"(
+-- crates/context-pg/src/vector_variants.rs:1357
+-- pgcontext::pgcontext::vector_variants::uint8vec_l2_distance
+CREATE  FUNCTION "uint8vec_l2_distance"(
 	"left" UInt8Vec, /* UInt8Vec */
 	"right" UInt8Vec /* UInt8Vec */
-) RETURNS bool /* bool */
+) RETURNS double precision /* f64 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_ge_wrapper';
+AS 'MODULE_PATHNAME', 'uint8vec_l2_distance_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variant_ordering.rs:385
--- pgcontext::vector_variant_ordering::uint8vec_cmp
-CREATE  FUNCTION "uint8vec_cmp"(
-	"left" UInt8Vec, /* UInt8Vec */
-	"right" UInt8Vec /* UInt8Vec */
-) RETURNS INT /* i32 */
+-- crates/context-pg/src/vector_variants.rs:989
+-- pgcontext::pgcontext::vector_variants::uint8vec_from_smallint_array
+CREATE  FUNCTION "uint8vec_from_smallint_array"(
+	"values" smallint[] /* Vec < i16 > */
+) RETURNS UInt8Vec /* UInt8Vec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_cmp_wrapper';
+AS 'MODULE_PATHNAME', 'uint8vec_from_smallint_array_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -7332,6 +10034,43 @@ CREATE OPERATOR CLASS pgcontext.uint8vec_ops DEFAULT FOR TYPE uint8vec USING btr
     OPERATOR 1 pgcontext.< (uint8vec, uint8vec), OPERATOR 2 pgcontext.<= (uint8vec, uint8vec),
     OPERATOR 3 pgcontext.= (uint8vec, uint8vec), OPERATOR 4 pgcontext.>= (uint8vec, uint8vec),
     OPERATOR 5 pgcontext.> (uint8vec, uint8vec), FUNCTION 1 pgcontext.uint8vec_cmp(uint8vec, uint8vec);
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1381
+-- pgcontext::pgcontext::vector_variants::uint8vec_l1_distance
+CREATE  FUNCTION "uint8vec_l1_distance"(
+	"left" UInt8Vec, /* UInt8Vec */
+	"right" UInt8Vec /* UInt8Vec */
+) RETURNS double precision /* f64 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'uint8vec_l1_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:676
+-- requires:
+--   Int8Vec
+--   UInt8Vec
+--   int8vec_l2_distance
+--   int8vec_negative_inner_product
+--   int8vec_cosine_distance
+--   int8vec_l1_distance
+--   uint8vec_l2_distance
+--   uint8vec_negative_inner_product
+--   uint8vec_cosine_distance
+--   uint8vec_l1_distance
+
+
+CREATE OPERATOR pgcontext.<-> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_l2_distance, COMMUTATOR = OPERATOR(pgcontext.<->));
+CREATE OPERATOR pgcontext.<#> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_negative_inner_product, COMMUTATOR = OPERATOR(pgcontext.<#>));
+CREATE OPERATOR pgcontext.<=> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_cosine_distance, COMMUTATOR = OPERATOR(pgcontext.<=>));
+CREATE OPERATOR pgcontext.<+> (LEFTARG = int8vec, RIGHTARG = int8vec, FUNCTION = pgcontext.int8vec_l1_distance, COMMUTATOR = OPERATOR(pgcontext.<+>));
+CREATE OPERATOR pgcontext.<-> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_l2_distance, COMMUTATOR = OPERATOR(pgcontext.<->));
+CREATE OPERATOR pgcontext.<#> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_negative_inner_product, COMMUTATOR = OPERATOR(pgcontext.<#>));
+CREATE OPERATOR pgcontext.<=> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_cosine_distance, COMMUTATOR = OPERATOR(pgcontext.<=>));
+CREATE OPERATOR pgcontext.<+> (LEFTARG = uint8vec, RIGHTARG = uint8vec, FUNCTION = pgcontext.uint8vec_l1_distance, COMMUTATOR = OPERATOR(pgcontext.<+>));
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -7577,39 +10316,6 @@ CREATE TYPE Vector (
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_datum.rs:209
--- requires:
---   pgcontext_bootstrap
---   Vector
-
-
-CREATE FUNCTION pgcontext._l2_distance_fast(pgcontext.vector, pgcontext.vector)
-RETURNS real
-AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE FUNCTION pgcontext._l2_distance_fast8(pgcontext.vector, pgcontext.vector)
-RETURNS double precision
-AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast8'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE FUNCTION pgcontext._negative_inner_product_fast(pgcontext.vector, pgcontext.vector)
-RETURNS real
-AS 'MODULE_PATHNAME', 'pgcontext_negative_inner_product_fast'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE FUNCTION pgcontext._cosine_distance_fast(pgcontext.vector, pgcontext.vector)
-RETURNS real
-AS 'MODULE_PATHNAME', 'pgcontext_cosine_distance_fast'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-
-CREATE FUNCTION pgcontext._l1_distance_fast(pgcontext.vector, pgcontext.vector)
-RETURNS real
-AS 'MODULE_PATHNAME', 'pgcontext_l1_distance_fast'
-LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
-/* </end connected objects> */
-
-/* <begin connected objects> */
 -- crates/context-pg/src/vector_variants.rs:731
 -- requires:
 --   Vector
@@ -7635,35 +10341,6 @@ CREATE OPERATOR pgcontext.<#> (LEFTARG = sparsevec, RIGHTARG = sparsevec, FUNCTI
 CREATE OPERATOR pgcontext.<=> (LEFTARG = sparsevec, RIGHTARG = sparsevec, FUNCTION = pgcontext.sparsevec_cosine_distance, COMMUTATOR = OPERATOR(pgcontext.<=>));
 CREATE OPERATOR pgcontext.<+> (LEFTARG = sparsevec, RIGHTARG = sparsevec, FUNCTION = pgcontext.sparsevec_l1_distance, COMMUTATOR = OPERATOR(pgcontext.<+>));
 CREATE OPERATOR pgcontext.<%> (LEFTARG = bitvec, RIGHTARG = bitvec, FUNCTION = pgcontext.bitvec_jaccard_distance, COMMUTATOR = OPERATOR(pgcontext.<%>));
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:183
--- requires:
---   Vector
---   create_vector_fast_distance_functions
-
-
-CREATE OPERATOR pgcontext.<#> (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext._negative_inner_product_fast,
-    COMMUTATOR = OPERATOR(pgcontext.<#>)
-);
-
-CREATE OPERATOR pgcontext.<=> (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext._cosine_distance_fast,
-    COMMUTATOR = OPERATOR(pgcontext.<=>)
-);
-
-CREATE OPERATOR pgcontext.<+> (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext._l1_distance_fast,
-    COMMUTATOR = OPERATOR(pgcontext.<+>)
-);
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -8360,147 +11037,162 @@ SELECT pg_catalog.pg_extension_config_dump(
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/query_builders.rs:15
--- pgcontext::query_builders::query_nearest
-CREATE  FUNCTION "query_nearest"(
-	"vector" Vector, /* Vector */
-	"limit" INT /* i32 */
-) RETURNS jsonb /* JsonB */
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'query_nearest_wrapper';
+-- crates/context-pg/src/vector_datum.rs:209
+-- requires:
+--   pgcontext_bootstrap
+--   Vector
+
+
+CREATE FUNCTION pgcontext._l2_distance_fast(pgcontext.vector, pgcontext.vector)
+RETURNS real
+AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION pgcontext._l2_distance_fast8(pgcontext.vector, pgcontext.vector)
+RETURNS double precision
+AS 'MODULE_PATHNAME', 'pgcontext_l2_distance_fast8'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION pgcontext._negative_inner_product_fast(pgcontext.vector, pgcontext.vector)
+RETURNS real
+AS 'MODULE_PATHNAME', 'pgcontext_negative_inner_product_fast'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION pgcontext._cosine_distance_fast(pgcontext.vector, pgcontext.vector)
+RETURNS real
+AS 'MODULE_PATHNAME', 'pgcontext_cosine_distance_fast'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
+
+CREATE FUNCTION pgcontext._l1_distance_fast(pgcontext.vector, pgcontext.vector)
+RETURNS real
+AS 'MODULE_PATHNAME', 'pgcontext_l1_distance_fast'
+LANGUAGE C IMMUTABLE STRICT PARALLEL SAFE;
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:701
--- pgcontext::pgcontext::vector::rerank_late_interaction
-CREATE  FUNCTION "rerank_late_interaction"(
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"point_ids" bigint[], /* Vec < i64 > */
-	"candidate_vectors" Vector[], /* Vec < Vector > */
-	"candidate_offsets" INT[], /* Vec < i32 > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"score" real  /* f32 */
-)
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'rerank_late_interaction_wrapper';
+-- crates/context-pg/src/vector.rs:183
+-- requires:
+--   Vector
+--   create_vector_fast_distance_functions
+
+
+CREATE OPERATOR pgcontext.<#> (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext._negative_inner_product_fast,
+    COMMUTATOR = OPERATOR(pgcontext.<#>)
+);
+
+CREATE OPERATOR pgcontext.<=> (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext._cosine_distance_fast,
+    COMMUTATOR = OPERATOR(pgcontext.<=>)
+);
+
+CREATE OPERATOR pgcontext.<+> (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext._l1_distance_fast,
+    COMMUTATOR = OPERATOR(pgcontext.<+>)
+);
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/hybrid_query/late_interaction.rs:40
--- pgcontext::hybrid_query::late_interaction::search_late_interaction
-CREATE  FUNCTION "search_late_interaction"(
+-- crates/context-pg/src/hybrid_query.rs:70
+-- pgcontext::hybrid_query::query
+CREATE  FUNCTION "query"(
 	"collection" TEXT, /* String */
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"vector_column" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"text_query" TEXT, /* String */
+	"lexical_source" TEXT, /* String */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
 	"point_id" bigint,  /* i64 */
 	"source_key" TEXT,  /* String */
 	"score" double precision  /* f64 */
 )
-STRICT
+STRICT 
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_late_interaction_wrapper';
+AS 'MODULE_PATHNAME', 'query_collection_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/table_search/named.rs:16
+-- crates/context-pg/src/vector.rs:585
+-- pgcontext::pgcontext::vector::l2_distance
+CREATE  FUNCTION "l2_distance"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'l2_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/grouped.rs:68
+-- pgcontext::table_search::grouped::grouped_search
+CREATE  FUNCTION "grouped_search"(
+	"collection" TEXT, /* String */
+	"vector_name" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"group_by" TEXT, /* String */
+	"group_limit" INT, /* i32 */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"group_value" TEXT,  /* String */
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'grouped_search_collection_named_vector_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hybrid_query/late_interaction.rs:80
+-- pgcontext::hybrid_query::late_interaction::explain_late_interaction
+CREATE  FUNCTION "explain_late_interaction"(
+	"collection" TEXT, /* String */
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"vector_column" TEXT /* String */
+) RETURNS TABLE (
+	"stage" TEXT,  /* String */
+	"detail" TEXT,  /* String */
+	"branch" TEXT,  /* Option < String > */
+	"strategy" TEXT,  /* String */
+	"status" QueryExplainStatus,  /* QueryExplainStatus */
+	"estimated_candidates" bigint,  /* Option < i64 > */
+	"candidate_budget" bigint  /* Option < i64 > */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'explain_late_interaction_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1032
+-- pgcontext::pgcontext::vector_variants::uint8vec_from_vector
+CREATE  FUNCTION "uint8vec_from_vector"(
+	"vector" Vector /* Vector */
+) RETURNS UInt8Vec /* UInt8Vec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'uint8vec_from_vector_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/named.rs:50
 -- pgcontext::table_search::named::search
 CREATE  FUNCTION "search"(
 	"collection" TEXT, /* String */
 	"vector_name" TEXT, /* String */
 	"vector" Vector, /* Vector */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_named_vector_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1013
--- pgcontext::pgcontext::vector_variants::int8vec_to_vector
-CREATE  FUNCTION "int8vec_to_vector"(
-	"vector" Int8Vec /* Int8Vec */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_to_vector_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:456
--- pgcontext::pgcontext::vector::vector_ge
-CREATE  FUNCTION "vector_ge"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_ge_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:438
--- pgcontext::pgcontext::vector::vector_le
-CREATE  FUNCTION "vector_le"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_le_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/quantization_sql.rs:17
--- pgcontext::quantization_sql::binary_quantize
-CREATE  FUNCTION "binary_quantize"(
-	"vector" Vector /* Vector */
-) RETURNS BitVec /* BitVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'binary_quantize_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/recommend.rs:109
--- pgcontext::table_search::recommend::recommend
-CREATE  FUNCTION "recommend"(
-	"collection" TEXT, /* String */
-	"positive_vectors" Vector[], /* Vec < Vector > */
-	"negative_vectors" Vector[], /* Vec < Vector > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'recommend_collection_from_vectors_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/candidate_recheck.rs:186
--- pgcontext::table_search::candidate_recheck::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
 	"filter" TEXT, /* Option < String > */
-	"candidate_point_ids" bigint[], /* Vec < i64 > */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
 	"point_id" bigint,  /* i64 */
@@ -8510,7 +11202,32 @@ CREATE  FUNCTION "search"(
 
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_filtered_candidates_wrapper';
+AS 'MODULE_PATHNAME', 'search_collection_named_vector_filtered_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hnsw_am.rs:358
+-- pgcontext::hnsw_am::hnsw_l2_distance
+CREATE  FUNCTION "hnsw_l2_distance"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS double precision /* f64 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'hnsw_l2_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/quantization_sql.rs:54
+-- pgcontext::quantization_sql::product_quantize
+CREATE  FUNCTION "product_quantize"(
+	"vector" Vector, /* Vector */
+	"subvector_dimensions" INT, /* i32 */
+	"codebooks" jsonb /* JsonB */
+) RETURNS bytea /* Vec < u8 > */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'product_quantize_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -8547,137 +11264,78 @@ AS 'MODULE_PATHNAME', 'search_collection_named_vector_filtered_candidates_wrappe
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:422
--- pgcontext::pgcontext::vector::vector_cmp
-CREATE  FUNCTION "vector_cmp"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS INT /* i32 */
+-- crates/context-pg/src/quantization_sql.rs:66
+-- pgcontext::quantization_sql::product_reconstruct
+CREATE  FUNCTION "product_reconstruct"(
+	"codes" bytea, /* Vec < u8 > */
+	"subvector_dimensions" INT, /* i32 */
+	"codebooks" jsonb /* JsonB */
+) RETURNS Vector /* Vector */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_cmp_wrapper';
+AS 'MODULE_PATHNAME', 'product_reconstruct_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:603
--- pgcontext::pgcontext::vector::cosine_distance
-CREATE  FUNCTION "cosine_distance"(
+-- crates/context-pg/src/quantization_sql.rs:39
+-- pgcontext::quantization_sql::scalar_reconstruct
+CREATE  FUNCTION "scalar_reconstruct"(
+	"codes" bytea, /* Vec < u8 > */
+	"min" real, /* f32 */
+	"max" real, /* f32 */
+	"levels" INT /* i32 */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'scalar_reconstruct_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:308
+-- pgcontext::pgcontext::vector::vector_from_integer_array
+CREATE  FUNCTION "vector_from_integer_array"(
+	"values" INT[] /* Vec < i32 > */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_from_integer_array_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/quantization_sql.rs:27
+-- pgcontext::quantization_sql::scalar_quantize
+CREATE  FUNCTION "scalar_quantize"(
+	"vector" Vector, /* Vector */
+	"min" real, /* f32 */
+	"max" real, /* f32 */
+	"levels" INT /* i32 */
+) RETURNS bytea /* Vec < u8 > */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'scalar_quantize_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1117
+-- pgcontext::pgcontext::vector_variants::sparsevec_from_vector
+CREATE  FUNCTION "sparsevec_from_vector"(
+	"vector" Vector /* Vector */
+) RETURNS SparseVec /* SparseVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'sparsevec_from_vector_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:591
+-- pgcontext::pgcontext::vector::inner_product
+CREATE  FUNCTION "inner_product"(
 	"left" Vector, /* Vector */
 	"right" Vector /* Vector */
 ) RETURNS real /* f32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'cosine_distance_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:657
--- pgcontext::pgcontext::vector::rerank_quantized_candidates
-CREATE  FUNCTION "rerank_quantized_candidates"(
-	"query" Vector, /* Vector */
-	"point_ids" bigint[], /* Vec < i64 > */
-	"original_vectors" Vector[], /* Vec < Vector > */
-	"metric" TEXT, /* String */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"score" real  /* f32 */
-)
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'rerank_quantized_candidates_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query.rs:138
--- pgcontext::hybrid_query::query
-CREATE  FUNCTION "query"(
-	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"sparse_vector_name" TEXT, /* String */
-	"sparse_query" SparseVec, /* SparseVec */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" double precision  /* f64 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'query_collection_dense_sparse_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1025
--- pgcontext::pgcontext::vector_variants::int8vec_from_vector
-CREATE  FUNCTION "int8vec_from_vector"(
-	"vector" Vector /* Vector */
-) RETURNS Int8Vec /* Int8Vec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'int8vec_from_vector_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:657
--- pgcontext::hnsw_am::_hnsw_candidates
-CREATE  FUNCTION "_hnsw_candidates"(
-	"index_relation" regclass, /* PgRelation */
-	"query" Vector, /* Vector */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"heap_tid" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'hnsw_candidates_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variant_typmods.rs:114
--- pgcontext::vector_variant_typmods::vector_enforce_typmod
-CREATE  FUNCTION "vector_enforce_typmod"(
-	"vector" Vector, /* Vector */
-	"typmod" INT, /* i32 */
-	"_explicit" bool /* bool */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_enforce_typmod_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:351
--- pgcontext::hybrid_query::late_interaction_ann::search_late_interaction_ann
-CREATE  FUNCTION "search_late_interaction_ann"(
-	"collection" TEXT, /* String */
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"candidates_per_query" INT, /* i32 */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" double precision  /* f64 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_owned_late_interaction_ann_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:358
--- pgcontext::hnsw_am::hnsw_l2_distance
-CREATE  FUNCTION "hnsw_l2_distance"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS double precision /* f64 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'hnsw_l2_distance_wrapper';
+AS 'MODULE_PATHNAME', 'inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -8692,15 +11350,84 @@ AS 'MODULE_PATHNAME', 'sparsevec_to_vector_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:444
--- pgcontext::pgcontext::vector::vector_eq
-CREATE  FUNCTION "vector_eq"(
+-- crates/context-pg/src/vector_variants.rs:702
+-- requires:
+--   Vector
+--   SparseVec
+--   sparsevec_from_real_array
+--   sparsevec_to_real_array
+--   sparsevec_from_vector
+--   sparsevec_to_vector
+
+
+CREATE CAST (real[] AS sparsevec)
+    WITH FUNCTION pgcontext.sparsevec_from_real_array(real[])
+    AS ASSIGNMENT;
+
+CREATE CAST (sparsevec AS real[])
+    WITH FUNCTION pgcontext.sparsevec_to_real_array(sparsevec)
+    AS ASSIGNMENT;
+
+CREATE CAST (vector AS sparsevec)
+    WITH FUNCTION pgcontext.sparsevec_from_vector(vector)
+    AS ASSIGNMENT;
+
+CREATE CAST (sparsevec AS vector)
+    WITH FUNCTION pgcontext.sparsevec_to_vector(sparsevec)
+    AS ASSIGNMENT;
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/candidate_recheck.rs:434
+-- pgcontext::table_search::candidate_recheck::_mmap_hnsw_artifact_candidates
+CREATE  FUNCTION "_mmap_hnsw_artifact_candidates"(
+	"collection" TEXT, /* String */
+	"artifact_name" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"max_mapped_bytes" bigint, /* i64 */
+	"candidate_limit" INT, /* i32 */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"score" real,  /* f32 */
+	"generation_high_water" bigint  /* i64 */
+)
+STRICT SECURITY DEFINER 
+SET search_path TO pg_catalog, pgcontext
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'mmap_hnsw_artifact_candidates_internal_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:462
+-- pgcontext::pgcontext::vector::vector_gt
+CREATE  FUNCTION "vector_gt"(
 	"left" Vector, /* Vector */
 	"right" Vector /* Vector */
 ) RETURNS bool /* bool */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_eq_wrapper';
+AS 'MODULE_PATHNAME', 'vector_gt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/candidate_recheck.rs:186
+-- pgcontext::table_search::candidate_recheck::search
+CREATE  FUNCTION "search"(
+	"collection" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"filter" TEXT, /* Option < String > */
+	"candidate_point_ids" bigint[], /* Vec < i64 > */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_collection_filtered_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -8727,6 +11454,143 @@ AS 'MODULE_PATHNAME', 'search_late_interaction_ann_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:432
+-- pgcontext::pgcontext::vector::vector_lt
+CREATE  FUNCTION "vector_lt"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_lt_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/query_builders.rs:15
+-- pgcontext::query_builders::query_nearest
+CREATE  FUNCTION "query_nearest"(
+	"vector" Vector, /* Vector */
+	"limit" INT /* i32 */
+) RETURNS jsonb /* JsonB */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'query_nearest_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:438
+-- pgcontext::pgcontext::vector::vector_le
+CREATE  FUNCTION "vector_le"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_le_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:701
+-- pgcontext::pgcontext::vector::rerank_late_interaction
+CREATE  FUNCTION "rerank_late_interaction"(
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"point_ids" bigint[], /* Vec < i64 > */
+	"candidate_vectors" Vector[], /* Vec < Vector > */
+	"candidate_offsets" INT[], /* Vec < i32 > */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"score" real  /* f32 */
+)
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'rerank_late_interaction_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hybrid_query.rs:138
+-- pgcontext::hybrid_query::query
+CREATE  FUNCTION "query"(
+	"collection" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"sparse_vector_name" TEXT, /* String */
+	"sparse_query" SparseVec, /* SparseVec */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" double precision  /* f64 */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'query_collection_dense_sparse_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:1317
+-- pgcontext::hybrid_query::late_interaction_ann::explain_late_interaction_ann
+CREATE  FUNCTION "explain_late_interaction_ann"(
+	"collection" TEXT, /* String */
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"vector_column" TEXT, /* String */
+	"token_table" TEXT, /* String */
+	"token_source_key_column" TEXT, /* String */
+	"token_vector_column" TEXT, /* String */
+	"candidates_per_query" INT /* i32 */
+) RETURNS TABLE (
+	"stage" TEXT,  /* String */
+	"detail" TEXT,  /* String */
+	"branch" TEXT,  /* Option < String > */
+	"strategy" TEXT,  /* String */
+	"status" QueryExplainStatus,  /* QueryExplainStatus */
+	"estimated_candidates" bigint,  /* Option < i64 > */
+	"candidate_budget" bigint  /* Option < i64 > */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'explain_late_interaction_ann_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:618
+-- pgcontext::pgcontext::vector::search
+CREATE  FUNCTION "search"(
+	"query" Vector, /* Vector */
+	"point_ids" bigint[], /* Vec < i64 > */
+	"vectors" Vector[], /* Vec < Vector > */
+	"metric" TEXT, /* String */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"score" real  /* f32 */
+)
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hnsw_am.rs:729
+-- pgcontext::hnsw_am::_hnsw_masked_candidates
+CREATE  FUNCTION "_hnsw_masked_candidates"(
+	"index_relation" regclass, /* PgRelation */
+	"query" Vector, /* Vector */
+	"allowed_heap_tids" anyarray, /* AnyArray */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"heap_tid" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'hnsw_masked_candidates_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/table_search.rs:79
 -- pgcontext::table_search::search
 CREATE  FUNCTION "search"(
@@ -8746,38 +11610,28 @@ AS 'MODULE_PATHNAME', 'search_collection_filtered_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:320
--- pgcontext::pgcontext::vector::vector_from_double_array
-CREATE  FUNCTION "vector_from_double_array"(
-	"values" double precision[] /* Vec < f64 > */
+-- crates/context-pg/src/vector_variant_typmods.rs:114
+-- pgcontext::vector_variant_typmods::vector_enforce_typmod
+CREATE  FUNCTION "vector_enforce_typmod"(
+	"vector" Vector, /* Vector */
+	"typmod" INT, /* i32 */
+	"_explicit" bool /* bool */
 ) RETURNS Vector /* Vector */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_from_double_array_wrapper';
+AS 'MODULE_PATHNAME', 'vector_enforce_typmod_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1032
--- pgcontext::pgcontext::vector_variants::uint8vec_from_vector
-CREATE  FUNCTION "uint8vec_from_vector"(
-	"vector" Vector /* Vector */
-) RETURNS UInt8Vec /* UInt8Vec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_from_vector_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/grouped.rs:17
--- pgcontext::table_search::grouped::grouped_search
-CREATE  FUNCTION "grouped_search"(
+-- crates/context-pg/src/table_search/candidate_recheck.rs:136
+-- pgcontext::table_search::candidate_recheck::search
+CREATE  FUNCTION "search"(
 	"collection" TEXT, /* String */
+	"vector_name" TEXT, /* String */
 	"vector" Vector, /* Vector */
-	"group_by" TEXT, /* String */
-	"group_limit" INT, /* i32 */
+	"candidate_point_ids" bigint[], /* Vec < i64 > */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
-	"group_value" TEXT,  /* String */
 	"point_id" bigint,  /* i64 */
 	"source_key" TEXT,  /* String */
 	"score" real  /* f32 */
@@ -8785,60 +11639,93 @@ CREATE  FUNCTION "grouped_search"(
 STRICT 
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'grouped_search_collection_wrapper';
+AS 'MODULE_PATHNAME', 'search_collection_named_vector_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:585
--- pgcontext::pgcontext::vector::l2_distance
-CREATE  FUNCTION "l2_distance"(
+-- crates/context-pg/src/vector.rs:597
+-- pgcontext::pgcontext::vector::negative_inner_product
+CREATE  FUNCTION "negative_inner_product"(
 	"left" Vector, /* Vector */
 	"right" Vector /* Vector */
 ) RETURNS real /* f32 */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'l2_distance_wrapper';
+AS 'MODULE_PATHNAME', 'negative_inner_product_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/quantization_sql.rs:54
--- pgcontext::quantization_sql::product_quantize
-CREATE  FUNCTION "product_quantize"(
-	"vector" Vector, /* Vector */
-	"subvector_dimensions" INT, /* i32 */
-	"codebooks" jsonb /* JsonB */
-) RETURNS bytea /* Vec < u8 > */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'product_quantize_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/query_builders.rs:163
--- pgcontext::query_builders::query_late_interaction
-CREATE  FUNCTION "query_late_interaction"(
+-- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:431
+-- pgcontext::hybrid_query::late_interaction_ann::explain_late_interaction_ann
+CREATE  FUNCTION "explain_late_interaction_ann"(
+	"collection" TEXT, /* String */
 	"query_vectors" Vector[], /* Vec < Vector > */
-	"candidates_per_query" INT, /* i32 */
-	"limit" INT /* i32 */
-) RETURNS jsonb /* JsonB */
-STRICT
+	"candidates_per_query" INT /* i32 */
+) RETURNS TABLE (
+	"stage" TEXT,  /* String */
+	"detail" TEXT,  /* String */
+	"branch" TEXT,  /* Option < String > */
+	"strategy" TEXT,  /* String */
+	"status" QueryExplainStatus,  /* QueryExplainStatus */
+	"estimated_candidates" bigint,  /* Option < i64 > */
+	"candidate_budget" bigint  /* Option < i64 > */
+)
+STRICT 
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'query_late_interaction_wrapper';
+AS 'MODULE_PATHNAME', 'explain_owned_late_interaction_ann_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/table_search/grouped.rs:68
--- pgcontext::table_search::grouped::grouped_search
-CREATE  FUNCTION "grouped_search"(
+-- crates/context-pg/src/vector_variants.rs:860
+-- pgcontext::pgcontext::vector_variants::halfvec_to_vector
+CREATE  FUNCTION "halfvec_to_vector"(
+	"vector" HalfVec /* HalfVec */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'halfvec_to_vector_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:535
+-- requires:
+--   Vector
+--   HalfVec
+--   halfvec_from_real_array
+--   halfvec_from_integer_array
+--   halfvec_from_double_array
+--   halfvec_to_real_array
+--   halfvec_to_vector
+
+
+CREATE CAST (real[] AS halfvec)
+    WITH FUNCTION pgcontext.halfvec_from_real_array(real[]);
+
+CREATE CAST (integer[] AS halfvec)
+    WITH FUNCTION pgcontext.halfvec_from_integer_array(integer[]);
+
+CREATE CAST (double precision[] AS halfvec)
+    WITH FUNCTION pgcontext.halfvec_from_double_array(double precision[]);
+
+CREATE CAST (halfvec AS real[])
+    WITH FUNCTION pgcontext.halfvec_to_real_array(halfvec)
+    AS ASSIGNMENT;
+
+CREATE CAST (halfvec AS vector)
+    WITH FUNCTION pgcontext.halfvec_to_vector(halfvec)
+    AS ASSIGNMENT;
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/candidate_recheck.rs:88
+-- pgcontext::table_search::candidate_recheck::search
+CREATE  FUNCTION "search"(
 	"collection" TEXT, /* String */
-	"vector_name" TEXT, /* String */
 	"vector" Vector, /* Vector */
-	"group_by" TEXT, /* String */
-	"group_limit" INT, /* i32 */
+	"candidate_point_ids" bigint[], /* Vec < i64 > */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
-	"group_value" TEXT,  /* String */
 	"point_id" bigint,  /* i64 */
 	"source_key" TEXT,  /* String */
 	"score" real  /* f32 */
@@ -8846,7 +11733,26 @@ CREATE  FUNCTION "grouped_search"(
 STRICT 
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'grouped_search_collection_named_vector_wrapper';
+AS 'MODULE_PATHNAME', 'search_collection_candidates_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/named.rs:16
+-- pgcontext::table_search::named::search
+CREATE  FUNCTION "search"(
+	"collection" TEXT, /* String */
+	"vector_name" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_collection_named_vector_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -8871,6 +11777,271 @@ AS 'MODULE_PATHNAME', 'search_mmap_hnsw_artifact_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
+-- crates/context-pg/src/table_search/recommend.rs:109
+-- pgcontext::table_search::recommend::recommend
+CREATE  FUNCTION "recommend"(
+	"collection" TEXT, /* String */
+	"positive_vectors" Vector[], /* Vec < Vector > */
+	"negative_vectors" Vector[], /* Vec < Vector > */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'recommend_collection_from_vectors_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search.rs:47
+-- pgcontext::table_search::search
+CREATE  FUNCTION "search"(
+	"collection" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_collection_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1019
+-- pgcontext::pgcontext::vector_variants::uint8vec_to_vector
+CREATE  FUNCTION "uint8vec_to_vector"(
+	"vector" UInt8Vec /* UInt8Vec */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'uint8vec_to_vector_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:320
+-- pgcontext::pgcontext::vector::vector_from_double_array
+CREATE  FUNCTION "vector_from_double_array"(
+	"values" double precision[] /* Vec < f64 > */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_from_double_array_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/quantization_sql.rs:17
+-- pgcontext::quantization_sql::binary_quantize
+CREATE  FUNCTION "binary_quantize"(
+	"vector" Vector /* Vector */
+) RETURNS BitVec /* BitVec */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'binary_quantize_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:603
+-- pgcontext::pgcontext::vector::cosine_distance
+CREATE  FUNCTION "cosine_distance"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS real /* f32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'cosine_distance_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/table_search/grouped.rs:17
+-- pgcontext::table_search::grouped::grouped_search
+CREATE  FUNCTION "grouped_search"(
+	"collection" TEXT, /* String */
+	"vector" Vector, /* Vector */
+	"group_by" TEXT, /* String */
+	"group_limit" INT, /* i32 */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"group_value" TEXT,  /* String */
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" real  /* f32 */
+)
+STRICT 
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'grouped_search_collection_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:299
+-- pgcontext::pgcontext::vector::vector_from_real_array
+CREATE  FUNCTION "vector_from_real_array"(
+	"values" real[] /* Vec < f32 > */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_from_real_array_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:456
+-- pgcontext::pgcontext::vector::vector_ge
+CREATE  FUNCTION "vector_ge"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_ge_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/query_builders.rs:163
+-- pgcontext::query_builders::query_late_interaction
+CREATE  FUNCTION "query_late_interaction"(
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"candidates_per_query" INT, /* i32 */
+	"limit" INT /* i32 */
+) RETURNS jsonb /* JsonB */
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'query_late_interaction_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector_variants.rs:1013
+-- pgcontext::pgcontext::vector_variants::int8vec_to_vector
+CREATE  FUNCTION "int8vec_to_vector"(
+	"vector" Int8Vec /* Int8Vec */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'int8vec_to_vector_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/hybrid_query/late_interaction.rs:40
+-- pgcontext::hybrid_query::late_interaction::search_late_interaction
+CREATE  FUNCTION "search_late_interaction"(
+	"collection" TEXT, /* String */
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"vector_column" TEXT, /* String */
+	"limit" INT /* i32 */
+) RETURNS TABLE (
+	"point_id" bigint,  /* i64 */
+	"source_key" TEXT,  /* String */
+	"score" double precision  /* f64 */
+)
+STRICT
+SET search_path TO pg_catalog, pgcontext, public
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'search_late_interaction_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:422
+-- pgcontext::pgcontext::vector::vector_cmp
+CREATE  FUNCTION "vector_cmp"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS INT /* i32 */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_cmp_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:444
+-- pgcontext::pgcontext::vector::vector_eq
+CREATE  FUNCTION "vector_eq"(
+	"left" Vector, /* Vector */
+	"right" Vector /* Vector */
+) RETURNS bool /* bool */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_eq_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:210
+-- requires:
+--   Vector
+--   vector_lt
+--   vector_le
+--   vector_eq
+--   vector_ne
+--   vector_ge
+--   vector_gt
+--   vector_cmp
+
+
+CREATE OPERATOR pgcontext.< (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext.vector_lt,
+    COMMUTATOR = OPERATOR(pgcontext.>),
+    NEGATOR = OPERATOR(pgcontext.>=)
+);
+
+CREATE OPERATOR pgcontext.<= (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext.vector_le,
+    COMMUTATOR = OPERATOR(pgcontext.>=),
+    NEGATOR = OPERATOR(pgcontext.>)
+);
+
+CREATE OPERATOR pgcontext.= (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext.vector_eq,
+    COMMUTATOR = OPERATOR(pgcontext.=),
+    NEGATOR = OPERATOR(pgcontext.<>)
+);
+
+CREATE OPERATOR pgcontext.<> (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext.vector_ne,
+    COMMUTATOR = OPERATOR(pgcontext.<>),
+    NEGATOR = OPERATOR(pgcontext.=)
+);
+
+CREATE OPERATOR pgcontext.>= (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext.vector_ge,
+    COMMUTATOR = OPERATOR(pgcontext.<=),
+    NEGATOR = OPERATOR(pgcontext.<)
+);
+
+CREATE OPERATOR pgcontext.> (
+    LEFTARG = vector,
+    RIGHTARG = vector,
+    FUNCTION = pgcontext.vector_gt,
+    COMMUTATOR = OPERATOR(pgcontext.<),
+    NEGATOR = OPERATOR(pgcontext.<=)
+);
+
+CREATE OPERATOR CLASS pgcontext.vector_ops
+    DEFAULT FOR TYPE vector USING btree AS
+    OPERATOR 1 pgcontext.< (vector, vector),
+    OPERATOR 2 pgcontext.<= (vector, vector),
+    OPERATOR 3 pgcontext.= (vector, vector),
+    OPERATOR 4 pgcontext.>= (vector, vector),
+    OPERATOR 5 pgcontext.> (vector, vector),
+    FUNCTION 1 pgcontext.vector_cmp(vector, vector);
+/* </end connected objects> */
+
+/* <begin connected objects> */
 -- crates/context-pg/src/query_builders.rs:26
 -- pgcontext::query_builders::query_nearest
 CREATE  FUNCTION "query_nearest"(
@@ -8886,78 +12057,54 @@ AS 'MODULE_PATHNAME', 'query_nearest_configured_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/table_search/candidate_recheck.rs:88
--- pgcontext::table_search::candidate_recheck::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"candidate_point_ids" bigint[], /* Vec < i64 > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_candidates_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:597
--- pgcontext::pgcontext::vector::negative_inner_product
-CREATE  FUNCTION "negative_inner_product"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS real /* f32 */
+-- crates/context-pg/src/vector_variants.rs:1025
+-- pgcontext::pgcontext::vector_variants::int8vec_from_vector
+CREATE  FUNCTION "int8vec_from_vector"(
+	"vector" Vector /* Vector */
+) RETURNS Int8Vec /* Int8Vec */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'negative_inner_product_wrapper';
+AS 'MODULE_PATHNAME', 'int8vec_from_vector_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:416
--- pgcontext::pgcontext::vector::vector_avg_final
-CREATE  FUNCTION "vector_avg_final"(
-	"state" real[] /* Vec < f32 > */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_avg_final_wrapper';
-/* </end connected objects> */
+-- crates/context-pg/src/vector_variants.rs:600
+-- requires:
+--   Vector
+--   Int8Vec
+--   UInt8Vec
+--   int8vec_from_smallint_array
+--   int8vec_from_integer_array
+--   uint8vec_from_smallint_array
+--   uint8vec_from_integer_array
+--   int8vec_to_smallint_array
+--   uint8vec_to_smallint_array
+--   int8vec_to_vector
+--   uint8vec_to_vector
+--   int8vec_from_vector
+--   uint8vec_from_vector
 
-/* <begin connected objects> */
--- crates/context-pg/src/quantization_sql.rs:66
--- pgcontext::quantization_sql::product_reconstruct
-CREATE  FUNCTION "product_reconstruct"(
-	"codes" bytea, /* Vec < u8 > */
-	"subvector_dimensions" INT, /* i32 */
-	"codebooks" jsonb /* JsonB */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'product_reconstruct_wrapper';
-/* </end connected objects> */
 
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query.rs:70
--- pgcontext::hybrid_query::query
-CREATE  FUNCTION "query"(
-	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"text_query" TEXT, /* String */
-	"lexical_source" TEXT, /* String */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" double precision  /* f64 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'query_collection_wrapper';
+CREATE CAST (smallint[] AS int8vec)
+    WITH FUNCTION pgcontext.int8vec_from_smallint_array(smallint[]);
+CREATE CAST (integer[] AS int8vec)
+    WITH FUNCTION pgcontext.int8vec_from_integer_array(integer[]);
+CREATE CAST (smallint[] AS uint8vec)
+    WITH FUNCTION pgcontext.uint8vec_from_smallint_array(smallint[]);
+CREATE CAST (integer[] AS uint8vec)
+    WITH FUNCTION pgcontext.uint8vec_from_integer_array(integer[]);
+CREATE CAST (int8vec AS smallint[])
+    WITH FUNCTION pgcontext.int8vec_to_smallint_array(int8vec) AS ASSIGNMENT;
+CREATE CAST (uint8vec AS smallint[])
+    WITH FUNCTION pgcontext.uint8vec_to_smallint_array(uint8vec) AS ASSIGNMENT;
+CREATE CAST (int8vec AS vector)
+    WITH FUNCTION pgcontext.int8vec_to_vector(int8vec) AS ASSIGNMENT;
+CREATE CAST (uint8vec AS vector)
+    WITH FUNCTION pgcontext.uint8vec_to_vector(uint8vec) AS ASSIGNMENT;
+CREATE CAST (vector AS int8vec)
+    WITH FUNCTION pgcontext.int8vec_from_vector(vector);
+CREATE CAST (vector AS uint8vec)
+    WITH FUNCTION pgcontext.uint8vec_from_vector(vector);
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -9410,310 +12557,31 @@ CREATE OPERATOR CLASS pgcontext.bit_jaccard_ops
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1117
--- pgcontext::pgcontext::vector_variants::sparsevec_from_vector
-CREATE  FUNCTION "sparsevec_from_vector"(
-	"vector" Vector /* Vector */
-) RETURNS SparseVec /* SparseVec */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'sparsevec_from_vector_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:702
--- requires:
---   Vector
---   SparseVec
---   sparsevec_from_real_array
---   sparsevec_to_real_array
---   sparsevec_from_vector
---   sparsevec_to_vector
-
-
-CREATE CAST (real[] AS sparsevec)
-    WITH FUNCTION pgcontext.sparsevec_from_real_array(real[])
-    AS ASSIGNMENT;
-
-CREATE CAST (sparsevec AS real[])
-    WITH FUNCTION pgcontext.sparsevec_to_real_array(sparsevec)
-    AS ASSIGNMENT;
-
-CREATE CAST (vector AS sparsevec)
-    WITH FUNCTION pgcontext.sparsevec_from_vector(vector)
-    AS ASSIGNMENT;
-
-CREATE CAST (sparsevec AS vector)
-    WITH FUNCTION pgcontext.sparsevec_to_vector(sparsevec)
-    AS ASSIGNMENT;
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/candidate_recheck.rs:136
--- pgcontext::table_search::candidate_recheck::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector_name" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"candidate_point_ids" bigint[], /* Vec < i64 > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_named_vector_candidates_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:308
--- pgcontext::pgcontext::vector::vector_from_integer_array
-CREATE  FUNCTION "vector_from_integer_array"(
-	"values" INT[] /* Vec < i32 > */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_from_integer_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:1019
--- pgcontext::pgcontext::vector_variants::uint8vec_to_vector
-CREATE  FUNCTION "uint8vec_to_vector"(
-	"vector" UInt8Vec /* UInt8Vec */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'uint8vec_to_vector_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:600
--- requires:
---   Vector
---   Int8Vec
---   UInt8Vec
---   int8vec_from_smallint_array
---   int8vec_from_integer_array
---   uint8vec_from_smallint_array
---   uint8vec_from_integer_array
---   int8vec_to_smallint_array
---   uint8vec_to_smallint_array
---   int8vec_to_vector
---   uint8vec_to_vector
---   int8vec_from_vector
---   uint8vec_from_vector
-
-
-CREATE CAST (smallint[] AS int8vec)
-    WITH FUNCTION pgcontext.int8vec_from_smallint_array(smallint[]);
-CREATE CAST (integer[] AS int8vec)
-    WITH FUNCTION pgcontext.int8vec_from_integer_array(integer[]);
-CREATE CAST (smallint[] AS uint8vec)
-    WITH FUNCTION pgcontext.uint8vec_from_smallint_array(smallint[]);
-CREATE CAST (integer[] AS uint8vec)
-    WITH FUNCTION pgcontext.uint8vec_from_integer_array(integer[]);
-CREATE CAST (int8vec AS smallint[])
-    WITH FUNCTION pgcontext.int8vec_to_smallint_array(int8vec) AS ASSIGNMENT;
-CREATE CAST (uint8vec AS smallint[])
-    WITH FUNCTION pgcontext.uint8vec_to_smallint_array(uint8vec) AS ASSIGNMENT;
-CREATE CAST (int8vec AS vector)
-    WITH FUNCTION pgcontext.int8vec_to_vector(int8vec) AS ASSIGNMENT;
-CREATE CAST (uint8vec AS vector)
-    WITH FUNCTION pgcontext.uint8vec_to_vector(uint8vec) AS ASSIGNMENT;
-CREATE CAST (vector AS int8vec)
-    WITH FUNCTION pgcontext.int8vec_from_vector(vector);
-CREATE CAST (vector AS uint8vec)
-    WITH FUNCTION pgcontext.uint8vec_from_vector(vector);
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:462
--- pgcontext::pgcontext::vector::vector_gt
-CREATE  FUNCTION "vector_gt"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_gt_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:618
--- pgcontext::pgcontext::vector::search
-CREATE  FUNCTION "search"(
+-- crates/context-pg/src/hnsw_am.rs:657
+-- pgcontext::hnsw_am::_hnsw_candidates
+CREATE  FUNCTION "_hnsw_candidates"(
+	"index_relation" regclass, /* PgRelation */
 	"query" Vector, /* Vector */
-	"point_ids" bigint[], /* Vec < i64 > */
-	"vectors" Vector[], /* Vec < Vector > */
-	"metric" TEXT, /* String */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
+	"heap_tid" TEXT,  /* String */
 	"score" real  /* f32 */
-)
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/candidate_recheck.rs:434
--- pgcontext::table_search::candidate_recheck::_mmap_hnsw_artifact_candidates
-CREATE  FUNCTION "_mmap_hnsw_artifact_candidates"(
-	"collection" TEXT, /* String */
-	"artifact_name" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"max_mapped_bytes" bigint, /* i64 */
-	"candidate_limit" INT, /* i32 */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"score" real,  /* f32 */
-	"generation_high_water" bigint  /* i64 */
-)
-STRICT SECURITY DEFINER 
-SET search_path TO pg_catalog, pgcontext
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'mmap_hnsw_artifact_candidates_internal_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query/late_interaction.rs:80
--- pgcontext::hybrid_query::late_interaction::explain_late_interaction
-CREATE  FUNCTION "explain_late_interaction"(
-	"collection" TEXT, /* String */
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"vector_column" TEXT /* String */
-) RETURNS TABLE (
-	"stage" TEXT,  /* String */
-	"detail" TEXT,  /* String */
-	"branch" TEXT,  /* Option < String > */
-	"strategy" TEXT,  /* String */
-	"status" QueryExplainStatus,  /* QueryExplainStatus */
-	"estimated_candidates" bigint,  /* Option < i64 > */
-	"candidate_budget" bigint  /* Option < i64 > */
-)
-STRICT
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'explain_late_interaction_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/table_search/named.rs:50
--- pgcontext::table_search::named::search
-CREATE  FUNCTION "search"(
-	"collection" TEXT, /* String */
-	"vector_name" TEXT, /* String */
-	"vector" Vector, /* Vector */
-	"filter" TEXT, /* Option < String > */
-	"limit" INT /* i32 */
-) RETURNS TABLE (
-	"point_id" bigint,  /* i64 */
-	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
-)
-
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_named_vector_filtered_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:860
--- pgcontext::pgcontext::vector_variants::halfvec_to_vector
-CREATE  FUNCTION "halfvec_to_vector"(
-	"vector" HalfVec /* HalfVec */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'halfvec_to_vector_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector_variants.rs:535
--- requires:
---   Vector
---   HalfVec
---   halfvec_from_real_array
---   halfvec_from_integer_array
---   halfvec_from_double_array
---   halfvec_to_real_array
---   halfvec_to_vector
-
-
-CREATE CAST (real[] AS halfvec)
-    WITH FUNCTION pgcontext.halfvec_from_real_array(real[]);
-
-CREATE CAST (integer[] AS halfvec)
-    WITH FUNCTION pgcontext.halfvec_from_integer_array(integer[]);
-
-CREATE CAST (double precision[] AS halfvec)
-    WITH FUNCTION pgcontext.halfvec_from_double_array(double precision[]);
-
-CREATE CAST (halfvec AS real[])
-    WITH FUNCTION pgcontext.halfvec_to_real_array(halfvec)
-    AS ASSIGNMENT;
-
-CREATE CAST (halfvec AS vector)
-    WITH FUNCTION pgcontext.halfvec_to_vector(halfvec)
-    AS ASSIGNMENT;
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/quantization_sql.rs:39
--- pgcontext::quantization_sql::scalar_reconstruct
-CREATE  FUNCTION "scalar_reconstruct"(
-	"codes" bytea, /* Vec < u8 > */
-	"min" real, /* f32 */
-	"max" real, /* f32 */
-	"levels" INT /* i32 */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'scalar_reconstruct_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:591
--- pgcontext::pgcontext::vector::inner_product
-CREATE  FUNCTION "inner_product"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS real /* f32 */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'inner_product_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:1317
--- pgcontext::hybrid_query::late_interaction_ann::explain_late_interaction_ann
-CREATE  FUNCTION "explain_late_interaction_ann"(
-	"collection" TEXT, /* String */
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"vector_column" TEXT, /* String */
-	"token_table" TEXT, /* String */
-	"token_source_key_column" TEXT, /* String */
-	"token_vector_column" TEXT, /* String */
-	"candidates_per_query" INT /* i32 */
-) RETURNS TABLE (
-	"stage" TEXT,  /* String */
-	"detail" TEXT,  /* String */
-	"branch" TEXT,  /* Option < String > */
-	"strategy" TEXT,  /* String */
-	"status" QueryExplainStatus,  /* QueryExplainStatus */
-	"estimated_candidates" bigint,  /* Option < i64 > */
-	"candidate_budget" bigint  /* Option < i64 > */
 )
 STRICT 
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'explain_late_interaction_ann_wrapper';
+AS 'MODULE_PATHNAME', 'hnsw_candidates_wrapper';
+/* </end connected objects> */
+
+/* <begin connected objects> */
+-- crates/context-pg/src/vector.rs:416
+-- pgcontext::pgcontext::vector::vector_avg_final
+CREATE  FUNCTION "vector_avg_final"(
+	"state" real[] /* Vec < f32 > */
+) RETURNS Vector /* Vector */
+IMMUTABLE STRICT PARALLEL SAFE
+LANGUAGE c /* Rust */
+AS 'MODULE_PATHNAME', 'vector_avg_final_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
@@ -9728,169 +12596,40 @@ AS 'MODULE_PATHNAME', 'vector_dims_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/vector.rs:299
--- pgcontext::pgcontext::vector::vector_from_real_array
-CREATE  FUNCTION "vector_from_real_array"(
-	"values" real[] /* Vec < f32 > */
-) RETURNS Vector /* Vector */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_from_real_array_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:432
--- pgcontext::pgcontext::vector::vector_lt
-CREATE  FUNCTION "vector_lt"(
-	"left" Vector, /* Vector */
-	"right" Vector /* Vector */
-) RETURNS bool /* bool */
-IMMUTABLE STRICT PARALLEL SAFE
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'vector_lt_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/vector.rs:210
--- requires:
---   Vector
---   vector_lt
---   vector_le
---   vector_eq
---   vector_ne
---   vector_ge
---   vector_gt
---   vector_cmp
-
-
-CREATE OPERATOR pgcontext.< (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext.vector_lt,
-    COMMUTATOR = OPERATOR(pgcontext.>),
-    NEGATOR = OPERATOR(pgcontext.>=)
-);
-
-CREATE OPERATOR pgcontext.<= (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext.vector_le,
-    COMMUTATOR = OPERATOR(pgcontext.>=),
-    NEGATOR = OPERATOR(pgcontext.>)
-);
-
-CREATE OPERATOR pgcontext.= (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext.vector_eq,
-    COMMUTATOR = OPERATOR(pgcontext.=),
-    NEGATOR = OPERATOR(pgcontext.<>)
-);
-
-CREATE OPERATOR pgcontext.<> (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext.vector_ne,
-    COMMUTATOR = OPERATOR(pgcontext.<>),
-    NEGATOR = OPERATOR(pgcontext.=)
-);
-
-CREATE OPERATOR pgcontext.>= (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext.vector_ge,
-    COMMUTATOR = OPERATOR(pgcontext.<=),
-    NEGATOR = OPERATOR(pgcontext.<)
-);
-
-CREATE OPERATOR pgcontext.> (
-    LEFTARG = vector,
-    RIGHTARG = vector,
-    FUNCTION = pgcontext.vector_gt,
-    COMMUTATOR = OPERATOR(pgcontext.<),
-    NEGATOR = OPERATOR(pgcontext.<=)
-);
-
-CREATE OPERATOR CLASS pgcontext.vector_ops
-    DEFAULT FOR TYPE vector USING btree AS
-    OPERATOR 1 pgcontext.< (vector, vector),
-    OPERATOR 2 pgcontext.<= (vector, vector),
-    OPERATOR 3 pgcontext.= (vector, vector),
-    OPERATOR 4 pgcontext.>= (vector, vector),
-    OPERATOR 5 pgcontext.> (vector, vector),
-    FUNCTION 1 pgcontext.vector_cmp(vector, vector);
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hnsw_am.rs:729
--- pgcontext::hnsw_am::_hnsw_masked_candidates
-CREATE  FUNCTION "_hnsw_masked_candidates"(
-	"index_relation" regclass, /* PgRelation */
+-- crates/context-pg/src/vector.rs:657
+-- pgcontext::pgcontext::vector::rerank_quantized_candidates
+CREATE  FUNCTION "rerank_quantized_candidates"(
 	"query" Vector, /* Vector */
-	"allowed_heap_tids" anyarray, /* AnyArray */
+	"point_ids" bigint[], /* Vec < i64 > */
+	"original_vectors" Vector[], /* Vec < Vector > */
+	"metric" TEXT, /* String */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
-	"heap_tid" TEXT,  /* String */
+	"point_id" bigint,  /* i64 */
 	"score" real  /* f32 */
 )
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'hnsw_masked_candidates_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:431
--- pgcontext::hybrid_query::late_interaction_ann::explain_late_interaction_ann
-CREATE  FUNCTION "explain_late_interaction_ann"(
-	"collection" TEXT, /* String */
-	"query_vectors" Vector[], /* Vec < Vector > */
-	"candidates_per_query" INT /* i32 */
-) RETURNS TABLE (
-	"stage" TEXT,  /* String */
-	"detail" TEXT,  /* String */
-	"branch" TEXT,  /* Option < String > */
-	"strategy" TEXT,  /* String */
-	"status" QueryExplainStatus,  /* QueryExplainStatus */
-	"estimated_candidates" bigint,  /* Option < i64 > */
-	"candidate_budget" bigint  /* Option < i64 > */
-)
-STRICT 
-SET search_path TO pg_catalog, pgcontext, public
-LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'explain_owned_late_interaction_ann_wrapper';
-/* </end connected objects> */
-
-/* <begin connected objects> */
--- crates/context-pg/src/quantization_sql.rs:27
--- pgcontext::quantization_sql::scalar_quantize
-CREATE  FUNCTION "scalar_quantize"(
-	"vector" Vector, /* Vector */
-	"min" real, /* f32 */
-	"max" real, /* f32 */
-	"levels" INT /* i32 */
-) RETURNS bytea /* Vec < u8 > */
 IMMUTABLE STRICT PARALLEL SAFE
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'scalar_quantize_wrapper';
+AS 'MODULE_PATHNAME', 'rerank_quantized_candidates_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- crates/context-pg/src/table_search.rs:47
--- pgcontext::table_search::search
-CREATE  FUNCTION "search"(
+-- crates/context-pg/src/hybrid_query/late_interaction_ann.rs:351
+-- pgcontext::hybrid_query::late_interaction_ann::search_late_interaction_ann
+CREATE  FUNCTION "search_late_interaction_ann"(
 	"collection" TEXT, /* String */
-	"vector" Vector, /* Vector */
+	"query_vectors" Vector[], /* Vec < Vector > */
+	"candidates_per_query" INT, /* i32 */
 	"limit" INT /* i32 */
 ) RETURNS TABLE (
 	"point_id" bigint,  /* i64 */
 	"source_key" TEXT,  /* String */
-	"score" real  /* f32 */
+	"score" double precision  /* f64 */
 )
 STRICT 
 SET search_path TO pg_catalog, pgcontext, public
 LANGUAGE c /* Rust */
-AS 'MODULE_PATHNAME', 'search_collection_wrapper';
+AS 'MODULE_PATHNAME', 'search_owned_late_interaction_ann_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */

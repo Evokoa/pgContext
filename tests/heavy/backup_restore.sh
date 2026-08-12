@@ -67,6 +67,19 @@ SELECT pgcontext.register_embedding_profile(
 SELECT pgcontext.register_semantic_rerank_source(
     'backup_docs', 'body', 'body', 'source_version'
 );
+SELECT pgcontext.create_document_chunk_projection('public.backup_document_chunks');
+SELECT pgcontext.register_chunking_profile(
+    'backup_chunks_v1', 'plain_text_v1', 64, 96, 8, 8, 8388608, false
+);
+SELECT pgcontext.register_chunking_profile(
+    'backup_chunks_v2', 'plain_text_v1', 48, 64, 8, 8, 8388608, false
+);
+SELECT pgcontext.register_document_source(
+    'backup_docs', 'body', 'body', 'source_version',
+    'public.backup_document_chunks', 'backup_chunks_v1'
+);
+SELECT pgcontext.prepare_chunking_profile_alias('backup_chunks_v1', 'backup_chunks_v2');
+SELECT pgcontext.promote_chunking_profile_alias('backup_chunks_v1', 'backup_chunks_v2');
 SELECT * FROM pgcontext.create_embedding_migration('backup_docs', 'embed_v1', 'embed_v2', 3);
 SQL
 
@@ -89,6 +102,14 @@ DECLARE
     profile_count bigint;
     rerank_source_count bigint;
     rerank_envelope jsonb;
+    chunk_profile_count bigint;
+    chunk_alias_count bigint;
+    chunk_retained_count bigint;
+    document_source_count bigint;
+    chunk_job_count bigint;
+    chunk_job_id bigint;
+    chunk_lease_token bigint;
+    current_chunk_count bigint;
     migration_count bigint;
     telemetry_status text;
     restored_query_count bigint;
@@ -175,6 +196,43 @@ BEGIN
         RAISE EXCEPTION 'restored semantic rerank source did not hydrate current text';
     END IF;
     RAISE NOTICE 'backup_restore_embedding_profiles_verified';
+
+    SELECT count(*) INTO chunk_profile_count
+      FROM pgcontext._visible_chunking_profiles
+     WHERE profile_name = 'backup_chunks_v1' AND status = 'ready';
+    SELECT count(*) INTO document_source_count
+      FROM pgcontext._visible_document_sources
+     WHERE source_name = 'body' AND status = 'ready';
+    SELECT count(*) INTO chunk_job_count
+      FROM pgcontext._visible_document_chunk_jobs;
+    SELECT count(*) INTO chunk_alias_count
+      FROM pgcontext._visible_chunking_profile_aliases AS aliases
+      JOIN pgcontext._visible_chunking_profiles AS profiles
+        USING (chunking_profile_id)
+     WHERE aliases.alias_name = 'backup_chunks_v1'
+       AND profiles.profile_name = 'backup_chunks_v2';
+    SELECT count(*) INTO chunk_retained_count
+      FROM pgcontext._chunking_profile_alias_retained AS retained
+      JOIN pgcontext._chunking_profile_aliases AS aliases
+        USING (chunking_profile_alias_id)
+      JOIN pgcontext._chunking_profiles AS profiles
+        ON profiles.chunking_profile_id = retained.chunking_profile_id
+     WHERE aliases.alias_name = 'backup_chunks_v1'
+       AND profiles.profile_name = 'backup_chunks_v1';
+    IF chunk_profile_count <> 1 OR document_source_count <> 1 OR chunk_job_count <> 0
+       OR chunk_alias_count <> 1 OR chunk_retained_count <> 1 THEN
+        RAISE EXCEPTION 'restored document chunk registration or transient-state contract failed';
+    END IF;
+    PERFORM pgcontext.enqueue_document_chunking('backup_docs', 'body', ARRAY['1']);
+    SELECT job_id, lease_token INTO chunk_job_id, chunk_lease_token
+      FROM pgcontext.claim_document_chunk_jobs(1, 60000, 'backup-restore-worker');
+    PERFORM pgcontext.fake_process_document_chunk_job(chunk_job_id, chunk_lease_token);
+    SELECT count(*) INTO current_chunk_count
+      FROM pgcontext.current_document_chunks('backup_docs', 'body', ARRAY['1']);
+    IF current_chunk_count = 0 THEN
+        RAISE EXCEPTION 'restored document chunk source did not republish current chunks';
+    END IF;
+    RAISE NOTICE 'backup_restore_document_chunking_verified';
 
     SELECT count(*) INTO migration_count FROM pgcontext.embedding_migrations()
      WHERE collection_name = 'backup_docs'

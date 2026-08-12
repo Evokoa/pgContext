@@ -110,11 +110,11 @@ For transparency, here is where the capabilities most often requested after
   occurrence ID with weighted reciprocal rank fusion. A full backfill remains
   optional. See
   [Multi-Model Retrieval, Semantic Reranking, and Automatic Chunking](#multi-model-retrieval-semantic-reranking-and-automatic-chunking).
-- **Automatic chunking and model-based reranking** — planned as a bounded,
-  restartable ingestion and retrieval workflow. PostgreSQL owns source versions,
-  chunk lineage, permissions, jobs, and atomic publication; provider-neutral
-  external workers own parsing/OCR, tokenizer-specific chunking, embedding
-  calls, and cross-encoder inference. See
+- **Automatic chunking and model-based reranking** — available as Experimental,
+  bounded workflows. PostgreSQL owns source versions, chunk lineage, permissions,
+  jobs, and atomic publication; provider-neutral external workers own the
+  certified text/Markdown/HTML parsing and reranking execution. OCR, network
+  fetch, provider embedding calls, and model-driven chunking remain planned. See
   [Multi-Model Retrieval, Semantic Reranking, and Automatic Chunking](#multi-model-retrieval-semantic-reranking-and-automatic-chunking).
 - **Replacing a dedicated RAG database** — that is the product goal for the
   retrieval and evidence layer: PostgreSQL remains the source of truth while
@@ -1327,9 +1327,17 @@ a digest-verified no-network Rust worker. Worker output is untrusted ordering
 input and PostgreSQL rechecks current source, filter, ACL, and RLS state before
 returning any row. The private fixture adapter certifies that contract without
 claiming broad transformer compatibility or bundling weights. Tokenizer-aware
-chunking, SQL ingestion catalogs, durable jobs, and external chunk publication
-remain incomplete. See [Multi-model retrieval](multi_model.md) and
-[Semantic reranking](semantic_reranking.md).
+automatic chunking now ships for plain text, Markdown, and HTML with immutable
+profiles, transactional outbox or explicit enqueue, fenced leases, a bounded
+external worker, canonical PostgreSQL revalidation, fake-embedding work,
+source-authoritative current reads, bounded rollback, delete invalidation, and
+atomic current aliases. Its complete PG17/PG18 lifecycle suites pass, but both
+one-million-row source-cardinality lanes miss the frozen publication-throughput
+floor (PG17: 10.837 chunks per second; PG18: 33.325). Automatic chunking
+therefore remains Experimental and its Stable promotion is a measured no-go.
+See [Multi-model retrieval](multi_model.md),
+[Semantic reranking](semantic_reranking.md), and
+[Automatic document chunking](automatic_chunking.md).
 
 Depends on: stable source and chunk occurrence identities, immutable
 model/profile metadata bound to named vectors, composite query execution,

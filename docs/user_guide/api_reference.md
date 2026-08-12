@@ -322,6 +322,70 @@ graduates from the experimental parity row.
 
 ## Experimental APIs
 
+Automatic document chunking:
+
+- `pgcontext.create_document_chunk_projection(table_name text)` creates the
+  caller-owned projection table with the frozen chunk/citation contract.
+- `pgcontext.register_chunking_profile(profile_name text, parser text,
+  target_tokens integer, max_tokens integer, min_tokens integer,
+  overlap_tokens integer, max_document_bytes bigint,
+  include_structure_context boolean)` registers an immutable parser/tokenizer
+  profile. `overlap_tokens` must be no greater than 64 and must remain below
+  `target_tokens`.
+- `pgcontext.register_document_source(collection text, source_name text,
+  text_column text, source_version_column text, projection_table text,
+  profile_name text)` binds authoritative source and projection relations.
+- `pgcontext.install_document_chunk_trigger(collection text, source_name text)`
+  installs the transactional enqueue/invalidation trigger.
+- `pgcontext.enqueue_document_chunking(collection text, source_name text,
+  source_keys text[])` explicitly enqueues at most 256 visible source rows.
+- `pgcontext.prepare_chunking_profile_alias(alias_name text, profile_name text)`
+  selects a non-serving shadow profile; replacing a shadow lazily supersedes
+  its unfinished jobs at the next fenced lifecycle boundary.
+- `pgcontext.enqueue_document_chunking_profile(collection text, source_name
+  text, profile_name text, source_keys text[])` builds the prepared shadow for
+  selected keys without changing current reads.
+- `pgcontext.promote_chunking_profile_alias(alias_name text, profile_name
+  text)` atomically makes the prepared shadow current and retains the prior
+  profile as a draining fallback.
+- `pgcontext.rollback_chunking_profile_alias(alias_name text)` atomically
+  restores the most recently retained predecessor.
+- `pgcontext.drain_chunking_profile_alias(alias_name text, profile_name text)`
+  explicitly removes one predecessor from fallback eligibility. At most eight
+  predecessors may remain retained per alias.
+- `pgcontext.claim_document_chunk_jobs(limit integer, lease_millis integer,
+  worker_id text)` returns fenced jobs and bounded worker envelopes.
+- `pgcontext.stage_document_chunks(job_id bigint, lease_token bigint,
+  response jsonb)` and `pgcontext.publish_document_chunk_generation(job_id
+  bigint, lease_token bigint)` validate and atomically publish complete output.
+- `pgcontext.heartbeat_document_chunk_job`,
+  `pgcontext.checkpoint_document_chunk_job`,
+  `pgcontext.fail_document_chunk_job`, `pgcontext.cancel_document_chunk_job`,
+  and `pgcontext.retry_document_chunk_job` manage bounded leased work.
+- `pgcontext.invalidate_document_chunks(collection text, source_name text,
+  source_keys text[])` retires current aliases without deleting authoritative
+  source rows.
+- `pgcontext.rebuild_document_chunk_job(job_id bigint)` is an owner-authorized
+  recovery operation for a `ready` or `retired` derived generation whose
+  user-owned projection failed its stored digest. It removes the current alias,
+  clears that generation's projection/embedding output, and requeues the same
+  source identity for canonical publication.
+- `pgcontext.rollback_document_chunk_generation(collection text, source_name
+  text, source_key text, generation_id bigint)` restores a prior complete
+  published generation only when its source identity still matches the
+  current invoker-visible row.
+- `pgcontext.document_chunking_progress(collection text, source_name text)`
+  returns content-free lifecycle counters.
+- `pgcontext.current_document_chunks(collection text, source_name text,
+  source_keys text[])` rehydrates the source and returns only current complete
+  chunks whose version and digest still match under current ACL/RLS.
+
+The PG17 and PG18 lifecycle suites pass. Stable promotion remains blocked by
+the frozen PG17 one-million-row source-cardinality lane's bounded publication
+workload throughput floor. See
+[Automatic document chunking](automatic_chunking.md) for the worker protocol,
+bounds, citation contract, and logical-restore behavior.
+
 Provider-neutral semantic reranking:
 
 - `pgcontext.register_semantic_rerank_source(collection text, source_name text,

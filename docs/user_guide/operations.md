@@ -198,6 +198,16 @@ finalized request state with `cleanup_semantic_rerank_requests`; the source
 table and registered point mappings remain authoritative. See
 [Semantic reranking](semantic_reranking.md).
 
+For automatic chunking, monitor `document_chunking_progress` and the
+membership-filtered job/generation views. Workers must use the returned lease
+token for staging, heartbeat, and publication; retry never replaces the prior
+ready alias. Profiles and source registrations survive logical dump/restore,
+but queues, leases, staging rows, embedding jobs, and current aliases are
+derived operational state. Re-enqueue after a logical restore; first use
+refreshes source and projection OIDs from their stored names and increments the
+registration revision when a binding changed. See
+[Automatic document chunking](automatic_chunking.md).
+
 Before building or rebuilding a `pgcontext_hnsw` index, size
 `maintenance_work_mem` for the corpus: the build enforces it as a hard budget
 and stops with SQLSTATE `22023` plus a suggested-setting `HINT` when the

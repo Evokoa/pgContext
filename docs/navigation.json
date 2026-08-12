@@ -115,6 +115,10 @@
           "path": "user_guide/semantic_reranking.md"
         },
         {
+          "title": "Automatic document chunking",
+          "path": "user_guide/automatic_chunking.md"
+        },
+        {
           "title": "Retrieval methods overview",
           "path": "user_guide/retrieval_methods.md"
         },

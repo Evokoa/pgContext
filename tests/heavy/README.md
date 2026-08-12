@@ -88,6 +88,23 @@ failure.
   quality, warm/cold latency, RSS, and cost ceilings, and rechecks ACL, forced
   RLS, and source churn. `ROW_COUNT=1000000` is required on PG17 and PG18;
   `ROW_COUNT=10000000` is the retained scheduled release command.
+- `document_chunking_worker.sh`: loads a deterministic source corpus, publishes
+  a frozen 256-document workload through fenced jobs (including one real
+  claim → external worker → stage → publish path), verifies stale-source
+  hiding and catalog isolation, and records per-transaction publication
+  latency plus persistent-worker token throughput/RSS. `ROW_COUNT` is the
+  source-corpus/cardinality lane; `processed_documents` is the explicitly
+  bounded publication workload.
+  Run `ROW_COUNT=1000000` on PG17 and PG18; `ROW_COUNT=10000000` is the retained
+  scheduled release-scale command.
+- `document_chunking_recovery.sh`: proves restart durability, expired-lease
+  takeover, stale-token fencing, and ready-generation visibility after a second
+  restart.
+- `document_chunking_non_superuser.sh`: runs registration, enqueue, claim,
+  publication, current reads, and retained-profile fallback as a real top-level
+  non-superuser with source `SELECT` but no private-catalog privileges.
+- `hnsw_replica_promotion.sh`: validates the HNSW exact oracle and the current
+  automatic-chunk generation after streaming-replica promotion.
 - `build_job_resumability.sh`: validates backend-local build-job interruption,
   retry progress preservation, restart abandonment recovery, supervised dynamic
   worker launch/publication/idle shutdown, disabled-worker fail-open behavior,

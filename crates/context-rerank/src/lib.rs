@@ -33,6 +33,7 @@
 
 mod adapter;
 mod backend;
+mod chunk_wire;
 mod linear_pair;
 mod manifest;
 mod runtime;
@@ -42,6 +43,12 @@ pub use adapter::{AuthorizedRowSource, BackendReranker, BackendRerankerConfig};
 pub use backend::{
     BackendResult, DeterministicRerankBackend, MAX_RERANK_BATCH, RerankBackend, RerankBackendError,
     RerankBatches, RerankOutcome, score_all, score_batch,
+};
+pub use chunk_wire::{
+    CHUNK_WORKER_FAILURE_VERSION, CHUNK_WORKER_REQUEST_VERSION, CHUNK_WORKER_RESPONSE_VERSION,
+    ChunkWorkerError, ChunkWorkerFailureV1, ChunkWorkerRequestV1, ChunkWorkerResponseV1,
+    MAX_CHUNK_WORKER_ELAPSED_MICROS, MAX_CHUNK_WORKER_FRAME_BYTES, WireChunkProfileV1,
+    WireTokenChunkV1, process_chunk_request,
 };
 pub use linear_pair::{LinearPairV1, LinearPairV1Error};
 pub use manifest::{

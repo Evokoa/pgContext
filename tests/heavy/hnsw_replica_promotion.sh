@@ -55,8 +55,8 @@ validate_promoted_oracle() {
     exact="$(psql_replica -At <<'SQL' | tail -n 1
 SET enable_indexscan = off;
 SELECT pg_catalog.jsonb_build_object(
-    'dense', (SELECT pg_catalog.array_agg(id ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector)
-                FROM (SELECT id, embedding FROM public.hnsw_replica_docs ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector LIMIT 3) AS ranked),
+    'dense', (SELECT pg_catalog.array_agg(id ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::pgcontext.vector)
+                FROM (SELECT id, embedding FROM public.hnsw_replica_docs ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::pgcontext.vector LIMIT 3) AS ranked),
     'int8', (SELECT pg_catalog.array_agg(id ORDER BY int8_value OPERATOR(pgcontext.<->) pgcontext.int8vec('[9,0]'))
                FROM (SELECT id, int8_value FROM public.hnsw_replica_docs ORDER BY int8_value OPERATOR(pgcontext.<->) pgcontext.int8vec('[9,0]') LIMIT 3) AS ranked),
     'uint8', (SELECT pg_catalog.array_agg(id ORDER BY uint8_value OPERATOR(pgcontext.<->) pgcontext.uint8vec('[9,0]'))
@@ -67,8 +67,8 @@ SQL
     indexed="$(psql_replica -At <<'SQL' | tail -n 1
 SET enable_seqscan = off;
 SELECT pg_catalog.jsonb_build_object(
-    'dense', (SELECT pg_catalog.array_agg(id ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector)
-                FROM (SELECT id, embedding FROM public.hnsw_replica_docs ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::vector LIMIT 3) AS ranked),
+    'dense', (SELECT pg_catalog.array_agg(id ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::pgcontext.vector)
+                FROM (SELECT id, embedding FROM public.hnsw_replica_docs ORDER BY embedding OPERATOR(pgcontext.<->) '[9,0]'::pgcontext.vector LIMIT 3) AS ranked),
     'int8', (SELECT pg_catalog.array_agg(id ORDER BY int8_value OPERATOR(pgcontext.<->) pgcontext.int8vec('[9,0]'))
                FROM (SELECT id, int8_value FROM public.hnsw_replica_docs ORDER BY int8_value OPERATOR(pgcontext.<->) pgcontext.int8vec('[9,0]') LIMIT 3) AS ranked),
     'uint8', (SELECT pg_catalog.array_agg(id ORDER BY uint8_value OPERATOR(pgcontext.<->) pgcontext.uint8vec('[9,0]'))
@@ -81,6 +81,25 @@ SQL
         exit 1
     fi
     printf 'hnsw_replica_promotion_oracle: passed\n'
+}
+
+validate_promoted_document_chunks() {
+    local current
+    current="$(psql_replica -At <<'SQL' | tail -n 1
+SELECT pg_catalog.jsonb_build_object(
+    'count', pg_catalog.count(*),
+    'versions', pg_catalog.array_agg(DISTINCT source_version ORDER BY source_version)
+)
+  FROM pgcontext.current_document_chunks(
+      'replica_chunk_docs', 'body', ARRAY['1']
+  );
+SQL
+)"
+    if [[ "${current}" != '{"count": 1, "versions": [2]}' ]]; then
+        echo "promoted automatic-chunking oracle mismatch: ${current}" >&2
+        exit 1
+    fi
+    printf 'document_chunking_replica_promotion_oracle: passed\n'
 }
 
 start_and_install_extension
@@ -107,6 +126,26 @@ CREATE INDEX hnsw_replica_docs_int8_idx ON public.hnsw_replica_docs USING pgcont
     (int8_value pgcontext.int8vec_hnsw_ops);
 CREATE INDEX hnsw_replica_docs_uint8_idx ON public.hnsw_replica_docs USING pgcontext_hnsw
     (uint8_value pgcontext.uint8vec_hnsw_ops);
+
+CREATE TABLE public.replica_chunk_docs (
+    id bigint PRIMARY KEY,
+    body text NOT NULL,
+    source_version bigint NOT NULL
+);
+INSERT INTO public.replica_chunk_docs VALUES (1, 'replica publication one', 1);
+SELECT pgcontext.create_collection('replica_chunk_docs', 'public.replica_chunk_docs');
+SELECT pgcontext.create_document_chunk_projection('public.replica_document_chunks');
+SELECT pgcontext.register_chunking_profile(
+    'replica_chunk_profile', 'plain_text_v1', 64, 96, 8, 8, 8388608, false
+);
+SELECT pgcontext.register_document_source(
+    'replica_chunk_docs', 'body', 'body', 'source_version',
+    'public.replica_document_chunks', 'replica_chunk_profile'
+);
+SELECT pgcontext.install_document_chunk_trigger('replica_chunk_docs', 'body');
+SELECT pgcontext.enqueue_document_chunking('replica_chunk_docs', 'body', ARRAY['1']);
+SELECT pgcontext.fake_process_document_chunk_job(job_id, lease_token)
+  FROM pgcontext.claim_document_chunk_jobs(1, 60000, 'replica-initial-worker');
 CHECKPOINT;
 SQL
 
@@ -116,11 +155,23 @@ rm -rf "${REPLICA_DIR}"
 start_replica
 
 psql_db -c "INSERT INTO public.hnsw_replica_docs VALUES (10, '[10,0]'::vector, '[10,0]'::int8vec, '[10,0]'::uint8vec)"
+psql_db <<'SQL'
+UPDATE public.replica_chunk_docs
+   SET body = 'replica publication two', source_version = 2
+ WHERE id = 1;
+SELECT pgcontext.fake_process_document_chunk_job(job_id, lease_token)
+  FROM pgcontext.claim_document_chunk_jobs(1, 60000, 'replica-update-worker');
+SQL
 for _ in {1..30}; do
-    if psql_replica -Atc "SELECT count(*) FROM public.hnsw_replica_docs" | grep -qx '4'; then break; fi
+    if psql_replica -Atc "SELECT count(*) FROM public.hnsw_replica_docs" | grep -qx '4' \
+       && psql_replica -Atc "SELECT count(*) FROM pgcontext._current_document_chunk_generations AS current JOIN pgcontext._document_chunk_generations AS generations USING (generation_id) WHERE generations.source_version = 2" | grep -qx '1'; then
+        break
+    fi
     sleep 1
 done
 psql_replica -Atc "SELECT count(*) FROM public.hnsw_replica_docs" | grep -qx '4'
+psql_replica -Atc "SELECT count(*) FROM pgcontext._current_document_chunk_generations AS current JOIN pgcontext._document_chunk_generations AS generations USING (generation_id) WHERE generations.source_version = 2" | grep -qx '1'
 
 "${PG_CTL}" -D "${REPLICA_DIR}" promote -w
 validate_promoted_oracle
+validate_promoted_document_chunks

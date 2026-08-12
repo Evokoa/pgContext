@@ -16,6 +16,7 @@ CREATE TABLE pgcontext._semantic_rerank_sources (
     source_table_name text NOT NULL,
     source_key_attnum int2 NOT NULL CHECK (source_key_attnum > 0),
     source_key_type_oid oid NOT NULL,
+    source_key_collation_oid oid NOT NULL DEFAULT 0,
     source_key_type_schema text NOT NULL,
     source_key_type_name text NOT NULL,
     text_column_name text NOT NULL,
@@ -173,6 +174,7 @@ BEGIN
 
     SELECT attribute.attnum,
            attribute.atttypid,
+           attribute.attcollation,
            type_namespace.nspname AS type_schema,
            type.typname AS type_name
       INTO key_row
@@ -234,7 +236,7 @@ BEGIN
     INSERT INTO pgcontext._semantic_rerank_sources (
         collection_id, source_name, source_table_oid,
         source_schema_name, source_table_name,
-        source_key_attnum, source_key_type_oid,
+        source_key_attnum, source_key_type_oid, source_key_collation_oid,
         source_key_type_schema, source_key_type_name,
         text_column_name, text_attnum, text_type_oid, text_collation_oid,
         text_collation_schema, text_collation_name,
@@ -243,7 +245,7 @@ BEGIN
     ) VALUES (
         p_collection_id, p_source_name, source_oid,
         source_schema, source_table,
-        key_row.attnum, key_row.atttypid,
+        key_row.attnum, key_row.atttypid, key_row.attcollation,
         key_row.type_schema, key_row.type_name,
         p_text_column, text_row.attnum, text_row.atttypid, text_row.attcollation,
         text_row.collation_schema, text_row.collation_name,
@@ -256,6 +258,7 @@ BEGIN
            source_table_name = EXCLUDED.source_table_name,
            source_key_attnum = EXCLUDED.source_key_attnum,
            source_key_type_oid = EXCLUDED.source_key_type_oid,
+           source_key_collation_oid = EXCLUDED.source_key_collation_oid,
            source_key_type_schema = EXCLUDED.source_key_type_schema,
            source_key_type_name = EXCLUDED.source_key_type_name,
            text_column_name = EXCLUDED.text_column_name,
@@ -268,7 +271,31 @@ BEGIN
            source_version_attnum = EXCLUDED.source_version_attnum,
            source_version_type_oid = EXCLUDED.source_version_type_oid,
            content_hash_rule = EXCLUDED.content_hash_rule,
-           registration_revision = pgcontext._semantic_rerank_sources.registration_revision + 1,
+           registration_revision = pgcontext._semantic_rerank_sources.registration_revision +
+               CASE WHEN
+                   pgcontext._semantic_rerank_sources.source_table_oid IS DISTINCT FROM
+                       EXCLUDED.source_table_oid
+                   OR pgcontext._semantic_rerank_sources.source_key_attnum IS DISTINCT FROM
+                       EXCLUDED.source_key_attnum
+                   OR pgcontext._semantic_rerank_sources.source_key_type_oid IS DISTINCT FROM
+                       EXCLUDED.source_key_type_oid
+                   OR pgcontext._semantic_rerank_sources.source_key_collation_oid IS DISTINCT FROM
+                       EXCLUDED.source_key_collation_oid
+                   OR pgcontext._semantic_rerank_sources.text_column_name IS DISTINCT FROM
+                       EXCLUDED.text_column_name
+                   OR pgcontext._semantic_rerank_sources.text_attnum IS DISTINCT FROM
+                       EXCLUDED.text_attnum
+                   OR pgcontext._semantic_rerank_sources.text_type_oid IS DISTINCT FROM
+                       EXCLUDED.text_type_oid
+                   OR pgcontext._semantic_rerank_sources.text_collation_oid IS DISTINCT FROM
+                       EXCLUDED.text_collation_oid
+                   OR pgcontext._semantic_rerank_sources.source_version_column_name IS DISTINCT FROM
+                       EXCLUDED.source_version_column_name
+                   OR pgcontext._semantic_rerank_sources.source_version_attnum IS DISTINCT FROM
+                       EXCLUDED.source_version_attnum
+                   OR pgcontext._semantic_rerank_sources.source_version_type_oid IS DISTINCT FROM
+                       EXCLUDED.source_version_type_oid
+               THEN 1 ELSE 0 END,
            status = 'ready',
            updated_at = pg_catalog.now()
     RETURNING rerank_source_id INTO registered_id;
@@ -301,6 +328,7 @@ BEGIN
        SET source_table_oid = source_class.oid,
            source_key_attnum = key_attribute.attnum,
            source_key_type_oid = key_attribute.atttypid,
+           source_key_collation_oid = key_attribute.attcollation,
            source_key_type_schema = key_type_namespace.nspname,
            source_key_type_name = key_type.typname,
            text_attnum = text_attribute.attnum,
@@ -312,6 +340,7 @@ BEGIN
                CASE WHEN source_class.oid IS DISTINCT FROM registration.source_table_oid
                           OR key_attribute.attnum IS DISTINCT FROM registration.source_key_attnum
                           OR key_attribute.atttypid IS DISTINCT FROM registration.source_key_type_oid
+                          OR key_attribute.attcollation IS DISTINCT FROM registration.source_key_collation_oid
                           OR text_attribute.attnum IS DISTINCT FROM registration.text_attnum
                           OR text_attribute.atttypid IS DISTINCT FROM registration.text_type_oid
                           OR text_attribute.attcollation IS DISTINCT FROM registration.text_collation_oid

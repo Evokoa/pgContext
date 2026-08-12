@@ -6,7 +6,7 @@ enum JsonFrame {
     },
 }
 
-fn decode_bounded_jsonb(
+pub(crate) fn decode_bounded_jsonb(
     datum: pg_sys::Datum,
     is_null: bool,
     maximum_raw_bytes: usize,

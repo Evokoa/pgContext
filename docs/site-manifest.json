@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "1e694a906ff569fd0d34167d4c534261e893a9219b107fb83cbdcef5f9b67ef7",
+  "navigation_sha256": "1a286b514d6133ea66563ce815930f559e7df3d90fc9f685b46761269594090c",
   "pages": [
     {
       "links": [],
@@ -220,6 +220,7 @@
         "release_notes.md",
         "roadmap.md",
         "user_guide/api_reference.md",
+        "user_guide/automatic_chunking.md",
         "user_guide/collections.md",
         "user_guide/configuration.md",
         "user_guide/filters.md",
@@ -236,7 +237,7 @@
         "user_guide/vector_search.md"
       ],
       "path": "index.md",
-      "sha256": "13d280de75497a9d11e0abb04f2c77155cad8bb4eb92719dba646b58450f2650"
+      "sha256": "fa17e428d43993bf1eac85f7a173169fe6a96bcd429002baaf6194f025e9f776"
     },
     {
       "links": [
@@ -347,6 +348,7 @@
       "links": [
         "adaptive_dimension.md",
         "api_reference.md",
+        "automatic_chunking.md",
         "client_examples.md",
         "collections.md",
         "configuration.md",
@@ -382,7 +384,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "0122b0e5c60fa28414db5210e9ed7adf1639bb598b800cf72ef46fb9e3169f99"
+      "sha256": "574b3300c7dc3a04dd7c6facee965e2e01207fed8b1156aaac1767dc15999ca6"
     },
     {
       "links": [
@@ -395,6 +397,7 @@
     {
       "links": [
         "adaptive_dimension.md",
+        "automatic_chunking.md",
         "indexes.md",
         "indexes.md",
         "multi_model.md",
@@ -404,7 +407,12 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "fdcfcdf91d7702262d6bb0ecf3fc3a9008179b95352f00a499f037155d3123d7"
+      "sha256": "8ed278d21d707396853b1a3d816f44f19f98fbbd906f75027d03cb73802325ae"
+    },
+    {
+      "links": [],
+      "path": "user_guide/automatic_chunking.md",
+      "sha256": "7d331a2cb7ce1e465666984ffc1e5f529449b568e8cc450f418a0426affb562d"
     },
     {
       "links": [],
@@ -511,6 +519,7 @@
     {
       "links": [
         "../../SECURITY.md",
+        "automatic_chunking.md",
         "https://github.com/evokoa/pgcontext/issues",
         "indexes.md#build-memory-budget",
         "mailto:team@evokoa.com",
@@ -519,12 +528,12 @@
         "troubleshooting.md"
       ],
       "path": "user_guide/operations.md",
-      "sha256": "2bb0b926f3117badfe6c294cc6e54e57b6b02222f07999f4f04514edded0a5cc"
+      "sha256": "c01c4edf85d31c0f58e1b24ad43d21c500925fa574a84fd9f4282dac574a7b87"
     },
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "87517af78d782f081ac332aede67ce702f42e0c31e1afee0e0a3275343ada21b"
+      "sha256": "8629d34e6fcee142d4cca2e5fe8433f56421791002dbe995d53087e09458e1f1"
     },
     {
       "links": [
@@ -582,7 +591,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "9bf9e99e74e9c06d5d731500a43e18e875ae32b5aaf3fd1b7ca286004d908088"
+      "sha256": "555f8f6adf739438f4e1d46227376042d876095b8ae845501f468cc3ba386754"
     },
     {
       "links": [
@@ -591,6 +600,7 @@
         "#sparse-learned-retrieval",
         "api_reference.md",
         "api_reference.md",
+        "automatic_chunking.md",
         "filters.md",
         "filters.md",
         "hybrid_retrieval.md",
@@ -621,7 +631,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/retrieval_methods.md",
-      "sha256": "3b8f5969a463628d30401fc14c74940fef026b1c150d2029853d523093a12f3c"
+      "sha256": "f1112957dedaf2d1bed79aabe543645481690d3a3d60fe9a21b13825da2528f8"
     },
     {
       "links": [
@@ -664,6 +674,7 @@
         "#summary-artifacts-and-deterministic-partition-rollups",
         "#summary-artifacts-and-deterministic-partition-rollups",
         "../benchmarks/quantized_hnsw_1m.md",
+        "automatic_chunking.md",
         "https://aclanthology.org/2025.tacl-1.36/",
         "https://aclanthology.org/P11-1101/",
         "https://arxiv.org/abs/2109.10086",
@@ -710,7 +721,7 @@
         "semantic_reranking.md"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "7f15ca4166b33513e425408aba80c9044bcadfb5f08633e3f2de781e8d2cf9dc"
+      "sha256": "3f2dcb7c8461cecaf6a7583d4a3565397bbb19115db6108ccb46006c606bdf7d"
     },
     {
       "links": [],
@@ -720,7 +731,7 @@
     {
       "links": [],
       "path": "user_guide/security.md",
-      "sha256": "ed007bbe814c01bd73c814f05d04c2b74e034e1db9c143cf5c5b9e64a1519132"
+      "sha256": "2e3df045e9e805982feb42a2c86b6ae346a3d79b5f58fb09baccb4ec773f7068"
     },
     {
       "links": [],
@@ -730,7 +741,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "9ccc9bbf629f099ac3a3ab3ef4ebdd04bc0f146e956a93628f20a7cfccf6194c"
+      "sha256": "9fceee57a31706ea2b946b4f5b519e22653137071ce8e86ff449938efd9d6cf9"
     },
     {
       "links": [],
@@ -746,6 +757,7 @@
       "links": [
         "../benchmarks/quantized_hnsw_1m.md",
         "api_reference.md",
+        "automatic_chunking.md",
         "collections.md",
         "filters.md",
         "hybrid_retrieval.md",
@@ -764,7 +776,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "614895755abfce648b00f4254b958f5f5db6482a7c0ab423bf21d62b9ba77165"
+      "sha256": "464016eb8472d7bf21764ad24a306cf66640fdb53557e8bfad1574399ea65061"
     },
     {
       "links": [

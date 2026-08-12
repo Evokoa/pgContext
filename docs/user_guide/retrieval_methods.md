@@ -245,6 +245,7 @@ stages, weighting, or reranking. Guide: [Hybrid retrieval](hybrid_retrieval.md).
 | Sparse (learned) | `pgcontext.search_sparse` | [vector_search.md](vector_search.md) |
 | Late-interaction | `pgcontext.rerank_late_interaction`, `pgcontext.search_late_interaction` | [vector_search.md](vector_search.md) |
 | External semantic rerank | `pgcontext.prepare_semantic_rerank`, `pgcontext.finalize_semantic_rerank` | [semantic_reranking.md](semantic_reranking.md) |
+| Automatic document chunking | `pgcontext.enqueue_document_chunking`, `pgcontext.current_document_chunks` | [automatic_chunking.md](automatic_chunking.md) |
 | Lexical (full-text) | `pgcontext.query` lexical branch, `pgcontext.query_lexical` | [lexical_retrieval.md](lexical_retrieval.md) |
 | Fuzzy (trigram) | `pgcontext.query_fuzzy` | [lexical_retrieval.md](lexical_retrieval.md) |
 | Example-based | `pgcontext.recommend`, `pgcontext.discover` | [vector_search.md](vector_search.md) |

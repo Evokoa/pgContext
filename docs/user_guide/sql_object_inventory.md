@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `32a5221dc8f8bc6e6f11b47de231f4df14503973e8357ce0d6062c98d49a667f`
+Full SQL artifact SHA-256: `b891daed767c5783a77f26b13ac12c1f0106b9b1712a54c823c4698d24eed910`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,9 +16,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 399 |
-| Tables | 28 |
-| Views | 19 |
+| Functions | 455 |
+| Tables | 38 |
+| Views | 28 |
 | Triggers | 6 |
 | Casts | 35 |
 | Operators | 62 |
@@ -55,6 +55,10 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._artifact_segments`
 - table `pgcontext._build_deltas`
 - table `pgcontext._build_jobs`
+- table `pgcontext._chunking_profile_alias_history`
+- table `pgcontext._chunking_profile_alias_retained`
+- table `pgcontext._chunking_profile_aliases`
+- table `pgcontext._chunking_profiles`
 - table `pgcontext._collection_aliases`
 - table `pgcontext._collection_fuzzy_sources`
 - table `pgcontext._collection_late_interaction_tokens`
@@ -67,6 +71,12 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._collection_sparse_vectors`
 - table `pgcontext._collection_vectors`
 - table `pgcontext._collections`
+- table `pgcontext._current_document_chunk_generations`
+- table `pgcontext._document_chunk_generations`
+- table `pgcontext._document_chunk_jobs`
+- table `pgcontext._document_chunk_staging`
+- table `pgcontext._document_embedding_jobs`
+- table `pgcontext._document_sources`
 - table `pgcontext._embedding_migrations`
 - table `pgcontext._embedding_profiles`
 - table `pgcontext._generation_aliases`
@@ -88,6 +98,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 - view `pgcontext._collection_acl`
 - view `pgcontext._visible_artifact_segments`
 - view `pgcontext._visible_build_jobs`
+- view `pgcontext._visible_chunking_profile_alias_retained`
+- view `pgcontext._visible_chunking_profile_aliases`
+- view `pgcontext._visible_chunking_profiles`
 - view `pgcontext._visible_collection_fuzzy_sources`
 - view `pgcontext._visible_collection_late_interaction`
 - view `pgcontext._visible_collection_lexical_fields`
@@ -98,6 +111,12 @@ The artifact fingerprint covers every object declaration, function result shape,
 - view `pgcontext._visible_collection_sparse_vectors`
 - view `pgcontext._visible_collection_vectors`
 - view `pgcontext._visible_collections`
+- view `pgcontext._visible_current_document_chunk_generations`
+- view `pgcontext._visible_document_chunk_generations`
+- view `pgcontext._visible_document_chunk_jobs`
+- view `pgcontext._visible_document_chunk_staging`
+- view `pgcontext._visible_document_embedding_jobs`
+- view `pgcontext._visible_document_sources`
 - view `pgcontext._visible_embedding_profiles`
 - view `pgcontext._visible_pgvector_ownership_conversions`
 - view `pgcontext._visible_query_stats`
@@ -111,6 +130,9 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 
 - `"_begin_pgvector_ownership_conversion"`
 - `"_compact_hnsw_segment_pair"`
+- `"_consume_document_chunk_permit"`
+- `"_document_chunk_raw_datum_bytes"`
+- `"_document_chunk_source_key_visible"`
 - `"_enqueue_ivfflat_compaction_debt"`
 - `"_hnsw_candidates"`
 - `"_hnsw_masked_candidates"`
@@ -155,6 +177,9 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"build_mmap_hnsw_artifact"`
 - `"bulk_delete_points"`
 - `"bulk_upsert_points"`
+- `"cancel_document_chunk_job"`
+- `"checkpoint_document_chunk_job"`
+- `"claim_document_chunk_jobs"`
 - `"cleanup_artifact_segments"`
 - `"cleanup_semantic_rerank_requests"`
 - `"clear_payload"`
@@ -173,9 +198,11 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"count"`
 - `"create_collection"`
 - `"create_collection_alias"`
+- `"create_document_chunk_projection"`
 - `"create_embedding_migration"`
 - `"create_fuzzy_index"`
 - `"create_lexical_index"`
+- `"current_document_chunks"`
 - `"cutover_pgvector_ownership_conversion"`
 - `"delete_payload"`
 - `"delete_points"`
@@ -184,6 +211,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"disable_pgvector_binding"`
 - `"disable_pgvector_name_facade"`
 - `"discover"`
+- `"document_chunking_progress"`
+- `"drain_chunking_profile_alias"`
 - `"drop_collection"`
 - `"drop_collection_alias"`
 - `"drop_fuzzy_source"`
@@ -196,6 +225,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"enable_pgvector_name_facade"`
 - `"encode_artifact_segment"`
 - `"enqueue_build_job"`
+- `"enqueue_document_chunking"`
+- `"enqueue_document_chunking_profile"`
 - `"enqueue_hnsw_compaction"`
 - `"enqueue_ivfflat_compaction"`
 - `"estimate_index_memory"`
@@ -206,6 +237,8 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"explain_sparse"`
 - `"explore"`
 - `"facet"`
+- `"fail_document_chunk_job"`
+- `"fake_process_document_chunk_job"`
 - `"finalize_pgvector_ownership_conversion"`
 - `"finalize_semantic_rerank"`
 - `"fuzzy_sources"`
@@ -237,6 +270,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"halfvec_to_vector"`
 - `"halfvec_typmod_in"`
 - `"halfvec_typmod_out"`
+- `"heartbeat_document_chunk_job"`
 - `"hnsw_build_stats"`
 - `"hnsw_l2_distance"`
 - `"hnsw_last_scan_work"`
@@ -246,6 +280,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"index_diagnostics"`
 - `"index_status"`
 - `"inner_product"`
+- `"install_document_chunk_trigger"`
 - `"int8vec"`
 - `"int8vec_cmp"`
 - `"int8vec_cosine_distance"`
@@ -272,6 +307,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"int8vec_typmod_out"`
 - `"integer_vector_avg_final"`
 - `"integer_vector_sum_final"`
+- `"invalidate_document_chunks"`
 - `"ivfflat_index_info"`
 - `"ivfflat_last_scan_work"`
 - `"l1_distance"`
@@ -283,11 +319,14 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"optimization_status"`
 - `"pgvector_compatibility_inventory"`
 - `"pgvector_ownership_conversions"`
+- `"prepare_chunking_profile_alias"`
 - `"prepare_semantic_rerank"`
 - `"product_quantize"`
 - `"product_reconstruct"`
+- `"promote_chunking_profile_alias"`
 - `"publish_artifact_segment"`
 - `"publish_artifact_segment_file"`
+- `"publish_document_chunk_generation"`
 - `"query"`
 - `"query_cohort_stats"`
 - `"query_discover"`
@@ -308,10 +347,13 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"query_telemetry_queue_stats"`
 - `"query_topology_expand"`
 - `"query_weight"`
+- `"rebuild_document_chunk_job"`
 - `"recall_check"`
 - `"recommend"`
 - `"record_query_stat"`
 - `"refresh_lexical_catalog"`
+- `"register_chunking_profile"`
+- `"register_document_source"`
 - `"register_embedding_profile"`
 - `"register_filter_column"`
 - `"register_fuzzy_source"`
@@ -329,6 +371,9 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"rerank_quantized_candidates"`
 - `"retire_artifact_segment"`
 - `"retry_build_job"`
+- `"retry_document_chunk_job"`
+- `"rollback_chunking_profile_alias"`
+- `"rollback_document_chunk_generation"`
 - `"rollback_pgvector_ownership_conversion"`
 - `"run_build_job"`
 - `"run_pgvector_ownership_conversion"`
@@ -371,6 +416,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"sparsevec_typmod_in"`
 - `"sparsevec_typmod_out"`
 - `"sparsevec_values"`
+- `"stage_document_chunks"`
 - `"start_build_job"`
 - `"start_pgvector_ownership_conversion"`
 - `"telemetry"`
@@ -429,44 +475,73 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext._attach_fuzzy_index`
 - `pgcontext._attach_lexical_index`
 - `pgcontext._begin_late_interaction_registration`
+- `pgcontext._cancel_document_chunk_job`
 - `pgcontext._capture_build_point_delta`
 - `pgcontext._capture_late_interaction_tokens`
+- `pgcontext._checkpoint_document_chunk_job`
+- `pgcontext._claim_document_chunk_jobs`
 - `pgcontext._cleanup_late_interaction_registration`
 - `pgcontext._cleanup_semantic_rerank_requests`
+- `pgcontext._complete_document_chunk_publication`
 - `pgcontext._cosine_distance_fast`
 - `pgcontext._detach_fuzzy_index`
 - `pgcontext._detach_lexical_index`
+- `pgcontext._document_chunk_outbox_trigger`
+- `pgcontext._drain_chunking_profile_alias`
 - `pgcontext._drop_fuzzy_source`
 - `pgcontext._drop_lexical_source`
 - `pgcontext._enforce_build_job_terminal_state`
+- `pgcontext._enqueue_document_chunk_job`
+- `pgcontext._fail_document_chunk_job`
 - `pgcontext._finalize_semantic_rerank_request`
 - `pgcontext._finish_late_interaction_registration`
+- `pgcontext._heartbeat_document_chunk_job`
 - `pgcontext._initialize_collection_source_revision`
 - `pgcontext._insert_semantic_rerank_request`
+- `pgcontext._install_document_chunk_outbox_trigger`
+- `pgcontext._invalidate_document_chunk_aliases`
 - `pgcontext._l1_distance_fast`
 - `pgcontext._l2_distance_fast8`
 - `pgcontext._l2_distance_fast`
 - `pgcontext._late_interaction_ann_candidate_points`
+- `pgcontext._load_document_chunk_claim_source`
+- `pgcontext._load_document_chunk_lease_expiry`
+- `pgcontext._load_document_chunk_staging`
+- `pgcontext._lock_document_chunk_job_alias`
+- `pgcontext._lock_document_chunk_read_alias`
+- `pgcontext._lock_document_chunk_source`
 - `pgcontext._mapped_hnsw_sql_drop`
 - `pgcontext._negative_inner_product_fast`
 - `pgcontext._pin_generation`
+- `pgcontext._prepare_chunking_profile_alias`
 - `pgcontext._prepare_late_interaction_repair`
+- `pgcontext._promote_chunking_profile_alias`
 - `pgcontext._publish_generation`
+- `pgcontext._rebuild_document_chunk_job`
 - `pgcontext._refresh_collection_source_table`
+- `pgcontext._refresh_document_chunk_source`
 - `pgcontext._refresh_lexical_catalog_oids`
 - `pgcontext._refresh_payload_source_bindings`
 - `pgcontext._refresh_semantic_rerank_source`
 - `pgcontext._refresh_sparse_vector_source_binding`
 - `pgcontext._refresh_vector_source_binding`
+- `pgcontext._register_chunking_profile`
+- `pgcontext._register_document_source`
 - `pgcontext._register_fuzzy_source`
 - `pgcontext._register_lexical_source`
 - `pgcontext._register_lexical_tsquery`
 - `pgcontext._register_semantic_rerank_source`
 - `pgcontext._reject_build_job_progress_regression`
 - `pgcontext._reject_embedding_profile_mutation`
+- `pgcontext._release_document_chunk_claim`
 - `pgcontext._require_collection_owner`
+- `pgcontext._retry_document_chunk_job`
+- `pgcontext._rollback_chunking_profile_alias`
+- `pgcontext._rollback_document_chunk_generation`
 - `pgcontext._set_embedding_profile_lifecycle`
+- `pgcontext._stage_document_chunk_response`
 - `pgcontext._store_late_interaction_tokens`
+- `pgcontext._supersede_document_chunk_claim`
 - `pgcontext._unpin_generation`
 - `pgcontext.bitvec_out`
 - `pgcontext.bitvec_send`

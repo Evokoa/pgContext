@@ -77,6 +77,14 @@ Reviewed groups:
   source version/hash, point deletion, filter, ACL, and RLS. Private candidate
   rows store no source text or source keys; default diagnostics store no query,
   tenant, metadata value, or provider payload.
+- Automatic document chunking: profile/source registration, enqueue, claim,
+  stage, publish, rollback, and current-chunk reads require collection
+  membership or ownership as documented. Text hydration executes as the
+  invoker under current source ACL/RLS. The SECURITY DEFINER registration,
+  staging, and publication helpers consume a one-shot backend-local permit
+  armed only after Rust validates the complete contract, so direct helper calls
+  cannot bypass source, worker-response, lease, or projection checks. Default
+  errors and progress rows contain no document or chunk text.
 - Artifact operations: `publish_artifact_segment`,
   `publish_artifact_segment_file`, `artifact_segments`,
   `artifact_segment_memory`, `artifact_segment_diagnostics`,

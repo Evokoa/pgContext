@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 255;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 274;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -422,6 +422,16 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_semantic_rerank_sources", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_semantic_rerank_requests", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_semantic_rerank_candidates", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_chunking_profiles", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_chunking_profile_aliases", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_chunking_profile_alias_history", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_chunking_profile_alias_retained", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_document_sources", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_document_chunk_generations", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_document_chunk_jobs", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_document_chunk_staging", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_current_document_chunk_generations", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_document_embedding_jobs", SqlLifecycle::Internal),
     SqlContractObject::object(
         SqlObjectKind::Table,
         Some("pgcontext"),
@@ -540,6 +550,15 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_semantic_rerank_sources", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_semantic_rerank_requests", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_semantic_rerank_candidates", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_chunking_profiles", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_chunking_profile_aliases", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_chunking_profile_alias_retained", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_document_sources", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_document_chunk_generations", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_document_chunk_jobs", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_current_document_chunk_generations", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_document_chunk_staging", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_document_embedding_jobs", SqlLifecycle::Internal),
     SqlContractObject::object(
         SqlObjectKind::View,
         Some("pgcontext"),

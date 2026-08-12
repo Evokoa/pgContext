@@ -23,6 +23,14 @@ mod collection_aliases;
 mod collection_limits;
 #[cfg(any(test, feature = "pg_test"))]
 pub(crate) mod contract;
+mod document_chunking;
+mod document_chunking_catalog_schema;
+mod document_chunking_dump_schema;
+mod document_chunking_lifecycle_schema;
+mod document_chunking_outbox_schema;
+mod document_chunking_profile_schema;
+mod document_chunking_profile_state_schema;
+mod document_chunking_rollback_schema;
 mod domain_types;
 mod embedding_migrations;
 mod embedding_profiles;
@@ -195,6 +203,10 @@ mod tests {
     include!("pg_tests/adaptive_dimension.rs");
     include!("pg_tests/multi_model.rs");
     include!("pg_tests/semantic_rerank.rs");
+    include!("pg_tests/document_chunking.rs");
+    include!("pg_tests/document_chunking_boundaries.rs");
+    include!("pg_tests/document_chunking_registration.rs");
+    include!("pg_tests/document_chunking_aliases.rs");
     include!("pg_tests/lexical_catalog.rs");
     include!("pg_tests/lexical_query.rs");
     include!("pg_tests/lexical_index.rs");
