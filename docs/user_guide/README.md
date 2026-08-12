@@ -75,6 +75,7 @@ Their dependency order and acceptance requirements are in the
 - [Dense vectors and exact search](vector_search.md)
 - [Multi-tenancy runbook](multi_tenancy.md)
 - [Client-facing examples](client_examples.md)
+- [Agent memory example](agent_memory.md)
 - [Filters](filters.md)
 - [Hybrid retrieval](hybrid_retrieval.md)
 - [Retrieval methods overview](retrieval_methods.md)

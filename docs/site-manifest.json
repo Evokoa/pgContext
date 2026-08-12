@@ -29,11 +29,19 @@
       "sha256": "e39fcc2e9e3de1b75306edbb397096035a717f2d7a704abec983dd8cba6fa8de"
     },
     {
+      "path": "examples/sql/06_agent_memory.sql",
+      "sha256": "6e786e63374230b67929451c5fb92124100a4b9c8f93530b51608e93f4a742a0"
+    },
+    {
+      "path": "playground/agent_memory.sql",
+      "sha256": "f0fff4e6d134b9d013b1193146a7376eda1cd0c27a8d1b1613257c6c86767792"
+    },
+    {
       "path": "playground/demo.sql",
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "1cbeb62c9b47db31419db3cbe82cbd971cbc98132e443a64dc651d7e5cda2a30",
+  "navigation_sha256": "1e940c4299eb29b24b522af8d11540478a8fdc08f57e15e5683a22f64271dcf0",
   "pages": [
     {
       "links": [],
@@ -333,6 +341,7 @@
     },
     {
       "links": [
+        "agent_memory.md",
         "api_reference.md",
         "client_examples.md",
         "collections.md",
@@ -364,7 +373,23 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "b9fd0d02a06dbae7f4ba40aa144e018230db0943ce2ee98fd0db3c5c71012018"
+      "sha256": "a60a5614979cc1aab13d1a0a103e54140dbf51f1c404adadf7e09e1dd985d94d"
+    },
+    {
+      "links": [
+        "../../examples/sql/06_agent_memory.sql",
+        "../../playground/agent_memory.sql",
+        "client_examples.md",
+        "filters.md",
+        "https://github.com/evokoa/pggraph",
+        "https://polygres.com/user-demo",
+        "hybrid_retrieval.md",
+        "hybrid_retrieval.md",
+        "playground.md",
+        "roadmap.md#graph-augmented-retrieval"
+      ],
+      "path": "user_guide/agent_memory.md",
+      "sha256": "fd8352e126cf13c94bade5b6b66901482943f9cde611076e4be6bae9cb3f3589"
     },
     {
       "links": [
@@ -377,9 +402,11 @@
       "sha256": "3e74fc6f73fde30dc4a1f6cf0a9fc217be8550813d837b09718a72ed6366bc67"
     },
     {
-      "links": [],
+      "links": [
+        "agent_memory.md"
+      ],
       "path": "user_guide/client_examples.md",
-      "sha256": "67fffd050540d0559f9ef89691713c8a8ade2f1c6ea9731f336cbd1f57c40057"
+      "sha256": "bd6f32166ad45c0c9510f272ddc13750cc2ab36e99a109eac86ccd1f47240e2e"
     },
     {
       "links": [
@@ -485,10 +512,11 @@
     },
     {
       "links": [
+        "../../playground/agent_memory.sql",
         "../../playground/demo.sql"
       ],
       "path": "user_guide/playground.md",
-      "sha256": "3ca69ee71ebfd028a1035c5e81e06e65f25e2ccdd8ab5c5cc45a49682dfa6049"
+      "sha256": "e57483934166f90187e8ebca576039d897d4866aee853b5af447552527b122dd"
     },
     {
       "links": [
@@ -644,6 +672,7 @@
         "docs/roadmap.md",
         "docs/roadmap.md",
         "docs/roadmap.md",
+        "docs/user_guide/agent_memory.md",
         "docs/user_guide/api_reference.md",
         "docs/user_guide/filters.md",
         "docs/user_guide/filters.md",
@@ -660,8 +689,9 @@
         "https://evokoa.com",
         "https://evokoa.com",
         "https://evokoa.com",
+        "https://github.com/Evokoa/homebrew-tap",
         "https://github.com/evokoa/pgcontext/pkgs/container/pgcontext",
-        "https://github.com/evokoa/pgcontext/releases/tag/v0.1.0",
+        "https://github.com/evokoa/pgcontext/releases/tag/v0.2.0",
         "https://github.com/evokoa/pgcontext/stargazers",
         "https://github.com/evokoa/pggraph",
         "https://github.com/evokoa/pggraph",
@@ -672,10 +702,10 @@
         "https://img.shields.io/badge/PostgreSQL-17%20%26%2018-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white",
         "https://img.shields.io/badge/docs-pgContext-0ea5e9?style=flat-square",
         "https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square",
-        "https://img.shields.io/badge/version-0.1.0-2ea44f?style=flat-square",
+        "https://img.shields.io/badge/version-0.2.0-2ea44f?style=flat-square",
         "https://img.shields.io/discord/1496159762704896022?style=for-the-badge&label=Join%20Discord&logo=discord&logoColor=white&color=5865F2",
         "https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars",
-        "https://pgxn.org/dist/pgcontext/0.1.0/",
+        "https://pgxn.org/dist/pgcontext/0.2.0/",
         "https://polygres.com",
         "https://polygres.com",
         "https://polygres.com",
@@ -688,7 +718,7 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "066ebbe15bdfced0245e60c1a89195c6fd30a852b71c3e2ad82f37a8fd179f69"
+      "sha256": "52f757146d7e2dbd18af9d8869503323ae49b9d43d8ea6880b29fd349b532dca"
     },
     {
       "links": [],
