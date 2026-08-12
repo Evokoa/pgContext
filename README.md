@@ -95,6 +95,9 @@ See pgContext's retrieval in action (hosted on [Polygres](https://polygres.com))
 - **[Wikipedia hybrid search](https://polygres.com/wikipedia)**: query a Wikipedia-scale dataset with live semantic + keyword hybrid retrieval.
 - **[Memory demo](https://polygres.com/user-demo)**: an interactive hybrid-retrieval playground with adjustable fusion weights across retrieval channels.
 
+Reproduce the memory pattern locally with the open-source
+[agent memory example](docs/user_guide/agent_memory.md) (`scripts/quickstart.sh agent-memory`).
+
 ## Vector search
 
 <p align="center">

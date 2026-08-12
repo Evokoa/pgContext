@@ -48,6 +48,11 @@ case "${MODE}" in
     compose exec -T postgres psql -U postgres -d pgcontext \
       <"${ROOT}/playground/demo.sql"
     ;;
+  agent-memory)
+    start
+    compose exec -T postgres psql -U postgres -d pgcontext \
+      <"${ROOT}/playground/agent_memory.sql"
+    ;;
   setup)
     start
     ;;
@@ -64,7 +69,7 @@ case "${MODE}" in
     "${ROOT}/release/build-packages.sh" "$@"
     ;;
   *)
-    echo "usage: scripts/quickstart.sh [demo|setup|psql|clean|package]" >&2
+    echo "usage: scripts/quickstart.sh [demo|agent-memory|setup|psql|clean|package]" >&2
     exit 2
     ;;
 esac

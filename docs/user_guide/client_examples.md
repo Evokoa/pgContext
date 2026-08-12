@@ -20,6 +20,9 @@ using hidden catalog tables or internal APIs. The runnable SQL files live under
   exact search over a registered sparse source column with
   `pgcontext.search_sparse`, and exact dense+sparse RRF query fusion with
   `pgcontext.query`.
+- `06_agent_memory.sql`: model durable agent memory over users, sessions, and
+  decisions; run filtered dense search, hybrid retrieval, and hydrate a context
+  pack for downstream LLM use. See [Agent memory example](agent_memory.md).
 
 Each script starts with `CREATE EXTENSION IF NOT EXISTS pgcontext;` and can be
 adapted into migrations or application smoke tests.

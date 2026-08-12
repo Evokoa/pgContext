@@ -95,6 +95,10 @@
           "path": "user_guide/client_examples.md"
         },
         {
+          "title": "Agent memory example",
+          "path": "user_guide/agent_memory.md"
+        },
+        {
           "title": "Multi-tenancy",
           "path": "user_guide/multi_tenancy.md"
         },
