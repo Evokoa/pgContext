@@ -89,6 +89,16 @@ impl ProfileName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Returns the bytes reserved by the owned profile-name allocation.
+    ///
+    /// Budget projections use the retained capacity rather than the visible
+    /// length so a caller-provided `String` with spare capacity cannot evade a
+    /// hard memory ceiling.
+    #[must_use]
+    pub fn allocation_capacity_bytes(&self) -> usize {
+        self.0.capacity()
+    }
 }
 
 impl fmt::Display for ProfileName {

@@ -90,6 +90,29 @@ assert_postgres_matrix_scope() {
   fi
 }
 
+assert_worker_platform_matrix_scope() {
+  local actual
+  local expected
+
+  actual="$(printf '%s\n' "${worker_platform_builds_block}" | awk '
+    /^        include:$/ { in_include = 1; next }
+    in_include && /^    steps:$/ { exit }
+    in_include { print }
+  ')"
+  expected='          - runner: ubuntu-24.04
+            platform: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+          - runner: macos-15-intel
+            platform: darwin-x86_64
+          - runner: macos-15
+            platform: darwin-aarch64'
+  if [[ "${actual}" != "${expected}" ]]; then
+    echo "release-gates worker matrix must contain exactly the four frozen platform rows" >&2
+    exit 1
+  fi
+}
+
 assert_artifact_report_command_contains() {
   local block="$1"
   local needle="$2"
@@ -111,6 +134,7 @@ supported_postgres_block="$(job_block "supported-postgres")"
 release_artifact_summary_block="$(job_block "release-artifact-summary")"
 postgres_matrix_summary_block="$(job_block "postgres-matrix-summary")"
 platform_builds_block="$(job_block "platform-builds")"
+worker_platform_builds_block="$(job_block "worker-platform-builds")"
 platform_build_summary_block="$(job_block "platform-build-summary")"
 fuzz_release_campaign_block="$(job_block "fuzz-release-campaign")"
 
@@ -118,6 +142,7 @@ assert_block_present "supported-postgres" "${supported_postgres_block}"
 assert_block_present "release-artifact-summary" "${release_artifact_summary_block}"
 assert_block_present "postgres-matrix-summary" "${postgres_matrix_summary_block}"
 assert_block_present "platform-builds" "${platform_builds_block}"
+assert_block_present "worker-platform-builds" "${worker_platform_builds_block}"
 assert_block_present "platform-build-summary" "${platform_build_summary_block}"
 assert_block_present "fuzz-release-campaign" "${fuzz_release_campaign_block}"
 
@@ -128,6 +153,7 @@ assert_workflow_contains "fuzz_jobs:"
 assert_postgres_matrix_entry "17" "pg17"
 assert_postgres_matrix_entry "18" "pg18"
 assert_postgres_matrix_scope
+assert_worker_platform_matrix_scope
 assert_block_contains "${supported_postgres_block}" "cargo check -p context-pg --no-default-features --features \${{ matrix.feature }}"
 assert_block_contains "${supported_postgres_block}" "run: scripts/run-v1-pgrx-tests.sh"
 assert_block_contains "${supported_postgres_block}" "scripts/run-postgres-matrix-gates.sh --major \${{ matrix.pg }} --mode heavy --out-dir target/postgres-matrix/pg\${{ matrix.pg }}-heavy"
@@ -164,6 +190,16 @@ assert_block_contains "${postgres_matrix_summary_block}" "name: combined-postgre
 assert_block_contains "${postgres_matrix_summary_block}" "path: target/postgres-matrix/all-postgres"
 assert_block_contains "${platform_builds_block}" "run: tests/shell/check_release_gates_workflow_smoke.sh"
 assert_block_contains "${platform_builds_block}" "run: tests/shell/upgrade_matrix_staging_smoke.sh"
+assert_block_contains "${worker_platform_builds_block}" 'runs-on: ${{ matrix.runner }}'
+assert_block_contains "${worker_platform_builds_block}" 'case "${{ matrix.platform }}:$(uname -m)" in'
+assert_step_contains "${worker_platform_builds_block}" "Build release worker without test hooks" "cargo build --release -p pgcontext-worker --bin pgcontext-worker"
+assert_step_contains "${worker_platform_builds_block}" "Test worker contracts" "cargo test -p pgcontext-worker --all-targets"
+assert_step_contains "${worker_platform_builds_block}" "Test worker contracts" "cargo test -p pgcontext-worker --features worker-test-hooks --test worker_binary"
+assert_step_contains "${worker_platform_builds_block}" "Test worker contracts" "cargo clippy -p pgcontext-worker --all-targets -- -D warnings"
+assert_step_contains "${worker_platform_builds_block}" "Verify frozen platform manifest" 'required_platforms'
+assert_step_contains "${worker_platform_builds_block}" "Verify frozen platform manifest" '${{ matrix.platform }}'
+assert_step_contains "${worker_platform_builds_block}" "Upload worker binary" 'name: pgcontext-worker-${{ matrix.platform }}'
+assert_step_contains "${worker_platform_builds_block}" "Upload worker binary" "path: target/release/pgcontext-worker"
 assert_block_contains "${platform_build_summary_block}" "platform-build-summary:"
 assert_block_contains "${platform_build_summary_block}" "name: Combined platform build evidence"
 assert_block_contains "${platform_build_summary_block}" "needs: platform-builds"

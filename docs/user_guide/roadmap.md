@@ -1321,11 +1321,15 @@ frozen equal-weight held-out contract passed at one million rows on PostgreSQL
 17 and 18.
 Immutable profile lifecycle and versioned coverage, bounded weighted-RRF
 execution, explicit degraded policy, equivalent filter/ACL/RLS rechecks, and
-profile-backed migration records are implemented. Provider-neutral rerank
-envelopes and a deterministic bounded character-span chunking kernel are
-foundations only; model-backed semantic reranking, tokenizer-aware chunking,
-SQL ingestion catalogs, durable jobs, and external-worker publication remain
-incomplete. See [Multi-model retrieval](multi_model.md).
+profile-backed migration records are implemented. Provider-neutral semantic
+reranking is also shipped through a detached bounded prepare/finalize API and
+a digest-verified no-network Rust worker. Worker output is untrusted ordering
+input and PostgreSQL rechecks current source, filter, ACL, and RLS state before
+returning any row. The private fixture adapter certifies that contract without
+claiming broad transformer compatibility or bundling weights. Tokenizer-aware
+chunking, SQL ingestion catalogs, durable jobs, and external chunk publication
+remain incomplete. See [Multi-model retrieval](multi_model.md) and
+[Semantic reranking](semantic_reranking.md).
 
 Depends on: stable source and chunk occurrence identities, immutable
 model/profile metadata bound to named vectors, composite query execution,

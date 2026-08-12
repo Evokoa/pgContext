@@ -188,6 +188,16 @@ their backfill with the profile-backed migration APIs, and keep the incumbent
 profile active or draining until held-out multi-model quality and coverage
 checks pass. See [Multi-model retrieval](multi_model.md).
 
+For semantic reranking, deploy `pgcontext-worker` as an application-side
+process, never as a PostgreSQL shared library or untracked background task.
+Preload only operator-provided artifacts whose length, digest, platform,
+license, and distribution policy match the immutable manifest. Monitor bounded
+`unavailable`, `timeout`, `crash`, `partial_output`, `expired`, and
+`circuit_open` labels without recording envelope contents. Clean expired or
+finalized request state with `cleanup_semantic_rerank_requests`; the source
+table and registered point mappings remain authoritative. See
+[Semantic reranking](semantic_reranking.md).
+
 Before building or rebuilding a `pgcontext_hnsw` index, size
 `maintenance_work_mem` for the corpus: the build enforces it as a hard budget
 and stops with SQLSTATE `22023` plus a suggested-setting `HINT` when the

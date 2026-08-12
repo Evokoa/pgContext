@@ -162,6 +162,51 @@ jobs:
           name: combined-postgres-matrix-report
           path: target/postgres-matrix/all-postgres
 
+  worker-platform-builds:
+    name: Worker ${{ matrix.platform }} contract
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+          - runner: macos-15-intel
+            platform: darwin-x86_64
+          - runner: macos-15
+            platform: darwin-aarch64
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # pinned
+        with:
+          toolchain: 1.96.0
+          components: clippy
+      - name: Verify runner architecture
+        run: |
+          case "${{ matrix.platform }}:$(uname -m)" in
+            linux-x86_64:x86_64|darwin-x86_64:x86_64|linux-aarch64:aarch64|darwin-aarch64:arm64) ;;
+            *) echo "worker runner architecture mismatch" >&2; exit 1 ;;
+          esac
+      - name: Build release worker without test hooks
+        run: cargo build --release -p pgcontext-worker --bin pgcontext-worker
+      - name: Test worker contracts
+        run: |
+          cargo test -p pgcontext-worker --all-targets
+          cargo test -p pgcontext-worker --features worker-test-hooks --test worker_binary
+          cargo clippy -p pgcontext-worker --all-targets -- -D warnings
+      - name: Verify frozen platform manifest
+        run: |
+          cargo run -q -p context-test --bin p12_semantic_rerank_manifest \
+            | awk -F '\t' -v platform="${{ matrix.platform }}" \
+                '$1 == "required_platforms" && index("," $2 ",", "," platform ",") { found=1 } END { exit !found }'
+      - name: Upload worker binary
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pgcontext-worker-${{ matrix.platform }}
+          path: target/release/pgcontext-worker
+
   platform-builds:
     name: ${{ matrix.os }} fast gates
     runs-on: ${{ matrix.os }}

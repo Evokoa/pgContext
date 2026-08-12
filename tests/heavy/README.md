@@ -83,6 +83,11 @@ failure.
   candidate serving with HNSW token-table candidates, deduplicated source keys,
   exact MaxSim source-table rerank, deleted-point filtering, and comparison
   budget rejection.
+- `semantic_rerank_contract.sh`: runs the frozen eight-query provider-neutral
+  rerank workload, invokes the digest-verified no-network worker, validates
+  quality, warm/cold latency, RSS, and cost ceilings, and rechecks ACL, forced
+  RLS, and source churn. `ROW_COUNT=1000000` is required on PG17 and PG18;
+  `ROW_COUNT=10000000` is the retained scheduled release command.
 - `build_job_resumability.sh`: validates backend-local build-job interruption,
   retry progress preservation, restart abandonment recovery, supervised dynamic
   worker launch/publication/idle shutdown, disabled-worker fail-open behavior,

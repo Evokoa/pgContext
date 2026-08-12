@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "0e09460a916dbbdbbebb577e186e32fb11ca5224b2521075f384cb7692d0c2d0",
+  "navigation_sha256": "1e694a906ff569fd0d34167d4c534261e893a9219b107fb83cbdcef5f9b67ef7",
   "pages": [
     {
       "links": [],
@@ -89,7 +89,7 @@
         "./hnsw_storage_contract.md"
       ],
       "path": "contributor_guide/architecture.md",
-      "sha256": "9aaffcdbd748cdf834dd1bc38c7b6bb001f8c52b2be50d4b6a2afcb69fa8918d"
+      "sha256": "fe546e1078413dd4f2c60e0f377594a889d3aeb853b9425c97af02f903af5fdb"
     },
     {
       "links": [
@@ -151,7 +151,7 @@
     {
       "links": [],
       "path": "contributor_guide/repository_map.md",
-      "sha256": "55918d7b565ca98a4e67d36ecc37bcafecd016624193fda6b1648a44995a08b5"
+      "sha256": "970554325d623d7c6de62d55f4f0dadfc178c5891c141313fd9d051ebce273be"
     },
     {
       "links": [],
@@ -231,11 +231,12 @@
         "user_guide/multi_model.md",
         "user_guide/operations.md",
         "user_guide/playground.md",
+        "user_guide/semantic_reranking.md",
         "user_guide/troubleshooting.md",
         "user_guide/vector_search.md"
       ],
       "path": "index.md",
-      "sha256": "5121e4bd6211b32cfebe87ca3f5e1b7b31edecacf0588290cb35cb1d5b1f4414"
+      "sha256": "13d280de75497a9d11e0abb04f2c77155cad8bb4eb92719dba646b58450f2650"
     },
     {
       "links": [
@@ -371,6 +372,7 @@
         "roadmap.md",
         "rollback.md",
         "security.md",
+        "semantic_reranking.md",
         "sql_object_inventory.md",
         "storage.md",
         "support_policy.md",
@@ -380,7 +382,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "973acb41b6b94caa31196509dfbf2da61a38abd8eb4a7dcd54fc436216a33d1f"
+      "sha256": "0122b0e5c60fa28414db5210e9ed7adf1639bb598b800cf72ef46fb9e3169f99"
     },
     {
       "links": [
@@ -398,10 +400,11 @@
         "multi_model.md",
         "pgvector_coexist.md",
         "pgvector_coexist.md",
+        "semantic_reranking.md",
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "620beac90c77f5b56bcc59bf67f994bff40890d211ddfa542ed8c90abd474d58"
+      "sha256": "fdcfcdf91d7702262d6bb0ecf3fc3a9008179b95352f00a499f037155d3123d7"
     },
     {
       "links": [],
@@ -512,15 +515,16 @@
         "indexes.md#build-memory-budget",
         "mailto:team@evokoa.com",
         "multi_model.md",
+        "semantic_reranking.md",
         "troubleshooting.md"
       ],
       "path": "user_guide/operations.md",
-      "sha256": "fa68f6a29744386820254260bfb199e2707b4f7018075a38704a6615c1be1139"
+      "sha256": "2bb0b926f3117badfe6c294cc6e54e57b6b02222f07999f4f04514edded0a5cc"
     },
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "9aaa2f3aaefacadf96d38202151627be373a6df3e2ab73a7bb8c5f2ab995df84"
+      "sha256": "87517af78d782f081ac332aede67ce702f42e0c31e1afee0e0a3275343ada21b"
     },
     {
       "links": [
@@ -578,7 +582,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "ee75b1c8cc6007fa57e1a95b99b91e81d7dfa44cacdba28fa6d3ab0d0e30ac74"
+      "sha256": "9bf9e99e74e9c06d5d731500a43e18e875ae32b5aaf3fd1b7ca286004d908088"
     },
     {
       "links": [
@@ -602,6 +606,8 @@
         "multi_tenancy.md",
         "roadmap.md",
         "roadmap.md",
+        "semantic_reranking.md",
+        "semantic_reranking.md",
         "sql_object_inventory.md",
         "vector_search.md",
         "vector_search.md",
@@ -615,7 +621,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/retrieval_methods.md",
-      "sha256": "e77ca295b134fbac62d08f7d2b13f16a8814cd68b0a385a92e6da7c8394c008b"
+      "sha256": "3b8f5969a463628d30401fc14c74940fef026b1c150d2029853d523093a12f3c"
     },
     {
       "links": [
@@ -700,10 +706,11 @@
         "https://www.postgresql.org/docs/current/textsearch-controls.html",
         "https://www.postgresql.org/docs/current/textsearch-indexes.html",
         "lexical_retrieval.md",
-        "multi_model.md"
+        "multi_model.md",
+        "semantic_reranking.md"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "a493081561981840b687210acfe657446b5edf9562659625967d14838747f59d"
+      "sha256": "7f15ca4166b33513e425408aba80c9044bcadfb5f08633e3f2de781e8d2cf9dc"
     },
     {
       "links": [],
@@ -713,12 +720,17 @@
     {
       "links": [],
       "path": "user_guide/security.md",
-      "sha256": "3f8a25311d28b264d99ec6ded367d9313c92946af9bac5641e424d49ec16d319"
+      "sha256": "ed007bbe814c01bd73c814f05d04c2b74e034e1db9c143cf5c5b9e64a1519132"
+    },
+    {
+      "links": [],
+      "path": "user_guide/semantic_reranking.md",
+      "sha256": "ce66ca5186f849256e7922d22679d030fade41e82f5330621b906ad865d1f258"
     },
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "72598005e1aabd4b3a32091971d8ccd0079937a2688c5a89af21ee05046d6303"
+      "sha256": "9ccc9bbf629f099ac3a3ab3ef4ebdd04bc0f146e956a93628f20a7cfccf6194c"
     },
     {
       "links": [],
@@ -752,7 +764,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "eeb121d805e3d9edd08054cfa23beb0ec60f5c2703a45356c9e520ab7e32aff9"
+      "sha256": "614895755abfce648b00f4254b958f5f5db6482a7c0ab423bf21d62b9ba77165"
     },
     {
       "links": [

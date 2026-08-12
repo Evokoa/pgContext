@@ -11,11 +11,12 @@
 //! boundary, not a convention: a backend has no way to produce a validated
 //! score, so a caller cannot skip validation by accident.
 
-use std::collections::BTreeSet;
+use std::mem::size_of;
 
 use context_query::{
     Cancellation, MAX_RERANK_CANDIDATES, MAX_RERANK_REQUEST_BYTES, QueryClock, RerankCandidate,
-    RerankFallbackPolicy, RerankRejection, RerankRequest, RerankRequestId, RerankScore,
+    RerankFallbackPolicy, RerankModelName, RerankQuery, RerankRejection, RerankRequest,
+    RerankRequestId, RerankResponsePolicy, RerankScore, validate_rerank_response_with_policy,
 };
 
 use crate::{WireError, WireRerankResponse, wire::bound_diagnostic};
@@ -85,20 +86,29 @@ impl RerankBackendError {
     /// there is nothing for a degraded result to be returned to.
     #[must_use]
     pub const fn is_degradable(&self) -> bool {
-        !matches!(self, Self::Cancelled)
+        self.failure_reason().is_some()
+    }
+
+    /// Maps an operational provider failure to the SQL finalization vocabulary.
+    ///
+    /// Caller-invalid, injected, malformed, and cancelled work deliberately has
+    /// no mapping: those failures must never become fused fallback output.
+    #[must_use]
+    pub const fn failure_reason(&self) -> Option<&'static str> {
+        match self {
+            Self::Unavailable => Some("unavailable"),
+            Self::Timeout => Some("timeout"),
+            Self::Transport { .. } => Some("crash"),
+            Self::Rejected(RerankRejection::Incomplete) => Some("partial_output"),
+            Self::Rejected(RerankRejection::Expired) => Some("expired"),
+            Self::Cancelled | Self::InvalidPlan { .. } | Self::Wire(_) | Self::Rejected(_) => None,
+        }
     }
 }
 
 impl core::fmt::Display for RerankBackendError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(formatter, "{}", self.stable_name())?;
-        match self {
-            Self::InvalidPlan { reason } | Self::Transport { reason } => {
-                write!(formatter, ": {reason}")
-            }
-            Self::Wire(error) => write!(formatter, ": {error}"),
-            _ => Ok(()),
-        }
+        formatter.write_str(self.stable_name())
     }
 }
 
@@ -182,8 +192,10 @@ impl RerankBatches {
     /// overflow, or when a batch violates the envelope contract.
     pub fn plan(
         base_request_id: RerankRequestId,
+        model: &RerankModelName,
         model_revision: u64,
         expires_at_micros: u64,
+        query: &RerankQuery,
         candidates: Vec<RerankCandidate>,
         batch_size: usize,
     ) -> BackendResult<Self> {
@@ -195,44 +207,67 @@ impl RerankBatches {
         if candidates.is_empty() {
             return Err(invalid_plan("rerank candidates must not be empty"));
         }
-        let unique = candidates
+        let mut unique_occurrences = candidates
             .iter()
             .map(RerankCandidate::occurrence_id)
-            .collect::<BTreeSet<_>>();
-        if unique.len() != candidates.len() {
+            .collect::<Vec<_>>();
+        unique_occurrences.sort_unstable();
+        if unique_occurrences.windows(2).any(|pair| pair[0] == pair[1]) {
             return Err(invalid_plan(
                 "rerank candidates must not repeat an occurrence",
             ));
+        }
+        let mut unique_points = candidates
+            .iter()
+            .map(RerankCandidate::point_id)
+            .collect::<Vec<_>>();
+        unique_points.sort_unstable();
+        if unique_points.windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err(invalid_plan("rerank candidates must not repeat a point"));
         }
 
         let mut requests = Vec::new();
         // `None` once the identity space is used up, so the overflow is only an
         // error if another batch actually needs an identity.
         let mut next_id = Some(base_request_id.get());
+        let fixed_bytes = size_of::<RerankRequest>()
+            .checked_add(model.as_str().len())
+            .and_then(|bytes| bytes.checked_add(query.as_str().len()))
+            .ok_or_else(|| invalid_plan("rerank request byte projection overflow"))?;
         let mut batch: Vec<RerankCandidate> = Vec::new();
-        let mut batch_bytes = 0_usize;
+        let mut batch_bytes = fixed_bytes;
         for candidate in candidates {
-            let bytes = candidate.text().len();
+            let bytes = candidate
+                .projected_bytes()
+                .map_err(|error| invalid_plan(error.to_string()))?;
+            let projected_bytes = batch_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| invalid_plan("rerank request byte projection overflow"))?;
             let would_overflow = !batch.is_empty()
-                && (batch.len() == batch_size
-                    || batch_bytes.saturating_add(bytes) > MAX_RERANK_REQUEST_BYTES);
+                && (batch.len() == batch_size || projected_bytes > MAX_RERANK_REQUEST_BYTES);
             if would_overflow {
                 requests.push(build_request(
                     &mut next_id,
+                    model,
                     model_revision,
                     expires_at_micros,
+                    query,
                     core::mem::take(&mut batch),
                 )?);
-                batch_bytes = 0;
+                batch_bytes = fixed_bytes;
             }
-            batch_bytes = batch_bytes.saturating_add(bytes);
+            batch_bytes = batch_bytes
+                .checked_add(bytes)
+                .ok_or_else(|| invalid_plan("rerank request byte projection overflow"))?;
             batch.push(candidate);
         }
         if !batch.is_empty() {
             requests.push(build_request(
                 &mut next_id,
+                model,
                 model_revision,
                 expires_at_micros,
+                query,
                 batch,
             )?);
         }
@@ -248,14 +283,23 @@ impl RerankBatches {
 
 fn build_request(
     next_id: &mut Option<u64>,
+    model: &RerankModelName,
     model_revision: u64,
     expires_at_micros: u64,
+    query: &RerankQuery,
     candidates: Vec<RerankCandidate>,
 ) -> BackendResult<RerankRequest> {
     let id = next_id.ok_or_else(|| invalid_plan("rerank request identity overflow"))?;
     let request_id = RerankRequestId::new(id).map_err(|error| invalid_plan(error.to_string()))?;
-    let request = RerankRequest::new(request_id, model_revision, expires_at_micros, candidates)
-        .map_err(|error| invalid_plan(error.to_string()))?;
+    let request = RerankRequest::new(
+        request_id,
+        model.clone(),
+        model_revision,
+        expires_at_micros,
+        query.clone(),
+        candidates,
+    )
+    .map_err(|error| invalid_plan(error.to_string()))?;
     *next_id = id.checked_add(1);
     Ok(request)
 }
@@ -284,10 +328,9 @@ pub enum RerankOutcome {
 
 /// Scores one batch and validates the answer against the request.
 ///
-/// The clock is read *after* the provider answers, so time spent inside the
-/// backend counts against the envelope's expiry. Reading it beforehand would
-/// make the expiry decorative: a provider that stalls past the deadline would
-/// still be validated against the moment the call started.
+/// The clock is read before dispatch and after the provider answers. The first
+/// check prevents releasing a later batch after expiry; the second counts all
+/// provider time against the same inclusive deadline.
 ///
 /// # Errors
 ///
@@ -303,10 +346,19 @@ pub fn score_batch(
             RerankRejection::ModelRevisionMismatch,
         ));
     }
+    if clock.now_micros() >= request.expires_at_micros() {
+        return Err(RerankBackendError::Rejected(RerankRejection::Expired));
+    }
     let wire = backend.score(request, request.expires_at_micros())?;
     let response = wire.to_response()?;
-    context_query::validate_rerank_response(request, &response, clock.now_micros())
-        .map_err(RerankBackendError::Rejected)
+    validate_rerank_response_with_policy(
+        request,
+        &response,
+        clock.now_micros(),
+        RerankResponsePolicy::RequireComplete,
+    )
+    .map(|validated| validated.scores().to_vec())
+    .map_err(RerankBackendError::Rejected)
 }
 
 /// Runs every batch, applying the caller's fallback policy to a failure.
@@ -357,11 +409,13 @@ fn degrade(
     error: RerankBackendError,
     policy: RerankFallbackPolicy,
 ) -> BackendResult<RerankOutcome> {
+    let reason = error.failure_reason();
     match policy {
-        RerankFallbackPolicy::DegradeWithoutRerank if error.is_degradable() => {
-            Ok(RerankOutcome::Degraded {
-                reason: error.stable_name(),
-            })
+        RerankFallbackPolicy::DegradeWithoutRerank if reason.is_some() => {
+            let Some(reason) = reason else {
+                return Err(error);
+            };
+            Ok(RerankOutcome::Degraded { reason })
         }
         _ => Err(error),
     }
@@ -436,6 +490,7 @@ impl RerankBackend for DeterministicRerankBackend {
         Ok(WireRerankResponse {
             version: request.version(),
             request_id: request.request_id().get(),
+            model: request.model().as_str().to_owned(),
             model_revision: self.model_revision,
             scores: request
                 .candidates()
@@ -453,545 +508,5 @@ impl RerankBackend for DeterministicRerankBackend {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use core::cell::Cell;
-
-    use super::*;
-    use context_core::{OccurrenceId, PointId, SourceVersion};
-    use context_query::QueryError;
-
-    /// A clock the test advances by hand, so elapsed time is not wall-clock.
-    struct TestClock {
-        now: Cell<u64>,
-    }
-
-    impl TestClock {
-        const fn at(now: u64) -> Self {
-            Self {
-                now: Cell::new(now),
-            }
-        }
-
-        fn advance(&self, micros: u64) {
-            self.now.set(self.now.get() + micros);
-        }
-    }
-
-    impl QueryClock for TestClock {
-        fn now_micros(&self) -> u64 {
-            self.now.get()
-        }
-    }
-
-    struct NeverCancelled;
-
-    impl Cancellation for NeverCancelled {
-        fn is_cancelled(&self) -> bool {
-            false
-        }
-    }
-
-    /// Reports cancellation the way PostgreSQL does: through `check_interrupt`,
-    /// with `is_cancelled` never becoming true.
-    struct InterruptedLikePostgres;
-
-    impl Cancellation for InterruptedLikePostgres {
-        fn check_interrupt(&self) -> context_query::Result<()> {
-            Err(QueryError::PortFailure {
-                stage: "test_interrupt",
-                message: "cancelled".to_owned(),
-            })
-        }
-
-        fn is_cancelled(&self) -> bool {
-            false
-        }
-    }
-
-    struct UnavailableBackend {
-        model_revision: u64,
-    }
-
-    impl RerankBackend for UnavailableBackend {
-        fn model_revision(&self) -> u64 {
-            self.model_revision
-        }
-
-        fn score(
-            &self,
-            _request: &RerankRequest,
-            _deadline_micros: u64,
-        ) -> BackendResult<WireRerankResponse> {
-            Err(RerankBackendError::Unavailable)
-        }
-    }
-
-    /// Counts calls so a test can assert a call was never issued.
-    struct CountingBackend {
-        calls: Cell<usize>,
-    }
-
-    impl CountingBackend {
-        const fn new() -> Self {
-            Self {
-                calls: Cell::new(0),
-            }
-        }
-    }
-
-    impl RerankBackend for CountingBackend {
-        fn model_revision(&self) -> u64 {
-            7
-        }
-
-        fn score(
-            &self,
-            request: &RerankRequest,
-            deadline_micros: u64,
-        ) -> BackendResult<WireRerankResponse> {
-            self.calls.set(self.calls.get() + 1);
-            DeterministicRerankBackend::new(7).score(request, deadline_micros)
-        }
-    }
-
-    /// Answers the request it was given with someone else's occurrence — the
-    /// shape a confused or hostile backend actually produces.
-    struct ImpostorBackend {
-        model_revision: u64,
-    }
-
-    impl RerankBackend for ImpostorBackend {
-        fn model_revision(&self) -> u64 {
-            self.model_revision
-        }
-
-        fn score(
-            &self,
-            request: &RerankRequest,
-            _deadline_micros: u64,
-        ) -> BackendResult<WireRerankResponse> {
-            Ok(WireRerankResponse {
-                version: request.version(),
-                request_id: request.request_id().get(),
-                model_revision: self.model_revision,
-                scores: vec![crate::WireRerankScore {
-                    occurrence_id: 9_999,
-                    score: 1.0,
-                }],
-            })
-        }
-    }
-
-    /// Stalls past the envelope's expiry before answering.
-    struct SlowBackend<'clock> {
-        clock: &'clock TestClock,
-        stall_micros: u64,
-    }
-
-    impl RerankBackend for SlowBackend<'_> {
-        fn model_revision(&self) -> u64 {
-            7
-        }
-
-        fn score(
-            &self,
-            request: &RerankRequest,
-            deadline_micros: u64,
-        ) -> BackendResult<WireRerankResponse> {
-            self.clock.advance(self.stall_micros);
-            DeterministicRerankBackend::new(7).score(request, deadline_micros)
-        }
-    }
-
-    fn candidate(index: u64) -> RerankCandidate {
-        RerankCandidate::new(
-            OccurrenceId::new(index).expect("occurrence"),
-            PointId::new(index),
-            SourceVersion::new(1).expect("version"),
-            format!("candidate text {index}"),
-            Vec::new(),
-        )
-        .expect("candidate")
-    }
-
-    fn candidates(count: u64) -> Vec<RerankCandidate> {
-        (1..=count).map(candidate).collect()
-    }
-
-    fn plan(candidates: Vec<RerankCandidate>, batch_size: usize) -> BackendResult<RerankBatches> {
-        RerankBatches::plan(
-            RerankRequestId::new(100).expect("request id"),
-            7,
-            10_000,
-            candidates,
-            batch_size,
-        )
-    }
-
-    fn batches(count: u64, batch_size: usize) -> RerankBatches {
-        plan(candidates(count), batch_size).expect("plan")
-    }
-
-    #[test]
-    fn batching_covers_every_candidate_exactly_once_with_distinct_identities() {
-        let planned = batches(7, 3);
-        assert_eq!(planned.requests().len(), 3);
-
-        let identities = planned
-            .requests()
-            .iter()
-            .map(|request| request.request_id().get())
-            .collect::<BTreeSet<_>>();
-        assert_eq!(identities, BTreeSet::from([100, 101, 102]));
-
-        let covered = planned
-            .requests()
-            .iter()
-            .flat_map(RerankRequest::candidates)
-            .map(RerankCandidate::occurrence_id)
-            .collect::<Vec<_>>();
-        assert_eq!(covered.len(), 7, "no candidate may be dropped or repeated");
-        assert_eq!(covered.iter().copied().collect::<BTreeSet<_>>().len(), 7);
-    }
-
-    #[test]
-    fn an_occurrence_repeated_across_batches_is_refused() {
-        // Each batch is individually valid, so only a plan-wide check catches
-        // this. Releasing the row twice would multiply the authorized byte
-        // budget and let the provider pick which of its two scores survives.
-        let repeated = vec![candidate(1), candidate(2), candidate(1)];
-        assert!(matches!(
-            plan(repeated, 2),
-            Err(RerankBackendError::InvalidPlan { .. })
-        ));
-    }
-
-    #[test]
-    fn an_empty_candidate_set_is_refused_rather_than_silently_succeeding() {
-        // `chunks` yields nothing for an empty slice, so without this check the
-        // plan would be empty and the whole rerank would report success with no
-        // ordering at all.
-        assert!(matches!(
-            plan(Vec::new(), 4),
-            Err(RerankBackendError::InvalidPlan { .. })
-        ));
-    }
-
-    #[test]
-    fn a_batch_is_split_on_bytes_as_well_as_on_count() {
-        // 200 candidates of 25 KiB fit the 512-candidate ceiling and blow the
-        // 4 MiB request ceiling, so a count-only split would build a plan the
-        // envelope refuses.
-        let text = "x".repeat(25 * 1024);
-        let candidates = (1..=200_u64)
-            .map(|index| {
-                RerankCandidate::new(
-                    OccurrenceId::new(index).expect("occurrence"),
-                    PointId::new(index),
-                    SourceVersion::new(1).expect("version"),
-                    text.clone(),
-                    Vec::new(),
-                )
-                .expect("candidate")
-            })
-            .collect::<Vec<_>>();
-
-        let planned = plan(candidates, MAX_RERANK_BATCH).expect("plan");
-        assert!(
-            planned.requests().len() > 1,
-            "the byte ceiling must force a split"
-        );
-        for request in planned.requests() {
-            let bytes = request
-                .candidates()
-                .iter()
-                .map(|candidate| candidate.text().len())
-                .sum::<usize>();
-            assert!(bytes <= MAX_RERANK_REQUEST_BYTES);
-        }
-        let covered = planned
-            .requests()
-            .iter()
-            .flat_map(RerankRequest::candidates)
-            .count();
-        assert_eq!(covered, 200, "no candidate may be dropped by the split");
-    }
-
-    #[test]
-    fn an_unusable_batch_size_is_refused_rather_than_clamped() {
-        for size in [0, MAX_RERANK_BATCH + 1] {
-            assert!(matches!(
-                plan(candidates(2), size),
-                Err(RerankBackendError::InvalidPlan { .. })
-            ));
-        }
-    }
-
-    #[test]
-    fn a_derived_identity_that_would_overflow_fails_instead_of_wrapping() {
-        let planned = RerankBatches::plan(
-            RerankRequestId::new(u64::MAX).expect("request id"),
-            7,
-            10_000,
-            candidates(4),
-            2,
-        );
-        assert!(matches!(
-            planned,
-            Err(RerankBackendError::InvalidPlan { .. })
-        ));
-    }
-
-    #[test]
-    fn the_deterministic_backend_scores_every_batch() {
-        let backend = DeterministicRerankBackend::new(7);
-        let outcome = score_all(
-            &backend,
-            &batches(7, 3),
-            &NeverCancelled,
-            &TestClock::at(0),
-            RerankFallbackPolicy::Require,
-        )
-        .expect("scored");
-        let RerankOutcome::Reranked(scores) = outcome else {
-            unreachable!("a healthy backend must not degrade")
-        };
-        assert_eq!(scores.len(), 7);
-        assert!(scores.iter().all(|score| score.score().is_finite()));
-    }
-
-    #[test]
-    fn the_deterministic_backend_matches_its_pinned_values() {
-        // Pinned so that changing the offset basis, the prime, or the shift is
-        // a test failure rather than a silent change to a "never changes" score.
-        assert_eq!(
-            DeterministicRerankBackend::score_of("candidate text 1"),
-            0.039_453_922_731_895_41
-        );
-        assert_eq!(
-            DeterministicRerankBackend::score_of("candidate text 2"),
-            0.456_253_198_859_871_03
-        );
-        assert_eq!(
-            DeterministicRerankBackend::score_of(""),
-            0.957_673_425_242_056_1
-        );
-    }
-
-    #[test]
-    fn texts_differing_in_one_character_are_not_almost_tied() {
-        // Without the finalizer these differ by ~1e-7, which makes the fixture
-        // unable to demonstrate that an ordering was carried through.
-        let first = DeterministicRerankBackend::score_of("candidate text 1");
-        let second = DeterministicRerankBackend::score_of("candidate text 2");
-        assert!(
-            (first - second).abs() > 0.01,
-            "{first} and {second} are too close to order meaningfully"
-        );
-    }
-
-    #[test]
-    fn the_deterministic_backend_stays_inside_the_unit_interval() {
-        for index in 0..2_000_u64 {
-            let score = DeterministicRerankBackend::score_of(&format!("row {index}"));
-            assert!((0.0..1.0).contains(&score), "{score} escaped [0, 1)");
-        }
-    }
-
-    #[test]
-    fn a_model_revision_drift_is_refused_before_the_call_is_made() {
-        let backend = CountingBackend::new();
-        let planned = RerankBatches::plan(
-            RerankRequestId::new(1).expect("request id"),
-            8,
-            10_000,
-            candidates(2),
-            2,
-        )
-        .expect("plan");
-        let error =
-            score_batch(&backend, &planned.requests()[0], &TestClock::at(0)).expect_err("refuse");
-        assert_eq!(
-            error,
-            RerankBackendError::Rejected(RerankRejection::ModelRevisionMismatch)
-        );
-        assert_eq!(backend.calls.get(), 0, "the provider must not be called");
-    }
-
-    #[test]
-    fn a_provider_scoring_an_unreleased_row_is_refused() {
-        let backend = ImpostorBackend { model_revision: 7 };
-        let planned = batches(2, 2);
-        let error =
-            score_batch(&backend, &planned.requests()[0], &TestClock::at(0)).expect_err("refuse");
-        assert_eq!(
-            error,
-            RerankBackendError::Rejected(RerankRejection::UnknownOccurrence)
-        );
-    }
-
-    #[test]
-    fn time_spent_inside_the_backend_counts_against_the_expiry() {
-        // The clock starts well inside the envelope's 10_000 expiry and the
-        // provider stalls past it. Reading the clock before the call — the
-        // obvious mistake — would accept this response.
-        let clock = TestClock::at(1_000);
-        let backend = SlowBackend {
-            clock: &clock,
-            stall_micros: 20_000,
-        };
-        let planned = batches(2, 2);
-        let error = score_batch(&backend, &planned.requests()[0], &clock).expect_err("refuse");
-        assert_eq!(
-            error,
-            RerankBackendError::Rejected(RerankRejection::Expired)
-        );
-    }
-
-    #[test]
-    fn a_response_arriving_inside_the_expiry_is_accepted() {
-        let clock = TestClock::at(1_000);
-        let backend = SlowBackend {
-            clock: &clock,
-            stall_micros: 500,
-        };
-        let planned = batches(2, 2);
-        let scores = score_batch(&backend, &planned.requests()[0], &clock).expect("accepted");
-        assert_eq!(scores.len(), 2);
-    }
-
-    #[test]
-    fn a_failure_fails_the_query_under_the_require_policy() {
-        let backend = UnavailableBackend { model_revision: 7 };
-        let error = score_all(
-            &backend,
-            &batches(4, 2),
-            &NeverCancelled,
-            &TestClock::at(0),
-            RerankFallbackPolicy::Require,
-        )
-        .expect_err("fail closed");
-        assert_eq!(error, RerankBackendError::Unavailable);
-    }
-
-    #[test]
-    fn a_failure_degrades_with_a_stable_reason_under_the_fuse_policy() {
-        let backend = UnavailableBackend { model_revision: 7 };
-        let outcome = score_all(
-            &backend,
-            &batches(4, 2),
-            &NeverCancelled,
-            &TestClock::at(0),
-            RerankFallbackPolicy::DegradeWithoutRerank,
-        )
-        .expect("degrade");
-        assert_eq!(
-            outcome,
-            RerankOutcome::Degraded {
-                reason: "unavailable"
-            }
-        );
-    }
-
-    /// Answers the first batch and then goes away.
-    struct FlakyBackend;
-
-    impl RerankBackend for FlakyBackend {
-        fn model_revision(&self) -> u64 {
-            7
-        }
-
-        fn score(
-            &self,
-            request: &RerankRequest,
-            deadline_micros: u64,
-        ) -> BackendResult<WireRerankResponse> {
-            if request.request_id().get() == 100 {
-                return DeterministicRerankBackend::new(7).score(request, deadline_micros);
-            }
-            Err(RerankBackendError::Timeout)
-        }
-    }
-
-    #[test]
-    fn a_partial_failure_never_yields_a_half_reranked_ordering() {
-        let error = score_all(
-            &FlakyBackend,
-            &batches(4, 2),
-            &NeverCancelled,
-            &TestClock::at(0),
-            RerankFallbackPolicy::Require,
-        )
-        .expect_err("fail closed");
-        assert_eq!(error, RerankBackendError::Timeout);
-    }
-
-    #[test]
-    fn a_partial_failure_discards_the_batches_that_did_succeed() {
-        let outcome = score_all(
-            &FlakyBackend,
-            &batches(4, 2),
-            &NeverCancelled,
-            &TestClock::at(0),
-            RerankFallbackPolicy::DegradeWithoutRerank,
-        )
-        .expect("degrade");
-        assert_eq!(
-            outcome,
-            RerankOutcome::Degraded { reason: "timeout" },
-            "the first batch's scores must not survive as a partial ordering"
-        );
-    }
-
-    #[test]
-    fn a_postgres_style_interrupt_stops_before_the_first_call() {
-        let backend = CountingBackend::new();
-        let error = score_all(
-            &backend,
-            &batches(4, 2),
-            &InterruptedLikePostgres,
-            &TestClock::at(0),
-            RerankFallbackPolicy::Require,
-        )
-        .expect_err("stop");
-        assert_eq!(error, RerankBackendError::Cancelled);
-        assert_eq!(
-            backend.calls.get(),
-            0,
-            "no authorized text may be released after cancellation"
-        );
-    }
-
-    #[test]
-    fn cancellation_is_never_degraded_into_a_usable_answer() {
-        let backend = CountingBackend::new();
-        let error = score_all(
-            &backend,
-            &batches(4, 2),
-            &InterruptedLikePostgres,
-            &TestClock::at(0),
-            RerankFallbackPolicy::DegradeWithoutRerank,
-        )
-        .expect_err("stop");
-        assert_eq!(error, RerankBackendError::Cancelled);
-        assert_eq!(backend.calls.get(), 0);
-    }
-
-    #[test]
-    fn a_provider_diagnostic_cannot_flood_a_log() {
-        let error = RerankBackendError::transport("!".repeat(10_000));
-        let RerankBackendError::Transport { reason } = &error else {
-            unreachable!("constructed a transport failure")
-        };
-        assert_eq!(reason.len(), crate::MAX_RERANK_DIAGNOSTIC_BYTES);
-    }
-
-    #[test]
-    fn bounding_a_diagnostic_never_splits_a_character() {
-        let error = RerankBackendError::transport("é".repeat(1_000));
-        let RerankBackendError::Transport { reason } = &error else {
-            unreachable!("constructed a transport failure")
-        };
-        assert!(reason.len() <= crate::MAX_RERANK_DIAGNOSTIC_BYTES);
-        assert!(reason.chars().all(|character| character == 'é'));
-    }
+    include!("backend/tests.rs");
 }

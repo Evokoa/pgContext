@@ -322,6 +322,27 @@ graduates from the experimental parity row.
 
 ## Experimental APIs
 
+Provider-neutral semantic reranking:
+
+- `pgcontext.register_semantic_rerank_source(collection text, source_name text,
+  text_column text, source_version_column text)` registers the authoritative
+  text and version binding.
+- `pgcontext.prepare_semantic_rerank(collection text, source_name text,
+  query text, candidates jsonb, model text, model_revision bigint,
+  ttl_millis bigint, failure_policy text, filter jsonb,
+  allow_partial boolean)` returns one bounded, authorized provider-neutral
+  envelope.
+- `pgcontext.finalize_semantic_rerank(request_id bigint, response jsonb,
+  failure_reason text)` validates untrusted scores and authoritatively rechecks
+  every final row.
+- `pgcontext.cleanup_semantic_rerank_requests(limit integer)` removes bounded
+  expired or finalized request state owned by the session role.
+
+The PostgreSQL 17 and 18 local certification lanes pass. These APIs remain
+Experimental until retained hosted worker build and smoke evidence covers
+Darwin and Linux on arm64 and x86_64. See
+[Semantic reranking](semantic_reranking.md).
+
 Profile-backed migration tracking:
 
 - `pgcontext.create_embedding_migration(collection text, source_profile text,

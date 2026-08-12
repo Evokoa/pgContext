@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 391;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 401;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -66,6 +66,15 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function("uint8vec_out", "input uint8vec", SqlLifecycle::Internal),
     SqlContractObject::function("uint8vec_send", "input uint8vec", SqlLifecycle::Internal),
     SqlContractObject::function("_reject_embedding_profile_mutation", "", SqlLifecycle::Internal),
+    SqlContractObject::function("_cleanup_semantic_rerank_requests", "p_limit integer", SqlLifecycle::Internal),
+    SqlContractObject::function("_finalize_semantic_rerank_request", "p_request_id bigint, p_response_sha256 bytea, p_final_status text, p_degraded_reason text, p_final_result jsonb", SqlLifecycle::Internal),
+    SqlContractObject::function("_insert_semantic_rerank_request", "p_collection_id bigint, p_rerank_source_id bigint, p_registration_revision bigint, p_filter_binding_sha256 bytea, p_model_name text, p_model_revision bigint, p_query_text text, p_filter_json jsonb, p_failure_policy text, p_allow_partial boolean, p_expires_at_micros bigint, p_candidates jsonb", SqlLifecycle::Internal),
+    SqlContractObject::function("_refresh_semantic_rerank_source", "p_collection_id bigint, p_source_name text", SqlLifecycle::Internal),
+    SqlContractObject::function("_register_semantic_rerank_source", "p_collection_id bigint, p_source_name text, p_text_column text, p_source_version_column text", SqlLifecycle::Internal),
+    SqlContractObject::function("cleanup_semantic_rerank_requests", "\"limit\" integer", SqlLifecycle::Experimental),
+    SqlContractObject::function("finalize_semantic_rerank", "request_id bigint, response jsonb, failure_reason text", SqlLifecycle::Experimental),
+    SqlContractObject::function("prepare_semantic_rerank", "collection text, source_name text, query text, candidates jsonb, model text, model_revision bigint, ttl_millis bigint, failure_policy text, filter jsonb, allow_partial boolean", SqlLifecycle::Experimental),
+    SqlContractObject::function("register_semantic_rerank_source", "collection text, source_name text, text_column text, source_version_column text", SqlLifecycle::Experimental),
     SqlContractObject::function(
         "bitvec_from_provider_bytes",
         "collection text, profile_name text, payload bytea",
@@ -751,7 +760,7 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "query_multi_model",
         "collection text, branches jsonb, filter jsonb, \"limit\" integer, rrf_k integer, unique_candidate_budget integer, require_all_profiles boolean",
-        SqlLifecycle::Experimental,
+        SqlLifecycle::Stable,
     ),
     SqlContractObject::function(
         "vector_prefix",
@@ -1517,6 +1526,11 @@ const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_
     SqlContractObject::function(
         "test_clear_hnsw_packed_cache",
         "",
+        SqlLifecycle::Internal,
+    ),
+    SqlContractObject::function(
+        "ivfflat_test_append_tombstone",
+        "index regclass, tid tid",
         SqlLifecycle::Internal,
     ),
 ];

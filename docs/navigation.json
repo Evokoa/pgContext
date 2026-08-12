@@ -111,6 +111,10 @@
           "path": "user_guide/multi_model.md"
         },
         {
+          "title": "Semantic reranking",
+          "path": "user_guide/semantic_reranking.md"
+        },
+        {
           "title": "Retrieval methods overview",
           "path": "user_guide/retrieval_methods.md"
         },

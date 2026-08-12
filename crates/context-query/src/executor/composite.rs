@@ -41,6 +41,37 @@ fn port_allocation_fits<T>(
         .is_some_and(|bytes| bytes <= port_budget.max_hydration_bytes())
 }
 
+fn rerank_authority_hydration_bytes(
+    rows: &[HydratedCandidate],
+    winner_count: usize,
+) -> Option<usize> {
+    let all_rows = rows.iter().try_fold(0_usize, |total, row| {
+        total.checked_add(row.source_key().as_str().len())
+    })?;
+    let first_winner = rows.len().saturating_sub(winner_count.min(rows.len()));
+    let winner_rows = rows
+        .iter()
+        .enumerate()
+        .try_fold(0_usize, |total, (index, row)| {
+            let key_bytes = row.source_key().as_str().len();
+            let rank = rows
+                .iter()
+                .enumerate()
+                .fold(0_usize, |rank, (other_index, other)| {
+                    let other_bytes = other.source_key().as_str().len();
+                    rank.saturating_add(usize::from(
+                        other_bytes < key_bytes
+                            || (other_bytes == key_bytes && other_index < index),
+                    ))
+                });
+            if rank < first_winner {
+                return Some(total);
+            }
+            total.checked_add(key_bytes)
+        })?;
+    all_rows.checked_add(winner_rows)
+}
+
 fn budget_exhausted_child(child: ExecutionOutcome) -> ExecutionOutcome {
     ExecutionOutcome::new(
         child.state().clone(),
@@ -200,7 +231,10 @@ impl QueryExecutor<'_> {
             return Ok(cancelled_child(child));
         }
         let limit = query.limit().min(child.points().len());
-        if !port_allocation_fits::<HydratedCandidate>(limit, port_budget, true) {
+        let hydration_fits = rerank_authority_hydration_bytes(child.points(), limit)
+            .is_some_and(|bytes| bytes <= port_budget.max_hydration_bytes());
+        if !port_allocation_fits::<HydratedCandidate>(limit, port_budget, false) || !hydration_fits
+        {
             return Ok(budget_exhausted_child(child));
         }
         let page = reranker.rerank(query, child.points(), limit, port_budget)?;
@@ -263,10 +297,17 @@ impl QueryExecutor<'_> {
                 .saturating_add(map_bytes),
         );
         usage.add_hydration_bytes(
-            page.rows()
+            child
+                .points()
                 .iter()
                 .map(|row| row.source_key().as_str().len())
-                .sum(),
+                .sum::<usize>()
+                .saturating_add(
+                    page.rows()
+                        .iter()
+                        .map(|row| row.source_key().as_str().len())
+                        .sum::<usize>(),
+                ),
         );
         if budget.exhausted(usage) {
             return Ok(stopped_child(&child, Completion::BudgetExhausted, usage));

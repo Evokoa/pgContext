@@ -11,17 +11,26 @@ use context_core::{OccurrenceId, PointId, SourceAuthority, SourceKey, SourceVers
 use context_query::{
     Cancellation, Candidate, CandidateBranch, CandidatePage, CandidateProvenance, CandidateSource,
     CandidateSourceKind, Completion, ExecutionBudget, FilterCandidateBatch, HydratedCandidate,
-    PortBudget, QueryClock, QueryError, QueryExecutor, QueryIr, QueryKind, RecheckPage,
-    RerankCandidate, RerankFallbackPolicy, RerankRequest, RerankRequestId, ScoreOrder,
-    SourceReadiness, SourceRechecker, StageDiagnostic, TelemetrySink,
+    PortBudget, QueryClock, QueryError, QueryExecutor, QueryIr, QueryKind,
+    RERANK_CONTENT_DIGEST_BYTES, RecheckPage, RerankCandidate, RerankContentDigest,
+    RerankContribution, RerankFallbackPolicy, RerankModelName, RerankQuery, RerankRequest,
+    RerankRequestId, ScoreOrder, SourceReadiness, SourceRechecker, StageDiagnostic, TelemetrySink,
 };
-use context_rerank::{
-    AuthorizedRowSource, BackendReranker, BackendResult, DeterministicRerankBackend, RerankBackend,
-    RerankBackendError, WireRerankResponse,
+use pgcontext_worker::{
+    AuthorizedRowSource, BackendReranker, BackendRerankerConfig, BackendResult,
+    DeterministicRerankBackend, RerankBackend, RerankBackendError, WireRerankResponse,
 };
 
 const POINTS: [u64; 4] = [1, 2, 3, 4];
 const MODEL_REVISION: u64 = 7;
+
+fn model() -> RerankModelName {
+    RerankModelName::new("fixture-v1").expect("model")
+}
+
+fn query_text() -> RerankQuery {
+    RerankQuery::new("postgres retrieval").expect("query")
+}
 
 struct FixedSource;
 
@@ -115,6 +124,7 @@ impl AuthorizedRowSource for Authorizer {
     fn authorize(
         &mut self,
         row: &HydratedCandidate,
+        _max_candidate_bytes: usize,
     ) -> Result<Option<RerankCandidate>, QueryError> {
         if self.withheld.contains(&row.point_id().get()) {
             return Ok(None);
@@ -132,7 +142,19 @@ impl AuthorizedRowSource for Authorizer {
             occurrence,
             row.point_id(),
             version,
+            RerankContentDigest::new([1; RERANK_CONTENT_DIGEST_BYTES]),
             format!("row {}", row.point_id().get()),
+            usize::try_from(row.point_id().get()).map_err(|_| QueryError::ArithmeticOverflow {
+                operation: "rerank_fixture_rank",
+            })?,
+            row.score(),
+            vec![RerankContribution::new(
+                "fixture",
+                1,
+                row.score(),
+                1.0,
+                0.01,
+            )?],
             Vec::new(),
         )
         .map(Some)
@@ -211,6 +233,14 @@ fn execute<B: RerankBackend>(
     withheld: Vec<u64>,
     limit: usize,
 ) -> context_query::ExecutionOutcome {
+    execute_result(backend, withheld, limit).expect("execution")
+}
+
+fn execute_result<B: RerankBackend>(
+    backend: &B,
+    withheld: Vec<u64>,
+    limit: usize,
+) -> context_query::Result<context_query::ExecutionOutcome> {
     let mut rows = Authorizer { withheld };
     let (cancellation, clock) = (NeverCancelled, FixedClock);
     let mut reranker = BackendReranker::new(
@@ -218,8 +248,12 @@ fn execute<B: RerankBackend>(
         &mut rows,
         &cancellation,
         &clock,
-        RerankFallbackPolicy::Require,
-        RerankRequestId::new(1).expect("request id"),
+        BackendRerankerConfig::new(
+            model(),
+            query_text(),
+            RerankFallbackPolicy::Require,
+            RerankRequestId::new(1).expect("request id"),
+        ),
     );
     QueryExecutor::new(
         &mut FixedSource,
@@ -233,7 +267,6 @@ fn execute<B: RerankBackend>(
         &plan(limit),
         ExecutionBudget::new(64, 64, 64, 8, 2, 8).expect("budget"),
     )
-    .expect("execution")
 }
 
 #[test]
@@ -321,8 +354,12 @@ fn a_score_threshold_above_a_rerank_filters_on_the_reranker_score() {
         &mut rows,
         &cancellation,
         &clock,
-        RerankFallbackPolicy::Require,
-        RerankRequestId::new(1).expect("request id"),
+        BackendRerankerConfig::new(
+            model(),
+            query_text(),
+            RerankFallbackPolicy::Require,
+            RerankRequestId::new(1).expect("request id"),
+        ),
     );
     let outcome = QueryExecutor::new(
         &mut FixedSource,
@@ -349,27 +386,17 @@ fn a_score_threshold_above_a_rerank_filters_on_the_reranker_score() {
 }
 
 #[test]
-fn a_withheld_row_degrades_the_query_instead_of_disappearing() {
-    // A short completed page is a port contract violation, and no honest score
-    // exists for a row the reranker never judged — so the query degrades
-    // visibly rather than quietly returning a different set of rows.
-    let outcome = execute(&DeterministicRerankBackend::new(MODEL_REVISION), vec![2], 4);
-
-    assert_ne!(outcome.completion(), Completion::Complete);
-    assert!(outcome.points().is_empty());
+fn a_withheld_row_fails_the_query_instead_of_disappearing() {
+    let error = execute_result(&DeterministicRerankBackend::new(MODEL_REVISION), vec![2], 4)
+        .expect_err("authority withholding must fail closed");
+    assert!(matches!(error, QueryError::PortFailure { .. }));
 }
 
 #[test]
-fn a_withheld_row_still_allows_a_complete_answer_under_a_smaller_limit() {
-    let outcome = execute(&DeterministicRerankBackend::new(MODEL_REVISION), vec![2], 3);
-
-    assert_eq!(outcome.completion(), Completion::Complete);
-    let actual = outcome
-        .points()
-        .iter()
-        .map(|row| row.point_id().get())
-        .collect::<Vec<_>>();
-    assert_eq!(actual, provider_order(&[1, 3, 4]));
+fn a_withheld_row_fails_even_when_other_rows_could_fill_the_limit() {
+    let error = execute_result(&DeterministicRerankBackend::new(MODEL_REVISION), vec![2], 3)
+        .expect_err("authority withholding has no implicit partial policy");
+    assert!(matches!(error, QueryError::PortFailure { .. }));
 }
 
 #[test]
@@ -401,8 +428,12 @@ fn a_dead_provider_under_the_require_policy_fails_the_query() {
         &mut rows,
         &cancellation,
         &clock,
-        RerankFallbackPolicy::Require,
-        RerankRequestId::new(1).expect("request id"),
+        BackendRerankerConfig::new(
+            model(),
+            query_text(),
+            RerankFallbackPolicy::Require,
+            RerankRequestId::new(1).expect("request id"),
+        ),
     );
     let error = QueryExecutor::new(
         &mut FixedSource,
@@ -441,8 +472,12 @@ fn a_dead_provider_under_the_degrade_policy_completes_non_authoritatively() {
         &mut rows,
         &cancellation,
         &clock,
-        RerankFallbackPolicy::DegradeWithoutRerank,
-        RerankRequestId::new(1).expect("request id"),
+        BackendRerankerConfig::new(
+            model(),
+            query_text(),
+            RerankFallbackPolicy::DegradeWithoutRerank,
+            RerankRequestId::new(1).expect("request id"),
+        ),
     );
     let outcome = QueryExecutor::new(
         &mut FixedSource,

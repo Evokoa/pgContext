@@ -372,6 +372,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -381,17 +382,6 @@ dependencies = [
  "context-core",
  "context-filter",
  "context-hybrid",
- "proptest",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "context-rerank"
-version = "0.1.0"
-dependencies = [
- "context-core",
- "context-query",
  "proptest",
  "serde",
  "serde_json",
@@ -1115,6 +1105,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pgcontext-worker"
+version = "0.1.0"
+dependencies = [
+ "context-core",
+ "context-query",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "pgrx"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1798,7 +1801,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "385a6cb71ab9ab790c5fe8d67f1645e6c450a7ce006a33de03daa956cf70a496"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

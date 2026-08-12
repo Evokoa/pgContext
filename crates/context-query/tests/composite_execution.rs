@@ -1281,9 +1281,20 @@ impl ExternalReranker for FakeExternalReranker {
 
 #[test]
 fn external_rerank_port_preserves_authoritative_provenance_and_revision() {
+    let inner = branch(1.0);
+    let mut baseline_source = RoutingSource::default();
+    let baseline = QueryExecutor::new(
+        &mut baseline_source,
+        None,
+        &mut ExactRechecker,
+        &mut Diagnostics::default(),
+        &NeverCancelled,
+    )
+    .execute(&inner, budget(8))
+    .expect("inner query should execute");
     let query = QueryIr::new(
         QueryKind::ExternalRerank {
-            query: Box::new(branch(1.0)),
+            query: Box::new(inner),
             model_revision: 7,
         },
         ScoreOrder::HigherIsBetter,
@@ -1305,10 +1316,35 @@ fn external_rerank_port_preserves_authoritative_provenance_and_revision() {
         &NeverCancelled,
     )
     .with_external_reranker(&mut reranker)
-    .execute(&query, budget(8))
+    .execute(
+        &query,
+        budget(8)
+            .with_resource_limits(1_000, 1024 * 1024, 6, 10_000)
+            .expect("short-key rerank budget"),
+    )
     .expect("external rerank should execute");
 
     assert_eq!(outcome.completion(), Completion::Complete);
+    let authority_key_bytes = outcome
+        .points()
+        .iter()
+        .map(|row| row.source_key().as_str().len())
+        .sum::<usize>();
+    assert_eq!(
+        outcome.usage().hydration_bytes(),
+        baseline
+            .usage()
+            .hydration_bytes()
+            .saturating_add(
+                baseline
+                    .points()
+                    .iter()
+                    .map(|row| row.source_key().as_str().len())
+                    .sum::<usize>()
+            )
+            .saturating_add(authority_key_bytes),
+        "usage must charge the all-candidate authority pass and winner recheck"
+    );
     assert!(
         outcome
             .points()

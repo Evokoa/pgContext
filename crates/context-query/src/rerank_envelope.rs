@@ -11,23 +11,201 @@
 //! rejected, not silently reinterpreted.
 
 use std::collections::BTreeSet;
+use std::mem::size_of;
 
-use context_core::{OccurrenceId, PointId, SourceVersion};
+use context_core::{OccurrenceId, PointId, ProfileName, SourceVersion};
 
 use crate::{QueryError, Result};
 
 /// Envelope contract version. Bump when any field's meaning changes.
-pub const RERANK_ENVELOPE_VERSION: u16 = 1;
+pub const RERANK_ENVELOPE_VERSION: u16 = 3;
 /// Maximum candidates in one rerank request.
 pub const MAX_RERANK_CANDIDATES: usize = 512;
+/// Maximum bytes in the original query released to a reranker.
+pub const MAX_RERANK_QUERY_BYTES: usize = 64 * 1024;
+/// Maximum bytes in one model identity.
+pub const MAX_RERANK_MODEL_NAME_BYTES: usize = 128;
 /// Maximum authorized text bytes attached to one candidate.
 pub const MAX_RERANK_TEXT_BYTES: usize = 32 * 1024;
-/// Maximum authorized text bytes across one request.
+/// Maximum serialized payload bytes across one request.
 pub const MAX_RERANK_REQUEST_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum JSON-encoded request or response bytes on the worker wire.
+pub const MAX_RERANK_WIRE_BYTES: usize = 6 * 1024 * 1024;
 /// Maximum allow-listed metadata entries on one candidate.
 pub const MAX_RERANK_METADATA_ENTRIES: usize = 8;
 /// Maximum bytes in one metadata key or value.
 pub const MAX_RERANK_METADATA_BYTES: usize = 1_024;
+/// Fixed byte width of an authoritative content digest.
+pub const RERANK_CONTENT_DIGEST_BYTES: usize = 32;
+/// Maximum fusion branches recorded for one candidate.
+pub const MAX_RERANK_CONTRIBUTIONS: usize = 127;
+
+/// The bounded original query released to a reranker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RerankQuery(String);
+
+impl RerankQuery {
+    /// Creates a nonblank bounded query.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] when the query is empty, blank,
+    /// contains NUL, or exceeds [`MAX_RERANK_QUERY_BYTES`].
+    pub fn new(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        if value.len() > MAX_RERANK_QUERY_BYTES {
+            return Err(invalid("rerank_query", "exceeds 65536 bytes"));
+        }
+        if value.trim().is_empty() || value.contains('\0') {
+            return Err(invalid("rerank_query", "must be nonblank and NUL-free"));
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the original query.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Immutable model identity carried independently of its numeric revision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RerankModelName(String);
+
+impl RerankModelName {
+    /// Creates a bounded control-free model identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] when the identity is blank,
+    /// control-bearing, or exceeds [`MAX_RERANK_MODEL_NAME_BYTES`].
+    pub fn new(value: impl Into<String>) -> Result<Self> {
+        let value = value.into();
+        if value.len() > MAX_RERANK_MODEL_NAME_BYTES {
+            return Err(invalid("rerank_model", "exceeds 128 bytes"));
+        }
+        if value.trim().is_empty() || value.chars().any(char::is_control) {
+            return Err(invalid("rerank_model", "must be nonblank and control-free"));
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the model identity.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Fixed digest of the authoritative text released for a candidate.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct RerankContentDigest([u8; RERANK_CONTENT_DIGEST_BYTES]);
+
+impl RerankContentDigest {
+    /// Creates a fixed-width digest.
+    #[must_use]
+    pub const fn new(bytes: [u8; RERANK_CONTENT_DIGEST_BYTES]) -> Self {
+        Self(bytes)
+    }
+
+    /// Returns the digest bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; RERANK_CONTENT_DIGEST_BYTES] {
+        &self.0
+    }
+}
+
+/// One bounded rank-fusion contribution retained for rerank provenance.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RerankContribution {
+    profile: ProfileName,
+    rank: usize,
+    native_score: f64,
+    weight: f64,
+    contribution: f64,
+}
+
+impl RerankContribution {
+    /// Creates validated fusion evidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] for an invalid profile, zero rank,
+    /// non-finite score/contribution, or non-positive weight.
+    pub fn new(
+        profile: impl Into<String>,
+        rank: usize,
+        native_score: f64,
+        weight: f64,
+        contribution: f64,
+    ) -> Result<Self> {
+        let profile = ProfileName::new(profile.into()).map_err(|_| {
+            invalid(
+                "rerank_contribution_profile",
+                "must be a bounded control-free profile name",
+            )
+        })?;
+        if rank == 0 {
+            return Err(invalid("rerank_contribution_rank", "must be positive"));
+        }
+        if !native_score.is_finite() {
+            return Err(invalid(
+                "rerank_contribution_native_score",
+                "must be finite",
+            ));
+        }
+        if !weight.is_finite() || weight <= 0.0 {
+            return Err(invalid(
+                "rerank_contribution_weight",
+                "must be finite and positive",
+            ));
+        }
+        if !contribution.is_finite() || contribution < 0.0 {
+            return Err(invalid(
+                "rerank_contribution",
+                "must be finite and nonnegative",
+            ));
+        }
+        Ok(Self {
+            profile,
+            rank,
+            native_score,
+            weight,
+            contribution,
+        })
+    }
+
+    /// Returns the contributing profile.
+    #[must_use]
+    pub fn profile(&self) -> &str {
+        self.profile.as_str()
+    }
+
+    /// Returns its one-based rank.
+    #[must_use]
+    pub const fn rank(&self) -> usize {
+        self.rank
+    }
+
+    /// Returns its diagnostic native score.
+    #[must_use]
+    pub const fn native_score(&self) -> f64 {
+        self.native_score
+    }
+
+    /// Returns its declared fusion weight.
+    #[must_use]
+    pub const fn weight(&self) -> f64 {
+        self.weight
+    }
+
+    /// Returns its weighted RRF contribution.
+    #[must_use]
+    pub const fn contribution(&self) -> f64 {
+        self.contribution
+    }
+}
 
 /// Correlates one rerank response with the request that produced it.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -61,15 +239,13 @@ pub struct RerankMetadata {
 }
 
 impl RerankMetadata {
-    /// Creates a bounded metadata pair.
+    /// Validates a borrowed metadata pair without allocating.
     ///
     /// # Errors
     ///
     /// Returns [`QueryError::InvalidInput`] when the key is empty or either
     /// side exceeds [`MAX_RERANK_METADATA_BYTES`].
-    pub fn new(key: impl Into<String>, value: impl Into<String>) -> Result<Self> {
-        let key = key.into();
-        let value = value.into();
+    pub fn validate(key: &str, value: &str) -> Result<()> {
         if key.is_empty() || key.len() > MAX_RERANK_METADATA_BYTES {
             return Err(invalid(
                 "rerank_metadata_key",
@@ -79,6 +255,19 @@ impl RerankMetadata {
         if value.len() > MAX_RERANK_METADATA_BYTES {
             return Err(invalid("rerank_metadata_value", "exceeds 1024 bytes"));
         }
+        Ok(())
+    }
+
+    /// Creates a bounded metadata pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] when the key is empty or either
+    /// side exceeds [`MAX_RERANK_METADATA_BYTES`].
+    pub fn new(key: impl Into<String>, value: impl Into<String>) -> Result<Self> {
+        let key = key.into();
+        let value = value.into();
+        Self::validate(&key, &value)?;
         Ok(Self { key, value })
     }
 
@@ -101,8 +290,12 @@ pub struct RerankCandidate {
     occurrence_id: OccurrenceId,
     point_id: PointId,
     source_version: SourceVersion,
+    content_digest: RerankContentDigest,
     text: String,
-    metadata: Vec<RerankMetadata>,
+    fused_rank: usize,
+    fused_score: f64,
+    contributions: Box<[RerankContribution]>,
+    metadata: Box<[RerankMetadata]>,
 }
 
 impl RerankCandidate {
@@ -110,16 +303,22 @@ impl RerankCandidate {
     ///
     /// # Errors
     ///
-    /// Returns [`QueryError::InvalidInput`] when the text exceeds
-    /// [`MAX_RERANK_TEXT_BYTES`], the metadata exceeds
-    /// [`MAX_RERANK_METADATA_ENTRIES`], or a metadata key repeats. A duplicate
-    /// key is rejected rather than last-wins so the provider cannot observe a
-    /// pair the caller did not intend to release.
+    /// Returns [`QueryError::InvalidInput`] when text, rank, score, fusion
+    /// provenance, or metadata violates its bound. Duplicate metadata keys and
+    /// profile contributions are rejected rather than last-wins.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the envelope constructor makes every independently validated trust-boundary field explicit"
+    )]
     pub fn new(
         occurrence_id: OccurrenceId,
         point_id: PointId,
         source_version: SourceVersion,
+        content_digest: RerankContentDigest,
         text: impl Into<String>,
+        fused_rank: usize,
+        fused_score: f64,
+        contributions: Vec<RerankContribution>,
         metadata: Vec<RerankMetadata>,
     ) -> Result<Self> {
         let text = text.into();
@@ -127,6 +326,28 @@ impl RerankCandidate {
             return Err(invalid(
                 "rerank_candidate_text",
                 "exceeds the authorized byte budget",
+            ));
+        }
+        if fused_rank == 0 {
+            return Err(invalid("rerank_fused_rank", "must be positive"));
+        }
+        if !fused_score.is_finite() {
+            return Err(invalid("rerank_fused_score", "must be finite"));
+        }
+        if contributions.is_empty() || contributions.len() > MAX_RERANK_CONTRIBUTIONS {
+            return Err(invalid(
+                "rerank_candidate_contributions",
+                "must contain 1..=127 entries",
+            ));
+        }
+        let contribution_profiles = contributions
+            .iter()
+            .map(RerankContribution::profile)
+            .collect::<BTreeSet<_>>();
+        if contribution_profiles.len() != contributions.len() {
+            return Err(invalid(
+                "rerank_candidate_contributions",
+                "must not repeat a profile",
             ));
         }
         if metadata.len() > MAX_RERANK_METADATA_ENTRIES {
@@ -149,8 +370,12 @@ impl RerankCandidate {
             occurrence_id,
             point_id,
             source_version,
+            content_digest,
             text,
-            metadata,
+            fused_rank,
+            fused_score,
+            contributions: contributions.into_boxed_slice(),
+            metadata: metadata.into_boxed_slice(),
         })
     }
 
@@ -172,16 +397,77 @@ impl RerankCandidate {
         self.source_version
     }
 
+    /// Returns the authoritative text digest.
+    #[must_use]
+    pub const fn content_digest(&self) -> RerankContentDigest {
+        self.content_digest
+    }
+
     /// Returns the authorized text released to the provider.
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text
     }
 
+    /// Returns the one-based fused rank before semantic reranking.
+    #[must_use]
+    pub const fn fused_rank(&self) -> usize {
+        self.fused_rank
+    }
+
+    /// Returns the fused score retained for fallback and provenance.
+    #[must_use]
+    pub const fn fused_score(&self) -> f64 {
+        self.fused_score
+    }
+
+    /// Returns the rank-fusion contribution evidence.
+    #[must_use]
+    pub fn contributions(&self) -> &[RerankContribution] {
+        &self.contributions
+    }
+
     /// Returns the allow-listed metadata released to the provider.
     #[must_use]
     pub fn metadata(&self) -> &[RerankMetadata] {
         &self.metadata
+    }
+
+    /// Returns the conservative extension-owned allocation projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::ArithmeticOverflow`] when the projection cannot
+    /// be represented by the current platform.
+    pub fn projected_bytes(&self) -> Result<usize> {
+        let metadata_bytes = self.metadata.iter().try_fold(0_usize, |total, entry| {
+            total
+                .checked_add(size_of::<RerankMetadata>())
+                .and_then(|value| value.checked_add(entry.key.capacity()))
+                .and_then(|value| value.checked_add(entry.value.capacity()))
+                .ok_or(QueryError::ArithmeticOverflow {
+                    operation: "rerank_candidate_metadata_projection",
+                })
+        })?;
+        let contribution_bytes =
+            self.contributions
+                .iter()
+                .try_fold(0_usize, |total, contribution| {
+                    total
+                        .checked_add(contribution.profile.allocation_capacity_bytes())
+                        .and_then(|value| value.checked_add(size_of::<RerankContribution>()))
+                        .ok_or(QueryError::ArithmeticOverflow {
+                            operation: "rerank_candidate_contribution_projection",
+                        })
+                })?;
+        self.text
+            .capacity()
+            .checked_add(metadata_bytes)
+            .and_then(|value| value.checked_add(contribution_bytes))
+            .and_then(|value| value.checked_add(size_of::<Self>()))
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "rerank_candidate_byte_projection",
+            })
     }
 }
 
@@ -190,9 +476,12 @@ impl RerankCandidate {
 pub struct RerankRequest {
     version: u16,
     request_id: RerankRequestId,
+    model: RerankModelName,
     model_revision: u64,
     expires_at_micros: u64,
-    candidates: Vec<RerankCandidate>,
+    query: RerankQuery,
+    candidates: Box<[RerankCandidate]>,
+    projected_bytes: usize,
 }
 
 impl RerankRequest {
@@ -205,8 +494,10 @@ impl RerankRequest {
     /// budget, or declares a zero model revision.
     pub fn new(
         request_id: RerankRequestId,
+        model: RerankModelName,
         model_revision: u64,
         expires_at_micros: u64,
+        query: RerankQuery,
         candidates: Vec<RerankCandidate>,
     ) -> Result<Self> {
         if model_revision == 0 {
@@ -218,36 +509,52 @@ impl RerankRequest {
                 "must contain 1..=512 candidates",
             ));
         }
-        let unique = candidates
+        let unique_occurrences = candidates
             .iter()
             .map(RerankCandidate::occurrence_id)
             .collect::<BTreeSet<_>>();
-        if unique.len() != candidates.len() {
+        if unique_occurrences.len() != candidates.len() {
             return Err(invalid(
                 "rerank_candidates",
                 "must not repeat an occurrence",
             ));
         }
-        let total_bytes = candidates
+        let unique_points = candidates
             .iter()
-            .try_fold(0_usize, |total, candidate| {
-                total.checked_add(candidate.text().len())
-            })
+            .map(RerankCandidate::point_id)
+            .collect::<BTreeSet<_>>();
+        if unique_points.len() != candidates.len() {
+            return Err(invalid("rerank_candidates", "must not repeat a point"));
+        }
+        let candidate_bytes = candidates.iter().try_fold(0_usize, |total, candidate| {
+            total
+                .checked_add(candidate.projected_bytes()?)
+                .ok_or(QueryError::ArithmeticOverflow {
+                    operation: "rerank_request_byte_projection",
+                })
+        })?;
+        let projected_bytes = candidate_bytes
+            .checked_add(query.0.capacity())
+            .and_then(|value| value.checked_add(model.0.capacity()))
+            .and_then(|value| value.checked_add(size_of::<Self>()))
             .ok_or(QueryError::ArithmeticOverflow {
                 operation: "rerank_request_byte_projection",
             })?;
-        if total_bytes > MAX_RERANK_REQUEST_BYTES {
+        if projected_bytes > MAX_RERANK_REQUEST_BYTES {
             return Err(invalid(
                 "rerank_candidates",
-                "exceed the authorized request byte budget",
+                "exceed the complete request byte budget",
             ));
         }
         Ok(Self {
             version: RERANK_ENVELOPE_VERSION,
             request_id,
+            model,
             model_revision,
             expires_at_micros,
-            candidates,
+            query,
+            candidates: candidates.into_boxed_slice(),
+            projected_bytes,
         })
     }
 
@@ -263,6 +570,22 @@ impl RerankRequest {
         self.request_id
     }
 
+    /// Rebinds a validated provisional request to its durable request identity.
+    ///
+    /// Candidate text and provenance remain owned by this request and are not
+    /// cloned while PostgreSQL assigns the final identity.
+    #[must_use]
+    pub fn with_request_id(mut self, request_id: RerankRequestId) -> Self {
+        self.request_id = request_id;
+        self
+    }
+
+    /// Returns the immutable model identity.
+    #[must_use]
+    pub const fn model(&self) -> &RerankModelName {
+        &self.model
+    }
+
     /// Returns the required model revision.
     #[must_use]
     pub const fn model_revision(&self) -> u64 {
@@ -275,10 +598,22 @@ impl RerankRequest {
         self.expires_at_micros
     }
 
+    /// Returns the original query released to the provider.
+    #[must_use]
+    pub const fn query(&self) -> &RerankQuery {
+        &self.query
+    }
+
     /// Returns the authorized candidates.
     #[must_use]
     pub fn candidates(&self) -> &[RerankCandidate] {
         &self.candidates
+    }
+
+    /// Returns the conservative extension-owned request allocation projection.
+    #[must_use]
+    pub const fn projected_bytes(&self) -> usize {
+        self.projected_bytes
     }
 }
 
@@ -325,6 +660,7 @@ impl RerankScore {
 pub struct RerankResponse {
     version: u16,
     request_id: RerankRequestId,
+    model: RerankModelName,
     model_revision: u64,
     scores: Vec<RerankScore>,
 }
@@ -335,12 +671,14 @@ impl RerankResponse {
     pub const fn new(
         version: u16,
         request_id: RerankRequestId,
+        model: RerankModelName,
         model_revision: u64,
         scores: Vec<RerankScore>,
     ) -> Self {
         Self {
             version,
             request_id,
+            model,
             model_revision,
             scores,
         }
@@ -350,6 +688,12 @@ impl RerankResponse {
     #[must_use]
     pub fn scores(&self) -> &[RerankScore] {
         &self.scores
+    }
+
+    /// Returns the immutable model identity echoed by the provider.
+    #[must_use]
+    pub const fn model(&self) -> &RerankModelName {
+        &self.model
     }
 }
 
@@ -367,6 +711,60 @@ pub enum RerankFallbackPolicy {
     DegradeWithoutRerank,
 }
 
+/// Whether a provider must score every released candidate.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RerankResponsePolicy {
+    /// Refuse a response that omits any released candidate.
+    RequireComplete,
+    /// Admit an explicitly partial response for a caller-owned partial policy.
+    AllowPartial,
+}
+
+/// Completeness of a validated response.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RerankResponseCompletion {
+    /// Every released candidate has exactly one score.
+    Complete,
+    /// At least one released candidate has no score.
+    Partial,
+}
+
+/// Provider scores after request membership and completeness validation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValidatedRerankResponse {
+    scores: Vec<RerankScore>,
+    completion: RerankResponseCompletion,
+}
+
+impl ValidatedRerankResponse {
+    /// Returns the accepted provider scores in provider order.
+    #[must_use]
+    pub fn scores(&self) -> &[RerankScore] {
+        &self.scores
+    }
+
+    /// Returns whether every released candidate was scored.
+    #[must_use]
+    pub const fn completion(&self) -> RerankResponseCompletion {
+        self.completion
+    }
+
+    /// Consumes the response and returns canonical relevance order.
+    ///
+    /// Reranker scores are higher-is-better. Provider array order is never
+    /// trusted; equal scores break by ascending occurrence identity.
+    #[must_use]
+    pub fn into_ordered_scores(mut self) -> Vec<RerankScore> {
+        self.scores.sort_by(|left, right| {
+            right
+                .score()
+                .total_cmp(&left.score())
+                .then_with(|| left.occurrence_id().cmp(&right.occurrence_id()))
+        });
+        self.scores
+    }
+}
+
 /// Why a rerank response was refused.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RerankRejection {
@@ -374,6 +772,8 @@ pub enum RerankRejection {
     VersionMismatch,
     /// The provider answered a different request.
     RequestMismatch,
+    /// The provider answered with a different model identity.
+    ModelMismatch,
     /// The provider answered with a different model revision.
     ModelRevisionMismatch,
     /// The request expired before the response arrived.
@@ -384,6 +784,8 @@ pub enum RerankRejection {
     DuplicateOccurrence,
     /// The provider scored an occurrence the request never released.
     UnknownOccurrence,
+    /// The response omitted a released candidate under a complete policy.
+    Incomplete,
 }
 
 impl RerankRejection {
@@ -393,11 +795,13 @@ impl RerankRejection {
         match self {
             Self::VersionMismatch => "version_mismatch",
             Self::RequestMismatch => "request_mismatch",
+            Self::ModelMismatch => "model_mismatch",
             Self::ModelRevisionMismatch => "model_revision_mismatch",
             Self::Expired => "expired",
             Self::TooManyScores => "too_many_scores",
             Self::DuplicateOccurrence => "duplicate_occurrence",
             Self::UnknownOccurrence => "unknown_occurrence",
+            Self::Incomplete => "incomplete",
         }
     }
 }
@@ -423,16 +827,41 @@ pub fn validate_rerank_response(
     response: &RerankResponse,
     now_micros: u64,
 ) -> core::result::Result<Vec<RerankScore>, RerankRejection> {
+    validate_rerank_response_with_policy(
+        request,
+        response,
+        now_micros,
+        RerankResponsePolicy::AllowPartial,
+    )
+    .map(|validated| validated.scores)
+}
+
+/// Validates an untrusted provider response and applies an explicit
+/// completeness policy.
+///
+/// # Errors
+///
+/// Returns [`RerankRejection`] when identities, membership, expiry,
+/// uniqueness, count, or requested completeness do not match the request.
+pub fn validate_rerank_response_with_policy(
+    request: &RerankRequest,
+    response: &RerankResponse,
+    now_micros: u64,
+    policy: RerankResponsePolicy,
+) -> core::result::Result<ValidatedRerankResponse, RerankRejection> {
     if response.version != request.version {
         return Err(RerankRejection::VersionMismatch);
     }
     if response.request_id != request.request_id {
         return Err(RerankRejection::RequestMismatch);
     }
+    if response.model != request.model {
+        return Err(RerankRejection::ModelMismatch);
+    }
     if response.model_revision != request.model_revision {
         return Err(RerankRejection::ModelRevisionMismatch);
     }
-    if now_micros > request.expires_at_micros {
+    if now_micros >= request.expires_at_micros {
         return Err(RerankRejection::Expired);
     }
     if response.scores.len() > request.candidates.len() {
@@ -452,7 +881,20 @@ pub fn validate_rerank_response(
             return Err(RerankRejection::DuplicateOccurrence);
         }
     }
-    Ok(response.scores.clone())
+    let completion = if response.scores.len() == request.candidates.len() {
+        RerankResponseCompletion::Complete
+    } else {
+        RerankResponseCompletion::Partial
+    };
+    if completion == RerankResponseCompletion::Partial
+        && policy == RerankResponsePolicy::RequireComplete
+    {
+        return Err(RerankRejection::Incomplete);
+    }
+    Ok(ValidatedRerankResponse {
+        scores: response.scores.clone(),
+        completion,
+    })
 }
 
 fn invalid(field: &'static str, reason: &'static str) -> QueryError {
@@ -466,234 +908,5 @@ fn invalid(field: &'static str, reason: &'static str) -> QueryError {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::*;
-
-    fn occurrence(id: u64) -> OccurrenceId {
-        OccurrenceId::new(id).expect("nonzero occurrence")
-    }
-
-    fn candidate(id: u64) -> RerankCandidate {
-        RerankCandidate::new(
-            occurrence(id),
-            PointId::new(id),
-            SourceVersion::new(1).expect("source version"),
-            "authorized text",
-            Vec::new(),
-        )
-        .expect("candidate")
-    }
-
-    fn request() -> RerankRequest {
-        RerankRequest::new(
-            RerankRequestId::new(7).expect("request id"),
-            3,
-            1_000,
-            vec![candidate(1), candidate(2)],
-        )
-        .expect("request")
-    }
-
-    fn response(scores: Vec<RerankScore>) -> RerankResponse {
-        RerankResponse::new(
-            RERANK_ENVELOPE_VERSION,
-            RerankRequestId::new(7).expect("request id"),
-            3,
-            scores,
-        )
-    }
-
-    fn score(id: u64, value: f64) -> RerankScore {
-        RerankScore::new(occurrence(id), value).expect("score")
-    }
-
-    #[test]
-    fn identities_and_scores_reject_reserved_and_non_finite_values() {
-        assert!(RerankRequestId::new(0).is_err());
-        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(
-                RerankScore::new(occurrence(1), value).is_err(),
-                "score {value} must be rejected"
-            );
-        }
-    }
-
-    #[test]
-    fn requests_bound_candidate_count_uniqueness_and_total_bytes() {
-        assert!(
-            RerankRequest::new(RerankRequestId::new(1).expect("id"), 1, 0, Vec::new()).is_err()
-        );
-        assert!(
-            RerankRequest::new(
-                RerankRequestId::new(1).expect("id"),
-                0,
-                0,
-                vec![candidate(1)]
-            )
-            .is_err(),
-            "a zero model revision must be rejected"
-        );
-        assert!(
-            RerankRequest::new(
-                RerankRequestId::new(1).expect("id"),
-                1,
-                0,
-                vec![candidate(1), candidate(1)]
-            )
-            .is_err(),
-            "a repeated occurrence must be rejected"
-        );
-
-        let oversized = (1..=MAX_RERANK_CANDIDATES + 1)
-            .map(|id| candidate(id as u64))
-            .collect::<Vec<_>>();
-        assert!(RerankRequest::new(RerankRequestId::new(1).expect("id"), 1, 0, oversized).is_err());
-    }
-
-    #[test]
-    fn candidates_bound_text_and_allow_listed_metadata() {
-        assert!(
-            RerankCandidate::new(
-                occurrence(1),
-                PointId::new(1),
-                SourceVersion::new(1).expect("version"),
-                "x".repeat(MAX_RERANK_TEXT_BYTES + 1),
-                Vec::new(),
-            )
-            .is_err()
-        );
-        let too_many = (0..=MAX_RERANK_METADATA_ENTRIES)
-            .map(|index| RerankMetadata::new(format!("k{index}"), "v").expect("metadata"))
-            .collect::<Vec<_>>();
-        assert!(
-            RerankCandidate::new(
-                occurrence(1),
-                PointId::new(1),
-                SourceVersion::new(1).expect("version"),
-                "text",
-                too_many,
-            )
-            .is_err()
-        );
-        let duplicated = vec![
-            RerankMetadata::new("tenant", "a").expect("metadata"),
-            RerankMetadata::new("tenant", "b").expect("metadata"),
-        ];
-        assert!(
-            RerankCandidate::new(
-                occurrence(1),
-                PointId::new(1),
-                SourceVersion::new(1).expect("version"),
-                "text",
-                duplicated,
-            )
-            .is_err(),
-            "a repeated metadata key must be rejected, not last-wins"
-        );
-        assert!(RerankMetadata::new("", "v").is_err());
-    }
-
-    #[test]
-    fn a_well_formed_response_is_accepted_in_provider_order() {
-        let accepted = validate_rerank_response(
-            &request(),
-            &response(vec![score(2, 0.9), score(1, 0.1)]),
-            500,
-        )
-        .expect("well-formed response");
-        assert_eq!(
-            accepted
-                .iter()
-                .map(|score| score.occurrence_id())
-                .collect::<Vec<_>>(),
-            vec![occurrence(2), occurrence(1)]
-        );
-    }
-
-    #[test]
-    fn a_response_answering_a_different_request_is_refused() {
-        let mismatched = RerankResponse::new(
-            RERANK_ENVELOPE_VERSION,
-            RerankRequestId::new(8).expect("id"),
-            3,
-            vec![score(1, 1.0)],
-        );
-        assert_eq!(
-            validate_rerank_response(&request(), &mismatched, 0),
-            Err(RerankRejection::RequestMismatch)
-        );
-    }
-
-    #[test]
-    fn version_model_and_expiry_mismatches_are_each_refused() {
-        let wrong_version = RerankResponse::new(
-            RERANK_ENVELOPE_VERSION + 1,
-            RerankRequestId::new(7).expect("id"),
-            3,
-            vec![score(1, 1.0)],
-        );
-        assert_eq!(
-            validate_rerank_response(&request(), &wrong_version, 0),
-            Err(RerankRejection::VersionMismatch)
-        );
-
-        let wrong_model = RerankResponse::new(
-            RERANK_ENVELOPE_VERSION,
-            RerankRequestId::new(7).expect("id"),
-            4,
-            vec![score(1, 1.0)],
-        );
-        assert_eq!(
-            validate_rerank_response(&request(), &wrong_model, 0),
-            Err(RerankRejection::ModelRevisionMismatch)
-        );
-
-        assert_eq!(
-            validate_rerank_response(&request(), &response(vec![score(1, 1.0)]), 1_001),
-            Err(RerankRejection::Expired)
-        );
-        assert!(
-            validate_rerank_response(&request(), &response(vec![score(1, 1.0)]), 1_000).is_ok(),
-            "expiry is inclusive of its own instant"
-        );
-    }
-
-    #[test]
-    fn injected_duplicated_and_oversized_score_sets_are_refused() {
-        assert_eq!(
-            validate_rerank_response(&request(), &response(vec![score(99, 1.0)]), 0),
-            Err(RerankRejection::UnknownOccurrence),
-            "a provider must not score an occurrence it was never given"
-        );
-        assert_eq!(
-            validate_rerank_response(&request(), &response(vec![score(1, 1.0), score(1, 2.0)]), 0),
-            Err(RerankRejection::DuplicateOccurrence)
-        );
-        assert_eq!(
-            validate_rerank_response(
-                &request(),
-                &response(vec![score(1, 1.0), score(2, 1.0), score(1, 1.0)]),
-                0
-            ),
-            Err(RerankRejection::TooManyScores)
-        );
-    }
-
-    #[test]
-    fn a_provider_may_return_fewer_scores_than_it_was_given() {
-        let accepted = validate_rerank_response(&request(), &response(vec![score(1, 0.5)]), 0)
-            .expect("a partial score set is well formed");
-        assert_eq!(accepted.len(), 1);
-    }
-
-    #[test]
-    fn rejections_and_policies_carry_stable_names() {
-        assert_eq!(
-            RerankRejection::UnknownOccurrence.stable_name(),
-            "unknown_occurrence"
-        );
-        assert_ne!(
-            RerankFallbackPolicy::Require,
-            RerankFallbackPolicy::DegradeWithoutRerank
-        );
-    }
+    include!("rerank_envelope/tests.rs");
 }

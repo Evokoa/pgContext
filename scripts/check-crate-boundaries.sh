@@ -30,7 +30,7 @@ pure_crates = (
     "context-storage",
     "context-query",
     "context-build",
-    "context-rerank",
+    "pgcontext-worker",
 )
 
 
@@ -87,8 +87,8 @@ exact_dependencies(
 )
 exact_dependencies("context-build", {"context-core"}, {"proptest"})
 exact_dependencies(
-    "context-rerank",
-    {"context-core", "context-query", "serde", "serde_json"},
+    "pgcontext-worker",
+    {"context-core", "context-query", "serde", "serde_json", "sha2", "tokio"},
     {"proptest"},
 )
 
@@ -129,7 +129,10 @@ for required in ("context-query", "context-build"):
 
 
 def rust_sources(crate: str):
-    crate_root = root / "crates" / crate
+    crate_directory = {
+        "pgcontext-worker": "context-rerank",
+    }.get(crate, crate)
+    crate_root = root / "crates" / crate_directory
     if not crate_root.is_dir():
         fail(f"missing crate directory: crates/{crate}")
     return sorted(
@@ -189,7 +192,7 @@ source_forbidden = {
     "context-index": re.compile(r"\bcontext_(?:storage|query|build)\b"),
     "context-storage": re.compile(r"\bcontext_(?:index|query|build)\b"),
     "context-build": re.compile(r"\bcontext_(?:filter|hybrid|index|storage|query)\b"),
-    "context-rerank": re.compile(r"\bcontext_(?:codec|filter|hybrid|index|storage|build|pg|test)\b"),
+    "pgcontext-worker": re.compile(r"\bcontext_(?:codec|filter|hybrid|index|storage|build|pg|test)\b"),
 }
 source_messages = {
     "context-codec": "context-codec source imports a sibling crate",
@@ -197,7 +200,7 @@ source_messages = {
     "context-index": "context-index source imports a forbidden sibling crate",
     "context-storage": "context-storage source imports a forbidden sibling crate",
     "context-build": "context-build source imports a crate other than context-core",
-    "context-rerank": "context-rerank source imports a crate other than context-core/context-query",
+    "pgcontext-worker": "pgcontext-worker source imports a crate other than context-core/context-query",
 }
 for crate, pattern in source_forbidden.items():
     for path in rust_sources(crate):

@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `db6e6fbcbd394916aaf1f40c1d94df762d735fd420523b457a5f329180df9a38`
+Full SQL artifact SHA-256: `32a5221dc8f8bc6e6f11b47de231f4df14503973e8357ce0d6062c98d49a667f`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,9 +16,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 390 |
-| Tables | 25 |
-| Views | 16 |
+| Functions | 399 |
+| Tables | 28 |
+| Views | 19 |
 | Triggers | 6 |
 | Casts | 35 |
 | Operators | 62 |
@@ -76,6 +76,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._generation_reader_pins`
 - table `pgcontext._pgvector_ownership_conversions`
 - table `pgcontext._query_stats`
+- table `pgcontext._semantic_rerank_candidates`
+- table `pgcontext._semantic_rerank_requests`
+- table `pgcontext._semantic_rerank_sources`
 - trigger `embedding_profiles_immutable`
 - trigger `pgcontext_build_jobs_no_progress_regression`
 - trigger `pgcontext_build_jobs_terminal_state`
@@ -98,6 +101,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 - view `pgcontext._visible_embedding_profiles`
 - view `pgcontext._visible_pgvector_ownership_conversions`
 - view `pgcontext._visible_query_stats`
+- view `pgcontext._visible_semantic_rerank_candidates`
+- view `pgcontext._visible_semantic_rerank_requests`
+- view `pgcontext._visible_semantic_rerank_sources`
 
 ## Function Names
 
@@ -150,6 +156,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"bulk_delete_points"`
 - `"bulk_upsert_points"`
 - `"cleanup_artifact_segments"`
+- `"cleanup_semantic_rerank_requests"`
 - `"clear_payload"`
 - `"collection_aliases"`
 - `"collection_info"`
@@ -200,6 +207,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"explore"`
 - `"facet"`
 - `"finalize_pgvector_ownership_conversion"`
+- `"finalize_semantic_rerank"`
 - `"fuzzy_sources"`
 - `"grouped_search"`
 - `"halfvec"`
@@ -275,6 +283,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"optimization_status"`
 - `"pgvector_compatibility_inventory"`
 - `"pgvector_ownership_conversions"`
+- `"prepare_semantic_rerank"`
 - `"product_quantize"`
 - `"product_reconstruct"`
 - `"publish_artifact_segment"`
@@ -311,6 +320,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"register_lexical_document_source"`
 - `"register_lexical_source"`
 - `"register_lexical_tsquery"`
+- `"register_semantic_rerank_source"`
 - `"register_sparse_vector"`
 - `"register_vector"`
 - `"repair_late_interaction"`
@@ -422,14 +432,17 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext._capture_build_point_delta`
 - `pgcontext._capture_late_interaction_tokens`
 - `pgcontext._cleanup_late_interaction_registration`
+- `pgcontext._cleanup_semantic_rerank_requests`
 - `pgcontext._cosine_distance_fast`
 - `pgcontext._detach_fuzzy_index`
 - `pgcontext._detach_lexical_index`
 - `pgcontext._drop_fuzzy_source`
 - `pgcontext._drop_lexical_source`
 - `pgcontext._enforce_build_job_terminal_state`
+- `pgcontext._finalize_semantic_rerank_request`
 - `pgcontext._finish_late_interaction_registration`
 - `pgcontext._initialize_collection_source_revision`
+- `pgcontext._insert_semantic_rerank_request`
 - `pgcontext._l1_distance_fast`
 - `pgcontext._l2_distance_fast8`
 - `pgcontext._l2_distance_fast`
@@ -442,11 +455,13 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `pgcontext._refresh_collection_source_table`
 - `pgcontext._refresh_lexical_catalog_oids`
 - `pgcontext._refresh_payload_source_bindings`
+- `pgcontext._refresh_semantic_rerank_source`
 - `pgcontext._refresh_sparse_vector_source_binding`
 - `pgcontext._refresh_vector_source_binding`
 - `pgcontext._register_fuzzy_source`
 - `pgcontext._register_lexical_source`
 - `pgcontext._register_lexical_tsquery`
+- `pgcontext._register_semantic_rerank_source`
 - `pgcontext._reject_build_job_progress_regression`
 - `pgcontext._reject_embedding_profile_mutation`
 - `pgcontext._require_collection_owner`

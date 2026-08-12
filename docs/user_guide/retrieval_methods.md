@@ -204,10 +204,11 @@ deterministically.
   Each adapter receives the remaining comparisons, memory, hydration, and
   elapsed allowance. Execution fails closed when the adapter is unavailable,
   exceeds that envelope, duplicates output IDs, or reports partial work. These
-  transport-neutral IR and port contracts are stable, but the bundled SQL
-  executor does not yet attach external-rerank or topology providers; executing
-  either constructor through `pgcontext.execute_query` therefore fails closed
-  until the later provider phases.
+  transport-neutral IR and port contracts are stable. Semantic reranking is
+  available through the detached `prepare_semantic_rerank` /
+  `finalize_semantic_rerank` boundary; `execute_query` still does not launch an
+  external process from a PostgreSQL backend. The topology provider remains a
+  later-phase integration.
   The memory allowance covers extension-owned transient and returned data;
   PostgreSQL executor-internal SPI/sort memory is governed by PostgreSQL, while
   pgContext bounds its admitted row set and applies the elapsed-time guard
@@ -227,9 +228,9 @@ with `pgcontext.execute_query`. The IR builders (`pgcontext.query_nearest`,
 whose stages you can inspect with `pgcontext.explain`. Constructors validate
 the entire child tree immediately. Bundled dense, sparse, lexical, fuzzy,
 quantized, late-interaction, recommendation, discovery, lookup, fusion, and
-score-transform execution is **Stable**. External-rerank and topology
-constructors currently provide stable transport-neutral contracts only; their
-bundled SQL providers remain unavailable.
+score-transform execution is **Stable**. External semantic reranking uses the
+experimental detached worker contract documented in [Semantic reranking](semantic_reranking.md);
+the topology constructor remains transport-only.
 
 The simpler `pgcontext.query` entry point covers the common dense + lexical
 case without assembling an IR; reach for `execute_query` when you need explicit
@@ -243,6 +244,7 @@ stages, weighting, or reranking. Guide: [Hybrid retrieval](hybrid_retrieval.md).
 | Variant types (half/sparse/bit) | typed cores + metric HNSW opclasses | [vector_search.md](vector_search.md) |
 | Sparse (learned) | `pgcontext.search_sparse` | [vector_search.md](vector_search.md) |
 | Late-interaction | `pgcontext.rerank_late_interaction`, `pgcontext.search_late_interaction` | [vector_search.md](vector_search.md) |
+| External semantic rerank | `pgcontext.prepare_semantic_rerank`, `pgcontext.finalize_semantic_rerank` | [semantic_reranking.md](semantic_reranking.md) |
 | Lexical (full-text) | `pgcontext.query` lexical branch, `pgcontext.query_lexical` | [lexical_retrieval.md](lexical_retrieval.md) |
 | Fuzzy (trigram) | `pgcontext.query_fuzzy` | [lexical_retrieval.md](lexical_retrieval.md) |
 | Example-based | `pgcontext.recommend`, `pgcontext.discover` | [vector_search.md](vector_search.md) |

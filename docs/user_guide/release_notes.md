@@ -314,6 +314,7 @@ We use maturity labels deliberately:
 | Quantized HNSW serving and exact reranking | Stable |
 | Named sparse and late-interaction advanced paths | Experimental |
 | Adaptive-dimension exact retrieval | Experimental; scan-based performance no-go |
+| Provider-neutral semantic reranking | Experimental detached contract; local PG17/PG18 certification passes, while hosted worker-platform certification remains pending |
 
 ## Parity Matrix Alignment
 
@@ -333,6 +334,7 @@ deliberately different feature cannot be mistaken for stable parity.
 | Named sparse vectors per collection | `experimental` | Registration, exact fallback, validated HNSW binding, filters, bounded-work explain counters, exact rerank, and exact fusion exist. |
 | Multi-vector and late-interaction query | `experimental` | Exact MaxSim and experimental token candidates exist; internal token-index maintenance is planned. |
 | Adaptive-dimension exact retrieval | `experimental` | Certified prefixes run only when an exhaustive bounded schedule fits; every result is authoritatively reranked at full dimensions, otherwise the query selects exact fallback before prefix work. The scan-based path is not promoted for latency. |
+| Provider-neutral semantic reranking | `experimental` | A bounded two-step SQL envelope releases only authorized current text, validates untrusted model output, and rechecks source hash/version, deletion, filters, ACL, and RLS. The no-network Rust worker loads only digest-verified operator artifacts. The frozen PG17/PG18 held-out contract passes locally; Stable promotion still requires retained hosted build and smoke evidence for Darwin and Linux on arm64 and x86_64. |
 | IVFFlat | `experimental` | Native `pgcontext_ivfflat` supports page-native full-precision, SQ8, and PQ postings, bounded probes, DML/VACUUM/REINDEX/CIC/partition lifecycle, exact source rerank, PG17/18 dump/restore, crash replay, and physical replication. pgvector drop-in names and automatic conversion remain separate migration work. |
 | PostgreSQL-native ACL, RLS, transactions, and backups | `intentionally different` | pgContext uses PostgreSQL's authority instead of recreating it in another service. |
 | Rebuildable acceleration artifacts | `intentionally different` | PostgreSQL tables are authoritative; indexes and generated segments are disposable acceleration state. |

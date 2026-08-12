@@ -267,6 +267,21 @@ fn refresh_restored_search_metadata(
         )
     });
 
+    // Lexical and fuzzy registrations bind the same authoritative source
+    // relation. A dump/restore or table rewrite changes all of those OIDs at
+    // once, so refresh them in the same drift-repair transaction before the
+    // canonical executor prepares a lexical leaf.
+    Spi::run_with_args(
+        "SELECT pgcontext._refresh_lexical_catalog_oids($1)",
+        &[collection_id.into()],
+    )
+    .unwrap_or_else(|error| {
+        raise_sql_error(
+            PgSqlErrorCode::ERRCODE_INTERNAL_ERROR,
+            format!("failed to refresh restored lexical metadata: {error}"),
+        )
+    });
+
     registered_vector.table_oid = current_table_oid;
     registered_vector.vector_attnum = current_vector_attnum;
 }

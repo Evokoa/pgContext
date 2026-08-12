@@ -24,10 +24,11 @@ CREATE EXTENSION pgcontext;
 
 CREATE TABLE public.docs (
     id bigint PRIMARY KEY,
-    embedding vector NOT NULL,
+    embedding vector(2) NOT NULL,
     body text NOT NULL,
     tenant text NOT NULL,
-    metadata jsonb NOT NULL
+    metadata jsonb NOT NULL,
+    source_version bigint NOT NULL DEFAULT 1
 );
 
 INSERT INTO public.docs (id, embedding, body, tenant, metadata)
@@ -63,6 +64,9 @@ SELECT pgcontext.register_embedding_profile(
         'configuration_hash', 'fedcba9876543210'
     )
 );
+SELECT pgcontext.register_semantic_rerank_source(
+    'backup_docs', 'body', 'body', 'source_version'
+);
 SELECT * FROM pgcontext.create_embedding_migration('backup_docs', 'embed_v1', 'embed_v2', 3);
 SQL
 
@@ -83,6 +87,8 @@ DECLARE
     priority_count bigint;
     point_count bigint;
     profile_count bigint;
+    rerank_source_count bigint;
+    rerank_envelope jsonb;
     migration_count bigint;
     telemetry_status text;
     restored_query_count bigint;
@@ -128,6 +134,45 @@ BEGIN
      WHERE collection_name = 'backup_docs';
     IF profile_count <> 2 THEN
         RAISE EXCEPTION 'unexpected restored embedding profile count: %', profile_count;
+    END IF;
+    SELECT count(*) INTO rerank_source_count
+      FROM pgcontext._visible_semantic_rerank_sources
+     WHERE source_name = 'body' AND status = 'ready';
+    IF rerank_source_count <> 1 THEN
+        RAISE EXCEPTION 'unexpected restored semantic rerank source count: %',
+            rerank_source_count;
+    END IF;
+    SELECT pgcontext.prepare_semantic_rerank(
+               'backup_docs', 'body', 'database internals',
+               jsonb_build_array(
+                   jsonb_build_object(
+                       'occurrence_id', 1,
+                       'point_id', (
+                           SELECT point_id
+                             FROM pgcontext._visible_collection_points
+                            WHERE source_key = '1'
+                              AND collection_id = (
+                                      SELECT collection_id
+                                        FROM pgcontext._visible_collections
+                                       WHERE collection_name = 'backup_docs'
+                                  )
+                       ),
+                       'fused_rank', 1,
+                       'fused_score', 1.0,
+                       'contributions', jsonb_build_array(
+                           jsonb_build_object(
+                               'profile', 'embed_v1', 'rank', 1,
+                               'native_score', 0.0, 'weight', 1.0,
+                               'contribution', 1.0
+                           )
+                       )
+                   )
+               ),
+               'restore-fixture', 1
+           )
+      INTO rerank_envelope;
+    IF rerank_envelope->'candidates'->0->>'text' IS DISTINCT FROM 'database internals' THEN
+        RAISE EXCEPTION 'restored semantic rerank source did not hydrate current text';
     END IF;
     RAISE NOTICE 'backup_restore_embedding_profiles_verified';
 

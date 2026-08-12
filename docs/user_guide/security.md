@@ -70,6 +70,13 @@ Reviewed groups:
   `embedding_migrations`. `query_multi_model` executes as the invoker and
   checks collection membership plus source-table `SELECT` before applying the
   same RLS and registered-filter boundary to every branch.
+- Detached semantic reranking: `register_semantic_rerank_source`,
+  `prepare_semantic_rerank`, `finalize_semantic_rerank`, and
+  `cleanup_semantic_rerank_requests`. Preparation is the only text-release
+  boundary. Finalization treats worker output as untrusted and rechecks current
+  source version/hash, point deletion, filter, ACL, and RLS. Private candidate
+  rows store no source text or source keys; default diagnostics store no query,
+  tenant, metadata value, or provider payload.
 - Artifact operations: `publish_artifact_segment`,
   `publish_artifact_segment_file`, `artifact_segments`,
   `artifact_segment_memory`, `artifact_segment_diagnostics`,

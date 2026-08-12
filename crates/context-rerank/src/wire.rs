@@ -7,10 +7,17 @@
 //! way a response reaches the executor.
 
 use context_core::{OccurrenceId, PointId, SourceVersion};
+pub use context_query::MAX_RERANK_WIRE_BYTES;
 use context_query::{
-    RerankCandidate, RerankMetadata, RerankRequest, RerankRequestId, RerankResponse, RerankScore,
+    MAX_RERANK_CANDIDATES, MAX_RERANK_CONTRIBUTIONS, MAX_RERANK_METADATA_ENTRIES,
+    RERANK_CONTENT_DIGEST_BYTES, RERANK_ENVELOPE_VERSION, RerankCandidate, RerankContentDigest,
+    RerankContribution, RerankMetadata, RerankModelName, RerankQuery, RerankRequest,
+    RerankRequestId, RerankResponse, RerankScore,
 };
-use serde::{Deserialize, Serialize};
+use serde::{
+    Deserialize, Deserializer, Serialize,
+    de::{Error as _, SeqAccess, Visitor},
+};
 
 /// Maximum bytes retained from a provider-supplied diagnostic string.
 ///
@@ -18,6 +25,8 @@ use serde::{Deserialize, Serialize};
 /// megabyte. The reason is bounded here so one hostile response cannot flood a
 /// PostgreSQL log through an error message.
 pub const MAX_RERANK_DIAGNOSTIC_BYTES: usize = 256;
+/// Version of the persistent worker's operational-failure frame.
+pub const RERANK_FAILURE_FRAME_VERSION: u16 = 1;
 
 /// Truncates a diagnostic to [`MAX_RERANK_DIAGNOSTIC_BYTES`], never splitting a
 /// character.
@@ -73,8 +82,79 @@ impl std::error::Error for WireError {}
 /// Result type for wire conversion.
 pub type WireResult<T> = Result<T, WireError>;
 
+/// Versioned, request-correlated operational failure from the persistent worker.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WireRerankFailure {
+    /// Failure-frame schema version.
+    pub version: u16,
+    /// Validated request identity this failure answers.
+    pub request_id: u64,
+    /// Stable worker error class.
+    pub error: String,
+    /// Exact SQL-compatible semantic-rerank finalization reason.
+    pub failure_reason: String,
+}
+
+impl WireRerankFailure {
+    /// Builds a correlated frame only for an operationally degradable failure.
+    #[must_use]
+    pub fn from_error(request_id: RerankRequestId, error: crate::WorkerRunError) -> Option<Self> {
+        let failure_reason = error.finalization_failure_reason()?;
+        Some(Self {
+            version: RERANK_FAILURE_FRAME_VERSION,
+            request_id: request_id.get(),
+            error: error.stable_name().to_owned(),
+            failure_reason: failure_reason.to_owned(),
+        })
+    }
+
+    /// Parses and validates one bounded failure frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WireError::Malformed`] for an unknown version, reserved
+    /// request identity, unknown class, mismatched reason, or malformed JSON.
+    pub fn from_json(payload: &str) -> WireResult<Self> {
+        if payload.len() > MAX_RERANK_DIAGNOSTIC_BYTES {
+            return Err(malformed_payload());
+        }
+        let frame: Self = serde_json::from_str(payload).map_err(malformed)?;
+        let valid = frame.version == RERANK_FAILURE_FRAME_VERSION
+            && frame.request_id > 0
+            && matches!(
+                (frame.error.as_str(), frame.failure_reason.as_str()),
+                ("expired", "expired")
+                    | ("timeout", "timeout")
+                    | ("unavailable", "unavailable")
+                    | ("circuit_open", "unavailable")
+                    | ("crash", "crash")
+                    | ("partial_output", "partial_output")
+            );
+        if !valid {
+            return Err(malformed_payload());
+        }
+        Ok(frame)
+    }
+
+    /// Serializes a bounded validated failure frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WireError::Malformed`] if serialization exceeds the fixed
+    /// diagnostic-frame ceiling.
+    pub fn to_json(&self) -> WireResult<String> {
+        let payload = serde_json::to_string(self).map_err(malformed)?;
+        if payload.len() > MAX_RERANK_DIAGNOSTIC_BYTES {
+            return Err(malformed_payload());
+        }
+        Ok(payload)
+    }
+}
+
 /// Serialized allow-listed metadata pair.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WireRerankMetadata {
     /// Metadata key.
     pub key: String,
@@ -84,6 +164,7 @@ pub struct WireRerankMetadata {
 
 /// Serialized authorized candidate.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WireRerankCandidate {
     /// Stable occurrence identity.
     pub occurrence_id: u64,
@@ -91,36 +172,83 @@ pub struct WireRerankCandidate {
     pub point_id: u64,
     /// Source version observed when the envelope was built.
     pub source_version: u64,
+    /// Fixed authoritative content digest.
+    pub content_digest: [u8; RERANK_CONTENT_DIGEST_BYTES],
     /// Authorized text released to the provider.
     pub text: String,
+    /// One-based fused rank before semantic reranking.
+    pub fused_rank: usize,
+    /// Fused score retained for fallback and diagnostics.
+    pub fused_score: f64,
+    /// Per-profile rank-fusion evidence.
+    #[serde(deserialize_with = "deserialize_contributions")]
+    pub contributions: Vec<WireRerankContribution>,
     /// Allow-listed metadata released to the provider.
+    #[serde(deserialize_with = "deserialize_metadata")]
     pub metadata: Vec<WireRerankMetadata>,
+}
+
+/// Serialized rank-fusion contribution.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WireRerankContribution {
+    /// Immutable embedding profile name.
+    pub profile: String,
+    /// One-based branch rank.
+    pub rank: usize,
+    /// Diagnostic native branch score.
+    pub native_score: f64,
+    /// Declared RRF weight.
+    pub weight: f64,
+    /// Weighted RRF contribution.
+    pub contribution: f64,
 }
 
 /// Serialized rerank request.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WireRerankRequest {
     /// Envelope contract version.
     pub version: u16,
     /// Request identity a response must echo.
     pub request_id: u64,
+    /// Immutable model identity.
+    pub model: String,
     /// Model revision a response must echo.
     pub model_revision: u64,
     /// Wall-clock expiry in the caller's microsecond epoch.
     pub expires_at_micros: u64,
+    /// Original query released to the provider.
+    pub query: String,
     /// Authorized candidates.
+    #[serde(deserialize_with = "deserialize_candidates")]
     pub candidates: Vec<WireRerankCandidate>,
 }
 
 impl WireRerankRequest {
+    /// Parses a bounded untrusted worker request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WireError::Malformed`] before parsing when the payload exceeds
+    /// [`MAX_RERANK_WIRE_BYTES`], or when JSON does not match the exact schema.
+    pub fn from_json(payload: &str) -> WireResult<Self> {
+        if payload.len() > MAX_RERANK_WIRE_BYTES {
+            return Err(malformed_payload());
+        }
+        serde_json::from_str(payload).map_err(malformed)
+    }
+
     /// Serializes a validated request for transmission.
     #[must_use]
     pub fn from_request(request: &RerankRequest) -> Self {
         Self {
             version: request.version(),
             request_id: request.request_id().get(),
+            model: request.model().as_str().to_owned(),
             model_revision: request.model_revision(),
             expires_at_micros: request.expires_at_micros(),
+            query: request.query().as_str().to_owned(),
             candidates: request
                 .candidates()
                 .iter()
@@ -128,7 +256,21 @@ impl WireRerankRequest {
                     occurrence_id: candidate.occurrence_id().get(),
                     point_id: candidate.point_id().get(),
                     source_version: candidate.source_version().get(),
+                    content_digest: *candidate.content_digest().as_bytes(),
                     text: candidate.text().to_owned(),
+                    fused_rank: candidate.fused_rank(),
+                    fused_score: candidate.fused_score(),
+                    contributions: candidate
+                        .contributions()
+                        .iter()
+                        .map(|contribution| WireRerankContribution {
+                            profile: contribution.profile().to_owned(),
+                            rank: contribution.rank(),
+                            native_score: contribution.native_score(),
+                            weight: contribution.weight(),
+                            contribution: contribution.contribution(),
+                        })
+                        .collect(),
                     metadata: candidate
                         .metadata()
                         .iter()
@@ -152,15 +294,45 @@ impl WireRerankRequest {
     /// Returns [`WireError`] when an identity is reserved or a validated
     /// constructor rejects the value.
     pub fn to_request(&self) -> WireResult<RerankRequest> {
+        self.clone().into_request()
+    }
+
+    /// Consumes wire data while rebuilding the validated request contract.
+    ///
+    /// This is the production conversion path: it moves authorized strings
+    /// instead of retaining a second complete wire copy beside the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WireError`] when an identity is reserved or a validated
+    /// constructor rejects the value.
+    pub fn into_request(self) -> WireResult<RerankRequest> {
+        if self.version != RERANK_ENVELOPE_VERSION {
+            return Err(WireError::Invalid {
+                reason: "unsupported rerank envelope version".to_owned(),
+            });
+        }
         let candidates = self
             .candidates
-            .iter()
+            .into_iter()
             .map(|candidate| {
                 let metadata = candidate
                     .metadata
-                    .iter()
-                    .map(|entry| {
-                        RerankMetadata::new(entry.key.clone(), entry.value.clone()).map_err(invalid)
+                    .into_iter()
+                    .map(|entry| RerankMetadata::new(entry.key, entry.value).map_err(invalid))
+                    .collect::<WireResult<Vec<_>>>()?;
+                let contributions = candidate
+                    .contributions
+                    .into_iter()
+                    .map(|contribution| {
+                        RerankContribution::new(
+                            contribution.profile,
+                            contribution.rank,
+                            contribution.native_score,
+                            contribution.weight,
+                            contribution.contribution,
+                        )
+                        .map_err(invalid)
                     })
                     .collect::<WireResult<Vec<_>>>()?;
                 RerankCandidate::new(
@@ -171,7 +343,11 @@ impl WireRerankRequest {
                         "source_version",
                         SourceVersion::new,
                     )?,
-                    candidate.text.clone(),
+                    RerankContentDigest::new(candidate.content_digest),
+                    candidate.text,
+                    candidate.fused_rank,
+                    candidate.fused_score,
+                    contributions,
                     metadata,
                 )
                 .map_err(invalid)
@@ -179,8 +355,10 @@ impl WireRerankRequest {
             .collect::<WireResult<Vec<_>>>()?;
         RerankRequest::new(
             request_identity(self.request_id)?,
+            RerankModelName::new(self.model).map_err(invalid)?,
             self.model_revision,
             self.expires_at_micros,
+            RerankQuery::new(self.query).map_err(invalid)?,
             candidates,
         )
         .map_err(invalid)
@@ -192,12 +370,92 @@ impl WireRerankRequest {
     ///
     /// Returns [`WireError::Malformed`] when serialization fails.
     pub fn to_json(&self) -> WireResult<String> {
-        serde_json::to_string(self).map_err(malformed)
+        let payload = serde_json::to_string(self).map_err(malformed)?;
+        if payload.len() > MAX_RERANK_WIRE_BYTES {
+            return Err(malformed_payload());
+        }
+        Ok(payload)
     }
+}
+
+fn deserialize_candidates<'de, D>(deserializer: D) -> Result<Vec<WireRerankCandidate>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_vec(deserializer, MAX_RERANK_CANDIDATES)
+}
+
+fn deserialize_contributions<'de, D>(
+    deserializer: D,
+) -> Result<Vec<WireRerankContribution>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_vec(deserializer, MAX_RERANK_CONTRIBUTIONS)
+}
+
+fn deserialize_metadata<'de, D>(deserializer: D) -> Result<Vec<WireRerankMetadata>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_vec(deserializer, MAX_RERANK_METADATA_ENTRIES)
+}
+
+fn deserialize_scores<'de, D>(deserializer: D) -> Result<Vec<WireRerankScore>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_bounded_vec(deserializer, MAX_RERANK_CANDIDATES)
+}
+
+fn deserialize_bounded_vec<'de, D, T>(deserializer: D, maximum: usize) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct BoundedVecVisitor<T> {
+        maximum: usize,
+        marker: core::marker::PhantomData<T>,
+    }
+
+    impl<'de, T> Visitor<'de> for BoundedVecVisitor<T>
+    where
+        T: Deserialize<'de>,
+    {
+        type Value = Vec<T>;
+
+        fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            write!(formatter, "an array with at most {} entries", self.maximum)
+        }
+
+        fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut values =
+                Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(self.maximum));
+            while values.len() < self.maximum {
+                let Some(value) = sequence.next_element()? else {
+                    return Ok(values);
+                };
+                values.push(value);
+            }
+            if sequence.next_element::<T>()?.is_some() {
+                return Err(A::Error::custom("bounded rerank array exceeded"));
+            }
+            Ok(values)
+        }
+    }
+
+    deserializer.deserialize_seq(BoundedVecVisitor {
+        maximum,
+        marker: core::marker::PhantomData,
+    })
 }
 
 /// Serialized provider score.
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WireRerankScore {
     /// Occurrence this score applies to.
     pub occurrence_id: u64,
@@ -207,14 +465,18 @@ pub struct WireRerankScore {
 
 /// Serialized provider response.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WireRerankResponse {
     /// Envelope contract version the provider answered with.
     pub version: u16,
     /// Request identity the provider echoed.
     pub request_id: u64,
+    /// Immutable model identity the provider echoed.
+    pub model: String,
     /// Model revision the provider echoed.
     pub model_revision: u64,
     /// Provider scores, in provider order.
+    #[serde(deserialize_with = "deserialize_scores")]
     pub scores: Vec<WireRerankScore>,
 }
 
@@ -226,7 +488,24 @@ impl WireRerankResponse {
     /// Returns [`WireError::Malformed`] for a payload that is not well-formed
     /// JSON matching the schema.
     pub fn from_json(payload: &str) -> WireResult<Self> {
+        if payload.len() > MAX_RERANK_WIRE_BYTES {
+            return Err(malformed_payload());
+        }
         serde_json::from_str(payload).map_err(malformed)
+    }
+
+    /// Serializes a worker response.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WireError::Malformed`] when serialization fails or exceeds
+    /// the bounded wire payload.
+    pub fn to_json(&self) -> WireResult<String> {
+        let payload = serde_json::to_string(self).map_err(malformed)?;
+        if payload.len() > MAX_RERANK_WIRE_BYTES {
+            return Err(malformed_payload());
+        }
+        Ok(payload)
     }
 
     /// Converts an untrusted payload into the validated response contract.
@@ -252,6 +531,7 @@ impl WireRerankResponse {
         Ok(RerankResponse::new(
             self.version,
             request_identity(self.request_id)?,
+            RerankModelName::new(self.model.clone()).map_err(invalid)?,
             self.model_revision,
             scores,
         ))
@@ -274,11 +554,13 @@ fn invalid(error: context_query::QueryError) -> WireError {
     }
 }
 
-fn malformed(error: serde_json::Error) -> WireError {
-    // serde embeds the offending value in a type error, so this string is
-    // partly provider-authored and gets the same bound as any other.
+fn malformed(_error: serde_json::Error) -> WireError {
+    malformed_payload()
+}
+
+fn malformed_payload() -> WireError {
     WireError::Malformed {
-        reason: bound_diagnostic(error.to_string()),
+        reason: "malformed payload".to_owned(),
     }
 }
 
@@ -293,14 +575,20 @@ mod tests {
             OccurrenceId::new(11).expect("occurrence"),
             PointId::new(11),
             SourceVersion::new(3).expect("version"),
+            RerankContentDigest::new([3; RERANK_CONTENT_DIGEST_BYTES]),
             "authorized text",
+            1,
+            0.25,
+            vec![RerankContribution::new("legacy_v1", 1, 0.4, 1.0, 0.01).expect("contribution")],
             vec![RerankMetadata::new("tenant", "acme").expect("metadata")],
         )
         .expect("candidate");
         RerankRequest::new(
             RerankRequestId::new(5).expect("request id"),
+            RerankModelName::new("fixture-v1").expect("model"),
             9,
             1_000,
+            RerankQuery::new("postgres retrieval").expect("query"),
             vec![candidate],
         )
         .expect("request")
@@ -337,7 +625,8 @@ mod tests {
 
     #[test]
     fn reserved_identities_are_refused_at_the_boundary() {
-        let payload = r#"{"version":1,"request_id":0,"model_revision":9,"scores":[]}"#;
+        let payload =
+            r#"{"version":3,"request_id":0,"model":"fixture-v1","model_revision":9,"scores":[]}"#;
         assert!(matches!(
             WireRerankResponse::from_json(payload)
                 .expect("well-formed json")
@@ -347,7 +636,7 @@ mod tests {
             })
         ));
 
-        let payload = r#"{"version":1,"request_id":5,"model_revision":9,"scores":[{"occurrence_id":0,"score":1.0}]}"#;
+        let payload = r#"{"version":3,"request_id":5,"model":"fixture-v1","model_revision":9,"scores":[{"occurrence_id":0,"score":1.0}]}"#;
         assert!(matches!(
             WireRerankResponse::from_json(payload)
                 .expect("well-formed json")
@@ -366,6 +655,7 @@ mod tests {
             let response = WireRerankResponse {
                 version: 1,
                 request_id: 5,
+                model: "fixture-v1".to_owned(),
                 model_revision: 9,
                 scores: vec![WireRerankScore {
                     occurrence_id: 11,
@@ -391,8 +681,9 @@ mod tests {
 
     #[test]
     fn a_refusal_cannot_quote_an_unbounded_provider_payload_into_a_log() {
-        // serde embeds the offending value in a type error, so a hostile
-        // provider can author most of this string.
+        // serde embeds the offending value in a type error. The wire boundary
+        // deliberately discards that diagnostic so provider content never
+        // reaches a log, even in bounded form.
         let flood = "x".repeat(50_000);
         let payload =
             format!(r#"{{"version":"{flood}","request_id":5,"model_revision":9,"scores":[]}}"#);
@@ -401,13 +692,91 @@ mod tests {
         else {
             unreachable!("a type mismatch is malformed")
         };
-        assert_eq!(reason.len(), MAX_RERANK_DIAGNOSTIC_BYTES);
+        assert_eq!(reason, "malformed payload");
+        assert!(!reason.contains(&flood));
+    }
+
+    #[test]
+    fn wire_arrays_and_high_escape_payloads_fail_before_unbounded_growth() {
+        let scores = (1..=MAX_RERANK_CANDIDATES + 1)
+            .map(|occurrence_id| format!(r#"{{"occurrence_id":{occurrence_id},"score":0.1}}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let payload = format!(
+            r#"{{"version":3,"request_id":5,"model":"fixture-v1","model_revision":9,"scores":[{scores}]}}"#
+        );
+        assert!(matches!(
+            WireRerankResponse::from_json(&payload),
+            Err(WireError::Malformed { .. })
+        ));
+
+        let candidates = (1_u64..=110)
+            .map(|id| {
+                RerankCandidate::new(
+                    OccurrenceId::new(id).expect("occurrence"),
+                    PointId::new(id),
+                    SourceVersion::new(1).expect("version"),
+                    RerankContentDigest::new([1; RERANK_CONTENT_DIGEST_BYTES]),
+                    "\u{0001}".repeat(context_query::MAX_RERANK_TEXT_BYTES),
+                    usize::try_from(id).expect("rank"),
+                    0.1,
+                    vec![
+                        RerankContribution::new("fixture", 1, 0.1, 1.0, 0.01)
+                            .expect("contribution"),
+                    ],
+                    Vec::new(),
+                )
+                .expect("individually bounded candidate")
+            })
+            .collect::<Vec<_>>();
+        let request = RerankRequest::new(
+            RerankRequestId::new(5).expect("request"),
+            RerankModelName::new("fixture-v1").expect("model"),
+            9,
+            1_000,
+            RerankQuery::new("query").expect("query"),
+            candidates,
+        )
+        .expect("decoded request stays below four MiB");
+        assert!(
+            WireRerankRequest::from_request(&request).to_json().is_err(),
+            "JSON escaping must not bypass the encoded wire ceiling"
+        );
+    }
+
+    #[test]
+    fn operational_failure_frames_are_bounded_correlated_and_round_trip() {
+        let frame = WireRerankFailure::from_error(
+            RerankRequestId::new(9).expect("request"),
+            crate::WorkerRunError::CircuitOpen,
+        )
+        .expect("operational failure");
+        let json = frame.to_json().expect("failure JSON");
+        assert_eq!(
+            WireRerankFailure::from_json(&json).expect("round trip"),
+            frame
+        );
+        assert_eq!(frame.request_id, 9);
+        assert_eq!(frame.failure_reason, "unavailable");
+        assert!(
+            WireRerankFailure::from_error(
+                RerankRequestId::new(9).expect("request"),
+                crate::WorkerRunError::InvalidRequest,
+            )
+            .is_none()
+        );
+        assert!(
+            WireRerankFailure::from_json(
+                r#"{"version":1,"request_id":0,"error":"timeout","failure_reason":"timeout"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn a_provider_payload_reaches_validation_only_through_the_contract() {
         let request = request();
-        let payload = r#"{"version":1,"request_id":5,"model_revision":9,
+        let payload = r#"{"version":3,"request_id":5,"model":"fixture-v1","model_revision":9,
              "scores":[{"occurrence_id":11,"score":0.25}]}"#;
         let response = WireRerankResponse::from_json(payload)
             .expect("well-formed json")
@@ -422,7 +791,7 @@ mod tests {
         );
 
         // The same bytes against a request they do not answer.
-        let mismatched = r#"{"version":1,"request_id":6,"model_revision":9,
+        let mismatched = r#"{"version":3,"request_id":6,"model":"fixture-v1","model_revision":9,
              "scores":[{"occurrence_id":11,"score":0.25}]}"#;
         let response = WireRerankResponse::from_json(mismatched)
             .expect("well-formed json")
@@ -463,7 +832,18 @@ mod tests {
                         OccurrenceId::new(*occurrence).expect("occurrence"),
                         PointId::new(*occurrence),
                         SourceVersion::new(1).expect("version"),
+                        RerankContentDigest::new([1; RERANK_CONTENT_DIGEST_BYTES]),
                         text.clone(),
+                        usize::try_from(*occurrence).expect("rank"),
+                        0.1,
+                        vec![RerankContribution::new(
+                            "fixture",
+                            usize::try_from(*occurrence).expect("rank"),
+                            0.1,
+                            1.0,
+                            0.01,
+                        )
+                        .expect("contribution")],
                         Vec::new(),
                     )
                     .expect("candidate")
@@ -471,8 +851,10 @@ mod tests {
                 .collect();
             let original = RerankRequest::new(
                 RerankRequestId::new(1).expect("request id"),
+                RerankModelName::new("fixture").expect("model"),
                 1,
                 1_000,
+                RerankQuery::new("query").expect("query"),
                 candidates,
             )
             .expect("request");

@@ -65,6 +65,8 @@ mod query_stats;
 )]
 mod query_stats_async;
 mod retrieval;
+mod semantic_rerank;
+mod semantic_rerank_catalog_schema;
 mod settings;
 mod sparse_search;
 mod table_search;
@@ -192,6 +194,7 @@ mod tests {
     include!("pg_tests/hybrid_sparse_cosine.rs");
     include!("pg_tests/adaptive_dimension.rs");
     include!("pg_tests/multi_model.rs");
+    include!("pg_tests/semantic_rerank.rs");
     include!("pg_tests/lexical_catalog.rs");
     include!("pg_tests/lexical_query.rs");
     include!("pg_tests/lexical_index.rs");

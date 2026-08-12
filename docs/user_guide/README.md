@@ -30,6 +30,7 @@ code-backed capability contract. Planned-only work remains in the
 - [Lexical and fuzzy retrieval](lexical_retrieval.md)
 - [Adaptive-dimension retrieval](adaptive_dimension.md)
 - [Multi-model retrieval](multi_model.md)
+- [Semantic reranking](semantic_reranking.md)
 - [Retrieval methods overview](retrieval_methods.md)
 - [Indexes](indexes.md)
 - [Rebuildable storage artifacts](storage.md)

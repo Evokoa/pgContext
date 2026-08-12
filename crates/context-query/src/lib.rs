@@ -73,10 +73,14 @@ pub use ports::{
     SourceRechecker, TelemetrySink, TopologyExpander,
 };
 pub use rerank_envelope::{
-    MAX_RERANK_CANDIDATES, MAX_RERANK_METADATA_BYTES, MAX_RERANK_METADATA_ENTRIES,
-    MAX_RERANK_REQUEST_BYTES, MAX_RERANK_TEXT_BYTES, RERANK_ENVELOPE_VERSION, RerankCandidate,
-    RerankFallbackPolicy, RerankMetadata, RerankRejection, RerankRequest, RerankRequestId,
-    RerankResponse, RerankScore, validate_rerank_response,
+    MAX_RERANK_CANDIDATES, MAX_RERANK_CONTRIBUTIONS, MAX_RERANK_METADATA_BYTES,
+    MAX_RERANK_METADATA_ENTRIES, MAX_RERANK_MODEL_NAME_BYTES, MAX_RERANK_QUERY_BYTES,
+    MAX_RERANK_REQUEST_BYTES, MAX_RERANK_TEXT_BYTES, MAX_RERANK_WIRE_BYTES,
+    RERANK_CONTENT_DIGEST_BYTES, RERANK_ENVELOPE_VERSION, RerankCandidate, RerankContentDigest,
+    RerankContribution, RerankFallbackPolicy, RerankMetadata, RerankModelName, RerankQuery,
+    RerankRejection, RerankRequest, RerankRequestId, RerankResponse, RerankResponseCompletion,
+    RerankResponsePolicy, RerankScore, ValidatedRerankResponse, validate_rerank_response,
+    validate_rerank_response_with_policy,
 };
 pub use strategy::{
     FilteredAnnReason, FilteredAnnStrategy, FilteredAnnStrategyInput, FilteredAnnStrategyKind,

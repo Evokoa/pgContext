@@ -12,7 +12,7 @@
 //! leave the database. The adapter calls that source again after provider
 //! scoring and compares the complete authorized snapshot; a source-version,
 //! text, metadata, identity, deletion, ACL, RLS, or filter change therefore
-//! fails or degrades before any reranked row is returned.
+//! fails closed before any reranked row is returned.
 //!
 //! # The score a reranked row carries
 //!
@@ -25,8 +25,9 @@
 //!
 //! # Reranking is all or nothing
 //!
-//! A row can miss the provider three ways: the source withheld it, the
-//! comparison budget cut it, or the provider returned no score for it. The
+//! A row can miss the provider because the comparison budget cut it or the
+//! provider returned no score for it. Authority withholding is not a partial
+//! result policy and fails closed before dispatch. The
 //! executor requires a completed page to hold exactly the rows it asked for,
 //! and no honest score exists for a row nobody ranked — so when fewer than
 //! `limit` rows come back scored, the whole page is reported as
@@ -38,12 +39,14 @@
 //! omitting a score is worth no more to it than returning the lowest one — and
 //! omitting enough scores degrades the query instead of trimming the answer.
 
-use std::collections::BTreeMap;
+use core::mem::size_of;
 
+use context_core::{OccurrenceId, PointId};
 use context_query::{
-    Cancellation, ExternalRerankPage, ExternalReranker, HydratedCandidate, PortBudget, QueryClock,
-    QueryError, QueryIr, QueryKind, RerankCandidate, RerankFallbackPolicy, RerankRequestId,
-    ScoreOrder,
+    Cancellation, ExternalRerankPage, ExternalReranker, HydratedCandidate,
+    MAX_RERANK_REQUEST_BYTES, PortBudget, QueryClock, QueryError, QueryIr, QueryKind,
+    RerankCandidate, RerankFallbackPolicy, RerankModelName, RerankQuery, RerankRequest,
+    RerankRequestId, RerankScore, ScoreOrder,
 };
 
 use crate::{
@@ -57,13 +60,16 @@ use crate::{
 /// occurrence identity and source version the response is validated against.
 /// It is called once before provider release and again before finalization, so
 /// it must evaluate current deletion, filter, ACL, and RLS state on every call.
-/// Returning `None` withholds the row from the provider. A withheld row cannot
-/// be ranked, so it does not appear in a complete reranked answer; if that
-/// leaves fewer than the requested number of rows, the query degrades rather
-/// than returning a shorter one. Withhold a row only when it genuinely must not
-/// be released.
+/// Returning `None` withholds the row from the provider and fails the attempt
+/// closed. Provider fallback never applies to authority or source drift.
 pub trait AuthorizedRowSource {
     /// Returns what may be released for `row`, or `None` to withhold it.
+    ///
+    /// `max_candidate_bytes` is a hard pre-allocation allowance. Database
+    /// implementations must check bounded column lengths and aggregate shape
+    /// before materializing authorized text or metadata. The adapter verifies
+    /// the returned candidate's conservative projection as a second boundary;
+    /// exceeding the allowance is a port-contract failure.
     ///
     /// # Errors
     ///
@@ -72,7 +78,35 @@ pub trait AuthorizedRowSource {
     fn authorize(
         &mut self,
         row: &HydratedCandidate,
+        max_candidate_bytes: usize,
     ) -> context_query::Result<Option<RerankCandidate>>;
+}
+
+/// Immutable query/model policy carried by a [`BackendReranker`].
+#[derive(Clone, Debug)]
+pub struct BackendRerankerConfig {
+    model: RerankModelName,
+    query_text: RerankQuery,
+    policy: RerankFallbackPolicy,
+    first_request_id: RerankRequestId,
+}
+
+impl BackendRerankerConfig {
+    /// Creates an already-validated adapter configuration.
+    #[must_use]
+    pub const fn new(
+        model: RerankModelName,
+        query_text: RerankQuery,
+        policy: RerankFallbackPolicy,
+        first_request_id: RerankRequestId,
+    ) -> Self {
+        Self {
+            model,
+            query_text,
+            policy,
+            first_request_id,
+        }
+    }
 }
 
 /// Adapts a [`RerankBackend`] to the executor's [`ExternalReranker`] port.
@@ -81,6 +115,8 @@ pub struct BackendReranker<'a, B, S, C, K> {
     rows: &'a mut S,
     cancellation: &'a C,
     clock: &'a K,
+    model: RerankModelName,
+    query_text: RerankQuery,
     policy: RerankFallbackPolicy,
     batch_size: usize,
     next_request_id: u64,
@@ -103,17 +139,18 @@ where
         rows: &'a mut S,
         cancellation: &'a C,
         clock: &'a K,
-        policy: RerankFallbackPolicy,
-        first_request_id: RerankRequestId,
+        config: BackendRerankerConfig,
     ) -> Self {
         Self {
             backend,
             rows,
             cancellation,
             clock,
-            policy,
+            model: config.model,
+            query_text: config.query_text,
+            policy: config.policy,
             batch_size: MAX_RERANK_BATCH,
-            next_request_id: first_request_id.get(),
+            next_request_id: config.first_request_id.get(),
         }
     }
 
@@ -181,19 +218,51 @@ where
             });
         }
 
-        // A port may not exceed its budget, and the provider is what performs
-        // the comparisons. Rows past the budget are never authorized and never
-        // released, so a budget below the requested row count cannot produce an
-        // authoritative rerank — it degrades the query below.
-        let comparable = rows.len().min(budget.max_comparisons());
-        let mut candidates = Vec::with_capacity(comparable);
-        let mut by_occurrence = BTreeMap::new();
-        for row in rows.iter().take(comparable) {
+        // Choosing the top `limit` rows requires scoring the entire bounded
+        // candidate set. Scoring only the fused prefix would make omitted rows
+        // unable to win and would therefore preserve membership rather than
+        // rerank it. Refuse before authorization when the comparison budget
+        // cannot cover every supplied row.
+        if budget.max_comparisons() < rows.len() {
+            return Ok(unranked(model_revision, 0));
+        }
+        let first_pass_hydration = rows.iter().try_fold(0_usize, |total, row| {
+            total.checked_add(row.source_key().as_str().len()).ok_or(
+                QueryError::ArithmeticOverflow {
+                    operation: "rerank_hydration_projection",
+                },
+            )
+        })?;
+        let winner_recheck_hydration = largest_output_key_bytes(rows, limit.min(rows.len()))?;
+        let hydration_bytes = first_pass_hydration
+            .checked_add(winner_recheck_hydration)
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "rerank_hydration_projection",
+            })?;
+        if hydration_bytes > budget.max_hydration_bytes() {
+            return Ok(unranked(model_revision, 0));
+        }
+
+        let fixed_memory = fixed_adapter_memory_bytes(rows, limit)?;
+        if fixed_memory > budget.max_memory_bytes() {
+            return Ok(unranked(model_revision, 0));
+        }
+
+        let mut candidates = Vec::with_capacity(rows.len());
+        let mut identities = Vec::with_capacity(rows.len());
+        let mut candidate_bytes = 0_usize;
+        let mut largest_candidate_bytes = 0_usize;
+        for row in rows {
             // `authorize` is a database read per row; without this the phase
             // before the first provider call is uninterruptible.
             self.cancellation.check_interrupt()?;
-            let Some(candidate) = self.rows.authorize(row)? else {
-                continue;
+            let remaining_candidate_bytes = budget
+                .max_memory_bytes()
+                .checked_sub(fixed_memory)
+                .and_then(|remaining| remaining.checked_sub(candidate_bytes))
+                .unwrap_or(0);
+            let Some(candidate) = self.rows.authorize(row, remaining_candidate_bytes)? else {
+                return authority_changed("external_rerank_source_authorization");
             };
             if candidate.point_id() != row.point_id() {
                 return Err(QueryError::PortFailure {
@@ -201,10 +270,23 @@ where
                     message: "authorized row changed the requested point identity".to_owned(),
                 });
             }
-            if by_occurrence
-                .insert(candidate.occurrence_id(), row.point_id())
-                .is_some()
-            {
+            let bytes = candidate.projected_bytes()?;
+            if bytes > remaining_candidate_bytes {
+                return Err(QueryError::PortFailure {
+                    stage: "external_rerank_source_authorization",
+                    message: "authorized row exceeded its memory allowance".to_owned(),
+                });
+            }
+            candidate_bytes =
+                candidate_bytes
+                    .checked_add(bytes)
+                    .ok_or(QueryError::ArithmeticOverflow {
+                        operation: "rerank_candidate_memory_projection",
+                    })?;
+            largest_candidate_bytes = largest_candidate_bytes.max(bytes);
+            identities.push((candidate.occurrence_id(), row.point_id()));
+            identities.sort_unstable_by_key(|(occurrence, _)| *occurrence);
+            if identities.windows(2).any(|pair| pair[0].0 == pair[1].0) {
                 return Err(QueryError::PortFailure {
                     stage: "external_rerank",
                     message: "authorized rows repeated an occurrence".to_owned(),
@@ -212,7 +294,16 @@ where
             }
             candidates.push(candidate);
         }
-        if candidates.is_empty() {
+        let projected_memory = projected_adapter_memory_bytes(
+            fixed_memory,
+            candidate_bytes,
+            largest_candidate_bytes,
+            rows.len(),
+            self.batch_size,
+            &self.model,
+            &self.query_text,
+        )?;
+        if projected_memory > budget.max_memory_bytes() {
             return Ok(unranked(model_revision, 0));
         }
 
@@ -228,8 +319,10 @@ where
             })?;
         let batches = RerankBatches::plan(
             RerankRequestId::new(self.next_request_id)?,
+            &self.model,
             model_revision,
             expires_at_micros,
+            &self.query_text,
             candidates,
             self.batch_size,
         )
@@ -270,13 +363,20 @@ where
             return Ok(unranked(model_revision, comparisons));
         }
 
-        let by_point = rows
-            .iter()
-            .map(|row| (row.point_id(), row))
-            .collect::<BTreeMap<_, _>>();
-        let mut ranked = Vec::with_capacity(scores.len());
-        for score in &scores {
-            let Some(point_id) = by_occurrence.get(&score.occurrence_id()) else {
+        let mut ranked = scores;
+        ranked.sort_by(|left, right| {
+            right
+                .score()
+                .total_cmp(&left.score())
+                .then_with(|| left.occurrence_id().cmp(&right.occurrence_id()))
+        });
+        let mut selected = Vec::with_capacity(limit);
+        for score in ranked.into_iter().take(limit) {
+            let Some((_, point_id)) = identities
+                .binary_search_by_key(&score.occurrence_id(), |(occurrence, _)| *occurrence)
+                .ok()
+                .and_then(|index| identities.get(index))
+            else {
                 // `score_all` already refuses an occurrence the request never
                 // released, so this is unreachable through the validated path.
                 // It is refused rather than skipped so no future path can
@@ -286,44 +386,34 @@ where
                     message: "provider scored an unreleased occurrence".to_owned(),
                 });
             };
-            ranked.push((*point_id, score.score()));
+            selected.push((*point_id, score.score()));
         }
-        // Same comparison the executor applies to the page it gets back, so the
-        // rows this call keeps at the limit boundary are the rows that survive.
-        ranked.sort_by(|left, right| {
-            right
-                .1
-                .total_cmp(&left.1)
-                .then_with(|| left.0.cmp(&right.0))
-        });
-
-        let released_by_point = batches
-            .requests()
-            .iter()
-            .flat_map(|request| request.candidates())
-            .map(|candidate| (candidate.point_id(), candidate))
-            .collect::<BTreeMap<_, _>>();
 
         let mut page = Vec::with_capacity(limit);
-        for (point_id, score) in ranked.into_iter().take(limit) {
-            let Some(row) = by_point.get(&point_id) else {
+        for (point_id, score) in selected {
+            let Some(row) = rows.iter().find(|row| row.point_id() == point_id) else {
                 return Err(QueryError::UnexpectedPointId {
                     stage: "external_rerank",
                     point_id,
                 });
             };
-            let Some(released) = released_by_point.get(&point_id) else {
+            let Some(released) = batches
+                .requests()
+                .iter()
+                .flat_map(|request| request.candidates())
+                .find(|candidate| candidate.point_id() == point_id)
+            else {
                 return Err(QueryError::UnexpectedPointId {
                     stage: "external_rerank_source_recheck",
                     point_id,
                 });
             };
             self.cancellation.check_interrupt()?;
-            let Some(current) = self.rows.authorize(row)? else {
-                return authorization_changed(self.policy, model_revision, comparisons);
+            let Some(current) = self.rows.authorize(row, largest_candidate_bytes)? else {
+                return authority_changed("external_rerank_source_recheck");
             };
-            if current != **released {
-                return authorization_changed(self.policy, model_revision, comparisons);
+            if current.projected_bytes()? > largest_candidate_bytes || current != *released {
+                return authority_changed("external_rerank_source_recheck");
             }
             page.push(HydratedCandidate::new(
                 point_id,
@@ -338,6 +428,144 @@ where
             model_revision,
         ))
     }
+}
+
+fn fixed_adapter_memory_bytes(
+    rows: &[HydratedCandidate],
+    limit: usize,
+) -> context_query::Result<usize> {
+    let row_count = rows.len();
+    let retained_slots = checked_product(
+        row_count,
+        size_of::<RerankCandidate>(),
+        "rerank_memory_projection",
+    )?;
+    let identity_slots = checked_product(
+        row_count,
+        size_of::<(OccurrenceId, PointId)>()
+            .checked_add(size_of::<OccurrenceId>())
+            .and_then(|bytes| bytes.checked_add(size_of::<PointId>()))
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "rerank_memory_projection",
+            })?,
+        "rerank_memory_projection",
+    )?;
+    let score_slots = checked_product(
+        row_count,
+        size_of::<RerankScore>()
+            .checked_mul(3)
+            .and_then(|bytes| bytes.checked_add(size_of::<(PointId, f64)>()))
+            .ok_or(QueryError::ArithmeticOverflow {
+                operation: "rerank_memory_projection",
+            })?,
+        "rerank_memory_projection",
+    )?;
+    let output_slots = checked_product(
+        limit.min(row_count),
+        size_of::<HydratedCandidate>(),
+        "rerank_memory_projection",
+    )?;
+    let output_keys = largest_output_key_bytes(rows, limit.min(row_count))?;
+    retained_slots
+        .checked_add(identity_slots)
+        .and_then(|bytes| bytes.checked_add(score_slots))
+        .and_then(|bytes| bytes.checked_add(output_slots))
+        .and_then(|bytes| bytes.checked_add(output_keys))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "rerank_memory_projection",
+        })
+}
+
+fn largest_output_key_bytes(
+    rows: &[HydratedCandidate],
+    output_count: usize,
+) -> context_query::Result<usize> {
+    let first_winner = rows.len().saturating_sub(output_count);
+    rows.iter()
+        .enumerate()
+        .try_fold(0_usize, |total, (index, row)| {
+            let key_bytes = row.source_key().as_str().len();
+            let rank = rows
+                .iter()
+                .enumerate()
+                .fold(0_usize, |rank, (other_index, other)| {
+                    let other_bytes = other.source_key().as_str().len();
+                    rank.saturating_add(usize::from(
+                        other_bytes < key_bytes
+                            || (other_bytes == key_bytes && other_index < index),
+                    ))
+                });
+            if rank < first_winner {
+                return Ok(total);
+            }
+            total
+                .checked_add(key_bytes)
+                .ok_or(QueryError::ArithmeticOverflow {
+                    operation: "rerank_memory_projection",
+                })
+        })
+}
+
+fn projected_adapter_memory_bytes(
+    fixed_memory: usize,
+    candidate_bytes: usize,
+    largest_candidate_bytes: usize,
+    row_count: usize,
+    batch_size: usize,
+    model: &RerankModelName,
+    query: &RerankQuery,
+) -> context_query::Result<usize> {
+    let request_fixed = size_of::<RerankRequest>()
+        .checked_add(model.as_str().len())
+        .and_then(|bytes| bytes.checked_add(query.as_str().len()))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "rerank_memory_projection",
+        })?;
+    let payload_capacity =
+        MAX_RERANK_REQUEST_BYTES
+            .checked_sub(request_fixed)
+            .ok_or(QueryError::InvalidInput {
+                field: "rerank_request",
+                reason: "fixed request fields exhaust the byte budget".to_owned(),
+            })?;
+    let count_batches = row_count.div_ceil(batch_size);
+    let byte_batches = candidate_bytes.div_ceil(payload_capacity.max(1));
+    // The greedy splitter can leave two adjacent batches less than half full,
+    // but never three: otherwise the first and third could not both have caused
+    // a byte-boundary split. Twice the aggregate byte quotient plus the count
+    // quotient is therefore a conservative upper bound on retained requests.
+    let batch_count = count_batches
+        .checked_add(
+            byte_batches
+                .checked_mul(2)
+                .ok_or(QueryError::ArithmeticOverflow {
+                    operation: "rerank_memory_projection",
+                })?,
+        )
+        .map(|count| count.min(row_count))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "rerank_memory_projection",
+        })?;
+    let request_bytes = checked_product(batch_count, request_fixed, "rerank_memory_projection")?;
+    fixed_memory
+        .checked_add(candidate_bytes)
+        // One current authoritative snapshot coexists with the released
+        // request during the post-provider recheck.
+        .and_then(|bytes| bytes.checked_add(largest_candidate_bytes))
+        .and_then(|bytes| bytes.checked_add(request_bytes))
+        .ok_or(QueryError::ArithmeticOverflow {
+            operation: "rerank_memory_projection",
+        })
+}
+
+fn checked_product(
+    count: usize,
+    bytes: usize,
+    operation: &'static str,
+) -> context_query::Result<usize> {
+    count
+        .checked_mul(bytes)
+        .ok_or(QueryError::ArithmeticOverflow { operation })
 }
 
 /// Reports that no authoritative reranking happened.
@@ -356,18 +584,11 @@ fn unranked(model_revision: u64, comparisons: usize) -> ExternalRerankPage {
     ExternalRerankPage::new(Vec::new(), comparisons, false, model_revision)
 }
 
-fn authorization_changed(
-    policy: RerankFallbackPolicy,
-    model_revision: u64,
-    comparisons: usize,
-) -> context_query::Result<ExternalRerankPage> {
-    match policy {
-        RerankFallbackPolicy::Require => Err(QueryError::PortFailure {
-            stage: "external_rerank_source_recheck",
-            message: "authoritative rerank source changed before finalization".to_owned(),
-        }),
-        RerankFallbackPolicy::DegradeWithoutRerank => Ok(unranked(model_revision, comparisons)),
-    }
+fn authority_changed(stage: &'static str) -> context_query::Result<ExternalRerankPage> {
+    Err(QueryError::PortFailure {
+        stage,
+        message: "authoritative rerank source changed before finalization".to_owned(),
+    })
 }
 
 fn port_failure(error: RerankBackendError) -> QueryError {
@@ -381,849 +602,5 @@ fn port_failure(error: RerankBackendError) -> QueryError {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use core::cell::{Cell, RefCell};
-    use std::collections::BTreeSet;
-
-    use super::*;
-    use context_core::{OccurrenceId, PointId, SourceKey, SourceVersion};
-    use context_query::RerankRequest;
-
-    use crate::{BackendResult, DeterministicRerankBackend, WireRerankResponse, WireRerankScore};
-
-    struct FixedClock;
-
-    impl QueryClock for FixedClock {
-        fn now_micros(&self) -> u64 {
-            1_000
-        }
-    }
-
-    struct NeverCancelled;
-
-    impl Cancellation for NeverCancelled {
-        fn is_cancelled(&self) -> bool {
-            false
-        }
-    }
-
-    fn candidate_for(row: &HydratedCandidate) -> context_query::Result<RerankCandidate> {
-        let occurrence =
-            OccurrenceId::new(row.point_id().get()).ok_or(QueryError::InvalidInput {
-                field: "occurrence_id",
-                reason: "must be nonzero".to_owned(),
-            })?;
-        let version = SourceVersion::new(1).ok_or(QueryError::InvalidInput {
-            field: "source_version",
-            reason: "must be nonzero".to_owned(),
-        })?;
-        RerankCandidate::new(
-            occurrence,
-            row.point_id(),
-            version,
-            format!("row {}", row.point_id().get()),
-            Vec::new(),
-        )
-    }
-
-    struct AuthorizeAll;
-
-    impl AuthorizedRowSource for AuthorizeAll {
-        fn authorize(
-            &mut self,
-            row: &HydratedCandidate,
-        ) -> context_query::Result<Option<RerankCandidate>> {
-            candidate_for(row).map(Some)
-        }
-    }
-
-    #[derive(Clone, Copy)]
-    enum FinalChange {
-        SourceVersion,
-        Text,
-        Revoke,
-    }
-
-    struct ChangeAfterRelease {
-        calls: BTreeMap<PointId, usize>,
-        change: FinalChange,
-    }
-
-    impl ChangeAfterRelease {
-        fn new(change: FinalChange) -> Self {
-            Self {
-                calls: BTreeMap::new(),
-                change,
-            }
-        }
-    }
-
-    impl AuthorizedRowSource for ChangeAfterRelease {
-        fn authorize(
-            &mut self,
-            row: &HydratedCandidate,
-        ) -> context_query::Result<Option<RerankCandidate>> {
-            let calls = self.calls.entry(row.point_id()).or_default();
-            *calls = calls.saturating_add(1);
-            if *calls == 1 {
-                return candidate_for(row).map(Some);
-            }
-            if matches!(self.change, FinalChange::Revoke) {
-                return Ok(None);
-            }
-            let occurrence =
-                OccurrenceId::new(row.point_id().get()).ok_or(QueryError::InvalidInput {
-                    field: "occurrence_id",
-                    reason: "must be nonzero".to_owned(),
-                })?;
-            let version =
-                SourceVersion::new(if matches!(self.change, FinalChange::SourceVersion) {
-                    2
-                } else {
-                    1
-                })
-                .ok_or(QueryError::InvalidInput {
-                    field: "source_version",
-                    reason: "must be nonzero".to_owned(),
-                })?;
-            let text = if matches!(self.change, FinalChange::Text) {
-                format!("edited row {}", row.point_id().get())
-            } else {
-                format!("row {}", row.point_id().get())
-            };
-            RerankCandidate::new(occurrence, row.point_id(), version, text, Vec::new()).map(Some)
-        }
-    }
-
-    /// Withholds the rows whose point id is in `withheld`, and counts calls so
-    /// a test can assert a row was never even considered for release.
-    struct AuthorizeSome {
-        withheld: BTreeSet<u64>,
-        calls: Cell<usize>,
-    }
-
-    impl AuthorizeSome {
-        fn new(withheld: impl IntoIterator<Item = u64>) -> Self {
-            Self {
-                withheld: withheld.into_iter().collect(),
-                calls: Cell::new(0),
-            }
-        }
-    }
-
-    impl AuthorizedRowSource for AuthorizeSome {
-        fn authorize(
-            &mut self,
-            row: &HydratedCandidate,
-        ) -> context_query::Result<Option<RerankCandidate>> {
-            self.calls.set(self.calls.get() + 1);
-            if self.withheld.contains(&row.point_id().get()) {
-                return Ok(None);
-            }
-            candidate_for(row).map(Some)
-        }
-    }
-
-    struct UnavailableBackend;
-
-    impl RerankBackend for UnavailableBackend {
-        fn model_revision(&self) -> u64 {
-            7
-        }
-
-        fn score(
-            &self,
-            _request: &RerankRequest,
-            _deadline_micros: u64,
-        ) -> BackendResult<WireRerankResponse> {
-            Err(RerankBackendError::Unavailable)
-        }
-    }
-
-    /// Scores only the first candidate of each batch, which the envelope allows.
-    struct PartialBackend;
-
-    impl RerankBackend for PartialBackend {
-        fn model_revision(&self) -> u64 {
-            7
-        }
-
-        fn score(
-            &self,
-            request: &RerankRequest,
-            _deadline_micros: u64,
-        ) -> BackendResult<WireRerankResponse> {
-            Ok(WireRerankResponse {
-                version: request.version(),
-                request_id: request.request_id().get(),
-                model_revision: 7,
-                scores: request
-                    .candidates()
-                    .iter()
-                    .take(1)
-                    .map(|candidate| WireRerankScore {
-                        occurrence_id: candidate.occurrence_id().get(),
-                        score: 1.0,
-                    })
-                    .collect(),
-            })
-        }
-    }
-
-    /// Records the identities and candidate counts it was asked to score.
-    struct RecordingBackend {
-        seen: RefCell<Vec<(u64, usize)>>,
-    }
-
-    impl RecordingBackend {
-        fn new() -> Self {
-            Self {
-                seen: RefCell::new(Vec::new()),
-            }
-        }
-
-        fn identities(&self) -> Vec<u64> {
-            self.seen.borrow().iter().map(|(id, _)| *id).collect()
-        }
-
-        fn released(&self) -> usize {
-            self.seen.borrow().iter().map(|(_, count)| *count).sum()
-        }
-    }
-
-    impl RerankBackend for RecordingBackend {
-        fn model_revision(&self) -> u64 {
-            7
-        }
-
-        fn score(
-            &self,
-            request: &RerankRequest,
-            deadline_micros: u64,
-        ) -> BackendResult<WireRerankResponse> {
-            self.seen
-                .borrow_mut()
-                .push((request.request_id().get(), request.candidates().len()));
-            DeterministicRerankBackend::new(7).score(request, deadline_micros)
-        }
-    }
-
-    /// Rows already in fused order: point 1 best, point n worst.
-    fn fused_rows(count: u64) -> Vec<HydratedCandidate> {
-        (1..=count)
-            .map(|point| {
-                HydratedCandidate::new(
-                    PointId::new(point),
-                    SourceKey::new(format!("row-{point}")).expect("source key"),
-                    1.0 - f64::from(u32::try_from(point).expect("small")) / 100.0,
-                )
-                .expect("hydrated")
-            })
-            .collect()
-    }
-
-    fn budget(max_comparisons: usize) -> PortBudget {
-        PortBudget::new(max_comparisons, 1 << 20, 1 << 20, 60_000_000)
-    }
-
-    /// An `ExternalRerank` node. The IR pins this kind to `HigherIsBetter`, so
-    /// that is the ordering the executor ever hands this port in practice.
-    fn plan_for(limit: usize, model_revision: u64) -> QueryIr {
-        let inner = QueryIr::nearest(
-            None,
-            vec![0.0, 1.0],
-            ScoreOrder::HigherIsBetter,
-            None,
-            limit,
-        )
-        .expect("query");
-        QueryIr::new(
-            QueryKind::ExternalRerank {
-                query: Box::new(inner),
-                model_revision,
-            },
-            ScoreOrder::HigherIsBetter,
-            None,
-            limit,
-        )
-        .expect("external rerank plan")
-    }
-
-    fn query(limit: usize) -> QueryIr {
-        plan_for(limit, 7)
-    }
-
-    fn reranker<'a, B: RerankBackend, S: AuthorizedRowSource>(
-        backend: &'a B,
-        rows: &'a mut S,
-        cancellation: &'a NeverCancelled,
-        clock: &'a FixedClock,
-        policy: RerankFallbackPolicy,
-    ) -> BackendReranker<'a, B, S, NeverCancelled, FixedClock> {
-        BackendReranker::new(
-            backend,
-            rows,
-            cancellation,
-            clock,
-            policy,
-            RerankRequestId::new(1).expect("request id"),
-        )
-    }
-
-    /// The order the deterministic backend puts these points in.
-    fn expected_order(points: &[u64]) -> Vec<u64> {
-        let mut scored = points
-            .iter()
-            .map(|point| {
-                (
-                    *point,
-                    DeterministicRerankBackend::score_of(&format!("row {point}")),
-                )
-            })
-            .collect::<Vec<_>>();
-        scored.sort_by(|left, right| right.1.total_cmp(&left.1).then(left.0.cmp(&right.0)));
-        scored.into_iter().map(|(point, _)| point).collect()
-    }
-
-    fn point_ids(page: &ExternalRerankPage) -> Vec<u64> {
-        page.rows().iter().map(|row| row.point_id().get()).collect()
-    }
-
-    #[test]
-    fn the_page_carries_the_providers_own_scores_in_the_providers_order() {
-        // The executor re-sorts by score, and stages above this one read the
-        // same value, so the score must be the reranker's relevance rather than
-        // a rank ordinal that would make a threshold or formula meaningless.
-        let backend = DeterministicRerankBackend::new(7);
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        )
-        .with_batch_size(2)
-        .expect("batch size");
-
-        let page = adapter
-            .rerank(&query(5), &fused_rows(5), 5, budget(1_000))
-            .expect("reranked");
-
-        assert!(page.exhausted());
-        assert_eq!(page.comparisons(), 5);
-        assert_eq!(point_ids(&page), expected_order(&[1, 2, 3, 4, 5]));
-
-        let scores = page
-            .rows()
-            .iter()
-            .map(HydratedCandidate::score)
-            .collect::<Vec<_>>();
-        let expected = point_ids(&page)
-            .into_iter()
-            .map(|point| DeterministicRerankBackend::score_of(&format!("row {point}")))
-            .collect::<Vec<_>>();
-        assert_eq!(scores, expected, "the score must be the provider's own");
-        assert!(
-            scores.windows(2).all(|pair| pair[0] > pair[1]),
-            "a re-sort under HigherIsBetter must reproduce the provider order"
-        );
-    }
-
-    #[test]
-    fn a_source_version_change_after_provider_scoring_fails_the_required_rerank() {
-        let backend = DeterministicRerankBackend::new(7);
-        let mut rows = ChangeAfterRelease::new(FinalChange::SourceVersion);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let error = adapter
-            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
-            .expect_err("source version drift must fail closed");
-        assert!(matches!(
-            error,
-            QueryError::PortFailure {
-                stage: "external_rerank_source_recheck",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn an_unversioned_text_edit_after_provider_scoring_also_fails_closed() {
-        let backend = DeterministicRerankBackend::new(7);
-        let mut rows = ChangeAfterRelease::new(FinalChange::Text);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let error = adapter
-            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
-            .expect_err("authorized text drift must fail closed");
-        assert!(matches!(
-            error,
-            QueryError::PortFailure {
-                stage: "external_rerank_source_recheck",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn a_post_provider_permission_change_degrades_without_returning_stale_rows() {
-        let backend = DeterministicRerankBackend::new(7);
-        let mut rows = ChangeAfterRelease::new(FinalChange::Revoke);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::DegradeWithoutRerank,
-        );
-
-        let page = adapter
-            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
-            .expect("permission drift should degrade under the configured policy");
-        assert!(!page.exhausted());
-        assert!(page.rows().is_empty());
-    }
-
-    /// Scores every candidate identically, so only the tie-break decides which
-    /// rows survive the limit.
-    struct TiedBackend;
-
-    impl RerankBackend for TiedBackend {
-        fn model_revision(&self) -> u64 {
-            7
-        }
-
-        fn score(
-            &self,
-            request: &RerankRequest,
-            _deadline_micros: u64,
-        ) -> BackendResult<WireRerankResponse> {
-            Ok(WireRerankResponse {
-                version: request.version(),
-                request_id: request.request_id().get(),
-                model_revision: 7,
-                scores: request
-                    .candidates()
-                    .iter()
-                    .map(|candidate| WireRerankScore {
-                        occurrence_id: candidate.occurrence_id().get(),
-                        score: 0.5,
-                    })
-                    .collect(),
-            })
-        }
-    }
-
-    #[test]
-    fn tied_scores_break_the_way_the_executor_would_break_them() {
-        // The adapter truncates to `limit` and the executor then re-sorts what
-        // it kept. If the two tie-breaks disagreed, the adapter would discard
-        // rows the executor would have ranked first.
-        let backend = TiedBackend;
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let page = adapter
-            .rerank(&query(3), &fused_rows(5), 3, budget(1_000))
-            .expect("reranked");
-        assert_eq!(
-            point_ids(&page),
-            vec![1, 2, 3],
-            "ties must resolve on ascending point id, as deterministic_points does"
-        );
-    }
-
-    #[test]
-    fn a_degraded_attempt_still_charges_the_work_it_released() {
-        // The provider was called; reporting zero comparisons would understate
-        // what the query actually did.
-        let backend = PartialBackend;
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        )
-        .with_batch_size(2)
-        .expect("batch size");
-
-        let page = adapter
-            .rerank(&query(5), &fused_rows(5), 5, budget(1_000))
-            .expect("degraded");
-        assert!(!page.exhausted());
-        assert_eq!(page.comparisons(), 5, "every released row was compared");
-    }
-
-    #[test]
-    fn an_ordering_the_provider_cannot_satisfy_is_refused() {
-        // A provider ranks by descending relevance, and the IR pins this query
-        // kind to HigherIsBetter. Any other ordering would be sorted back to
-        // front, so it is refused before a row is even authorized.
-        let backend = DeterministicRerankBackend::new(7);
-        let mut rows = AuthorizeSome::new([]);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let plan = QueryIr::nearest(None, vec![0.0, 1.0], ScoreOrder::LowerIsBetter, None, 3)
-            .expect("query");
-        let error = adapter
-            .rerank(&plan, &fused_rows(3), 3, budget(1_000))
-            .expect_err("refuse");
-        assert!(matches!(
-            error,
-            QueryError::PortFailure {
-                stage: "external_rerank",
-                ..
-            }
-        ));
-        assert_eq!(rows.calls.get(), 0, "no row may be authorized");
-    }
-
-    #[test]
-    fn a_withheld_row_degrades_the_page_rather_than_shortening_it() {
-        // The executor rejects a completed page short of `limit`, and there is
-        // no honest score for a row the provider never judged.
-        let backend = DeterministicRerankBackend::new(7);
-        let mut rows = AuthorizeSome::new([2, 4]);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let page = adapter
-            .rerank(&query(5), &fused_rows(5), 5, budget(1_000))
-            .expect("degraded");
-        assert!(!page.exhausted());
-        assert!(page.rows().is_empty());
-    }
-
-    #[test]
-    fn withheld_rows_still_allow_a_complete_page_under_a_smaller_limit() {
-        let backend = DeterministicRerankBackend::new(7);
-        let mut rows = AuthorizeSome::new([2, 4]);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let page = adapter
-            .rerank(&query(3), &fused_rows(5), 3, budget(1_000))
-            .expect("reranked");
-        assert!(page.exhausted());
-        assert_eq!(point_ids(&page), expected_order(&[1, 3, 5]));
-        assert_eq!(page.comparisons(), 3);
-    }
-
-    #[test]
-    fn a_provider_omitting_a_score_degrades_the_query_instead_of_dropping_a_row() {
-        let backend = PartialBackend;
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        )
-        .with_batch_size(2)
-        .expect("batch size");
-
-        // 5 candidates across 3 batches, one score each: too few to complete a
-        // 5-row page, so the provider degrades the query rather than editing it.
-        let page = adapter
-            .rerank(&query(5), &fused_rows(5), 5, budget(1_000))
-            .expect("degraded");
-        assert!(!page.exhausted());
-        assert!(page.rows().is_empty(), "a provider must not remove rows");
-    }
-
-    #[test]
-    fn the_comparison_budget_bounds_what_is_released_to_the_provider() {
-        let backend = RecordingBackend::new();
-        let mut rows = AuthorizeSome::new([]);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let page = adapter
-            .rerank(&query(2), &fused_rows(6), 2, budget(2))
-            .expect("reranked");
-        assert_eq!(page.comparisons(), 2, "the port must respect its budget");
-        assert_eq!(rows.calls.get(), 4, "two admitted rows are read twice");
-        assert_eq!(backend.released(), 2);
-        assert_eq!(page.rows().len(), 2);
-    }
-
-    #[test]
-    fn a_budget_too_small_to_rerank_the_page_degrades_rather_than_truncating() {
-        let backend = RecordingBackend::new();
-        let mut rows = AuthorizeSome::new([]);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let page = adapter
-            .rerank(&query(6), &fused_rows(6), 6, budget(2))
-            .expect("degraded");
-        assert!(!page.exhausted());
-        assert_eq!(backend.released(), 2, "the budget still bounds the release");
-    }
-
-    #[test]
-    fn nothing_releasable_reports_an_unranked_page() {
-        let backend = DeterministicRerankBackend::new(7);
-        let mut rows = AuthorizeSome::new([1, 2, 3, 4]);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let page = adapter
-            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
-            .expect("unranked");
-        assert!(!page.exhausted(), "an un-reranked page must say so");
-        assert_eq!(rows.calls.get(), 4);
-    }
-
-    #[test]
-    fn a_backend_failure_under_the_require_policy_fails_the_port() {
-        let backend = UnavailableBackend;
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        let error = adapter
-            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
-            .expect_err("fail closed");
-        assert!(matches!(
-            error,
-            QueryError::PortFailure {
-                stage: "external_rerank",
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn a_backend_failure_under_the_degrade_policy_reports_an_unranked_page() {
-        let backend = UnavailableBackend;
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::DegradeWithoutRerank,
-        );
-
-        let page = adapter
-            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
-            .expect("degrade");
-        assert!(!page.exhausted());
-        assert!(page.rows().is_empty());
-    }
-
-    #[test]
-    fn a_backend_serving_the_wrong_revision_is_refused_before_any_text_is_released() {
-        let backend = DeterministicRerankBackend::new(9);
-        let mut rows = AuthorizeSome::new([]);
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-
-        // The plan requires revision 7; the backend serves 9.
-        let error = adapter
-            .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
-            .expect_err("refuse");
-        assert!(matches!(
-            error,
-            QueryError::PortFailure {
-                stage: "external_rerank",
-                ..
-            }
-        ));
-        assert_eq!(rows.calls.get(), 0, "no row may even be authorized");
-    }
-
-    #[test]
-    fn an_unusable_batch_size_is_refused_at_configuration_time() {
-        let backend = DeterministicRerankBackend::new(7);
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        for size in [0, MAX_RERANK_BATCH + 1] {
-            let configured = reranker(
-                &backend,
-                &mut rows,
-                &cancellation,
-                &clock,
-                RerankFallbackPolicy::Require,
-            )
-            .with_batch_size(size);
-            assert!(matches!(
-                configured,
-                Err(RerankBackendError::InvalidPlan { .. })
-            ));
-        }
-    }
-
-    #[test]
-    fn request_identities_never_repeat_across_calls() {
-        let backend = RecordingBackend::new();
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        )
-        .with_batch_size(2)
-        .expect("batch size");
-
-        let input = fused_rows(5);
-        adapter
-            .rerank(&query(5), &input, 5, budget(1_000))
-            .expect("first call");
-        adapter
-            .rerank(&query(5), &input, 5, budget(1_000))
-            .expect("second call");
-
-        let issued = backend.identities();
-        assert_eq!(issued, vec![1, 2, 3, 4, 5, 6]);
-        assert_eq!(
-            issued.iter().collect::<BTreeSet<_>>().len(),
-            issued.len(),
-            "an identity must never be reused across calls"
-        );
-    }
-
-    #[test]
-    fn an_empty_page_is_not_sent_to_a_provider() {
-        let backend = UnavailableBackend;
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-        let page = adapter
-            .rerank(&query(4), &[], 4, budget(1_000))
-            .expect("empty");
-        assert!(page.rows().is_empty());
-        assert!(page.exhausted());
-    }
-
-    #[test]
-    fn a_provider_scoring_an_unreleased_occurrence_is_refused_not_skipped() {
-        struct ImpostorBackend;
-
-        impl RerankBackend for ImpostorBackend {
-            fn model_revision(&self) -> u64 {
-                7
-            }
-
-            fn score(
-                &self,
-                request: &RerankRequest,
-                _deadline_micros: u64,
-            ) -> BackendResult<WireRerankResponse> {
-                Ok(WireRerankResponse {
-                    version: request.version(),
-                    request_id: request.request_id().get(),
-                    model_revision: 7,
-                    scores: vec![WireRerankScore {
-                        occurrence_id: 9_999,
-                        score: 1.0,
-                    }],
-                })
-            }
-        }
-
-        let backend = ImpostorBackend;
-        let mut rows = AuthorizeAll;
-        let (cancellation, clock) = (NeverCancelled, FixedClock);
-        let mut adapter = reranker(
-            &backend,
-            &mut rows,
-            &cancellation,
-            &clock,
-            RerankFallbackPolicy::Require,
-        );
-        assert!(
-            adapter
-                .rerank(&query(4), &fused_rows(4), 4, budget(1_000))
-                .is_err()
-        );
-    }
+    include!("adapter/tests.rs");
 }
