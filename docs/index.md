@@ -25,6 +25,7 @@ and the [0.2.0 release notes](release_notes.md).
 - [Semantic reranking](user_guide/semantic_reranking.md)
 - [Automatic document chunking](user_guide/automatic_chunking.md)
 - [Exact-first readiness](user_guide/exact_first_readiness.md)
+- [Internal virtual beam engine](user_guide/virtual_beam.md)
 - [pgContext vs. pgvector vs. Qdrant](pgcontext-vs-pgvector-vs-qdrant.md)
 - [pgContext vs. pgvector benchmark](benchmarks/pgvector.md)
 - [Owned late-interaction storage and write amplification](benchmarks/late_interaction_owned.md)

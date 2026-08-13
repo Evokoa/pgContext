@@ -8,6 +8,7 @@
 #![warn(rustdoc::broken_intra_doc_links)]
 
 mod adaptive;
+mod beam;
 mod budget;
 mod error;
 mod executor;
@@ -29,6 +30,16 @@ pub use adaptive::{
     AdaptivePrefixStrategy, AdaptivePrefixStrategyInput, AdaptivePrefixStrategyKind,
     AdaptiveWideningBudget, AdaptiveWideningInput, AdaptiveWideningPlan, AdaptiveWideningStep,
     AdaptiveWideningTermination, plan_adaptive_widening, select_adaptive_prefix_strategy,
+};
+pub use beam::{
+    AuthorizationContextToken, BeamBudget, BeamBudgetKind, BeamCompletion, BeamDiagnostics,
+    BeamExpansion, BeamExpansionBatch, BeamExpansionProvider, BeamHit, BeamNodeId, BeamOutcome,
+    BeamParent, BeamPathStep, BeamProviderRequest, BeamPruningDiagnostics, BeamScoreComponents,
+    BeamScoreDiagnostics, BeamSeed, BeamStateId, BeamTransition, DEFAULT_BEAM_EXPANSION_BATCH,
+    DEFAULT_BEAM_WIDTH, MAX_BEAM_ADMITTED_STATES, MAX_BEAM_ELAPSED_MICROS, MAX_BEAM_EXACT_RERANKS,
+    MAX_BEAM_EXPANSION_BATCH, MAX_BEAM_HOPS, MAX_BEAM_PARENT_BYTES, MAX_BEAM_RETAINED_BYTES,
+    MAX_BEAM_VECTOR_EXPANSIONS, MAX_BEAM_VISITED_KEYS, MAX_BEAM_WIDTH, PathPatternState,
+    TopologyNodeId, VirtualBeamEngine,
 };
 pub use budget::{
     BudgetUsage, DEFAULT_QUERY_COMPARISONS, DEFAULT_QUERY_ELAPSED_MICROS,

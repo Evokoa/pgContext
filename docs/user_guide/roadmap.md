@@ -288,7 +288,7 @@ PG17 V1 freeze
 
 stable source identifiers + composite execution + mapped serving
 ├── internal HNSW-only lazy cursor
-│   └── bounded virtual state arena + exact source rerank
+│   └── internal bounded vector-only beam state arena + exact score ordering
 └── pgGraph topology-boundary audit + provenance manifest
     └── pgContext-owned `context-topology` kernel
         └── versioned projection + optional residency
@@ -1358,6 +1358,14 @@ planner default, index format, or PostgreSQL authority check. Its frozen
 differential gate requires exact eager parity across metrics and batch sizes,
 identical work accounting, and bounded latency, retained memory, and process
 RSS. See [Internal lazy HNSW cursor](lazy_hnsw_cursor.md).
+
+The next graph-composition foundation is also implemented internally: a
+provider-neutral vector-only beam owns bounded parent state, dominance and
+cycle pruning, separated score components, and reconstructed occurrence paths.
+Its frozen graph-off lane preserves the lazy cursor's ordered occurrence,
+point, score, and work output within fixed latency, retained-memory, and RSS
+ceilings. Topology expansion remains rejected, and the kernel adds no SQL or
+planner surface. See [Internal virtual beam engine](virtual_beam.md).
 
 Depends on: stable source and chunk occurrence identities, immutable
 model/profile metadata bound to named vectors, composite query execution,
@@ -2638,10 +2646,13 @@ an HNSW/vector-only search path.
    terminal diagnostics. Differential and release-mode gates cover ordering,
    work, cancellation, memory, RSS, and latency parity. No public default or
    SQL contract changed.
-3. **Virtual state and memory governance.** Add the parent arena, provider
-   batching, dominance table, hard admission/visited budgets, explicit
-   budget-exhaustion behavior, and per-component scoring telemetry while
-   remaining vector-only.
+3. **Virtual state and memory governance — implemented internally.** The
+   vector-only kernel owns a compact parent arena, provider batching,
+   deterministic dominance/cycle pruning, hard admission and visited budgets,
+   explicit incomplete outcomes, separated score telemetry, and bounded path
+   reconstruction. Its graph-off gate preserves P15 ordered output and work
+   within frozen latency, retained-memory, and RSS ceilings. Topology remains
+   rejected and no SQL or planner surface is exposed.
 4. **Topology projection and residency.** Add the versioned projection,
    build/publication path, query-owned expansion port, and runtime lifecycle.
    Prove that `off` is nonresident, `auto` fallback is observable, and

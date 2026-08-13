@@ -91,6 +91,10 @@
           "path": "user_guide/lazy_hnsw_cursor.md"
         },
         {
+          "title": "Internal virtual beam engine",
+          "path": "user_guide/virtual_beam.md"
+        },
+        {
           "title": "pgvector Coexist Mode",
           "path": "user_guide/pgvector_coexist.md"
         },

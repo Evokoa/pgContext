@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "449ae5f19bd70ef4962779e02baec69534b59643124d758d3ddd034f3ba216d7",
+  "navigation_sha256": "5bfea09ded1a61e65e0c1f84ea4fbd639f10f7a7df13146a3ecc74a7e637feb7",
   "pages": [
     {
       "links": [],
@@ -235,10 +235,11 @@
         "user_guide/playground.md",
         "user_guide/semantic_reranking.md",
         "user_guide/troubleshooting.md",
-        "user_guide/vector_search.md"
+        "user_guide/vector_search.md",
+        "user_guide/virtual_beam.md"
       ],
       "path": "index.md",
-      "sha256": "2b1ea489e2f4366861a164babfa7b6ffd88676266155492815b48ef2481eb8b8"
+      "sha256": "8aaefef6d0f6d77c8e4394b4b143d58183e726f65cecb934dfc224d4d854bd9c"
     },
     {
       "links": [
@@ -548,7 +549,7 @@
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "855e9bb7ae0c8566a562f69627f73c86b87f51b0c36b507b7878704b94f64c4b"
+      "sha256": "2fb374b811082e4fee8418e71ccfe8b35424a7eb9079eb9feba2c8027da17f8e"
     },
     {
       "links": [
@@ -606,7 +607,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "35a33a3e001d2a50fdb95b327f10c2fa91aef13e0f30272745eb44b82d62951a"
+      "sha256": "3a0602bf820a9eacd0daeb8ea84ac858afa0c0dd3563498de7a3028e1a0bf188"
     },
     {
       "links": [
@@ -735,10 +736,11 @@
         "lazy_hnsw_cursor.md",
         "lexical_retrieval.md",
         "multi_model.md",
-        "semantic_reranking.md"
+        "semantic_reranking.md",
+        "virtual_beam.md"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "9113c65303a8a77908c7801e390145856f9b54e207c9e38084ffa7528261724b"
+      "sha256": "17d24dba48cf5590244217a15283ab293e2c92a53ba5939fa5d3d0aa3b559e29"
     },
     {
       "links": [],
@@ -793,7 +795,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "3e17008d295df1a0371c2e392778a51ac598e0e452aea142801e9aa57b95466e"
+      "sha256": "8752dcd3416d457ce137e37abca61e7516e5542f12dc8d3cae16768b6f4940a6"
     },
     {
       "links": [
@@ -810,6 +812,11 @@
       ],
       "path": "user_guide/vector_search.md",
       "sha256": "13bda582a53a1a8c51d39ecef9b278f839f8cdc831c6b9b80b34f530d352b286"
+    },
+    {
+      "links": [],
+      "path": "user_guide/virtual_beam.md",
+      "sha256": "b6c158bacfb5b47517de33a77c37f1cd687fe8fcc37def5a870e59c188e0e8b8"
     }
   ],
   "public_files": [
