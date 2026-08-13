@@ -9,9 +9,9 @@ use context_filter::{Filter, parse_filter_json};
 use serde_json::Value as JsonValue;
 
 use crate::{
-    Formula, FuzzyQuery, FuzzySourceName, LateInteractionWork, LexicalQuery, LexicalSourceName,
-    MAX_LATE_INTERACTION_COMPARISONS, MAX_LATE_INTERACTION_SCALAR_CELLS, MultiProfileBranch,
-    MultiProfileQuery, QueryError, Result, ScoreOrder,
+    Formula, FuzzyQuery, FuzzySourceName, LateInteractionWork, LazyCursorControl, LexicalQuery,
+    LexicalSourceName, MAX_LATE_INTERACTION_COMPARISONS, MAX_LATE_INTERACTION_SCALAR_CELLS,
+    MultiProfileBranch, MultiProfileQuery, QueryError, Result, ScoreOrder,
 };
 
 /// Maximum nesting depth accepted by a typed query plan.
@@ -171,6 +171,7 @@ pub struct QueryIr {
     filter: Option<Arc<Filter>>,
     limit: SearchLimit,
     score_order: ScoreOrder,
+    lazy_cursor: LazyCursorControl,
 }
 
 impl QueryIr {
@@ -195,6 +196,7 @@ impl QueryIr {
             filter: parse_filter(filter)?,
             limit: SearchLimit::new(limit)?,
             score_order,
+            lazy_cursor: LazyCursorControl::disabled(),
         };
         query.validate()?;
         Ok(query)
@@ -221,6 +223,7 @@ impl QueryIr {
             filter: parse_filter(filter)?,
             limit: SearchLimit::new(limit)?,
             score_order,
+            lazy_cursor: LazyCursorControl::disabled(),
         };
         query.validate()?;
         Ok(query)
@@ -248,6 +251,7 @@ impl QueryIr {
             filter: parse_filter(filter)?,
             limit: SearchLimit::new(limit)?,
             score_order: ScoreOrder::LowerIsBetter,
+            lazy_cursor: LazyCursorControl::disabled(),
         };
         query.validate()?;
         Ok(query)
@@ -270,6 +274,7 @@ impl QueryIr {
             filter: parse_filter(filter)?,
             limit: SearchLimit::new(limit)?,
             score_order: ScoreOrder::HigherIsBetter,
+            lazy_cursor: LazyCursorControl::disabled(),
         };
         query.validate()?;
         Ok(query)
@@ -292,6 +297,7 @@ impl QueryIr {
             filter: parse_filter(filter)?,
             limit: SearchLimit::new(limit)?,
             score_order: ScoreOrder::HigherIsBetter,
+            lazy_cursor: LazyCursorControl::disabled(),
         };
         query.validate()?;
         Ok(query)
@@ -329,6 +335,7 @@ impl QueryIr {
             filter: None,
             limit: SearchLimit::new(limit)?,
             score_order: ScoreOrder::HigherIsBetter,
+            lazy_cursor: LazyCursorControl::disabled(),
         };
         query.validate()?;
         Ok(query)
@@ -351,6 +358,7 @@ impl QueryIr {
             filter: parse_filter(filter)?,
             limit: SearchLimit::new(limit)?,
             score_order,
+            lazy_cursor: LazyCursorControl::disabled(),
         };
         query.validate()?;
         Ok(query)
@@ -378,6 +386,27 @@ impl QueryIr {
     #[must_use]
     pub const fn score_order(&self) -> ScoreOrder {
         self.score_order
+    }
+
+    /// Returns the internal lazy-candidate control for this query node.
+    #[must_use]
+    pub const fn lazy_cursor_control(&self) -> LazyCursorControl {
+        self.lazy_cursor
+    }
+
+    /// Attaches an internal lazy-candidate control to a vector-nearest leaf.
+    ///
+    /// This is not decoded by the public SQL plan parser. It exists for
+    /// internal composition and remains disabled on every public constructor.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`QueryError::InvalidInput`] when enabled for a non-dense
+    /// nearest-neighbor query.
+    pub fn with_lazy_cursor_control(mut self, control: LazyCursorControl) -> Result<Self> {
+        self.lazy_cursor = control;
+        self.validate()?;
+        Ok(self)
     }
 
     /// Reports whether this node or any descendant executable leaf has a filter.
@@ -472,6 +501,12 @@ fn validate_query(query: &QueryIr, depth: usize, nodes: &mut usize) -> Result<()
     *nodes = nodes.saturating_add(1);
     if *nodes > MAX_QUERY_NODES {
         return Err(invalid("query", "exceeds maximum node count"));
+    }
+    if query.lazy_cursor.advance().is_some() && !matches!(query.kind, QueryKind::Nearest { .. }) {
+        return Err(invalid(
+            "lazy_cursor",
+            "is supported only for dense nearest-neighbor leaves",
+        ));
     }
     if query.filter.is_some()
         && matches!(
@@ -720,6 +755,7 @@ pub fn build_multi_profile_query(
             filter: filter.clone(),
             limit: SearchLimit::new(limit)?,
             score_order: ScoreOrder::LowerIsBetter,
+            lazy_cursor: LazyCursorControl::disabled(),
         };
         leaf.validate()?;
         weighted.push(QueryIr::new(

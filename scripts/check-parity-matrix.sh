@@ -22,7 +22,7 @@ awk -F'|' '
     printf "invalid parity row %d: expected 5 columns, got %d\n", NR, NF > "/dev/stderr"
     exit 1
   }
-  $3 != "stable" && $3 != "experimental" && $3 != "planned" && $3 != "intentionally different" {
+  $3 != "stable" && $3 != "experimental" && $3 != "internal" && $3 != "planned" && $3 != "intentionally different" {
     printf "invalid parity status for %s: %s\n", $1, $3 > "/dev/stderr"
     exit 1
   }

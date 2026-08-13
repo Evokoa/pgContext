@@ -1,5 +1,10 @@
 # Indexes
 
+The HNSW graph-read implementation also has a bounded statement-local cursor
+used only for internal composition. It does not add a SQL option or planner
+mode; see [Internal lazy HNSW cursor](lazy_hnsw_cursor.md) for its limits and
+certification boundary.
+
 pgContext adds HNSW indexing. The pure Rust
 `context-index` implementation stores typed point IDs, node IDs, and graph
 layers, validates HNSW parameters, and performs deterministic hierarchical

@@ -1,8 +1,9 @@
 //! Query-owned synchronous infrastructure ports.
 
 use crate::{
-    Candidate, CandidatePage, ExternalRerankPage, FilterCandidateBatch, HydratedCandidate, QueryIr,
-    RecheckPage, Result, SourceReadiness, StageDiagnostic,
+    Candidate, CandidatePage, ExternalRerankPage, FilterCandidateBatch, HydratedCandidate,
+    LazyCursorAdvance, LazyCursorPage, LazyCursorTermination, LazyCursorWork, QueryIr, RecheckPage,
+    Result, SourceReadiness, StageDiagnostic,
 };
 
 /// Remaining hard resources supplied to one infrastructure-port call.
@@ -133,6 +134,49 @@ pub trait CandidateSource {
         limit: usize,
         budget: PortBudget,
     ) -> Result<CandidatePage>;
+}
+
+/// Statement-local, resumable candidate provider.
+///
+/// Implementations own their frontier and visited state. They must not encode
+/// or persist that state, and every operation must honor the supplied
+/// [`PortBudget`] before doing adapter work.
+pub trait CandidateCursor {
+    /// Returns the next already-admitted candidate without consuming it.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport-neutral cancellation, budget, or adapter failure.
+    fn peek(&mut self, budget: PortBudget) -> Result<Option<Candidate>>;
+
+    /// Consumes and returns the next already-admitted candidate.
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport-neutral cancellation, budget, or adapter failure.
+    fn pop(&mut self, budget: PortBudget) -> Result<Option<Candidate>>;
+
+    /// Advances the provider by at most the requested number of expansions.
+    ///
+    /// The returned page contains only candidates made safe to expose by this
+    /// advance. `CandidatePage::exhausted()` may be true only when
+    /// [`Self::termination`] is [`LazyCursorTermination::Exhausted`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a transport-neutral cancellation, budget, or adapter failure.
+    fn advance(&mut self, request: LazyCursorAdvance, budget: PortBudget)
+    -> Result<LazyCursorPage>;
+
+    /// Reports whether the provider proved that no additional candidate can
+    /// be produced.
+    fn exhausted(&self) -> bool;
+
+    /// Returns cumulative content-free work for this statement-local cursor.
+    fn work(&self) -> LazyCursorWork;
+
+    /// Returns the terminal reason once the cursor can no longer advance.
+    fn termination(&self) -> Option<LazyCursorTermination>;
 }
 
 /// Adapter that derives logical candidates from a public filter.

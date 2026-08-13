@@ -18,6 +18,7 @@ mod p11_multi_model;
 mod p12_semantic_rerank;
 mod p13_automatic_chunking;
 mod p14_exact_first;
+mod p15_lazy_hnsw;
 mod p5_codec;
 mod p8_composite;
 mod p9_lexical;
@@ -93,6 +94,7 @@ pub use p13_automatic_chunking::{
     p13_automatic_chunking_manifest_hash,
 };
 pub use p14_exact_first::*;
+pub use p15_lazy_hnsw::*;
 
 /// Maximum accepted latency regression before explicit review is required.
 pub const BENCHMARK_LATENCY_REGRESSION_LIMIT: f64 = 0.10;

@@ -44,8 +44,9 @@ hnsw_am.rs|fn|hnsw_orderby_contract|certifies and caches a live index metric and
 hnsw_am.rs|fn|hnsw_orderby_query|reads a live PostgreSQL scan descriptor and key
 hnsw_am.rs|fn|hnsw_pgcontext_type_oid|calls PostgreSQL catalog lookup with a C string
 hnsw_am.rs|fn|hnsw_query_from_orderby_datum|decodes a PostgreSQL scan-key datum
-hnsw_am.rs|fn|hnsw_scan_candidates|reads a live index relation and PostgreSQL pages
+hnsw_am.rs|fn|hnsw_scan_candidates_with_comparison_budget|reads a live index relation and PostgreSQL pages under an explicit comparison and memory budget
 hnsw_am.rs|fn|hnsw_scan_candidates_with_metric|scans a live index relation with an already certified metric
+hnsw_am.rs|fn|hnsw_scan_candidates_with_metric_and_comparison_budget|scans a live index relation with a certified metric and explicit comparison and memory budgets
 hnsw_am.rs|fn|hnsw_scan_state_ptr|dereferences the AM-owned scan-state slot
 hnsw_am.rs|fn|hnsw_score_metric|reads live relation and operator-class metadata
 hnsw_am.rs|fn|hnsw_score_metric_contract|reads live relation, operator-class, and certified result-type metadata

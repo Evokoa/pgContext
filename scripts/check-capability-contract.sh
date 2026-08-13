@@ -69,7 +69,7 @@ awk -F'|' -v root="${REPO_ROOT}" '
   }
   NF != 9 { fail("invalid capability row " NR ": expected 9 columns, got " NF) }
   $1 !~ /^CAP-[A-Z0-9-]+$/ { fail("invalid capability ID on row " NR ": " $1) }
-  $3 != "stable" && $3 != "experimental" && $3 != "planned" && $3 != "intentionally different" {
+  $3 != "stable" && $3 != "experimental" && $3 != "internal" && $3 != "planned" && $3 != "intentionally different" {
     fail("invalid capability maturity on row " NR ": " $3)
   }
   seen_id[$1]++ { fail("duplicate capability ID: " $1) }
@@ -100,6 +100,9 @@ while IFS='|' read -r id capability maturity source_owner consumer focused_test 
       ;;
     experimental)
       supported_maturity="Experimental"
+      ;;
+    internal)
+      supported_maturity="Internal"
       ;;
     intentionally\ different)
       if [[ "${id}" == "CAP-POSTGRES-NATIVE" ]]; then

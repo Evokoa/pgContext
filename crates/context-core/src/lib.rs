@@ -13,6 +13,7 @@ mod exact;
 mod exact_first;
 mod identity;
 mod integer_metric_kernels;
+mod lazy_cursor;
 mod matryoshka;
 mod metric;
 mod metric_kernels;
@@ -44,6 +45,7 @@ pub use exact_first::{
     derive_exact_first_readiness,
 };
 pub use identity::PointId;
+pub use lazy_cursor::{DEFAULT_LAZY_CURSOR_BATCH, LazyCursorTermination, MAX_LAZY_CURSOR_BATCH};
 pub use matryoshka::{MAX_MATRYOSHKA_PREFIXES, MatryoshkaPolicy, PrefixDimensions};
 pub use metric::DistanceMetric;
 pub use profile_lifecycle::ProfileLifecycle;

@@ -368,7 +368,8 @@ printf 'mapped_hnsw_temp_teardown_reclaimed\n'
 DROP_DATABASE_NAME="${DBNAME}_dropdb"
 drop_database "${DROP_DATABASE_NAME}"
 create_database "${DROP_DATABASE_NAME}"
-psql -h "${PGHOST}" -p "${PGPORT}" -d "${DROP_DATABASE_NAME}" -v ON_ERROR_STOP=1 <<'SQL'
+PGOPTIONS="${PGOPTIONS:-} -c search_path=public,pgcontext" \
+    psql -h "${PGHOST}" -p "${PGPORT}" -d "${DROP_DATABASE_NAME}" -v ON_ERROR_STOP=1 <<'SQL'
 CREATE EXTENSION pgcontext;
 CREATE TABLE public.mapped_drop_database_docs (
     id bigint PRIMARY KEY,

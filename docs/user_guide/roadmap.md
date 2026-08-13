@@ -287,7 +287,7 @@ PG17 V1 freeze
         └── PostgreSQL 18 cumulative statistics + EXPLAIN options
 
 stable source identifiers + composite execution + mapped serving
-├── experimental HNSW-only lazy beam cursor
+├── internal HNSW-only lazy cursor
 │   └── bounded virtual state arena + exact source rerank
 └── pgGraph topology-boundary audit + provenance manifest
     └── pgContext-owned `context-topology` kernel
@@ -1350,6 +1350,14 @@ throughput floor, but miss building/indexed p95 latency and temp ceilings
 Exact-first therefore remains Experimental and Stable promotion is a measured
 no-go. See
 [Exact-first readiness](exact_first_readiness.md).
+
+The first graph-composition foundation is now implemented as an internal lazy
+HNSW cursor. Existing page, mapped, quantized, segmented, and delta-overlay
+entry points drain the same bounded traversal, so this changes no SQL surface,
+planner default, index format, or PostgreSQL authority check. Its frozen
+differential gate requires exact eager parity across metrics and batch sizes,
+identical work accounting, and bounded latency, retained memory, and process
+RSS. See [Internal lazy HNSW cursor](lazy_hnsw_cursor.md).
 
 Depends on: stable source and chunk occurrence identities, immutable
 model/profile metadata bound to named vectors, composite query execution,
@@ -2625,10 +2633,11 @@ an HNSW/vector-only search path.
    pinned pgGraph behavior. The default result is the selective fork; promote a
    shared-crate extraction only if the convergence conditions above are already
    demonstrably true.
-2. **HNSW-only experiment.** Put the existing bounded best-first HNSW traversal
-   behind an internal lazy cursor, expose experimental beam controls and
-   diagnostics, and demonstrate recall, ordering, cancellation, and memory
-   parity with the existing path. This phase does not change public defaults.
+2. **HNSW-only experiment — implemented internally.** The existing bounded
+   best-first HNSW traversal now runs behind an internal lazy cursor with typed
+   terminal diagnostics. Differential and release-mode gates cover ordering,
+   work, cancellation, memory, RSS, and latency parity. No public default or
+   SQL contract changed.
 3. **Virtual state and memory governance.** Add the parent arena, provider
    batching, dominance table, hard admission/visited budgets, explicit
    budget-exhaustion behavior, and per-component scoring telemetry while

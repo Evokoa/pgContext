@@ -13,6 +13,7 @@ mod error;
 mod executor;
 mod formula;
 mod ir;
+mod lazy_cursor;
 mod lexical;
 mod multi_profile;
 mod plan;
@@ -46,6 +47,10 @@ pub use ir::{
     Fusion, MAX_FILTER_SCALAR_BYTES, MAX_QUERY_DEPTH, MAX_QUERY_NODES, QueryIr, QueryKind,
     build_multi_profile_query, validate_filter_json_value,
 };
+pub use lazy_cursor::{
+    DEFAULT_LAZY_CURSOR_BATCH, LazyCursorAdvance, LazyCursorControl, LazyCursorPage,
+    LazyCursorTermination, LazyCursorWork, MAX_LAZY_CURSOR_BATCH,
+};
 pub use lexical::{
     FuzzyMode, FuzzyQuery, FuzzySourceName, FuzzyThreshold, LexicalBooleanOperator,
     LexicalNormalization, LexicalPrefixTerm, LexicalQuery, LexicalRankWeights, LexicalRanker,
@@ -69,8 +74,8 @@ pub use policy::{
     MAX_LATE_INTERACTION_SCALAR_CELLS, candidate_expansion_decision,
 };
 pub use ports::{
-    Cancellation, CandidateSource, ExternalReranker, FilterCandidateSource, PortBudget, QueryClock,
-    SourceRechecker, TelemetrySink, TopologyExpander,
+    Cancellation, CandidateCursor, CandidateSource, ExternalReranker, FilterCandidateSource,
+    PortBudget, QueryClock, SourceRechecker, TelemetrySink, TopologyExpander,
 };
 pub use rerank_envelope::{
     MAX_RERANK_CANDIDATES, MAX_RERANK_CONTRIBUTIONS, MAX_RERANK_METADATA_BYTES,

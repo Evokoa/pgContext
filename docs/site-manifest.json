@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "7bba214e11ea72201c65cbdc26c25b698b6c89da606e1e47b1c6a0e9f4a22682",
+  "navigation_sha256": "449ae5f19bd70ef4962779e02baec69534b59643124d758d3ddd034f3ba216d7",
   "pages": [
     {
       "links": [],
@@ -463,10 +463,11 @@
     {
       "links": [
         "../benchmarks/ivfflat_1m.md",
+        "lazy_hnsw_cursor.md",
         "pgvector_coexist.md"
       ],
       "path": "user_guide/indexes.md",
-      "sha256": "61d34ad0e546b0bbf692ffcc09f96f302b5f66e27534f28ffaba077643870fd7"
+      "sha256": "278122c48cb94828e3a5d71c5cf948554db0d61dd9c69813e49ceffe4a1d2dfe"
     },
     {
       "links": [
@@ -477,6 +478,11 @@
       ],
       "path": "user_guide/installation.md",
       "sha256": "f95375d4cb6af48a903349425b38d3c61aad56937fafbf8a88a74b542c2b8dca"
+    },
+    {
+      "links": [],
+      "path": "user_guide/lazy_hnsw_cursor.md",
+      "sha256": "6efc5b2d461e37a55ce1de5ff46222b69c07d65005f2545cd66032c74e18d24f"
     },
     {
       "links": [
@@ -542,7 +548,7 @@
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "f0b493881b72e69c53aae7b3c6e69286ef7ff6ac2dc80e84de67ab64b3a6af56"
+      "sha256": "855e9bb7ae0c8566a562f69627f73c86b87f51b0c36b507b7878704b94f64c4b"
     },
     {
       "links": [
@@ -600,7 +606,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "5151bc7a2da221a72a2a1eddbef216a642e91e46b7d4f0baf996ab86411508e2"
+      "sha256": "35a33a3e001d2a50fdb95b327f10c2fa91aef13e0f30272745eb44b82d62951a"
     },
     {
       "links": [
@@ -726,12 +732,13 @@
         "https://www.postgresql.org/docs/current/routine-vacuuming.html",
         "https://www.postgresql.org/docs/current/textsearch-controls.html",
         "https://www.postgresql.org/docs/current/textsearch-indexes.html",
+        "lazy_hnsw_cursor.md",
         "lexical_retrieval.md",
         "multi_model.md",
         "semantic_reranking.md"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "407460dde4189a7859ad93de9d28c0a84849382bc3875a9aef4d4580b4119e49"
+      "sha256": "9113c65303a8a77908c7801e390145856f9b54e207c9e38084ffa7528261724b"
     },
     {
       "links": [],
@@ -786,7 +793,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "0f997cd80119e37a1dfeaed0a37343a9ece22df5951f13777373c0f9a5694238"
+      "sha256": "3e17008d295df1a0371c2e392778a51ac598e0e452aea142801e9aa57b95466e"
     },
     {
       "links": [

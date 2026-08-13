@@ -48,10 +48,13 @@ pub use delta_scan::{
     merge_topk, scan_delta_topk,
 };
 pub use hnsw_hierarchy::{
-    ConcurrentHnswBuilder, HnswCancellation, HnswComparisonBudget, HnswGraphSnapshot,
-    HnswInsertOutcome, HnswLevel, HnswLevelSeed, HnswSearchOutcome, HnswWork, NeverCancel,
-    search_graph_read, search_graph_read_with_comparison_budget, search_graph_read_with_mask,
-    search_graph_read_with_mask_and_comparison_budget, search_graph_read_with_mask_budgeted,
+    ConcurrentHnswBuilder, HnswCancellation, HnswComparisonBudget, HnswCursorAdvanceOutcome,
+    HnswCursorBudget, HnswCursorFrontier, HnswCursorTermination, HnswGraphSnapshot,
+    HnswInsertOutcome, HnswLazyCursor, HnswLevel, HnswLevelSeed, HnswSearchOutcome, HnswWork,
+    MAX_HNSW_CURSOR_ADVANCE, NeverCancel, projected_hnsw_cursor_retained_bytes,
+    projected_legacy_eager_hnsw_bytes, search_graph_read, search_graph_read_with_comparison_budget,
+    search_graph_read_with_mask, search_graph_read_with_mask_and_comparison_budget,
+    search_graph_read_with_mask_budgeted, seed_graph_read_cursor, seed_graph_read_cursor_with_mask,
 };
 pub use ivf::{
     InMemoryIvfIndex, IvfCancellation, IvfCandidateBudget, IvfCandidateMask, IvfCentroidRead,
@@ -123,6 +126,22 @@ pub enum HnswError {
         consumed: usize,
     },
 
+    /// Cursor-owned state could not fit in the caller's memory allowance.
+    #[error("HNSW cursor memory budget {maximum} cannot admit {required} bytes")]
+    CursorMemoryBudgetExceeded {
+        /// Maximum caller-owned cursor bytes.
+        maximum: usize,
+        /// Conservatively projected bytes required by the operation.
+        required: usize,
+    },
+
+    /// A cursor stopped before proving complete graph exhaustion.
+    #[error("HNSW cursor stopped before exhaustion: {}", reason.stable_name())]
+    CursorIncomplete {
+        /// Stable resource or cancellation reason.
+        reason: HnswCursorTermination,
+    },
+
     /// An insertion reused a point identifier already present in the graph.
     #[error("duplicate HNSW point id {point_id:?}")]
     DuplicatePointId {
@@ -154,6 +173,9 @@ impl HnswError {
             Self::Core(error) => error.context_error(),
             Self::RecallBudgetExceeded { .. } => ContextError::RecallBudgetExceeded,
             Self::ComparisonBudgetExceeded { .. } => ContextError::RecallBudgetExceeded,
+            Self::CursorMemoryBudgetExceeded { .. } | Self::CursorIncomplete { .. } => {
+                ContextError::RecallBudgetExceeded
+            }
             Self::DuplicatePointId { .. } => ContextError::InvalidFilter,
             Self::Cancelled => ContextError::RecallBudgetExceeded,
             Self::InvalidSnapshot { .. } => ContextError::IndexCorrupt,
@@ -529,7 +551,7 @@ impl CandidateMask {
     /// Callers that can raise the default candidate-mask ceiling (for
     /// example the AM masked-scan path, backed by
     /// `pgcontext.hnsw_mask_candidate_limit`) use this instead of the
-    /// fixed-default [`Self::validate_budget`].
+    /// fixed-default `validate_budget` helper.
     ///
     /// # Errors
     ///

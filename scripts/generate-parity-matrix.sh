@@ -67,6 +67,7 @@ BEGIN {
     print ""
     print "- `stable`: covered by the first production SQL compatibility contract."
     print "- `experimental`: SQL-visible or implemented, but outside the production promise."
+    print "- `internal`: implemented for pgContext composition, with no public SQL promise."
     print "- `planned`: explicitly not part of the first stable surface yet."
     print "- `intentionally different`: pgContext deliberately uses PostgreSQL-native semantics."
     print ""

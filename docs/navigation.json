@@ -87,6 +87,10 @@
           "path": "user_guide/indexes.md"
         },
         {
+          "title": "Internal lazy HNSW cursor",
+          "path": "user_guide/lazy_hnsw_cursor.md"
+        },
+        {
           "title": "pgvector Coexist Mode",
           "path": "user_guide/pgvector_coexist.md"
         },

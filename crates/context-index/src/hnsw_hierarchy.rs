@@ -15,6 +15,14 @@ use crate::{
     MAX_GRAPH_NEIGHBORS_PER_LAYER, Result, sort_candidates, sort_search_results,
 };
 
+mod cursor;
+
+pub use cursor::{
+    HnswCursorAdvanceOutcome, HnswCursorBudget, HnswCursorFrontier, HnswCursorTermination,
+    HnswLazyCursor, MAX_HNSW_CURSOR_ADVANCE, projected_hnsw_cursor_retained_bytes,
+    projected_legacy_eager_hnsw_bytes, seed_graph_read_cursor, seed_graph_read_cursor_with_mask,
+};
+
 /// Searches an owned graph adapter without materializing the full graph.
 ///
 /// Each node vector and adjacency layer is fetched only when traversal reaches
@@ -192,303 +200,18 @@ fn search_graph_read_impl(
     comparison_budget: &HnswComparisonBudget,
     cancellation: &mut impl HnswCancellation,
 ) -> Result<HnswSearchOutcome> {
-    ensure_hnsw_metric(metric)?;
-    let metadata = graph.metadata()?;
-    let Some(mut current) = metadata.entry_point() else {
-        return Ok(HnswSearchOutcome {
-            results: Vec::new(),
-            work: HnswWork::default(),
-        });
-    };
-    let dimensions = metadata.dimensions().ok_or(HnswError::InvalidSnapshot {
-        reason: "nonempty graph is missing dimensions",
-    })?;
-    if query.dimension() != dimensions {
-        return Err(HnswError::DimensionMismatch {
-            left: dimensions,
-            right: query.dimension(),
-        });
-    }
-    graph.prepare_query(metric, query)?;
-    let scorer = HnswScorer { metric, query };
-    let mut work = HnswWork::default();
-    work.check_cancellation(cancellation)?;
-    work.record_distance_budgeted(comparison_budget)?;
-    let entry_layer_count = graph_read_node_score(graph, &scorer, current)?.2;
-    for layer_index in (1..entry_layer_count).rev() {
-        let candidates = search_graph_read_layer(
-            graph,
-            &scorer,
-            current,
-            1,
-            LayerIndex::new(layer_index),
-            &mut work,
-            comparison_budget,
-            cancellation,
-        )?;
-        if let Some(best) = candidates.first() {
-            current = best.node_id;
-        }
-    }
-    let search_width = config.ef_search().max(limit.get());
-    let candidates = if let Some(mask) = mask {
-        search_graph_read_layer_filtered(
-            graph,
-            &scorer,
-            current,
-            search_width,
-            LayerIndex::base(),
-            mask,
-            &mut work,
-            comparison_budget,
-            cancellation,
-        )?
-    } else {
-        search_graph_read_layer(
-            graph,
-            &scorer,
-            current,
-            search_width,
-            LayerIndex::base(),
-            &mut work,
-            comparison_budget,
-            cancellation,
-        )?
-    };
-    let mut results = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
-        comparison_budget.reserve_comparison()?;
-        let point_id = graph_read_point_id(graph, candidate.node_id)?;
-        if mask.is_some_and(|mask| !mask.allows(point_id)) {
-            continue;
-        }
-        results.push(HnswSearchResult {
-            point_id,
-            score: candidate.score,
-        });
-    }
-    sort_search_results(&mut results);
-    results.truncate(limit.get());
-    Ok(HnswSearchOutcome { results, work })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn search_graph_read_layer_filtered(
-    graph: &mut impl GraphRead,
-    scorer: &HnswScorer<'_>,
-    entry: HnswNodeId,
-    ef: usize,
-    layer: LayerIndex,
-    mask: &CandidateMask,
-    work: &mut HnswWork,
-    comparison_budget: &HnswComparisonBudget,
-    cancellation: &mut impl HnswCancellation,
-) -> Result<Vec<Candidate>> {
-    work.record_distance_budgeted(comparison_budget)?;
-    let (entry_score, entry_point_id, _) = graph_read_node_score(graph, scorer, entry)?;
-    let entry_candidate = Candidate {
-        node_id: entry,
-        score: entry_score,
-    };
-    let entry_allowed = mask.allows(entry_point_id);
-    let mut pending = BinaryHeap::from([Reverse(entry_candidate)]);
-    let mut nearest = BinaryHeap::new();
-    if entry_allowed {
-        nearest.push(entry_candidate);
-    }
-    let metadata = graph.metadata()?;
-    let acorn = mask.is_sparse_for(metadata.node_count());
-    let mut visited = vec![false; metadata.node_count()];
-    let Some(entry_visited) = visited.get_mut(entry.get()) else {
-        return Err(HnswError::InvalidSnapshot {
-            reason: "entry point exceeds graph node count",
-        });
-    };
-    *entry_visited = true;
-
-    let mut neighbor_scratch = Vec::new();
-    let mut second_neighbor_scratch = Vec::new();
-    while let Some(Reverse(candidate)) = pending.pop() {
-        work.check_cancellation(cancellation)?;
-        work.record_expansion()?;
-        let worst = nearest.peek().map_or(f32::INFINITY, |item| item.score);
-        if nearest.len() >= ef && candidate.score > worst {
-            break;
-        }
-        if !graph.read_neighbors_into(candidate.node_id, layer, &mut neighbor_scratch)? {
-            return Err(HnswError::InvalidSnapshot {
-                reason: "traversal adjacency is missing",
-            });
-        }
-        for neighbor in neighbor_scratch.iter().copied() {
-            work.record_edge()?;
-            let Some(neighbor_visited) = visited.get_mut(neighbor.get()) else {
-                return Err(HnswError::InvalidSnapshot {
-                    reason: "neighbor exceeds graph node count",
-                });
-            };
-            if *neighbor_visited {
-                continue;
-            }
-            *neighbor_visited = true;
-            work.record_distance_budgeted(comparison_budget)?;
-            let (score, point_id, _) = graph_read_node_score(graph, scorer, neighbor)?;
-            let scored = Candidate {
-                node_id: neighbor,
-                score,
-            };
-            let allowed = mask.allows(point_id);
-            if allowed {
-                nearest.push(scored);
-                if nearest.len() > ef {
-                    nearest.pop();
-                }
-            }
-            let current_worst = nearest.peek().map_or(f32::INFINITY, |item| item.score);
-            if nearest.len() < ef || scored.score <= current_worst {
-                pending.push(Reverse(scored));
-            } else if acorn && !allowed {
-                let second_hop =
-                    graph.read_neighbors_into(neighbor, layer, &mut second_neighbor_scratch)?;
-                if !second_hop {
-                    return Err(HnswError::InvalidSnapshot {
-                        reason: "ACORN connector adjacency is missing",
-                    });
-                }
-                for second_neighbor in second_neighbor_scratch.iter().copied() {
-                    work.record_edge()?;
-                    let Some(second_visited) = visited.get_mut(second_neighbor.get()) else {
-                        return Err(HnswError::InvalidSnapshot {
-                            reason: "ACORN neighbor exceeds graph node count",
-                        });
-                    };
-                    if *second_visited {
-                        continue;
-                    }
-                    *second_visited = true;
-                    work.record_distance_budgeted(comparison_budget)?;
-                    let (score, point_id, _) =
-                        graph_read_node_score(graph, scorer, second_neighbor)?;
-                    let second_scored = Candidate {
-                        node_id: second_neighbor,
-                        score,
-                    };
-                    let second_allowed = mask.allows(point_id);
-                    if second_allowed {
-                        nearest.push(second_scored);
-                        if nearest.len() > ef {
-                            nearest.pop();
-                        }
-                    }
-                    let second_worst = nearest.peek().map_or(f32::INFINITY, |item| item.score);
-                    if nearest.len() < ef || second_scored.score <= second_worst {
-                        pending.push(Reverse(second_scored));
-                    }
-                }
-            }
-        }
-    }
-    Ok(nearest.into_sorted_vec())
-}
-
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one layer traversal carries explicit topology, work, budget, and cancellation state"
-)]
-fn search_graph_read_layer(
-    graph: &mut impl GraphRead,
-    scorer: &HnswScorer<'_>,
-    entry: HnswNodeId,
-    ef: usize,
-    layer: LayerIndex,
-    work: &mut HnswWork,
-    comparison_budget: &HnswComparisonBudget,
-    cancellation: &mut impl HnswCancellation,
-) -> Result<Vec<Candidate>> {
-    work.record_distance_budgeted(comparison_budget)?;
-    let entry_candidate = Candidate {
-        node_id: entry,
-        score: graph_read_node_score(graph, scorer, entry)?.0,
-    };
-    let mut pending = BinaryHeap::from([Reverse(entry_candidate)]);
-    let mut nearest = BinaryHeap::from([entry_candidate]);
-    let metadata = graph.metadata()?;
-    let mut visited = vec![false; metadata.node_count()];
-    let Some(entry_visited) = visited.get_mut(entry.get()) else {
-        return Err(HnswError::InvalidSnapshot {
-            reason: "entry point exceeds graph node count",
-        });
-    };
-    *entry_visited = true;
-    let mut neighbor_scratch = Vec::new();
-    while let Some(Reverse(candidate)) = pending.pop() {
-        work.check_cancellation(cancellation)?;
-        work.record_expansion()?;
-        let worst = nearest.peek().map_or(f32::INFINITY, |item| item.score);
-        if nearest.len() >= ef && candidate.score > worst {
-            break;
-        }
-        if !graph.read_neighbors_into(candidate.node_id, layer, &mut neighbor_scratch)? {
-            return Err(HnswError::InvalidSnapshot {
-                reason: "traversal adjacency is missing",
-            });
-        }
-        for neighbor in neighbor_scratch.iter().copied() {
-            work.record_edge()?;
-            let Some(neighbor_visited) = visited.get_mut(neighbor.get()) else {
-                return Err(HnswError::InvalidSnapshot {
-                    reason: "neighbor exceeds graph node count",
-                });
-            };
-            if *neighbor_visited {
-                continue;
-            }
-            *neighbor_visited = true;
-            work.record_distance_budgeted(comparison_budget)?;
-            let scored = Candidate {
-                node_id: neighbor,
-                score: graph_read_node_score(graph, scorer, neighbor)?.0,
-            };
-            let should_add = nearest.len() < ef
-                || nearest
-                    .peek()
-                    .is_some_and(|current_worst| scored < *current_worst);
-            if should_add {
-                pending.push(Reverse(scored));
-                nearest.push(scored);
-                if nearest.len() > ef {
-                    nearest.pop();
-                }
-            }
-        }
-    }
-    Ok(nearest.into_sorted_vec())
-}
-
-fn graph_read_node_score(
-    graph: &mut impl GraphRead,
-    scorer: &HnswScorer<'_>,
-    node_id: HnswNodeId,
-) -> Result<(f32, HnswPointId, usize)> {
-    let scored = graph.score_node(node_id, scorer.metric, scorer.query)?;
-    scored
-        .map(|scored| (scored.score(), scored.point_id(), scored.layer_count()))
-        .ok_or(HnswError::InvalidSnapshot {
-            reason: "traversal node is missing",
-        })
-}
-
-fn graph_read_point_id(graph: &mut impl GraphRead, node_id: HnswNodeId) -> Result<HnswPointId> {
-    graph
-        .with_node(node_id, |node| node.point_id())?
-        .ok_or(HnswError::InvalidSnapshot {
-            reason: "candidate node is missing",
-        })
-}
-
-struct HnswScorer<'a> {
-    metric: DistanceMetric,
-    query: &'a DenseVector,
+    cursor::seed_graph_read_cursor_impl(
+        graph,
+        metric,
+        query,
+        config,
+        limit,
+        mask,
+        comparison_budget,
+        HnswCursorBudget::unlimited(),
+        cancellation,
+    )?
+    .finish()
 }
 
 fn ensure_hnsw_metric(metric: DistanceMetric) -> Result<()> {
