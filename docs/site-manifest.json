@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "1a286b514d6133ea66563ce815930f559e7df3d90fc9f685b46761269594090c",
+  "navigation_sha256": "7bba214e11ea72201c65cbdc26c25b698b6c89da606e1e47b1c6a0e9f4a22682",
   "pages": [
     {
       "links": [],
@@ -223,6 +223,7 @@
         "user_guide/automatic_chunking.md",
         "user_guide/collections.md",
         "user_guide/configuration.md",
+        "user_guide/exact_first_readiness.md",
         "user_guide/filters.md",
         "user_guide/hybrid_retrieval.md",
         "user_guide/indexes.md",
@@ -237,7 +238,7 @@
         "user_guide/vector_search.md"
       ],
       "path": "index.md",
-      "sha256": "fa17e428d43993bf1eac85f7a173169fe6a96bcd429002baaf6194f025e9f776"
+      "sha256": "2b1ea489e2f4366861a164babfa7b6ffd88676266155492815b48ef2481eb8b8"
     },
     {
       "links": [
@@ -353,6 +354,7 @@
         "collections.md",
         "configuration.md",
         "errors.md",
+        "exact_first_readiness.md",
         "filters.md",
         "hybrid_retrieval.md",
         "indexes.md",
@@ -384,7 +386,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "574b3300c7dc3a04dd7c6facee965e2e01207fed8b1156aaac1767dc15999ca6"
+      "sha256": "e6a773a3a3b4ae8110ea7a3941204132f25a56d2ed32931d2cc53abc522a3e6a"
     },
     {
       "links": [
@@ -398,6 +400,7 @@
       "links": [
         "adaptive_dimension.md",
         "automatic_chunking.md",
+        "exact_first_readiness.md",
         "indexes.md",
         "indexes.md",
         "multi_model.md",
@@ -407,7 +410,7 @@
         "support_policy.md"
       ],
       "path": "user_guide/api_reference.md",
-      "sha256": "8ed278d21d707396853b1a3d816f44f19f98fbbd906f75027d03cb73802325ae"
+      "sha256": "f43b49465cf79c64328c783cf5d7940d8d7a40b5d3f64d2b3f5776f4945205ba"
     },
     {
       "links": [],
@@ -439,6 +442,11 @@
       "links": [],
       "path": "user_guide/errors.md",
       "sha256": "01e27cb0d58220bb73168971266e8030acabe39de9517b715c19b7dca2f9883b"
+    },
+    {
+      "links": [],
+      "path": "user_guide/exact_first_readiness.md",
+      "sha256": "43cabac5f5d999d9338d23e73a003608aaab22dba0694076af96b762b3a3454e"
     },
     {
       "links": [],
@@ -520,6 +528,7 @@
       "links": [
         "../../SECURITY.md",
         "automatic_chunking.md",
+        "exact_first_readiness.md",
         "https://github.com/evokoa/pgcontext/issues",
         "indexes.md#build-memory-budget",
         "mailto:team@evokoa.com",
@@ -528,12 +537,12 @@
         "troubleshooting.md"
       ],
       "path": "user_guide/operations.md",
-      "sha256": "c01c4edf85d31c0f58e1b24ad43d21c500925fa574a84fd9f4282dac574a7b87"
+      "sha256": "82034e57f88757e88cec4c79038fac60dcec9406295c419f648a177f6c7b5ad7"
     },
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "8629d34e6fcee142d4cca2e5fe8433f56421791002dbe995d53087e09458e1f1"
+      "sha256": "f0b493881b72e69c53aae7b3c6e69286ef7ff6ac2dc80e84de67ab64b3a6af56"
     },
     {
       "links": [
@@ -591,7 +600,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "555f8f6adf739438f4e1d46227376042d876095b8ae845501f468cc3ba386754"
+      "sha256": "5151bc7a2da221a72a2a1eddbef216a642e91e46b7d4f0baf996ab86411508e2"
     },
     {
       "links": [
@@ -675,6 +684,7 @@
         "#summary-artifacts-and-deterministic-partition-rollups",
         "../benchmarks/quantized_hnsw_1m.md",
         "automatic_chunking.md",
+        "exact_first_readiness.md",
         "https://aclanthology.org/2025.tacl-1.36/",
         "https://aclanthology.org/P11-1101/",
         "https://arxiv.org/abs/2109.10086",
@@ -721,7 +731,7 @@
         "semantic_reranking.md"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "3f2dcb7c8461cecaf6a7583d4a3565397bbb19115db6108ccb46006c606bdf7d"
+      "sha256": "407460dde4189a7859ad93de9d28c0a84849382bc3875a9aef4d4580b4119e49"
     },
     {
       "links": [],
@@ -741,7 +751,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "9fceee57a31706ea2b946b4f5b519e22653137071ce8e86ff449938efd9d6cf9"
+      "sha256": "64919694486523644ec32be48c6bc4adb3844be36c1a94bc37e94bb8c4f181d9"
     },
     {
       "links": [],
@@ -776,7 +786,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "464016eb8472d7bf21764ad24a306cf66640fdb53557e8bfad1574399ea65061"
+      "sha256": "0f997cd80119e37a1dfeaed0a37343a9ece22df5951f13777373c0f9a5694238"
     },
     {
       "links": [

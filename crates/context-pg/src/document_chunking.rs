@@ -33,6 +33,7 @@ const MAX_SOURCE_KEY_BYTES: usize = 1024;
 const MAX_STAGING_BYTES: usize = 32 * 1024 * 1024;
 const MAX_WORKER_CLAIM_BYTES: usize = 40 * 1024 * 1024;
 const MAX_STAGING_JSON_NODES: usize = 1_000_000;
+const MAX_STAGING_JSON_DEPTH: usize = 64;
 const MAX_DOCUMENT_CHUNK_ELAPSED_MICROS: u64 = 120_000_000;
 
 /// Applies current source-table ACL/RLS to one registered document key.

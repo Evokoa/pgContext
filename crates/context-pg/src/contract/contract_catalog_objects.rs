@@ -2,7 +2,7 @@
 
 use super::{SqlContractObject, SqlLifecycle, SqlObjectKind};
 
-pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 274;
+pub(super) const CATALOG_SQL_CONTRACT_OBJECTS_LEN: usize = 285;
 
 #[rustfmt::skip]
 pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_CONTRACT_OBJECTS_LEN] = &[
@@ -419,6 +419,12 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
         "_embedding_profiles",
         SqlLifecycle::Internal,
     ),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_exact_first_registrations", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_exact_first_columns", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_exact_first_plans", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_exact_first_plan_jobs", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_exact_first_targets", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_exact_first_invalid_samples", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_semantic_rerank_sources", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_semantic_rerank_requests", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::Table, Some("pgcontext"), "_semantic_rerank_candidates", SqlLifecycle::Internal),
@@ -547,6 +553,11 @@ pub(super) const CATALOG_SQL_CONTRACT_OBJECTS: &[SqlContractObject; CATALOG_SQL_
         "_visible_embedding_profiles",
         SqlLifecycle::Internal,
     ),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_exact_first_registrations", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_exact_first_columns", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_exact_first_plans", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_exact_first_targets", SqlLifecycle::Internal),
+    SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_exact_first_invalid_samples", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_semantic_rerank_sources", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_semantic_rerank_requests", SqlLifecycle::Internal),
     SqlContractObject::object(SqlObjectKind::View, Some("pgcontext"), "_visible_semantic_rerank_candidates", SqlLifecycle::Internal),

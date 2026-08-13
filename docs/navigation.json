@@ -119,6 +119,10 @@
           "path": "user_guide/automatic_chunking.md"
         },
         {
+          "title": "Exact-first readiness",
+          "path": "user_guide/exact_first_readiness.md"
+        },
+        {
           "title": "Retrieval methods overview",
           "path": "user_guide/retrieval_methods.md"
         },

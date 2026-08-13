@@ -32,6 +32,7 @@ code-backed capability contract. Planned-only work remains in the
 - [Multi-model retrieval](multi_model.md)
 - [Semantic reranking](semantic_reranking.md)
 - [Automatic document chunking](automatic_chunking.md)
+- [Exact-first readiness](exact_first_readiness.md)
 - [Retrieval methods overview](retrieval_methods.md)
 - [Indexes](indexes.md)
 - [Rebuildable storage artifacts](storage.md)

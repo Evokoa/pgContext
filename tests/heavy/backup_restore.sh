@@ -38,6 +38,35 @@ VALUES
     (3, '[5,5]'::vector, 'gardening notes', 'other', '{"priority":"low","lang":"fr"}');
 
 SELECT * FROM pgcontext.create_collection('backup_docs', 'public.docs');
+SELECT * FROM pgcontext.register_exact_first(
+    'backup_docs', 'public.docs',
+    jsonb_build_object(
+        'version', 'exact_first_registration_v1',
+        'key_column', 'id',
+        'bindings', jsonb_build_array(
+            jsonb_build_object(
+                'name', 'embedding', 'column', 'embedding', 'kind', 'dense',
+                'dimensions', 2, 'metric', 'l2'
+            ),
+            jsonb_build_object(
+                'name', 'tenant', 'column', 'tenant', 'kind', 'filter'
+            ),
+            jsonb_build_object(
+                'name', 'metadata', 'column', 'metadata', 'kind', 'payload'
+            )
+        )
+    )
+);
+SELECT * FROM pgcontext.exact_first_advisor(
+    'backup_docs',
+    jsonb_build_object(
+        'version', 'exact_first_advisor_v1',
+        'memory_budget_bytes', 1048576,
+        'build_window_seconds', 60,
+        'update_millihertz', 0,
+        'filter_selectivity_bps', 10000
+    )
+);
 SELECT * FROM pgcontext.register_vector('backup_docs', 'embedding', 'embedding', 2, 'l2');
 SELECT * FROM pgcontext.register_filter_column('backup_docs', 'tenant', 'tenant');
 SELECT * FROM pgcontext.register_jsonb_path('backup_docs', 'priority', 'metadata', ARRAY['priority']);
@@ -114,6 +143,12 @@ DECLARE
     telemetry_status text;
     restored_query_count bigint;
     restored_hnsw_indexes bigint;
+    exact_registration_count bigint;
+    exact_plan_count bigint;
+    exact_job_count bigint;
+    exact_target_count bigint;
+    exact_state text;
+    exact_source_key text;
 BEGIN
     SELECT source_key
       INTO nearest_source_key
@@ -122,6 +157,51 @@ BEGIN
         RAISE EXCEPTION 'unexpected restored nearest source key: %', nearest_source_key;
     END IF;
     RAISE NOTICE 'backup_restore_nearest_verified';
+
+    SELECT count(*) INTO exact_registration_count
+      FROM pgcontext._visible_exact_first_registrations
+     WHERE collection_id = (
+               SELECT collection_id FROM pgcontext._visible_collections
+                WHERE collection_name = 'backup_docs'
+           );
+    SELECT count(*) INTO exact_plan_count
+      FROM pgcontext._visible_exact_first_plans AS plans
+      JOIN pgcontext._visible_exact_first_registrations AS registrations
+        USING (exact_first_registration_id)
+     WHERE registrations.collection_id = (
+               SELECT collection_id FROM pgcontext._visible_collections
+                WHERE collection_name = 'backup_docs'
+           );
+    SELECT count(*) INTO exact_job_count
+      FROM pgcontext._visible_exact_first_plans AS plans
+      JOIN pgcontext._visible_exact_first_registrations AS registrations
+        USING (exact_first_registration_id)
+     WHERE registrations.collection_id = (
+               SELECT collection_id FROM pgcontext._visible_collections
+                WHERE collection_name = 'backup_docs'
+           )
+       AND plans.build_job_id IS NOT NULL;
+    SELECT count(*) INTO exact_target_count
+      FROM pgcontext._visible_exact_first_targets AS targets
+      JOIN pgcontext._visible_exact_first_registrations AS registrations
+        USING (exact_first_registration_id)
+     WHERE registrations.collection_id = (
+               SELECT collection_id FROM pgcontext._visible_collections
+                WHERE collection_name = 'backup_docs'
+           );
+    SELECT readiness_state INTO exact_state
+      FROM pgcontext.exact_first_readiness('backup_docs');
+    SELECT source_key INTO exact_source_key
+      FROM pgcontext.exact_first_search(
+          'backup_docs', 'embedding', '[0,0]'::vector, 1
+      );
+    IF exact_registration_count <> 1 OR exact_plan_count <> 1
+       OR exact_job_count <> 0 OR exact_target_count <> 0
+       OR exact_state IS DISTINCT FROM 'exact_only'
+       OR exact_source_key IS DISTINCT FROM '1' THEN
+        RAISE EXCEPTION 'restored exact-first logical/transient contract failed';
+    END IF;
+    RAISE NOTICE 'backup_restore_exact_first_verified';
 
     SELECT count(*)
       INTO filtered_count

@@ -11,6 +11,7 @@ pub(crate) fn decode_bounded_jsonb(
     is_null: bool,
     maximum_raw_bytes: usize,
     maximum_nodes: usize,
+    maximum_depth: usize,
     message: &'static str,
 ) -> Option<JsonB> {
     if is_null {
@@ -91,7 +92,7 @@ pub(crate) fn decode_bounded_jsonb(
                 raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, message);
             }
         }
-        if frames.len() > MAX_RERANK_JSON_DEPTH {
+        if frames.len() > maximum_depth {
             free_detoasted_jsonb(original, detoasted);
             raise_sql_error(PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED, message);
         }
@@ -198,7 +199,15 @@ macro_rules! bounded_json_argument {
                 is_null: bool,
                 _typoid: pg_sys::Oid,
             ) -> Option<Self> {
-                decode_bounded_jsonb(datum, is_null, $bytes, $nodes, $message).map(Self)
+                decode_bounded_jsonb(
+                    datum,
+                    is_null,
+                    $bytes,
+                    $nodes,
+                    MAX_RERANK_JSON_DEPTH,
+                    $message,
+                )
+                .map(Self)
             }
         }
 

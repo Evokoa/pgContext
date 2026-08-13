@@ -35,6 +35,8 @@ mod domain_types;
 mod embedding_migrations;
 mod embedding_profiles;
 mod error;
+mod exact_first;
+mod exact_first_catalog_schema;
 #[allow(
     unsafe_code,
     reason = "the custom PostgreSQL access method is the crate's audited FFI boundary"
@@ -207,6 +209,7 @@ mod tests {
     include!("pg_tests/document_chunking_boundaries.rs");
     include!("pg_tests/document_chunking_registration.rs");
     include!("pg_tests/document_chunking_aliases.rs");
+    include!("pg_tests/exact_first.rs");
     include!("pg_tests/lexical_catalog.rs");
     include!("pg_tests/lexical_query.rs");
     include!("pg_tests/lexical_index.rs");

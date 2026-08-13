@@ -386,6 +386,33 @@ workload throughput floor. See
 [Automatic document chunking](automatic_chunking.md) for the worker protocol,
 bounds, citation contract, and logical-restore behavior.
 
+Exact-first readiness:
+
+- `pgcontext.inspect_exact_first_source(source_table text, options jsonb)`
+  returns bounded type-support diagnostics without mutation.
+- `pgcontext.register_exact_first(collection text, source_table text,
+  specification jsonb, apply_policy text)` registers an idempotent dense exact
+  path and requires at least one complete public dense adapter.
+- `pgcontext.exact_first_search(collection text, binding text, vector vector,
+  limit integer)` executes a complete invoker-authoritative exact scan with
+  native `real` scores and deterministic source-key ties.
+- `pgcontext.exact_first_advisor(collection text, objectives jsonb)` stores an
+  immutable exact-only, HNSW, or IVFFlat recommendation and reviewed DDL.
+- `pgcontext.apply_exact_first_plan(collection text, plan_revision bigint,
+  policy text)` leaves the plan frozen, enqueues it, or applies it in the
+  foreground under an explicit policy.
+- `pgcontext.claim_exact_first_build`, `heartbeat_exact_first_build`,
+  `publish_exact_first_build`, `fail_exact_first_build`,
+  `cancel_exact_first_build`, and `retry_exact_first_build` form the fenced
+  top-level concurrent-index controller protocol.
+- `pgcontext.exact_first_readiness(collection text)` and
+  `pgcontext.exact_first_progress(collection text)` return bounded,
+  content-free state and progress.
+
+These APIs are Experimental until the unchanged P14 ten-million-row contract
+passes on PostgreSQL 17 and 18. See
+[Exact-first readiness](exact_first_readiness.md).
+
 Provider-neutral semantic reranking:
 
 - `pgcontext.register_semantic_rerank_source(collection text, source_name text,

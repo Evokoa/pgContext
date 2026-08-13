@@ -8,7 +8,7 @@ this file by hand.
 
 The SQL contract registry owns lifecycle classification; this inventory pins the installed object and option shape consumed by the capability contract.
 
-Full SQL artifact SHA-256: `b891daed767c5783a77f26b13ac12c1f0106b9b1712a54c823c4698d24eed910`
+Full SQL artifact SHA-256: `1c8604054104fd9ceb1f2b0d568a88b426e9c219aba4e3d131dbc182d4d5b7ad`
 
 The artifact fingerprint covers every object declaration, function result shape, cast method/context, operator identity, and opclass strategy. `contract_registry` separately compares installed functions and catalog objects bidirectionally, including typed operator and access-method/input-type opclass identities.
 
@@ -16,9 +16,9 @@ The artifact fingerprint covers every object declaration, function result shape,
 |---|---:|
 | Types | 20 |
 | Schemas | 0 |
-| Functions | 455 |
-| Tables | 38 |
-| Views | 28 |
+| Functions | 468 |
+| Tables | 44 |
+| Views | 33 |
 | Triggers | 6 |
 | Casts | 35 |
 | Operators | 62 |
@@ -79,6 +79,12 @@ The artifact fingerprint covers every object declaration, function result shape,
 - table `pgcontext._document_sources`
 - table `pgcontext._embedding_migrations`
 - table `pgcontext._embedding_profiles`
+- table `pgcontext._exact_first_columns`
+- table `pgcontext._exact_first_invalid_samples`
+- table `pgcontext._exact_first_plan_jobs`
+- table `pgcontext._exact_first_plans`
+- table `pgcontext._exact_first_registrations`
+- table `pgcontext._exact_first_targets`
 - table `pgcontext._generation_aliases`
 - table `pgcontext._generation_artifacts`
 - table `pgcontext._generation_build_rows`
@@ -118,6 +124,11 @@ The artifact fingerprint covers every object declaration, function result shape,
 - view `pgcontext._visible_document_embedding_jobs`
 - view `pgcontext._visible_document_sources`
 - view `pgcontext._visible_embedding_profiles`
+- view `pgcontext._visible_exact_first_columns`
+- view `pgcontext._visible_exact_first_invalid_samples`
+- view `pgcontext._visible_exact_first_plans`
+- view `pgcontext._visible_exact_first_registrations`
+- view `pgcontext._visible_exact_first_targets`
 - view `pgcontext._visible_pgvector_ownership_conversions`
 - view `pgcontext._visible_query_stats`
 - view `pgcontext._visible_semantic_rerank_candidates`
@@ -142,6 +153,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"_sync_pgvector_ownership_columns"`
 - `"_transition_pgvector_ownership_conversion"`
 - `"adopt_pgvector"`
+- `"apply_exact_first_plan"`
 - `"artifact_segment_diagnostics"`
 - `"artifact_segment_memory"`
 - `"artifact_segment_mmap_payload"`
@@ -178,8 +190,10 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"bulk_delete_points"`
 - `"bulk_upsert_points"`
 - `"cancel_document_chunk_job"`
+- `"cancel_exact_first_build"`
 - `"checkpoint_document_chunk_job"`
 - `"claim_document_chunk_jobs"`
+- `"claim_exact_first_build"`
 - `"cleanup_artifact_segments"`
 - `"cleanup_semantic_rerank_requests"`
 - `"clear_payload"`
@@ -230,6 +244,10 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"enqueue_hnsw_compaction"`
 - `"enqueue_ivfflat_compaction"`
 - `"estimate_index_memory"`
+- `"exact_first_advisor"`
+- `"exact_first_progress"`
+- `"exact_first_readiness"`
+- `"exact_first_search"`
 - `"execute_query"`
 - `"explain"`
 - `"explain_late_interaction"`
@@ -238,6 +256,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"explore"`
 - `"facet"`
 - `"fail_document_chunk_job"`
+- `"fail_exact_first_build"`
 - `"fake_process_document_chunk_job"`
 - `"finalize_pgvector_ownership_conversion"`
 - `"finalize_semantic_rerank"`
@@ -271,6 +290,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"halfvec_typmod_in"`
 - `"halfvec_typmod_out"`
 - `"heartbeat_document_chunk_job"`
+- `"heartbeat_exact_first_build"`
 - `"hnsw_build_stats"`
 - `"hnsw_l2_distance"`
 - `"hnsw_last_scan_work"`
@@ -280,6 +300,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"index_diagnostics"`
 - `"index_status"`
 - `"inner_product"`
+- `"inspect_exact_first_source"`
 - `"install_document_chunk_trigger"`
 - `"int8vec"`
 - `"int8vec_cmp"`
@@ -327,6 +348,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"publish_artifact_segment"`
 - `"publish_artifact_segment_file"`
 - `"publish_document_chunk_generation"`
+- `"publish_exact_first_build"`
 - `"query"`
 - `"query_cohort_stats"`
 - `"query_discover"`
@@ -355,6 +377,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"register_chunking_profile"`
 - `"register_document_source"`
 - `"register_embedding_profile"`
+- `"register_exact_first"`
 - `"register_filter_column"`
 - `"register_fuzzy_source"`
 - `"register_jsonb_path"`
@@ -372,6 +395,7 @@ Overload argument and result identities are pinned by the artifact fingerprint a
 - `"retire_artifact_segment"`
 - `"retry_build_job"`
 - `"retry_document_chunk_job"`
+- `"retry_exact_first_build"`
 - `"rollback_chunking_profile_alias"`
 - `"rollback_document_chunk_generation"`
 - `"rollback_pgvector_ownership_conversion"`

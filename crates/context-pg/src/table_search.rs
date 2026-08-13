@@ -60,6 +60,11 @@ pub fn search_collection(
 > {
     let collection_name = collection_name_from_sql(collection);
     let limit = search_limit_from_sql(limit);
+    if let Some(rows) =
+        crate::exact_first::search::try_search_default(&collection_name, &vector, limit)
+    {
+        return TableIterator::new(rows);
+    }
     let query = context_query::QueryIr::nearest(
         None,
         vector.as_slice().to_vec(),

@@ -208,6 +208,15 @@ refreshes source and projection OIDs from their stored names and increments the
 registration revision when a binding changed. See
 [Automatic document chunking](automatic_chunking.md).
 
+For exact-first optimization, keep serving `exact_first_search` while a
+controller runs the reviewed `CREATE INDEX CONCURRENTLY` returned by
+`claim_exact_first_build` as its own top-level statement. Heartbeat before the
+60-second lease expires, publish only after PostgreSQL reports the expected
+index valid, and use cancel/retry rather than editing private plan/job catalogs.
+Logical restore retains registrations and immutable plans but intentionally
+drops transient leases and targets; exact serving remains available while the
+optimization is rebuilt. See [Exact-first readiness](exact_first_readiness.md).
+
 Before building or rebuilding a `pgcontext_hnsw` index, size
 `maintenance_work_mem` for the corpus: the build enforces it as a hard budget
 and stops with SQLSTATE `22023` plus a suggested-setting `HINT` when the

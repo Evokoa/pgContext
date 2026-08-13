@@ -8,7 +8,7 @@ use super::{
     },
 };
 
-const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 457;
+const FUNCTION_SQL_CONTRACT_OBJECTS_LEN: usize = 470;
 const SQL_CONTRACT_OBJECTS_LEN: usize = CATALOG_SQL_CONTRACT_OBJECTS_LEN
     + PGVECTOR_OWNERSHIP_SQL_CONTRACT_OBJECTS_LEN
     + FUNCTION_SQL_CONTRACT_OBJECTS_LEN;
@@ -53,6 +53,19 @@ const fn build_sql_contract_objects() -> [SqlContractObject; SQL_CONTRACT_OBJECT
 
 #[rustfmt::skip]
 const FUNCTION_SQL_CONTRACT_OBJECTS: &[SqlContractObject; FUNCTION_SQL_CONTRACT_OBJECTS_LEN] = &[
+    SqlContractObject::function("cancel_exact_first_build", "collection text", SqlLifecycle::Experimental),
+    SqlContractObject::function("claim_exact_first_build", "collection text, worker_id text, lease_millis integer", SqlLifecycle::Experimental),
+    SqlContractObject::function("exact_first_progress", "collection text", SqlLifecycle::Experimental),
+    SqlContractObject::function("fail_exact_first_build", "collection text, plan_revision bigint, lease_token bigint, error_code text", SqlLifecycle::Experimental),
+    SqlContractObject::function("heartbeat_exact_first_build", "collection text, plan_revision bigint, lease_token bigint, lease_millis integer", SqlLifecycle::Experimental),
+    SqlContractObject::function("publish_exact_first_build", "collection text, plan_revision bigint, lease_token bigint", SqlLifecycle::Experimental),
+    SqlContractObject::function("retry_exact_first_build", "collection text", SqlLifecycle::Experimental),
+    SqlContractObject::function("exact_first_search", "collection text, binding text, vector vector, \"limit\" integer", SqlLifecycle::Experimental),
+    SqlContractObject::function("apply_exact_first_plan", "collection text, plan_revision bigint, policy text", SqlLifecycle::Experimental),
+    SqlContractObject::function("exact_first_advisor", "collection text, objectives jsonb", SqlLifecycle::Experimental),
+    SqlContractObject::function("exact_first_readiness", "collection text", SqlLifecycle::Experimental),
+    SqlContractObject::function("inspect_exact_first_source", "source_table text, options jsonb", SqlLifecycle::Experimental),
+    SqlContractObject::function("register_exact_first", "collection text, source_table text, specification jsonb, apply_policy text", SqlLifecycle::Experimental),
     SqlContractObject::function("_document_chunk_raw_datum_bytes", "value anyelement", SqlLifecycle::Internal),
     SqlContractObject::function("_document_chunk_source_key_visible", "document_source_id bigint, source_key text", SqlLifecycle::Internal),
     SqlContractObject::function("bitvec_out", "input bitvec", SqlLifecycle::Internal),

@@ -40,6 +40,7 @@ impl FromDatum for BoundedChunkResponse {
             is_null,
             MAX_STAGING_BYTES,
             MAX_STAGING_JSON_NODES,
+            MAX_STAGING_JSON_DEPTH,
             "document chunk response exceeds the JSON allocation budget",
         )
         .map(Self)

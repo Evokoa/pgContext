@@ -1339,6 +1339,18 @@ See [Multi-model retrieval](multi_model.md),
 [Semantic reranking](semantic_reranking.md), and
 [Automatic document chunking](automatic_chunking.md).
 
+Experimental exact-first readiness now registers complete dense-vector source
+scans before any acceleration exists, freezes explicit advisor plans, and
+supervises genuine top-level concurrent HNSW/IVFFlat builds without changing
+source authority or exact final ordering. Stable promotion remains gated on the
+unchanged PostgreSQL 17 and 18 ten-million-row lifecycle reports. Both reports
+now preserve bit-exact results and 100% top-10 recall while exceeding the build
+throughput floor, but miss building/indexed p95 latency and temp ceilings
+(PG17: 7.850 s / 490 ms / 12.81 GB; PG18: 6.894 s / 468 ms / 13.74 GB).
+Exact-first therefore remains Experimental and Stable promotion is a measured
+no-go. See
+[Exact-first readiness](exact_first_readiness.md).
+
 Depends on: stable source and chunk occurrence identities, immutable
 model/profile metadata bound to named vectors, composite query execution,
 authoritative source rechecks, bounded work governance, and the
