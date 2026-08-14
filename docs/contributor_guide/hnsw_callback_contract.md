@@ -102,7 +102,8 @@ Use the normal PostgreSQL-adapter gates after changing this boundary:
 
 ```sh
 PG_CONFIG=/opt/homebrew/opt/postgresql@17/bin/pg_config \
-  cargo test -p context-pg --no-default-features --features pg17 hnsw_am::
+  cargo check -p context-pg --tests --no-default-features --features pg17
+PG_MAJOR=17 scripts/run-v1-pgrx-tests.sh
 PG_CONFIG=/opt/homebrew/opt/postgresql@17/bin/pg_config \
   cargo clippy -p context-pg --no-default-features --features pg17 \
   --lib --tests -- -D warnings -A clippy::cast_precision_loss \

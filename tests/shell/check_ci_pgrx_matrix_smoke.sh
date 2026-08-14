@@ -53,3 +53,29 @@ bench_workflow=.github/workflows/bench-regression.yml
 grep -qF '/usr/lib/postgresql/17/bin/pg_isready' "${bench_workflow}"
 grep -qF 'createuser -p "${pg_port}"' "${bench_workflow}"
 grep -qF 'port=${PGCONTEXT_CI_PG_PORT} dbname=postgres' "${bench_workflow}"
+
+if rg -n 'cargo pgrx test' .github/workflows scripts tests/heavy \
+  --glob '*.yml' --glob '*.yaml' --glob '*.sh'; then
+  echo "CI and release scripts must run pg_tests through the in-server runner" >&2
+  exit 1
+fi
+if rg -n 'cargo test -p context-pg' scripts/run-postgres-matrix-gates.sh; then
+  echo "PostgreSQL matrix must not link context-pg test binaries standalone" >&2
+  exit 1
+fi
+grep -qF 'cargo check -p context-pg --tests' scripts/run-postgres-matrix-gates.sh
+grep -qF 'PG_MAJOR=${major} scripts/run-v1-pgrx-tests.sh' \
+  scripts/run-postgres-matrix-gates.sh
+grep -qF 'PG_MAJOR=${PG_MAJOR} scripts/run-v1-pgrx-tests.sh' \
+  scripts/run-security-review-report.sh
+
+for replica_script in \
+  tests/heavy/exact_first_replica_promotion.sh \
+  tests/heavy/ivfflat_replica_promotion.sh
+do
+  if grep -qF '/private/tmp' "${replica_script}"; then
+    echo "replica socket path is macOS-specific: ${replica_script}" >&2
+    exit 1
+  fi
+  grep -qF 'SOCKET_ROOT="${HEAVY_SOCKET_ROOT:-/tmp}"' "${replica_script}"
+done

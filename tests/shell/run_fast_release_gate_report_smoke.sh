@@ -4,7 +4,6 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 TMPDIR="${TMPDIR:-${REPO_ROOT}/target/tmp}"
 export PGRX_TEST_PLATFORM=Linux
-export PGRX_TEST_MODE=native
 mkdir -p "${TMPDIR}"
 work_dir="$(mktemp -d "${TMPDIR}/fast-release-gate-report-test.XXXXXX")"
 trap 'rm -rf "${work_dir}"' EXIT
@@ -34,7 +33,22 @@ fake_bin="${work_dir}/bin"
 fake_no_pgrx_bin="${work_dir}/bin-no-pgrx"
 fake_wrong_pg_bin="${work_dir}/bin-wrong-pg"
 mkdir -p "${fixture_root}/scripts" "${fake_bin}" "${fake_no_pgrx_bin}" "${fake_wrong_pg_bin}"
-cp "${REPO_ROOT}/scripts/run-v1-pgrx-tests.sh" "${fixture_root}/scripts/run-v1-pgrx-tests.sh"
+cat >"${fixture_root}/scripts/run-v1-pgrx-tests.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+if ! cargo pgrx --version >/dev/null 2>&1; then
+  echo 'cargo-pgrx unavailable' >&2
+  exit 127
+fi
+printf 'in-server pgrx suite pg%s\n' "${PG_MAJOR}" \
+  >>"${FAKE_FAST_GATE_LOG:-/dev/null}"
+if [[ "${FAKE_FAST_GATE_FAIL_GATE:-}" == context-pg-pgrx ]]; then
+  echo 'simulated context-pg-pgrx failure' >&2
+  exit 42
+fi
+printf 'fake in-server pgrx suite passed\n'
+SH
+chmod +x "${fixture_root}/scripts/run-v1-pgrx-tests.sh"
 
 cat >"${fixture_root}/Cargo.toml" <<'DOC'
 [workspace.metadata.pgcontext]
@@ -69,7 +83,6 @@ case "$*" in
   "clippy -p context-pg --all-targets --features pg17 -- -D warnings") gate="clippy-context-pg" ;;
   "test --workspace --exclude context-pg --all-features") gate="workspace-tests" ;;
   "check -p context-pg --features pg17") gate="context-pg-check" ;;
-  "pgrx test --release -p context-pg pg17") gate="context-pg-pgrx" ;;
   "doc --workspace --no-deps") gate="docs" ;;
   "audit --db target/cargo-audit-advisory-db") gate="cargo-audit" ;;
   "deny check") gate="cargo-deny" ;;
@@ -215,7 +228,7 @@ do
     END { exit(found ? 0 : 1) }
   ' "${summary}"
 done
-grep -q '^pgrx test --release -p context-pg pg17$' "${work_dir}/success.log"
+grep -q '^in-server pgrx suite pg17$' "${work_dir}/success.log"
 grep -q '^audit --db target/cargo-audit-advisory-db$' "${work_dir}/success.log"
 grep -q '^deny check$' "${work_dir}/success.log"
 

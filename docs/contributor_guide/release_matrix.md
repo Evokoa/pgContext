@@ -33,7 +33,7 @@ Multi-major certification jobs run the PostgreSQL 17 and 18 matrix:
 
 - `cargo test --workspace --exclude context-pg --all-features`;
 - `cargo check -p context-pg --no-default-features --features pgXX`;
-- `cargo pgrx test --release -p context-pg pgXX`;
+- `PG_MAJOR=XX scripts/run-v1-pgrx-tests.sh` (the full suite runs inside PostgreSQL);
 - `cargo pgrx schema -p context-pg pgXX --out target/release-sql/pgXX.sql`;
 - heavy install, backup/restore, crash/restart, upgrade, low-memory, and
   corruption tests for each supported PostgreSQL major;
@@ -53,9 +53,10 @@ scripts/run-postgres-matrix-gates.sh --allow-missing
 
 Use `--mode fast`, `--mode schema`, `--mode pgrx`, or `--mode heavy` to rerun
 one gate tier. Fast mode records separate rows for workspace fast tests,
-`context-pg` feature checks, and `context-pg` Rust tests. Schema mode records
-generated extension SQL paths and checksums. Heavy mode records one report row
-per heavy harness script, including install, upgrade, backup/restore,
+`context-pg` feature checks, and compile-only `context-pg` test-target checks.
+PostgreSQL-backed test executables are never linked or run standalone. Schema
+mode records generated extension SQL paths and checksums. Heavy mode records one
+report row per heavy harness script, including install, upgrade, backup/restore,
 cross-version import, crash/restart, VACUUM, concurrency, recall, ACL/RLS,
 late-interaction ANN serving, low-memory, corruption, and SQLSTATE gates.
 
@@ -90,8 +91,8 @@ PG_MAJOR=17 scripts/release-linux-container-gates.sh
 Repeat with `PG_MAJOR=17` and `18` for the supported matrix. The
 container pins Rust and pgrx versions, installs matching PostgreSQL development
 files, runs fast Rust gates, checks `context-pg`, and writes generated extension
-SQL under `target/release-sql/`. It does not replace `cargo pgrx test`; use the
-PostgreSQL matrix runner for pgrx SQL-test evidence.
+SQL under `target/release-sql/`. It does not replace the full in-server pgrx
+suite; use the PostgreSQL matrix runner for pgrx SQL-test evidence.
 
 Before claiming macOS and Linux build coverage, attach a combined platform build
 report:

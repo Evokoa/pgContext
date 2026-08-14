@@ -39,7 +39,14 @@ full_matrix_rows=$((supported_major_count * (6 + ${#heavy_gate_names[@]})))
 stage_passing_heavy_fixtures() {
   local root="$1"
   local gate
-  mkdir -p "${root}/tests/heavy"
+  mkdir -p "${root}/scripts" "${root}/tests/heavy"
+  cat >"${root}/scripts/run-v1-pgrx-tests.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'running 1 pg_tests in PostgreSQL (full suite)\n'
+printf 'pgrx_live_backend_complete: 1 tests\n'
+SH
+  chmod +x "${root}/scripts/run-v1-pgrx-tests.sh"
   for gate in "${heavy_gate_names[@]}"; do
     cat >"${root}/tests/heavy/${gate}.sh" <<'SH'
 #!/usr/bin/env bash
@@ -219,10 +226,10 @@ assert_heavy_row() {
 
 assert_row "workspace-fast" "cargo test --workspace --exclude context-pg --all-features"
 assert_row "context-pg-check" "cargo check -p context-pg --no-default-features --features pg17"
-assert_row "context-pg-test" "cargo test -p context-pg --no-default-features --features pg17"
+assert_row "context-pg-test-check" "cargo check -p context-pg --tests --no-default-features --features pg17"
 assert_row "pgrx-init" "cargo pgrx init --pg17 ${fake_bin}/pg_config"
 assert_row "schema" "cargo pgrx schema -p context-pg pg17 --out ${work_dir}/report/pg17.sql"
-assert_row "pgrx" "cargo pgrx test --release -p context-pg pg17"
+assert_row "pgrx" "PG_MAJOR=17 scripts/run-v1-pgrx-tests.sh"
 assert_heavy_row \
   "fresh_install_smoke" \
   "PG_VERSION=pg17 PG_FEATURE=pg17 PG_CONFIG=${fake_bin}/pg_config PGPORT=28817 tests/heavy/fresh_install_smoke.sh"
@@ -583,7 +590,7 @@ PATH="${fake_bin}:${PATH}" FAKE_CARGO_LOG="${work_dir}/partial-execute-cargo.log
 grep -qF $'pg17\tpgrx-init\tpassed\t0' "${work_dir}/partial-execute/summary.tsv"
 grep -qF $'pg17\tworkspace-fast\tpassed\t0' "${work_dir}/partial-execute/summary.tsv"
 grep -qF $'pg17\tcontext-pg-check\tpassed\t0' "${work_dir}/partial-execute/summary.tsv"
-grep -qF $'pg17\tcontext-pg-test\tpassed\t0' "${work_dir}/partial-execute/summary.tsv"
+grep -qF $'pg17\tcontext-pg-test-check\tpassed\t0' "${work_dir}/partial-execute/summary.tsv"
 grep -qF -- '- Passed: `4`' "${work_dir}/partial-execute/report.md"
 grep -qF -- '- Full release scope: `0`' "${work_dir}/partial-execute/report.md"
 grep -qF -- '- Approval: `incomplete`' "${work_dir}/partial-execute/report.md"

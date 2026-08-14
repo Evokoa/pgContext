@@ -182,20 +182,23 @@ grep -q \
 grep -q 'python3:scripts/run_pgrx_tests_in_server.py .*--database pgcontext_linux_runner_smoke' \
   "${log_path}"
 
-: >"${log_path}"
-PATH="${fake_bin}:${PATH}" \
+if PATH="${fake_bin}:${PATH}" \
   REPO_ROOT="${fixture_root}" \
   PGRX_TEST_PLATFORM=Linux \
   PGRX_TEST_MODE=native \
   FAKE_PGRX_LOG="${log_path}" \
-  "${fixture_root}/scripts/run-v1-pgrx-tests.sh"
-grep -q '^cargo:pgrx test --release -p context-pg pg17$' "${log_path}"
+  "${fixture_root}/scripts/run-v1-pgrx-tests.sh" \
+  2>"${work_dir}/native-mode.err"; then
+  echo "native pgrx test mode should be rejected" >&2
+  exit 1
+fi
+grep -q 'standalone pgrx test executables are unsupported' \
+  "${work_dir}/native-mode.err"
 
 if PATH="${fake_bin}:${PATH}" \
   REPO_ROOT="${fixture_root}" \
   PG_MAJOR=16 \
   PGRX_TEST_PLATFORM=Linux \
-  PGRX_TEST_MODE=native \
   FAKE_PGRX_LOG="${log_path}" \
   "${fixture_root}/scripts/run-v1-pgrx-tests.sh" \
   2>"${work_dir}/invalid-major.err"; then
@@ -226,7 +229,7 @@ if PATH="${fake_bin}:${PATH}" \
   echo "unsupported PGRX_TEST_MODE should fail" >&2
   exit 1
 fi
-grep -q 'PGRX_TEST_MODE must be in-server or native' \
+grep -q 'PGRX_TEST_MODE must be in-server' \
   "${work_dir}/invalid-mode.err"
 
 : >"${log_path}"

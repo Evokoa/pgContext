@@ -26,12 +26,8 @@ PG_FEATURE="pg${PG_MAJOR}"
 cd "${REPO_ROOT}"
 PGRX_TEST_PLATFORM="${PGRX_TEST_PLATFORM:-$(uname -s)}"
 PGRX_TEST_MODE="${PGRX_TEST_MODE:-in-server}"
-if [[ "${PGRX_TEST_MODE}" == "native" ]]; then
-  cargo pgrx test --release -p context-pg "${PG_FEATURE}"
-  exit 0
-fi
 if [[ "${PGRX_TEST_MODE}" != "in-server" ]]; then
-  echo "PGRX_TEST_MODE must be in-server or native" >&2
+  echo "PGRX_TEST_MODE must be in-server; standalone pgrx test executables are unsupported" >&2
   exit 2
 fi
 

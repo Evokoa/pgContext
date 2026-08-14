@@ -194,7 +194,10 @@ run_gate() {
       overall_status=1
     }
     if [[ "${status}" == "passed" && "${min_selected_tests}" -gt 0 ]]; then
-      selected_tests="$(awk '/^running [0-9]+ tests?/ { total += $2 } END { print total + 0 }' "${log_file}")"
+      selected_tests="$(awk '
+        /^running [0-9]+ tests?/ || /^running [0-9]+ pg_tests / { total += $2 }
+        END { print total + 0 }
+      ' "${log_file}")"
       if [[ "${selected_tests}" -lt "${min_selected_tests}" ]]; then
         {
           printf '\nexpected at least %s selected tests, saw %s\n' \
@@ -224,52 +227,12 @@ run_gate() {
 }
 
 run_gate \
-  "pgrx-search-path" \
+  "pgrx-full-suite" \
   "pgrx" \
-  "hostile search_path and shadow-catalog pg_tests" \
-  "cargo pgrx test --release -p context-pg pg${PG_MAJOR} security_definer" \
-  2 \
-  cargo pgrx test --release -p context-pg "pg${PG_MAJOR}" security_definer
-
-run_gate \
-  "pgrx-telemetry-privacy" \
-  "pgrx" \
-  "telemetry privacy pg_test rejects vector, payload, filter, and query-text storage" \
-  "cargo pgrx test --release -p context-pg pg${PG_MAJOR} telemetry_surfaces_do_not_store" \
+  "full in-server pg_test suite: hostile search_path and shadow-catalog; telemetry privacy; source-table ACL and collection ownership; point mutation ACL denial; source-table RLS and split-owner ACL; SQLSTATE contract" \
+  "PG_MAJOR=${PG_MAJOR} scripts/run-v1-pgrx-tests.sh" \
   1 \
-  cargo pgrx test --release -p context-pg "pg${PG_MAJOR}" telemetry_surfaces_do_not_store
-
-run_gate \
-  "pgrx-acl-denial" \
-  "pgrx" \
-  "source-table ACL and collection ownership denial pg_tests" \
-  "cargo pgrx test --release -p context-pg pg${PG_MAJOR} denies" \
-  10 \
-  cargo pgrx test --release -p context-pg "pg${PG_MAJOR}" denies
-
-run_gate \
-  "pgrx-point-mutation-acl" \
-  "pgrx" \
-  "point mutation ACL denial pg_test" \
-  "cargo pgrx test --release -p context-pg pg${PG_MAJOR} point_mutations_deny" \
-  1 \
-  cargo pgrx test --release -p context-pg "pg${PG_MAJOR}" point_mutations_deny
-
-run_gate \
-  "pgrx-rls-acl" \
-  "pgrx" \
-  "source-table RLS and split-owner ACL pg_tests" \
-  "cargo pgrx test --release -p context-pg pg${PG_MAJOR} rls" \
-  2 \
-  cargo pgrx test --release -p context-pg "pg${PG_MAJOR}" rls
-
-run_gate \
-  "pgrx-sqlstate-contract" \
-  "pgrx" \
-  "SQLSTATE contract for documented bad paths" \
-  "cargo pgrx test --release -p context-pg pg${PG_MAJOR} sqlstate_contract" \
-  4 \
-  cargo pgrx test --release -p context-pg "pg${PG_MAJOR}" sqlstate_contract
+  env PG_MAJOR="${PG_MAJOR}" "${REPO_ROOT}/scripts/run-v1-pgrx-tests.sh"
 
 run_gate \
   "unsafe-comments" \

@@ -18,13 +18,9 @@ failed or skipped row before checking off the release checklist.
 
 The report includes:
 
-- hostile `search_path` and shadow-catalog pgrx tests;
-- telemetry privacy pgrx tests that reject vector, payload, filter, and
-  query-text storage;
-- source-table ACL and collection ownership pgrx tests;
-- point-mutation ACL denial pgrx tests;
-- source-table RLS and split-owner ACL pgrx tests;
-- SQLSTATE contract pgrx tests;
+- the full pgrx suite executed inside PostgreSQL, including hostile
+  `search_path`, shadow-catalog, telemetry privacy, source-table ACL/RLS,
+  point-mutation denial, and SQLSTATE contract tests;
 - unsafe `SAFETY:` comment checks;
 - heavy RLS/ACL boundary coverage;
 - heavy-wrapper SQLSTATE contract coverage for the configured PostgreSQL major.

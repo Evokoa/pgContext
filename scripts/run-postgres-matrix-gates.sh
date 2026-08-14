@@ -801,10 +801,10 @@ for major in "${majors[@]}"; do
     run_gate "${major}" "context-pg-check" "${command}" "${log_file}" \
       env PG_CONFIG="${pg_config}" PG_CONFIG_VERSION="${pg_config_version}" cargo check -p context-pg --no-default-features --features "${pg_feature}"
 
-    log_file="${out_dir}/pg${major}-context-pg-test.log"
-    command="cargo test -p context-pg --no-default-features --features ${pg_feature}"
-    run_gate "${major}" "context-pg-test" "${command}" "${log_file}" \
-      env PG_CONFIG="${pg_config}" PG_CONFIG_VERSION="${pg_config_version}" cargo test -p context-pg --no-default-features --features "${pg_feature}"
+    log_file="${out_dir}/pg${major}-context-pg-test-check.log"
+    command="cargo check -p context-pg --tests --no-default-features --features ${pg_feature}"
+    run_gate "${major}" "context-pg-test-check" "${command}" "${log_file}" \
+      env PG_CONFIG="${pg_config}" PG_CONFIG_VERSION="${pg_config_version}" cargo check -p context-pg --tests --no-default-features --features "${pg_feature}"
   fi
 
   if [[ "${mode}" == "schema" || "${mode}" == "all" ]]; then
@@ -817,9 +817,9 @@ for major in "${majors[@]}"; do
 
   if [[ "${mode}" == "pgrx" || "${mode}" == "all" ]]; then
     log_file="${out_dir}/pg${major}-pgrx.log"
-    command="cargo pgrx test --release -p context-pg pg${major}"
+    command="PG_MAJOR=${major} scripts/run-v1-pgrx-tests.sh"
     run_gate "${major}" "pgrx" "${command}" "${log_file}" \
-      cargo pgrx test --release -p context-pg "pg${major}"
+      env PG_MAJOR="${major}" "${REPO_ROOT}/scripts/run-v1-pgrx-tests.sh"
   fi
 
   if [[ "${mode}" == "heavy" || "${mode}" == "all" ]]; then
