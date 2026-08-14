@@ -1,0 +1,4 @@
+huggingface-hub==0.36.0
+numpy==2.3.5
+onnxruntime==1.23.2
+transformers==4.57.3
