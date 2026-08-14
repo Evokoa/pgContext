@@ -33,7 +33,7 @@
       "sha256": "265f496ce56ef7ce6890937d3300c320e0af8bdcb5e9bcfb34128d34f10c682a"
     }
   ],
-  "navigation_sha256": "5bfea09ded1a61e65e0c1f84ea4fbd639f10f7a7df13146a3ecc74a7e637feb7",
+  "navigation_sha256": "e61aa7dfca04a3fb74d1be347749f979aa636310777bbab6c3617b0b2bd53d43",
   "pages": [
     {
       "links": [],
@@ -68,6 +68,7 @@
         "fuzzing.md",
         "hnsw_callback_contract.md",
         "postgres_module_organization.md",
+        "real_semantic_models.md",
         "release_gates.md",
         "release_matrix.md",
         "release_process.md",
@@ -81,7 +82,7 @@
         "vector_engine.md"
       ],
       "path": "contributor_guide/README.md",
-      "sha256": "c59cb6b259aa1be7255fa2fbb28cf3dcd681ae79239ac21b400daedd5ad473a4"
+      "sha256": "781d57674f4c22f314edab2beff158c786fc113c77cddc37ba5d455e0b5cf7cb"
     },
     {
       "links": [
@@ -128,6 +129,11 @@
       "sha256": "91b27bf59f2759d6a5ac650c47465aac7e6a0892078291beb9bf9a94229dd87a"
     },
     {
+      "links": [],
+      "path": "contributor_guide/real_semantic_models.md",
+      "sha256": "0abddd851864f2776402dc85d3f3e3450b0bb280ff2d5cc7f7f1cd557c8e86cb"
+    },
+    {
       "links": [
         "../../release/README.md",
         "../benchmarks/pgvector.md",
@@ -141,12 +147,12 @@
     {
       "links": [],
       "path": "contributor_guide/release_matrix.md",
-      "sha256": "08da88ba0add79326f6e39b6c8eea52650b7aa40b53e1187087053998a7f6e0a"
+      "sha256": "4aba57a4ea70ee83f8496614f753e943f6272d0c9f78a36380c20ab91b4f2ebf"
     },
     {
       "links": [],
       "path": "contributor_guide/release_process.md",
-      "sha256": "abe77ed40203cbe95a67b26e308213693fca10b7632011f497e45d20d643d434"
+      "sha256": "b2a2f0cb5c5d3febcd021f6cea770af6a8d0cd1087d098c5d3090f6b7600d282"
     },
     {
       "links": [],
@@ -204,7 +210,7 @@
         "../benchmarks/pgvector.md"
       ],
       "path": "contributor_guide/vector_engine.md",
-      "sha256": "44a7ed75b02d40b3e7f9fd4c47f1c3bd7aaf076f2d16e7925516537ae6b58bf7"
+      "sha256": "9845696f0ac20f26b0d07198aa33b70cb9170596abdd4ab94ca5f5471d23dd40"
     },
     {
       "links": [
@@ -239,7 +245,7 @@
         "user_guide/virtual_beam.md"
       ],
       "path": "index.md",
-      "sha256": "8aaefef6d0f6d77c8e4394b4b143d58183e726f65cecb934dfc224d4d854bd9c"
+      "sha256": "824c7e1708e63fbdd4a11ab3932e3281b9527da9b30c7ec58cb51b4c74da9fe0"
     },
     {
       "links": [
@@ -330,14 +336,14 @@
         "user_guide/quickstart.md"
       ],
       "path": "quickstart.md",
-      "sha256": "6010bdc79e3d2c888ab0134737c6f48a852990a5191cdd16d5910432390dc6a9"
+      "sha256": "0ea41489ce307584af056ac00b7f6aa75698e3fbc92fff37e13f08f8b63421f5"
     },
     {
       "links": [
         "user_guide/release_notes.md"
       ],
       "path": "release_notes.md",
-      "sha256": "e329e7c71dbbeffdadbda3e3a4b2c92e211a1ec5baeb28851483cf297fd4e93e"
+      "sha256": "f489a5151414745dbd1bc4da347e43bb94f037b023bedba9722a2f2bc3ee2a14"
     },
     {
       "links": [
@@ -387,7 +393,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/README.md",
-      "sha256": "e6a773a3a3b4ae8110ea7a3941204132f25a56d2ed32931d2cc53abc522a3e6a"
+      "sha256": "1b751d53ec8075f9c82b7da07b50c7436b8d948dda4294df4225c629f83d00f0"
     },
     {
       "links": [
@@ -473,12 +479,13 @@
     {
       "links": [
         "https://github.com/Evokoa/homebrew-tap",
-        "https://pgxn.org/dist/pgcontext/0.2.0/",
+        "https://pgxn.org/dist/pgcontext/0.3.0/",
         "operations.md",
+        "release_notes.md#compatibility-and-migration",
         "troubleshooting.md"
       ],
       "path": "user_guide/installation.md",
-      "sha256": "f95375d4cb6af48a903349425b38d3c61aad56937fafbf8a88a74b542c2b8dca"
+      "sha256": "b8a82af8f1889e2ded5a5fc2eae7443f3c28cbc8a6185eb2f8f13be69a20ea0c"
     },
     {
       "links": [],
@@ -496,11 +503,12 @@
     },
     {
       "links": [
-        "../benchmarks/pgvector.md",
-        "roadmap.md"
+        "release_notes.md#compatibility-and-migration",
+        "roadmap.md",
+        "supported_features.md"
       ],
       "path": "user_guide/limitations.md",
-      "sha256": "139f857f15794fe8116e92dcafd6784991c969464e6aee668e9a0aa77400717e"
+      "sha256": "712a3f1cdfc87af29a0a62161a01756feac6e3cfaa1adcc6fe889a509ccbc5f8"
     },
     {
       "links": [
@@ -540,16 +548,17 @@
         "indexes.md#build-memory-budget",
         "mailto:team@evokoa.com",
         "multi_model.md",
+        "release_notes.md#compatibility-and-migration",
         "semantic_reranking.md",
         "troubleshooting.md"
       ],
       "path": "user_guide/operations.md",
-      "sha256": "82034e57f88757e88cec4c79038fac60dcec9406295c419f648a177f6c7b5ad7"
+      "sha256": "b84149085c5fe6511ff113d0225f50e38a492af358de622d5c21b294af253605"
     },
     {
       "links": [],
       "path": "user_guide/parity_matrix.md",
-      "sha256": "2fb374b811082e4fee8418e71ccfe8b35424a7eb9079eb9feba2c8027da17f8e"
+      "sha256": "9c3f2f927f17a386d498c5bf999ac342ce89b859b74de76ec77c9bbe287d7854"
     },
     {
       "links": [
@@ -563,7 +572,7 @@
         "pgvector_coexist.md"
       ],
       "path": "user_guide/pgvector_migration.md",
-      "sha256": "e71f8444863e04856a6a5a4805c86023a66e3d85cdb33d0a49550b6530d41409"
+      "sha256": "6a81fa590b167248850fdb728479a33015d03f7edfadc457eefcf41787e193b8"
     },
     {
       "links": [
@@ -582,32 +591,24 @@
     },
     {
       "links": [
+        "#compatibility-and-migration",
+        "../contributor_guide/real_semantic_models.md",
         "api_reference.md",
-        "collections.md",
-        "filters.md",
-        "https://github.com/evokoa/pgcontext/issues",
-        "hybrid_retrieval.md",
+        "automatic_chunking.md",
         "indexes.md",
         "installation.md",
-        "installation.md",
-        "limitations.md",
-        "limitations.md",
-        "mailto:team@evokoa.com",
+        "multi_model.md",
         "operations.md",
-        "parity_matrix.md",
+        "pgvector_coexist.md",
         "pgvector_migration.md",
-        "pgvector_migration.md",
-        "playground.md",
-        "playground.md",
-        "quickstart.md",
-        "roadmap.md",
-        "roadmap.md",
-        "rollback.md",
+        "retrieval_methods.md",
+        "semantic_reranking.md",
         "support_policy.md",
-        "vector_search.md"
+        "supported_features.md",
+        "supported_features.md"
       ],
       "path": "user_guide/release_notes.md",
-      "sha256": "3a0602bf820a9eacd0daeb8ea84ac858afa0c0dd3563498de7a3028e1a0bf188"
+      "sha256": "6d39056fa329c3562ef0f611e632dbf9cbc9231d7c5f4d3cc14ac1410af8e924"
     },
     {
       "links": [
@@ -740,7 +741,7 @@
         "virtual_beam.md"
       ],
       "path": "user_guide/roadmap.md",
-      "sha256": "17d24dba48cf5590244217a15283ab293e2c92a53ba5939fa5d3d0aa3b559e29"
+      "sha256": "1c8424055cf7702b6b203b62a48b170981aaa249d7bf7a2ce4a9c9ccce6c3340"
     },
     {
       "links": [],
@@ -760,7 +761,7 @@
     {
       "links": [],
       "path": "user_guide/sql_object_inventory.md",
-      "sha256": "64919694486523644ec32be48c6bc4adb3844be36c1a94bc37e94bb8c4f181d9"
+      "sha256": "76bf7f6a7521263d60809fc0ac00e52d6a10e50bfc7da4f0973d11888039b6a9"
     },
     {
       "links": [],
@@ -770,7 +771,7 @@
     {
       "links": [],
       "path": "user_guide/support_policy.md",
-      "sha256": "725b372b2cec8be173c53cb3a6f3646651c535bcf8b2a4b55b36f69321fc607a"
+      "sha256": "338b1801012dccb13160c1270814069a86f4982cca17e6386234518e68d6ac35"
     },
     {
       "links": [
@@ -795,7 +796,7 @@
         "vector_search.md"
       ],
       "path": "user_guide/supported_features.md",
-      "sha256": "8752dcd3416d457ce137e37abca61e7516e5542f12dc8d3cae16768b6f4940a6"
+      "sha256": "05c1de23d2cdbbfabc823984e94653f44ef84add7fd511360330963df0042fa7"
     },
     {
       "links": [
@@ -864,7 +865,7 @@
         "https://evokoa.com",
         "https://github.com/Evokoa/homebrew-tap",
         "https://github.com/evokoa/pgcontext/pkgs/container/pgcontext",
-        "https://github.com/evokoa/pgcontext/releases/tag/v0.2.0",
+        "https://github.com/evokoa/pgcontext/releases/tag/v0.3.0",
         "https://github.com/evokoa/pgcontext/stargazers",
         "https://github.com/evokoa/pggraph",
         "https://github.com/evokoa/pggraph",
@@ -875,10 +876,10 @@
         "https://img.shields.io/badge/PostgreSQL-17%20%26%2018-336791?style=flat-square&amp;logo=postgresql&amp;logoColor=white",
         "https://img.shields.io/badge/docs-pgContext-0ea5e9?style=flat-square",
         "https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square",
-        "https://img.shields.io/badge/version-0.2.0-2ea44f?style=flat-square",
+        "https://img.shields.io/badge/version-0.3.0-2ea44f?style=flat-square",
         "https://img.shields.io/discord/1496159762704896022?style=for-the-badge&label=Join%20Discord&logo=discord&logoColor=white&color=5865F2",
         "https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars",
-        "https://pgxn.org/dist/pgcontext/0.2.0/",
+        "https://pgxn.org/dist/pgcontext/0.3.0/",
         "https://polygres.com",
         "https://polygres.com",
         "https://polygres.com",
@@ -891,19 +892,19 @@
         "playground/demo.sql"
       ],
       "path": "README.md",
-      "sha256": "58d73e5d8612c52c25bdbea86991541d80e0b6473dc463957e4e31938e6072ed"
+      "sha256": "da61cd5e81622f52d08e7d5dc7819f9b6b7b6f24bb8702717f9493c1e98fc850"
     },
     {
       "links": [],
       "path": "CONTRIBUTING.md",
-      "sha256": "441ef75c352e456c23ed615eeaa79cff3bcee5917c9ec557872e850f6e2e0081"
+      "sha256": "3aa1214725a9bbe8b9e9718ee90e5b381bdea25996d88bef30d21a267050ef13"
     },
     {
       "links": [
         "mailto:team@evokoa.com"
       ],
       "path": "SECURITY.md",
-      "sha256": "771deadcce9a0478e56b00948685529a42fac654ca5aee0f29d092cb8a41c88a"
+      "sha256": "01eba0cf077de8cbd9a4708ca1956474157c8b112f660e14996023bef500e00e"
     },
     {
       "links": [],
@@ -916,7 +917,7 @@
         "../docs/contributor_guide/release_process.md"
       ],
       "path": "release/README.md",
-      "sha256": "a4e9f0f3436af5abcaac27d0297d4264c25f13d04f4d7102fcd33fb0da6feeb5"
+      "sha256": "d1d1998ace50e0ee497b715a156be65edd2f3070ae9515de31b2e3222661e331"
     }
   ],
   "renderer": "github-markdown",

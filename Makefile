@@ -2,11 +2,11 @@ EXTENSION := pgcontext
 PACKAGE := context-pg
 PG_CONFIG ?= pg_config
 PGRX ?= cargo pgrx
-TAG ?= v0.2.0
+TAG ?= v0.3.0
 PG_MAJOR := $(shell $(PG_CONFIG) --version 2>/dev/null | sed -E 's/[^0-9]*([0-9]+).*/\1/')
 PG_FEATURE := pg$(PG_MAJOR)
 
-.PHONY: all check-supported-pg install install-pgcontext-upgrades installcheck package quickstart clean
+.PHONY: all check-supported-pg install installcheck package quickstart install-real-semantic-models test-real-semantic-models test-real-semantic-models-postgres clean
 
 all: package
 
@@ -19,10 +19,6 @@ check-supported-pg:
 install: check-supported-pg
 	$(PGRX) install -p $(PACKAGE) --pg-config $(PG_CONFIG) --release \
 		--no-default-features --features $(PG_FEATURE)
-	$(MAKE) install-pgcontext-upgrades
-
-install-pgcontext-upgrades: check-supported-pg
-	scripts/install-pgcontext-upgrades.sh $(PG_CONFIG)
 
 installcheck: check-supported-pg
 	$(PGRX) test -p $(PACKAGE) $(PG_FEATURE)
@@ -32,6 +28,15 @@ package:
 
 quickstart:
 	scripts/quickstart.sh
+
+install-real-semantic-models:
+	scripts/install-real-semantic-models.sh
+
+test-real-semantic-models:
+	scripts/run-real-semantic-model-smoke.sh
+
+test-real-semantic-models-postgres:
+	scripts/run-real-semantic-postgres-smoke.sh
 
 clean:
 	cargo clean

@@ -12,6 +12,7 @@ Whether you're fixing bugs, optimizing vector operations, or simply looking to u
 - [Storage and memory](storage_memory.md)
 - [Scripts and generated contracts](scripts.md)
 - [Testing](testing.md)
+- [Optional real semantic model tests](real_semantic_models.md)
 - [Benchmark methodology](benchmark_methodology.md)
 - [Fuzzing](fuzzing.md)
 - [HNSW callback boundary](hnsw_callback_contract.md)
@@ -35,7 +36,7 @@ cargo clippy -p context-pg --all-targets --features pg17 -- -D warnings
 cargo test --workspace --exclude context-pg --all-features
 cargo check -p context-pg --features pg17
 scripts/run-v1-pgrx-tests.sh
-cargo pgrx schema -p context-pg pg17 --out /tmp/pgcontext--0.2.0.generated.sql
+cargo pgrx schema -p context-pg pg17 --out /tmp/pgcontext--0.3.0.generated.sql
 scripts/check-extension-sql-artifact.sh --pg-major 17
 scripts/check-hnsw-vacuum.sh
 scripts/check-hnsw-restart.sh

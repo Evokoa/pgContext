@@ -29,6 +29,13 @@ or making previously valid stable input fail without an explicit migration path.
 
 ## Upgrades
 
+pgContext 0.3.0 is a declared clean-install baseline. It has no in-place update
+from 0.1 or 0.2; operators preserve authoritative source rows, recreate
+extension-owned registrations, and rebuild derived artifacts according to the
+release notes. This one-time baseline break is recorded in
+`release/clean-install-baselines.data` so release gates do not mistake the
+absence of historical SQL for an untested upgrade.
+
 Extension update scripts must not scan user data, start index builds, or mutate
 user-owned source tables. Upgrades may update pgContext-owned catalogs and SQL
 objects, then operators should run smoke checks for collection metadata, exact

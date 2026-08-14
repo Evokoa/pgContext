@@ -260,6 +260,10 @@
           "path": "contributor_guide/testing.md"
         },
         {
+          "title": "Optional real semantic model tests",
+          "path": "contributor_guide/real_semantic_models.md"
+        },
+        {
           "title": "Benchmark methodology",
           "path": "contributor_guide/benchmark_methodology.md"
         },

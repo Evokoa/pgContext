@@ -1,21 +1,23 @@
 # Installation
 
-pgContext 0.2 supports PostgreSQL 17 and 18. Extension binaries, development
+pgContext 0.3 supports PostgreSQL 17 and 18. Extension binaries, development
 headers, `pg_config`, and the running server must all use the same major version.
 Installing a build into a different major is unsupported.
 
-`CREATE EXTENSION pgcontext` and extension updates must be run by a PostgreSQL
-superuser because pgContext installs a custom access method. Application roles
-do not need superuser privileges to use granted pgContext APIs.
+`CREATE EXTENSION pgcontext` must be run by a PostgreSQL superuser because
+pgContext installs custom access methods. Application roles do not need
+superuser privileges to use granted pgContext APIs. Version 0.3.0 is a
+clean-install baseline and has no 0.1/0.2 extension update script; see the
+[release notes](release_notes.md#compatibility-and-migration).
 
 ## Installation Methods
 
 | Method | Host | Builds locally | Availability |
 |---|---|---:|---|
-| GHCR image | Docker on Linux, macOS, or Windows | No | With the v0.2.0 release |
+| GHCR image | Docker on Linux, macOS, or Windows | No | With the v0.3.0 release |
 | Manual source | Linux/macOS, or Windows through WSL2 | Yes | From the checkout or source archive |
 | Local Compose playground | Docker on Linux, macOS, or Windows | Yes | From the checkout |
-| PGXN | Linux/macOS source hosts | Yes | Available for 0.2.0 |
+| PGXN | Linux/macOS source hosts | Yes | Available for 0.3.0 |
 | Homebrew | macOS with Homebrew PostgreSQL 17 | Yes | Available from the Evokoa tap |
 
 Shell scripts target Bash. On Windows, use Docker Desktop with WSL2 and run
@@ -24,17 +26,17 @@ shells. The image itself supports `linux/amd64` and `linux/arm64`.
 
 ## Prebuilt Docker image
 
-The prebuilt images for this release use the v0.2.0 tag. Replace `17` with
+The prebuilt images for this release use the v0.3.0 tag. Replace `17` with
 `18` to select the other supported server major:
 
 ```sh
-docker pull ghcr.io/evokoa/pgcontext:pg17-v0.2.0
+docker pull ghcr.io/evokoa/pgcontext:pg17-v0.3.0
 docker run -d --rm \
   --name pgcontext \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pgcontext \
   -p 5432:5432 \
-  ghcr.io/evokoa/pgcontext:pg17-v0.2.0
+  ghcr.io/evokoa/pgcontext:pg17-v0.3.0
 ```
 
 Verify PostgreSQL, the extension, dense HNSW, and metadata filtering:
@@ -48,8 +50,8 @@ docker exec -i pgcontext psql -U postgres -d pgcontext -v ON_ERROR_STOP=1 \
 ```
 
 Use the immutable manifest digest from the published release for controlled
-deployments. Every major has immutable `pgMAJOR-v0.2.0` and
-`pgMAJOR-0.2.0` aliases plus a rolling `pgMAJOR` alias. PostgreSQL 17 also owns
+deployments. Every major has immutable `pgMAJOR-v0.3.0` and
+`pgMAJOR-0.3.0` aliases plus a rolling `pgMAJOR` alias. PostgreSQL 17 also owns
 the unqualified immutable version aliases and rolling `latest` alias.
 
 Cleanup:
@@ -60,8 +62,8 @@ docker stop pgcontext
 
 ## PGXN source installation
 
-pgContext 0.2.0 is available from
-[PGXN](https://pgxn.org/dist/pgcontext/0.2.0/).
+pgContext 0.3.0 is available from
+[PGXN](https://pgxn.org/dist/pgcontext/0.3.0/).
 
 Prerequisites:
 
@@ -85,7 +87,7 @@ extension name.
 ## Homebrew
 
 The [Evokoa Homebrew tap](https://github.com/Evokoa/homebrew-tap) builds
-pgContext 0.2.0 against Homebrew `postgresql@17` and installs the PostgreSQL
+pgContext 0.3.0 against Homebrew `postgresql@17` and installs the PostgreSQL
 extension files:
 
 ```sh
@@ -154,7 +156,7 @@ volume for Docker (`scripts/quickstart.sh clean`).
 - `permission denied` during install: use the filesystem privilege model for
   that PostgreSQL installation while preserving `PG_CONFIG`.
 - image tag not found or PGXN distribution missing: these artifacts are
-  published with the v0.2.0 release; until then, use local Compose or a manual
+  published with the v0.3.0 release; until then, use local Compose or a manual
   source build.
 - extension cannot be dropped: identify dependent vector columns/tables and
   remove them deliberately; do not use `CASCADE` without review.

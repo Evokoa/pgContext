@@ -12,17 +12,17 @@ restricted-online rewrite because the sparse physical layouts differ. See
 [Trying pgContext on an Existing pgvector Database](pgvector_coexist.md) for
 the live workflow and inventory tools.
 
-### Upgrading a pgvector-first 0.1 install
+### Moving a 0.1 or 0.2 installation to 0.3
 
-The 0.1→0.2 extension update deliberately refuses this legacy layout before
-mutation because `public.vector` belongs to pgvector. Export pgContext
-collection/vector/filter registrations and inventory every object depending on
-the old pgContext extension before any `DROP EXTENSION ... CASCADE`; CASCADE can
-remove application views/functions as well as indexes. Then install the current
-pgContext extension, enable its pgvector binding, recreate the registrations
-and dependent objects, and rebuild `pgcontext_hnsw` indexes over the original
-unchanged pgvector columns. The upgrade preflight never rewrites or retypes
-those columns.
+0.3.0 is a clean-install baseline and has no in-place extension update from
+0.1 or 0.2. Export pgContext collection, vector, profile, and filter
+registrations and inventory every object depending on the old pgContext
+extension before any `DROP EXTENSION ... CASCADE`; CASCADE can remove
+application views and functions as well as indexes. Preserve the pgvector-owned
+source columns, install the current pgContext extension, enable its pgvector
+binding, recreate the registrations and dependent objects, and rebuild
+`pgcontext_hnsw` or `pgcontext_ivfflat` indexes over the unchanged pgvector
+columns. This workflow does not rewrite or retype those source columns.
 
 Explicit pgContext HNSW opclasses cover half and sparse L2, inner product,
 cosine, and L1, plus bit Hamming and Jaccard. The names and metric bindings are

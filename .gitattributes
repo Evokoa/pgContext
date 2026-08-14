@@ -1,4 +1,1 @@
-sql/pgcontext--0.1.0.sql whitespace=-blank-at-eol,-blank-at-eof
-sql/pgcontext--0.1.0--0.2.0.sql whitespace=-blank-at-eol,-blank-at-eof
-sql/pgcontext--0.2.0.sql whitespace=-blank-at-eol,-blank-at-eof
-sql/pgcontext_pgvector--0.2.0.sql whitespace=-blank-at-eol,-blank-at-eof
+sql/pgcontext--0.3.0.sql whitespace=-blank-at-eol,-blank-at-eof

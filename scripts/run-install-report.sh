@@ -186,7 +186,7 @@ package_source() {
 install_source() {
   cd "${WORK_DIR}/source/pgContext-${VERSION}"
   make install PG_CONFIG="${PG_CONFIG_BIN}"
-  test -f "$("${PG_CONFIG_BIN}" --sharedir)/extension/pgcontext--0.1.0--0.2.0.sql"
+  test -f "$("${PG_CONFIG_BIN}" --sharedir)/extension/pgcontext--${VERSION}.sql"
 }
 
 source_demo() {

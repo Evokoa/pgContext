@@ -26,8 +26,8 @@
   <a href="https://github.com/evokoa/pgcontext/stargazers">
     <img src="https://img.shields.io/github/stars/evokoa/pgcontext?style=flat-square&logo=github&label=stars" alt="GitHub stars">
   </a>
-  <a href="https://github.com/evokoa/pgcontext/releases/tag/v0.2.0">
-    <img src="https://img.shields.io/badge/version-0.2.0-2ea44f?style=flat-square" alt="Version 0.2.0">
+  <a href="https://github.com/evokoa/pgcontext/releases/tag/v0.3.0">
+    <img src="https://img.shields.io/badge/version-0.3.0-2ea44f?style=flat-square" alt="Version 0.3.0">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="Apache-2.0 license">
@@ -193,29 +193,36 @@ semantics.
 
 ## Roadmap
 
-pgContext 0.2.0 extends the V1 foundation with the first complete advanced
-retrieval pipeline. It now includes:
+pgContext 0.3.0 extends the V1 foundation with a bounded advanced-retrieval
+pipeline. It now includes:
 
-- **Broader vector indexing.** First-class non-dense HNSW opclasses, named
-  sparse ANN, and scalar/product/binary quantized traversal with exact rerank.
-- **Composable retrieval.** Typed dense, filtered, sparse, full-text,
-  quantized, recommendation, lookup, and late-interaction branches with
-  weighted or reciprocal-rank fusion.
+- **Broader vector indexing.** Non-dense and integer HNSW, Stable quantized
+  serving with exact rerank, segmented maintenance, and Experimental native
+  IVFFlat.
+- **Composable retrieval.** Stable typed composite execution, PostgreSQL-native
+  lexical retrieval, and multi-model weighted reciprocal-rank fusion alongside
+  dense, sparse, filtered, fuzzy, quantized, recommendation, lookup, and
+  late-interaction branches.
+- **Semantic infrastructure.** Experimental detached reranking and automatic
+  source-linked chunking, with optional revision-pinned real-model smokes but no
+  bundled model weights.
 - **Owned serving infrastructure.** Internally maintained late-interaction
-  tokens, immutable mapped HNSW generations, and automatic bounded execution
-  telemetry.
-- **pgvector migration.** A certified PostgreSQL 17 bridge, preflight and
-  adoption tooling, and lossless resumable conversion for the supported
-  profile without requiring a new application vector column.
+  tokens, immutable mapped generations, supervised jobs, automatic bounded
+  telemetry, a lazy HNSW cursor, and the internal bounded virtual beam.
+- **pgvector migration.** A certified PostgreSQL 17 and 18 main-extension
+  binding, conflict-safe name facade, preflight/adoption tooling, and resumable
+  HNSW/IVFFlat ownership conversion without requiring a new application vector
+  column.
 - **Graph-augmented retrieval.** We plan to bring graph capabilities from our
   sister extension **[pgGraph](https://github.com/evokoa/pggraph)** into
   pgContext, so vector results can expand and re-rank along the relationships in
   your data (the pattern behind GraphRAG), without leaving Postgres or copying
   data between systems.
 
-Still to come: certification at 10M vectors, measured x86 performance numbers,
-support for more PostgreSQL majors, a TurboQuant evaluation, and full pgvector
-name compatibility. See the [known limitations](docs/user_guide/limitations.md),
+Still to come: broader 1M/10M IVFFlat and HNSW certification, production model
+adapters and embedding jobs, topology-backed mixed retrieval, additional
+PostgreSQL majors, and longer platform/security campaigns. See the
+[known limitations](docs/user_guide/limitations.md),
 [product roadmap](docs/user_guide/roadmap.md), and full
 [roadmap](docs/roadmap.md).
 
@@ -236,13 +243,13 @@ Windows. Choose the matching `pgMAJOR-vVERSION` tag; unqualified version tags
 continue to select PostgreSQL 17.
 
 ```sh
-docker pull ghcr.io/evokoa/pgcontext:pg17-v0.2.0
+docker pull ghcr.io/evokoa/pgcontext:pg17-v0.3.0
 docker run -d --rm \
   --name pgcontext \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=pgcontext \
   -p 5432:5432 \
-  ghcr.io/evokoa/pgcontext:pg17-v0.2.0
+  ghcr.io/evokoa/pgcontext:pg17-v0.3.0
 ```
 
 Wait for PostgreSQL to accept connections, then verify the extension is loaded
@@ -283,7 +290,7 @@ shell support, verification, uninstall, cleanup, and troubleshooting.
 ### Homebrew
 
 The [Evokoa Homebrew tap](https://github.com/Evokoa/homebrew-tap) installs
-pgContext 0.2.0 for Homebrew `postgresql@17`. The formula builds from source
+pgContext 0.3.0 for Homebrew `postgresql@17`. The formula builds from source
 and installs PostgreSQL extension files; it does not add a `pgcontext` command
 to your shell.
 
@@ -303,8 +310,8 @@ psql -X -v ON_ERROR_STOP=1 -d postgres \
 
 ### PGXN
 
-pgContext 0.2.0 is available from
-[PGXN](https://pgxn.org/dist/pgcontext/0.2.0/). With PostgreSQL 17 or 18,
+pgContext 0.3.0 is available from
+[PGXN](https://pgxn.org/dist/pgcontext/0.3.0/). With PostgreSQL 17 or 18,
 its matching server development headers, Rust 1.96.0, and `cargo-pgrx` 0.19.1
 installed:
 

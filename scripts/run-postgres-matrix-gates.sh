@@ -400,6 +400,7 @@ run_gate() {
   local finished
   local status="passed"
   local exit_code=0
+  local current_version
 
   started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   if [[ "${dry_run}" -eq 1 ]]; then
@@ -428,8 +429,22 @@ run_gate() {
     }
     if [[ "${status}" == "passed" && "${gate}" == "heavy:upgrade_matrix" ]]; then
       if grep -q "No previous pgcontext SQL versions are present" "${log_file}"; then
-        status="skipped"
-        printf '\nupgrade_from_previous: skipped; no previous SQL versions are present\n' >>"${log_file}"
+        current_version=""
+        if [[ -f "${REPO_ROOT}/crates/context-pg/pgcontext.control" ]]; then
+          current_version="$(sed -n "s/^default_version = '\([^']*\)'/\1/p" \
+            "${REPO_ROOT}/crates/context-pg/pgcontext.control")"
+        fi
+        if [[ -n "${current_version}" \
+          && -f "${REPO_ROOT}/release/clean-install-baselines.data" ]] \
+          && awk -F'|' -v version="${current_version}" \
+          'NR > 1 && $1 == version { found = 1 } END { exit !found }' \
+          "${REPO_ROOT}/release/clean-install-baselines.data"; then
+          printf '\nupgrade_from_previous: not_applicable; %s is a declared clean-install baseline\n' \
+            "${current_version}" >>"${log_file}"
+        else
+          status="skipped"
+          printf '\nupgrade_from_previous: skipped; no previous SQL versions are present\n' >>"${log_file}"
+        fi
       elif ! grep -Eq '^upgrade_path_exercised: [^[:space:]]+ -> [^[:space:]]+$' "${log_file}"; then
         status="failed"
         exit_code=1
@@ -662,7 +677,9 @@ run_gate() {
     shasum -a 256 "${schema_file}" >>"${log_file}"
   fi
   if [[ "${gate}" == "heavy:upgrade_matrix" && "${status}" == "passed" ]]; then
-    printf 'upgrade_from_previous: passed\n' >>"${log_file}"
+    if ! grep -q '^upgrade_from_previous: not_applicable;' "${log_file}"; then
+      printf 'upgrade_from_previous: passed\n' >>"${log_file}"
+    fi
   fi
   {
     printf 'matrix gate status: %s\n' "${status}"

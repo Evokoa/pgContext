@@ -6,9 +6,9 @@ WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pgcontext-release-validation.XXXXXX")"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
 cd "${ROOT}"
-scripts/validate-release.py --tag v0.2.0
+scripts/validate-release.py --tag v0.3.0
 
-if scripts/validate-release.py --tag 0.2.0 >"${WORK_DIR}/bad-tag.log" 2>&1; then
+if scripts/validate-release.py --tag 0.3.0 >"${WORK_DIR}/bad-tag.log" 2>&1; then
   echo "release validation accepted a tag without the v prefix" >&2
   exit 1
 fi

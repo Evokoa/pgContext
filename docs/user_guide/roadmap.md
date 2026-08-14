@@ -4,11 +4,11 @@ This document describes pgContext's product direction and release-engineering
 plans following the installable GitHub V1 launch.
 
 It outlines broad product direction, not an implementation checklist. Items
-marked complete are implemented for 0.2.0; remaining items describe later work.
+marked complete are implemented for 0.3.0; remaining items describe later work.
 
 A feature listed here remains "planned" until its public capability row and
 release notes announce its arrival. The document began as a post-V1 plan and
-now records completed 0.2 work and remaining direction. A roadmap item only becomes release-blocking once it is
+now records completed 0.3 work and remaining direction. A roadmap item only becomes release-blocking once it is
 selected into a future dependency-ordered build or release plan.
 
 The product goal is a PostgreSQL-native AI search engine into which an
@@ -36,7 +36,7 @@ without building a second database inside the extension.
 ## Frequently asked since 0.1.0
 
 For transparency, here is where the capabilities most often requested after
-0.1.0 stand in 0.2.0 and where the remaining work is headed:
+0.1.0 stand in 0.3.0 and where the remaining work is headed:
 
 - **Faster index builds** — pgvector currently builds HNSW indexes faster.
   Closing that gap is planned through parallel-build efficiency and
@@ -98,10 +98,10 @@ For transparency, here is where the capabilities most often requested after
   non-supporting PostgreSQL 19 beta/RC readiness lane may run once the pinned
   pgrx toolchain supports the selected prerelease; that lane produces no
   package, compatibility, or support claim.
-- **Drop-in pgvector name compatibility** — the certified companion bridge now
-  builds pgContext indexes on existing `vector`, `halfvec`, and bounded
-  `sparsevec` columns without data movement; full unqualified name
-  compatibility is sequenced later. See
+- **Drop-in pgvector name compatibility** — the certified main-extension
+  binding builds pgContext indexes on existing `vector`, `halfvec`, and bounded
+  `sparsevec` columns without data movement; the optional name facade can be
+  enabled when the `hnsw` and `ivfflat` names are free. See
   [pgvector Migration and Compatibility](#pgvector-migration-and-compatibility).
 - **Changing embedding models without re-embedding everything** — planned as
   mixed-profile late fusion rather than vector-space translation. Old and new

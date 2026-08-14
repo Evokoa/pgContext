@@ -298,15 +298,20 @@ The detailed symptom-to-action runbook is in
 
 ## Upgrades
 
-Install and upgrade the extension with ordinary PostgreSQL extension workflows
-as a PostgreSQL superuser. pgContext creates an access method, and the supported
-standalone 0.1-to-0.2 update also performs a version-pinned extension-namespace
-catalog repair. Fresh 0.2 SQL types live in `pgcontext`; qualify them (for
-example, `pgcontext.vector`) or deliberately add `pgcontext` to the application
-role/database `search_path`.
-Upgrade scripts must not discover user data or start index builds during
-extension installation. After an upgrade, run smoke queries against collection
-registration, exact search, filters, telemetry, and any deployed index paths.
+pgContext 0.3.0 is a clean-install baseline. It does not ship a 0.1-to-0.3 or
+0.2-to-0.3 extension update script. Back up the database, inventory dependencies,
+preserve or export authoritative source rows, install 0.3.0 cleanly, recreate
+registrations, and rebuild derived indexes and artifacts. Do not use
+`DROP EXTENSION ... CASCADE` until every dependent application object has been
+reviewed. The complete procedure is in the
+[0.3.0 release notes](release_notes.md#compatibility-and-migration).
+
+Fresh SQL types live in `pgcontext`; qualify them (for example,
+`pgcontext.vector`) or deliberately add `pgcontext` to the application
+role/database `search_path`. Future update scripts must not discover user data
+or start index builds during extension installation. After any future update,
+run smoke queries against collection registration, exact search, filters,
+telemetry, and every deployed index path.
 
 ## Normal PostgreSQL Indexes
 

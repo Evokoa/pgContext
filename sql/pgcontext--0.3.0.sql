@@ -13308,4 +13308,3 @@ CREATE FUNCTION "_sync_pgvector_ownership_columns"()
 	LANGUAGE c
 	AS 'MODULE_PATHNAME', '_sync_pgvector_ownership_columns_wrapper';
 /* </end connected objects> */
-

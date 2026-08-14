@@ -4,7 +4,7 @@ pgContext is an open-source PostgreSQL extension for AI vector and hybrid
 retrieval.
 
 This guide distinguishes stable, implemented behavior from experimental and
-planned paths. pgContext 0.2.0 targets PostgreSQL 17 and 18.
+planned paths. pgContext 0.3.0 targets PostgreSQL 17 and 18.
 
 ## Current Status
 

@@ -673,6 +673,30 @@ grep -qF 'upgrade_from_previous: skipped; no previous SQL versions are present' 
 grep -qF 'matrix gate status: skipped' "${work_dir}/heavy-skip/pg17-heavy-upgrade_matrix.log"
 grep -qF 'matrix gate exit code: 0' "${work_dir}/heavy-skip/pg17-heavy-upgrade_matrix.log"
 
+mkdir -p "${heavy_root}/crates/context-pg" "${heavy_root}/release"
+cat >"${heavy_root}/crates/context-pg/pgcontext.control" <<'CONTROL'
+default_version = '0.3.0'
+CONTROL
+cat >"${heavy_root}/release/clean-install-baselines.data" <<'BASELINES'
+Version|Reason
+0.3.0|test clean-install baseline
+BASELINES
+env \
+  PATH="${fake_bin}:${PATH}" \
+  FAKE_CARGO_LOG="${work_dir}/heavy-clean-baseline-cargo.log" \
+  PG17_CONFIG="${work_dir}/pg17-matrix/bin/pg_config" \
+  REPO_ROOT="${heavy_root}" \
+  "${REPO_ROOT}/scripts/run-postgres-matrix-gates.sh" \
+    --major 17 \
+    --mode heavy \
+    --out-dir "${work_dir}/heavy-clean-baseline"
+grep -qF $'pg17\theavy:upgrade_matrix\tpassed\t0' \
+  "${work_dir}/heavy-clean-baseline/summary.tsv"
+grep -qF 'upgrade_from_previous: not_applicable; 0.3.0 is a declared clean-install baseline' \
+  "${work_dir}/heavy-clean-baseline/pg17-heavy-upgrade_matrix.log"
+grep -qF 'matrix gate status: passed' \
+  "${work_dir}/heavy-clean-baseline/pg17-heavy-upgrade_matrix.log"
+
 cat >"${heavy_root}/tests/heavy/upgrade_matrix.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail

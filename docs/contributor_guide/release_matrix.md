@@ -65,10 +65,11 @@ approval; rerun the missing PostgreSQL majors on CI or a release host with the
 matching development files installed before checking off the matrix gate.
 Matrix reports mark approval as `incomplete` whenever any row is skipped,
 failed, missing, or dry-run.
-Before the first released upgrade fixture exists, the `heavy:upgrade_matrix`
-row records current-version lifecycle coverage and is marked skipped for
-upgrade-from-previous evidence. Do not use that skipped row to check off upgrade
-coverage without an explicit release waiver.
+For a version listed in `release/clean-install-baselines.data`, the
+`heavy:upgrade_matrix` row records current-version lifecycle and failed-update
+rollback coverage, then marks upgrade-from-previous as not applicable. An
+unlisted version with no previous install SQL remains skipped and cannot close
+release approval.
 
 The release-gates workflow also runs the all-major report directly with
 `scripts/run-postgres-matrix-gates.sh --mode all --out-dir
@@ -127,9 +128,9 @@ The source publication payload is version-neutral and unsigned. Build it twice,
 verify its complete checksum manifest, SBOM, provenance, and policy:
 
 ```sh
-release/build-packages.sh --out-dir target/release-payload v0.2.0
+release/build-packages.sh --out-dir target/release-payload v0.3.0
 scripts/verify-release-payload.py \
-  --tag v0.2.0 \
+  --tag v0.3.0 \
   --candidate-sha "$(git rev-parse HEAD)" \
   target/release-payload
 ```

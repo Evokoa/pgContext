@@ -84,7 +84,6 @@ def main() -> None:
             f"{prefix}crates/context-pg/Cargo.toml",
             f"{prefix}pgcontext.control",
             f"{prefix}sql/pgcontext--{version}.sql",
-            f"{prefix}sql/pgcontext--0.1.0--0.2.0.sql",
         }
         missing = sorted(required - files.keys())
         if missing:
