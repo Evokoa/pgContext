@@ -1,6 +1,8 @@
 //! Serving-cache, revision, and telemetry unit tests split from
 //! `tests.rs` to keep both under the source-hygiene size target.
 
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
 use super::*;
 
 #[test]

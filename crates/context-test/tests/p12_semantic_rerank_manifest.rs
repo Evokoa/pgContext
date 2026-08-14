@@ -3,6 +3,7 @@
 use context_query::{
     MAX_RERANK_CANDIDATES, MAX_RERANK_QUERY_BYTES, MAX_RERANK_REQUEST_BYTES, MAX_RERANK_TEXT_BYTES,
 };
+
 use context_test::{
     P12_ADAPTER, P12_ARTIFACT_BYTES, P12_ARTIFACT_SHA256, P12_BREAKER_COOLDOWN_MICROS,
     P12_BREAKER_FAILURES, P12_CANDIDATE_COUNT, P12_COLD_START_MICROS, P12_DATASET_REVISION,
@@ -15,6 +16,8 @@ use context_test::{
     P12_REQUIRED_PLATFORMS, P12_SCORE_CONTRACT, P12_SEMANTIC_RERANK_GATES, P12_TOKENIZER_REVISION,
     P12_TOP_K, P12_WORKLOAD_REVISION, P12_WORKLOAD_SHA256, p12_semantic_rerank_manifest_hash,
 };
+
+const _: () = assert!(P12_CANDIDATE_COUNT <= MAX_RERANK_CANDIDATES);
 
 #[test]
 fn p12_manifest_freezes_quality_latency_cost_and_resilience_before_measurement() {
@@ -61,7 +64,6 @@ fn p12_manifest_freezes_the_worker_wire_artifact_and_token_contract() {
 
 #[test]
 fn p12_manifest_is_inside_the_query_owned_envelope_bounds() {
-    assert!(P12_CANDIDATE_COUNT <= MAX_RERANK_CANDIDATES);
     assert_eq!(MAX_RERANK_QUERY_BYTES, 64 * 1024);
     assert_eq!(MAX_RERANK_TEXT_BYTES, 32 * 1024);
     assert_eq!(MAX_RERANK_REQUEST_BYTES, 4 * 1024 * 1024);

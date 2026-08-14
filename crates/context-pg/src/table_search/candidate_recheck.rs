@@ -1224,6 +1224,7 @@ fn raise_quantized_codec_error(error: CodecError) -> ! {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod mmap_memory_tests {
     use super::*;
 

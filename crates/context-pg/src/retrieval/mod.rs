@@ -2,7 +2,7 @@
 
 mod lexical;
 mod sparse;
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(feature = "pg_test")]
 pub(crate) use lexical::lexical_filter_parameter_memory;
 pub(crate) use lexical::{LexicalStrategy, lexical_headline_rows};
 pub(crate) use sparse::{SparseCandidateStrategy, run_sparse_query};
@@ -1764,6 +1764,7 @@ fn recommendation_preparation_memory_limit(limit: usize, budget: PortBudget) -> 
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::items_after_test_module)]
 mod candidate_budget_tests {
     use std::cell::Cell;
 

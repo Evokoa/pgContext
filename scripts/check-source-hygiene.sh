@@ -24,16 +24,18 @@ else
 fi
 
 large_file_allowlist="scripts/source-hygiene-large-files.data"
+hygiene_failed=0
 while IFS='|' read -r oversized_file line_count; do
   [[ -n "${oversized_file}" ]] || continue
   maximum="$(awk -F'|' -v path="${oversized_file}" '$1 == path { print $2 }' "${large_file_allowlist}")"
   if [[ -z "${maximum}" ]]; then
     echo "Rust source file exceeds 1,000 lines without a reviewed size pin: ${oversized_file} (${line_count})"
-    exit 1
+    hygiene_failed=1
+    continue
   fi
   if (( line_count > maximum )); then
     echo "Pinned large Rust source grew: ${oversized_file} (${line_count} > ${maximum})"
-    exit 1
+    hygiene_failed=1
   fi
 done <<<"${oversized_files}"
 
@@ -41,17 +43,18 @@ while IFS='|' read -r pinned_file maximum; do
   [[ -n "${pinned_file}" && "${pinned_file}" != \#* ]] || continue
   if [[ ! -f "${pinned_file}" ]]; then
     echo "Pinned large Rust source is missing: ${pinned_file}"
-    exit 1
+    hygiene_failed=1
+    continue
   fi
   line_count="$(wc -l <"${pinned_file}")"
   if (( line_count <= 1000 )); then
     echo "Large-source pin is stale and must be removed: ${pinned_file} (${line_count})"
-    exit 1
-  fi
-  if (( maximum < line_count )); then
-    echo "Pinned large Rust source exceeds its reviewed size: ${pinned_file} (${line_count} > ${maximum})"
-    exit 1
+    hygiene_failed=1
   fi
 done <"${large_file_allowlist}"
+
+if (( hygiene_failed != 0 )); then
+  exit 1
+fi
 
 scripts/check-unsafe-safety-comments.sh
