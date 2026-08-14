@@ -135,6 +135,31 @@ jobs:
           elif ! sudo pg_ctlcluster 17 main status; then
             sudo pg_ctlcluster 17 main start
           fi
+          pg_port="$(
+            pg_lsclusters --no-header |
+              awk '$1 == "17" && $2 == "main" { print $3; exit }'
+          )"
+          if [[ ! "${pg_port}" =~ ^[0-9]+$ ]]; then
+            echo "could not resolve the PostgreSQL 17 main cluster port" >&2
+            pg_lsclusters >&2
+            exit 1
+          fi
+          ready=false
+          for _ in $(seq 1 30); do
+            if sudo -u postgres /usr/lib/postgresql/17/bin/pg_isready \
+              -p "${pg_port}" -d postgres
+            then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "${ready}" != true ]]; then
+            echo "PostgreSQL 17 main did not become ready on port ${pg_port}" >&2
+            pg_lsclusters >&2
+            exit 1
+          fi
+          echo "PGCONTEXT_CI_PG_PORT=${pg_port}" >> "${GITHUB_ENV}"
       - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4
         with:
           path: |
@@ -152,15 +177,22 @@ jobs:
             --no-default-features --features pg17 --release
       - name: Coexist verification
         run: |
-          PGCONTEXT_COEXIST_PSQL="sudo -u postgres psql" scripts/check-pgvector-coexist.sh
-          PGCONTEXT_BRIDGE_PSQL="sudo -u postgres psql" scripts/check-pgvector-bridge.sh
-          PGCONTEXT_CONVERSION_PSQL="sudo -u postgres psql" \
-            PGCONTEXT_CONVERSION_PG_DUMP="sudo -u postgres pg_dump" \
-            PGCONTEXT_CONVERSION_PG_RESTORE="sudo -u postgres pg_restore" \
+          postgres_psql="sudo -u postgres psql -p ${PGCONTEXT_CI_PG_PORT}"
+          postgres_dump="sudo -u postgres pg_dump -p ${PGCONTEXT_CI_PG_PORT}"
+          postgres_restore="sudo -u postgres pg_restore -p ${PGCONTEXT_CI_PG_PORT}"
+          PGCONTEXT_COEXIST_PSQL="${postgres_psql}" scripts/check-pgvector-coexist.sh
+          PGCONTEXT_BRIDGE_PSQL="${postgres_psql}" \
+            PGCONTEXT_BRIDGE_PG_DUMP="${postgres_dump}" \
+            PGCONTEXT_BRIDGE_PG_RESTORE="${postgres_restore}" \
+            scripts/check-pgvector-bridge.sh
+          PGCONTEXT_CONVERSION_PSQL="${postgres_psql}" \
+            PGCONTEXT_CONVERSION_PG_DUMP="${postgres_dump}" \
+            PGCONTEXT_CONVERSION_PG_RESTORE="${postgres_restore}" \
             scripts/check-pgvector-ownership-conversion.sh
       - name: pgvector-derived HNSW regression profile
         run: |
           sudo -u postgres env \
+            PGPORT="${PGCONTEXT_CI_PG_PORT}" \
             PGCONTEXT_REGRESSION_PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config \
             PG_REGRESS=/usr/lib/postgresql/17/lib/pgxs/src/test/regress/pg_regress \
             scripts/check-pgvector-regression-compat.sh

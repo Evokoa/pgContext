@@ -48,7 +48,32 @@ jobs:
           elif ! sudo pg_ctlcluster 17 main status; then
             sudo pg_ctlcluster 17 main start
           fi
-          sudo -u postgres createuser -s "$(whoami)"
+          pg_port="$(
+            pg_lsclusters --no-header |
+              awk '$1 == "17" && $2 == "main" { print $3; exit }'
+          )"
+          if [[ ! "${pg_port}" =~ ^[0-9]+$ ]]; then
+            echo "could not resolve the PostgreSQL 17 main cluster port" >&2
+            pg_lsclusters >&2
+            exit 1
+          fi
+          ready=false
+          for _ in $(seq 1 30); do
+            if sudo -u postgres /usr/lib/postgresql/17/bin/pg_isready \
+              -p "${pg_port}" -d postgres
+            then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "${ready}" != true ]]; then
+            echo "PostgreSQL 17 main did not become ready on port ${pg_port}" >&2
+            pg_lsclusters >&2
+            exit 1
+          fi
+          sudo -u postgres createuser -p "${pg_port}" -s "$(whoami)"
+          echo "PGCONTEXT_CI_PG_PORT=${pg_port}" >> "${GITHUB_ENV}"
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
@@ -67,4 +92,4 @@ jobs:
       - name: Run reduced-lane regression gate
         run: |
           scripts/bench-regression.sh \
-            --dsn "host=/var/run/postgresql port=5432 dbname=postgres"
+            --dsn "host=/var/run/postgresql port=${PGCONTEXT_CI_PG_PORT} dbname=postgres"

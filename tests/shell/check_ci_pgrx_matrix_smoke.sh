@@ -33,3 +33,23 @@ if grep -Eq 'pg:.*(15|16)' <<<"${pgrx_job}"; then
   echo "pgrx certification matrix must not include unsupported majors" >&2
   exit 1
 fi
+
+coexist_job="$(job_block pgvector-coexist)"
+if [[ -z "${coexist_job}" ]]; then
+  echo "CI must define a pgvector coexistence job" >&2
+  exit 1
+fi
+grep -qF "awk '\$1 == \"17\" && \$2 == \"main\" { print \$3; exit }'" \
+  <<<"${coexist_job}"
+grep -qF '/usr/lib/postgresql/17/bin/pg_isready' <<<"${coexist_job}"
+grep -qF 'echo "PGCONTEXT_CI_PG_PORT=${pg_port}" >> "${GITHUB_ENV}"' \
+  <<<"${coexist_job}"
+grep -qF 'postgres_psql="sudo -u postgres psql -p ${PGCONTEXT_CI_PG_PORT}"' \
+  <<<"${coexist_job}"
+grep -qF 'PGCONTEXT_BRIDGE_PG_DUMP="${postgres_dump}"' <<<"${coexist_job}"
+grep -qF 'PGPORT="${PGCONTEXT_CI_PG_PORT}"' <<<"${coexist_job}"
+
+bench_workflow=.github/workflows/bench-regression.yml
+grep -qF '/usr/lib/postgresql/17/bin/pg_isready' "${bench_workflow}"
+grep -qF 'createuser -p "${pg_port}"' "${bench_workflow}"
+grep -qF 'port=${PGCONTEXT_CI_PG_PORT} dbname=postgres' "${bench_workflow}"
