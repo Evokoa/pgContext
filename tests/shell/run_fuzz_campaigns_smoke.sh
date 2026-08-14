@@ -173,7 +173,20 @@ if "${REPO_ROOT}/scripts/run-fuzz-campaigns.sh" \
 fi
 grep -q 'duplicate fuzz target: vector_text' "${work_dir}/duplicate-target.err"
 
+dirty_root="${work_dir}/dirty-root"
+mkdir -p "${dirty_root}/fuzz/fuzz_targets" "${dirty_root}/fuzz/corpus/vector_text"
+printf 'fuzz target fixture\n' >"${dirty_root}/fuzz/fuzz_targets/vector_text.rs"
+printf 'seed fixture\n' >"${dirty_root}/fuzz/corpus/vector_text/seed"
+git -C "${dirty_root}" init -q
+git -C "${dirty_root}" add .
+git -C "${dirty_root}" \
+  -c user.name='Fuzz Test' \
+  -c user.email='fuzz-test@example.invalid' \
+  commit -q -m 'initial clean fuzz fixture'
+printf 'dirty fixture\n' >>"${dirty_root}/fuzz/fuzz_targets/vector_text.rs"
+
 if PATH="${fake_bin}:${PATH}" FAKE_CARGO_LOG="${work_dir}/dirty-cargo.log" \
+  REPO_ROOT="${dirty_root}" \
   "${REPO_ROOT}/scripts/run-fuzz-campaigns.sh" \
   --target vector_text \
   --duration 1 \
