@@ -44,10 +44,26 @@ grep -qF "awk '\$1 == \"17\" && \$2 == \"main\" { print \$3; exit }'" \
 grep -qF '/usr/lib/postgresql/17/bin/pg_isready' <<<"${coexist_job}"
 grep -qF 'echo "PGCONTEXT_CI_PG_PORT=${pg_port}" >> "${GITHUB_ENV}"' \
   <<<"${coexist_job}"
+grep -qF 'sudo -u postgres createuser -p "${pg_port}" -s "$(whoami)"' \
+  <<<"${coexist_job}"
 grep -qF 'postgres_psql="sudo -u postgres psql -p ${PGCONTEXT_CI_PG_PORT}"' \
   <<<"${coexist_job}"
 grep -qF 'PGCONTEXT_BRIDGE_PG_DUMP="${postgres_dump}"' <<<"${coexist_job}"
 grep -qF 'PGPORT="${PGCONTEXT_CI_PG_PORT}"' <<<"${coexist_job}"
+if grep -qF 'sudo -u postgres env' <<<"${coexist_job}"; then
+  echo "pgvector regression script must run as the checkout-owning CI user" >&2
+  exit 1
+fi
+
+setup_python_pin='actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6'
+grep -qF "${setup_python_pin}" .github/workflows/ci.yml
+grep -qF "${setup_python_pin}" .github/workflows/bench-regression.yml
+if rg -n 'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065' \
+  .github/workflows
+then
+  echo "Node 20-based setup-python v5 pin must not return" >&2
+  exit 1
+fi
 
 bench_workflow=.github/workflows/bench-regression.yml
 grep -qF '/usr/lib/postgresql/17/bin/pg_isready' "${bench_workflow}"
