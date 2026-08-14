@@ -798,7 +798,9 @@ sparse_nearest=$(q "SELECT id FROM conversion_sparse
   || fail "finalized canonical sparsevec HNSW failed after pgvector removal"
 
 # A finalized database must dump and restore without the bridge or pgvector.
-${PG_DUMP} -d "${DB}" --format=custom --file="${DUMP_FILE}"
+# Keep ownership of the dump artifact with the shell running this gate even
+# when the configured pg_dump command changes OS users under sudo.
+${PG_DUMP} -d "${DB}" --format=custom > "${DUMP_FILE}"
 ${PSQL} -d postgres -v ON_ERROR_STOP=1 \
   -c "DROP DATABASE IF EXISTS ${RESTORE_DB};" \
   -c "CREATE DATABASE ${RESTORE_DB};" >/dev/null

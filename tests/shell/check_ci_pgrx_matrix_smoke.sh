@@ -79,3 +79,16 @@ do
   fi
   grep -qF 'SOCKET_ROOT="${HEAVY_SOCKET_ROOT:-/tmp}"' "${replica_script}"
 done
+
+for pgvector_script in \
+  scripts/check-pgvector-bridge.sh \
+  scripts/check-pgvector-ownership-conversion.sh
+do
+  if rg -n '\$\{PG_DUMP\}.*(?:--file(?:=|[[:space:]])|-f[[:space:]])' \
+    "${pgvector_script}"
+  then
+    echo "configured pg_dump must not own the temporary artifact: ${pgvector_script}" >&2
+    exit 1
+  fi
+  grep -qF '> "${DUMP_FILE}"' "${pgvector_script}"
+done

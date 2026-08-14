@@ -9,7 +9,7 @@ PG_DUMP=${PGCONTEXT_BRIDGE_PG_DUMP:-pg_dump}
 PG_RESTORE=${PGCONTEXT_BRIDGE_PG_RESTORE:-pg_restore}
 DB=${PGCONTEXT_BRIDGE_DB:-pgcontext_pgvector_check}
 RESTORE_DB=${PGCONTEXT_BRIDGE_RESTORE_DB:-${DB}_restore}
-DUMP_FILE=${TMPDIR:-/tmp}/${DB}.dump
+DUMP_FILE=${TMPDIR:-/tmp}/${DB}-${$}.dump
 
 for database_name in "${DB}" "${RESTORE_DB}"; do
   if [[ ! "${database_name}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
@@ -453,7 +453,10 @@ quoted_replacement=$(q "SELECT count(*)
 # Optional binding objects deliberately stay outside extension membership so
 # pg_dump emits their DDL. Prove that an enabled binding and its live indexes
 # restore into a clean database before exercising hostile-object rejection.
-${PG_DUMP} -Fc -d "${DB}" -f "${DUMP_FILE}"
+# The configured pg_dump may run as a different OS user (for example,
+# `sudo -u postgres pg_dump` in CI). Let this shell create the artifact so the
+# user running the gate also owns and can remove it.
+${PG_DUMP} -Fc -d "${DB}" > "${DUMP_FILE}"
 ${PSQL} -d postgres -v ON_ERROR_STOP=1 \
   -c "DROP DATABASE IF EXISTS ${RESTORE_DB};" \
   -c "CREATE DATABASE ${RESTORE_DB};" >/dev/null
