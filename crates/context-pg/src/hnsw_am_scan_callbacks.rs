@@ -96,6 +96,8 @@ fn hnsw_cost_estimate_safe(
     let (segment_count, delta_records) = if path.as_ref().indexinfo.is_null() {
         (1_usize, 0_u64)
     } else {
+        // SAFETY: the null branch was excluded and PostgreSQL owns the live
+        // IndexOptInfo for the duration of this planner callback.
         let index_oid = unsafe { (*path.as_ref().indexinfo).indexoid };
         if index_oid == pg_sys::InvalidOid {
             (1, 0)

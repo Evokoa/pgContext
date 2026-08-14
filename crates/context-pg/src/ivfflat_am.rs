@@ -503,11 +503,15 @@ unsafe extern "C-unwind" fn ivfflat_build(
     if tuples == 0 {
         // SAFETY: block zero was initialized immediately above.
         unsafe { publish_meta(index_relation, IvfflatMeta::empty()) };
+        // SAFETY: the build callback owns the live relation and all initialized
+        // pages; the helper skips nonpermanent relations.
         unsafe { wal_log_build_pages(index_relation) };
         return crate::hnsw_am::build_result(heap_tuples, 0.0);
     }
 
     update_build_phase(4);
+    // SAFETY: the null branch is excluded and PostgreSQL retains IndexInfo for
+    // the synchronous build callback.
     let concurrent = !index_info.is_null() && unsafe { (*index_info).ii_Concurrent };
     // SAFETY: PostgreSQL retains both relation locks and IndexInfo for the
     // complete synchronous parallel-worker lifecycle.
@@ -516,12 +520,16 @@ unsafe extern "C-unwind" fn ivfflat_build(
             .collector
             .finish_parallel(heap_relation, index_relation, metric, concurrent)
     };
+    // SAFETY: the build owns the live index relation and reads only its current
+    // main-fork block count.
     let generation_start = unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     };
     // SAFETY: the build owns this relation and publishes generation one.
     unsafe { write_ivfflat_generation(index_relation, metric, output, 1, generation_start) };
     // PostgreSQL build callbacks also emit the standard new-page range record.
+    // SAFETY: the build owns the fully initialized relation and the helper
+    // verifies that the index is permanent before emitting WAL.
     unsafe { wal_log_build_pages(index_relation) };
     #[allow(
         clippy::cast_precision_loss,
@@ -560,6 +568,8 @@ unsafe fn write_ivfflat_generation(
         )
     };
     let directory_start = centroid_end;
+    // SAFETY: the build owns the live relation; directory bytes remain live and
+    // the start cursor is the end returned by the preceding section writer.
     let directory_end = unsafe {
         write_chunk_pages(
             index_relation,
@@ -573,6 +583,8 @@ unsafe fn write_ivfflat_generation(
     update_build_phase(6);
     let (codec_end, codec_bytes) = if let Some(codec) = output.codec_artifact.as_deref() {
         (
+            // SAFETY: the operator-selected codec bytes remain live and the
+            // build owns the relation and exact next-page cursor.
             unsafe { write_chunk_pages(index_relation, ChunkKind::Codec, 0, codec, codec_start) },
             codec.len(),
         )
@@ -581,6 +593,8 @@ unsafe fn write_ivfflat_generation(
     };
     let posting_start = codec_end;
     update_build_phase(7);
+    // SAFETY: the build owns the relation and temporary posting file; the
+    // writer consumes exactly the validated byte count from the next cursor.
     let posting_end = unsafe {
         write_chunk_pages_from_temp(
             index_relation,
@@ -998,8 +1012,14 @@ unsafe extern "C-unwind" fn ivfflat_bulk_delete(
     }
     // VACUUM's table lock is acquired before the per-index append lock, the
     // same global order used by the HNSW maintenance path.
+    // SAFETY: the null info branch was excluded and PostgreSQL keeps the
+    // IndexVacuumInfo plus relation live for this callback.
     let index_relation = unsafe { (*info).index };
+    // SAFETY: VACUUM holds the table lock and this helper acquires the matching
+    // per-index serialization lock before any publication access.
     unsafe { crate::hnsw_am::serialize_hnsw_insert(index_relation) };
+    // SAFETY: VACUUM owns the live locked relation; each helper validates and
+    // copies its catalog or page metadata before returning.
     let meta = unsafe { read_meta(index_relation) };
     let metric = unsafe { crate::hnsw_am::hnsw_score_metric(index_relation) };
     let live = unsafe { read_all_live_tids(index_relation, meta) };
@@ -1008,6 +1028,8 @@ unsafe extern "C-unwind" fn ivfflat_bulk_delete(
     for heap_tid in live {
         let mut tid = pg_sys::ItemPointerData::default();
         u64_to_item_pointer(heap_tid, &mut tid);
+        // SAFETY: PostgreSQL supplied the callback and state for this VACUUM;
+        // `tid` is initialized and lives through the call.
         if unsafe { callback(ptr::addr_of_mut!(tid), callback_state) } {
             let record = DeltaRecord::tombstone(heap_tid);
             let payload = encode_delta_record(&record).unwrap_or_else(|error| {
@@ -1016,6 +1038,8 @@ unsafe extern "C-unwind" fn ivfflat_bulk_delete(
                     format!("failed to encode IVFFlat vacuum tombstone: {error}"),
                 )
             });
+            // SAFETY: VACUUM owns the relation and serialization lock; payload
+            // bytes stay live for the synchronous append.
             unsafe {
                 append_delta_record(index_relation, metric, &payload, meta.dimensions as usize)
             };
@@ -1028,6 +1052,8 @@ unsafe extern "C-unwind" fn ivfflat_bulk_delete(
         clippy::cast_precision_loss,
         reason = "PostgreSQL vacuum statistics expose tuple estimates as f64"
     )]
+    // SAFETY: `result` is newly allocated or supplied as writable VACUUM stats
+    // and remains live for this guarded callback.
     unsafe {
         (*result).tuples_removed += removed as f64;
         (*result).num_index_tuples = (live_count.saturating_sub(removed as usize)) as f64;
@@ -1101,6 +1127,8 @@ unsafe fn prepare_scan(scan: pg_sys::IndexScanDesc, state: &mut ScanState) {
     let mut completion_reason = "delta_only";
     let mut live = BTreeMap::<u64, f32>::new();
     if meta.tuples > 0 {
+        // SAFETY: the scan owns the live relation and the validated metapage
+        // bounds this immutable centroid section.
         let centroid_bytes = unsafe {
             read_chunk_range(
                 (*scan).indexRelation,
@@ -1113,6 +1141,8 @@ unsafe fn prepare_scan(scan: pg_sys::IndexScanDesc, state: &mut ScanState) {
                 meta.centroid_bytes,
             )
         };
+        // SAFETY: the scan owns the live relation and the validated metapage
+        // bounds this immutable directory section.
         let directory_bytes = unsafe {
             read_chunk_range(
                 (*scan).indexRelation,
@@ -1136,6 +1166,8 @@ unsafe fn prepare_scan(scan: pg_sys::IndexScanDesc, state: &mut ScanState) {
         let quantized_scorer = if meta.codec_bytes == 0 {
             None
         } else {
+            // SAFETY: the scan owns the live relation and the validated
+            // metapage bounds this immutable codec section.
             let codec_bytes = unsafe {
                 read_chunk_range(
                     (*scan).indexRelation,
@@ -1253,6 +1285,8 @@ unsafe fn prepare_scan(scan: pg_sys::IndexScanDesc, state: &mut ScanState) {
             pg_sys::check_for_interrupts!();
             let list = list_id.get();
             let extent = directory[list];
+            // SAFETY: the decoded directory was checked against the published
+            // posting extent and the scan keeps the relation live.
             let list_bytes = unsafe {
                 read_chunk_range(
                     (*scan).indexRelation,
@@ -1331,6 +1365,8 @@ unsafe fn prepare_scan(scan: pg_sys::IndexScanDesc, state: &mut ScanState) {
     // trained centroid generation. Chronological overwrite/tombstone folding
     // also prevents duplicate TID returns after updates and reuse.
     if !state.delta_loaded {
+        // SAFETY: the scan owns the live relation and `meta` is the validated
+        // publication snapshot used for this preparation pass.
         for record in unsafe { read_delta_records((*scan).indexRelation, meta) } {
             delta_records = delta_records.saturating_add(1);
             let global_visited = state
@@ -1464,6 +1500,8 @@ unsafe fn scan_state(scan: pg_sys::IndexScanDesc) -> &'static mut ScanState {
 }
 
 unsafe fn initialize_metapage(index_relation: pg_sys::Relation) {
+    // SAFETY: the build callback guarantees a live index relation; PostgreSQL
+    // returns only its current main-fork block count.
     let blocks = unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     };
@@ -1514,6 +1552,8 @@ unsafe fn append_delta_record(
     dimensions: usize,
 ) {
     // Lock block zero before the append page so all writers share one order.
+    // SAFETY: the caller owns a live relation and serialization lock; block
+    // zero is the initialized metapage.
     let meta_buffer = unsafe {
         pg_sys::ReadBufferExtended(
             index_relation,
@@ -1523,21 +1563,27 @@ unsafe fn append_delta_record(
             ptr::null_mut(),
         )
     };
+    // SAFETY: `meta_buffer` is pinned and every exit path releases it once.
     unsafe {
         pg_sys::LockBuffer(meta_buffer, pg_sys::BUFFER_LOCK_EXCLUSIVE.cast_signed());
     }
+    // SAFETY: the exclusive lock keeps the metapage stable; the page-item
+    // helper validates bounds and returns an owned copy.
     let meta_bytes = unsafe {
         crate::hnsw_am::copy_hnsw_page_item(pg_sys::BufferGetPage(meta_buffer), FIRST_ITEM)
     }
     .unwrap_or_else(|error| {
+        // SAFETY: this error path owns the exclusive pin and lock.
         unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
         raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error)
     });
     let mut meta = IvfflatMeta::decode(&meta_bytes).unwrap_or_else(|error| {
+        // SAFETY: this decode-error path owns the exclusive pin and lock.
         unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
         raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error.to_string())
     });
     let dimensions = u32::try_from(dimensions).unwrap_or_else(|_| {
+        // SAFETY: this conversion-error path owns the exclusive pin and lock.
         unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
@@ -1545,6 +1591,7 @@ unsafe fn append_delta_record(
         )
     });
     if meta.dimensions != 0 && meta.dimensions != dimensions {
+        // SAFETY: this validation-error path owns the exclusive pin and lock.
         unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_DATA_EXCEPTION,
@@ -1555,16 +1602,20 @@ unsafe fn append_delta_record(
         );
     }
     if meta.metric_tag != 0 && meta.metric_tag != metric.storage_tag() {
+        // SAFETY: this validation-error path owns the exclusive pin and lock.
         unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_INVALID_OBJECT_DEFINITION,
             "IVFFlat insert metric does not match the published generation",
         );
     }
+    // SAFETY: the caller owns the live relation and reads only its main-fork
+    // block count while the metapage lock prevents a competing append.
     let relation_blocks = unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     };
     if let Err(error) = meta.validate_page_extents(CHUNK_DATA_BYTES, relation_blocks) {
+        // SAFETY: this validation-error path owns the exclusive pin and lock.
         unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
         raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error.to_string());
     }
@@ -1582,6 +1633,8 @@ unsafe fn append_delta_record(
         let target_block = meta
             .delta_end
             .checked_add(u32::try_from(chunk_index).unwrap_or_else(|_| {
+                // SAFETY: this conversion-error path owns the metapage pin and
+                // exclusive lock and no data buffer has been opened yet.
                 unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
                 raise_sql_error(
                     PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
@@ -1589,6 +1642,8 @@ unsafe fn append_delta_record(
                 )
             }))
             .unwrap_or_else(|| {
+                // SAFETY: this overflow path owns the metapage pin and lock and
+                // no data buffer has been opened yet.
                 unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
                 raise_sql_error(
                     PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
@@ -1600,6 +1655,8 @@ unsafe fn append_delta_record(
         } else {
             pg_sys::InvalidBlockNumber
         };
+        // SAFETY: the target is the validated overwrite cursor or PostgreSQL's
+        // append sentinel; RBM_ZERO_AND_LOCK returns one exclusive buffer.
         let data_buffer = unsafe {
             pg_sys::ReadBufferExtended(
                 index_relation,
@@ -1609,8 +1666,11 @@ unsafe fn append_delta_record(
                 ptr::null_mut(),
             )
         };
+        // SAFETY: `data_buffer` is pinned and exclusively locked until the WAL
+        // record finishes or the mismatch path releases it.
         let actual_block = unsafe { pg_sys::BufferGetBlockNumber(data_buffer) };
         if actual_block != target_block {
+            // SAFETY: this mismatch path owns both pinned exclusive buffers.
             unsafe {
                 pg_sys::UnlockReleaseBuffer(data_buffer);
                 pg_sys::UnlockReleaseBuffer(meta_buffer);
@@ -1622,7 +1682,11 @@ unsafe fn append_delta_record(
         }
         // Each data page is WAL-logged before metapage publication. A crash
         // before publication leaves only overwriteable pages at delta_end.
+        // SAFETY: the live relation and exclusive data buffer are owned by this
+        // append until the Generic WAL record is finished.
         let wal = unsafe { pg_sys::GenericXLogStart(index_relation) };
+        // SAFETY: `wal` is new and `data_buffer` is pinned and exclusively
+        // locked for registration.
         let data_page = unsafe {
             pg_sys::GenericXLogRegisterBuffer(
                 wal,
@@ -1630,7 +1694,11 @@ unsafe fn append_delta_record(
                 pg_sys::GENERIC_XLOG_FULL_IMAGE.cast_signed(),
             )
         };
+        // SAFETY: `data_page` is the private registered image for this WAL
+        // transition and has no live items yet.
         unsafe { pg_sys::PageInit(data_page, pg_sys::BLCKSZ as pg_sys::Size, 0) };
+        // SAFETY: the registered page image is private and `page_payload`
+        // remains live throughout the synchronous add-item call.
         let offset = unsafe {
             pg_sys::PageAddItemExtended(
                 data_page,
@@ -1641,6 +1709,8 @@ unsafe fn append_delta_record(
             )
         };
         if offset != FIRST_ITEM {
+            // SAFETY: this rejection path owns the open WAL state and both
+            // pinned exclusive buffers.
             unsafe {
                 pg_sys::GenericXLogAbort(wal);
                 pg_sys::UnlockReleaseBuffer(data_buffer);
@@ -1651,6 +1721,8 @@ unsafe fn append_delta_record(
                 "failed to append IVFFlat WAL delta chunk",
             );
         }
+        // SAFETY: the registered image is fully initialized; finish consumes
+        // the WAL state before the data buffer is released exactly once.
         unsafe {
             pg_sys::GenericXLogFinish(wal);
             pg_sys::UnlockReleaseBuffer(data_buffer);
@@ -1661,6 +1733,8 @@ unsafe fn append_delta_record(
     meta.delta_end = meta
         .delta_end
         .checked_add(u32::try_from(chunk_count).unwrap_or_else(|_| {
+            // SAFETY: this conversion-error path still owns the metapage pin
+            // and exclusive lock.
             unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
@@ -1668,6 +1742,8 @@ unsafe fn append_delta_record(
             )
         }))
         .unwrap_or_else(|| {
+            // SAFETY: this overflow path still owns the metapage pin and
+            // exclusive lock.
             unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
@@ -1681,6 +1757,7 @@ unsafe fn append_delta_record(
     // SAFETY: the metapage is pinned and exclusively locked. Data chunks were
     // durably WAL-logged before this single publication record.
     let wal = unsafe { pg_sys::GenericXLogStart(index_relation) };
+    // SAFETY: `wal` is new and `meta_buffer` is pinned and exclusively locked.
     let meta_page = unsafe {
         pg_sys::GenericXLogRegisterBuffer(
             wal,
@@ -1688,9 +1765,13 @@ unsafe fn append_delta_record(
             pg_sys::GENERIC_XLOG_FULL_IMAGE.cast_signed(),
         )
     };
+    // SAFETY: `meta_page` is the private registered image and the helper
+    // validates the fixed metapage item's mutable span.
     let (meta_target, meta_len) =
         unsafe { crate::hnsw_am::checked_hnsw_page_item_span(meta_page, FIRST_ITEM) }
             .unwrap_or_else(|error| {
+                // SAFETY: this validation-error path owns the open WAL state
+                // and the one pinned exclusive metapage buffer.
                 unsafe {
                     pg_sys::GenericXLogAbort(wal);
                     pg_sys::UnlockReleaseBuffer(meta_buffer);
@@ -1698,6 +1779,8 @@ unsafe fn append_delta_record(
                 raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error)
             });
     if meta_len != META_BYTES {
+        // SAFETY: this length-error path owns the open WAL state and the one
+        // pinned exclusive metapage buffer.
         unsafe {
             pg_sys::GenericXLogAbort(wal);
             pg_sys::UnlockReleaseBuffer(meta_buffer);
@@ -1715,6 +1798,8 @@ unsafe fn append_delta_record(
     }
     if meta.delta_count >= IVFFLAT_DELTA_COMPACTION_THRESHOLD {
         let generation = i64::try_from(meta.generation).unwrap_or(i64::MAX);
+        // SAFETY: the live relation remains owned by the callback and rd_id is
+        // immutable for its lifetime.
         let index_oid = unsafe { (*index_relation).rd_id };
         let queued = Spi::get_one_with_args::<bool>(
             "SELECT pgcontext._enqueue_ivfflat_compaction_debt($1, $2)",
@@ -1740,10 +1825,13 @@ unsafe fn publish_meta(index_relation: pg_sys::Relation, meta: IvfflatMeta) {
             ptr::null_mut(),
         )
     };
+    // SAFETY: `buffer` is pinned and every exit path releases it exactly once.
     unsafe { pg_sys::LockBuffer(buffer, pg_sys::BUFFER_LOCK_EXCLUSIVE.cast_signed()) };
     // Publish through one full-image Generic WAL record so this helper is safe
     // during both CREATE INDEX and later immutable-generation cutover.
+    // SAFETY: the caller owns the live relation and exclusive metapage buffer.
     let wal = unsafe { pg_sys::GenericXLogStart(index_relation) };
+    // SAFETY: `wal` is new and `buffer` is pinned and exclusively locked.
     let page = unsafe {
         pg_sys::GenericXLogRegisterBuffer(
             wal,
@@ -1754,6 +1842,8 @@ unsafe fn publish_meta(index_relation: pg_sys::Relation, meta: IvfflatMeta) {
     // SAFETY: page is the registered shadow of the pinned exclusive buffer.
     let span = unsafe { crate::hnsw_am::checked_hnsw_page_item_span(page, FIRST_ITEM) };
     let (target, len) = span.unwrap_or_else(|error| {
+        // SAFETY: this validation-error path owns the WAL state and pinned
+        // exclusive buffer.
         unsafe {
             pg_sys::GenericXLogAbort(wal);
             pg_sys::UnlockReleaseBuffer(buffer);
@@ -1761,6 +1851,8 @@ unsafe fn publish_meta(index_relation: pg_sys::Relation, meta: IvfflatMeta) {
         raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error)
     });
     if len != META_BYTES {
+        // SAFETY: this length-error path owns the WAL state and pinned
+        // exclusive buffer.
         unsafe {
             pg_sys::GenericXLogAbort(wal);
             pg_sys::UnlockReleaseBuffer(buffer);
@@ -1815,6 +1907,8 @@ unsafe fn write_chunk_pages(
                     "IVFFlat section block range overflow",
                 )
             });
+        // SAFETY: the caller owns the live relation and reads only the current
+        // main-fork block count before selecting append versus overwrite.
         let relation_blocks = unsafe {
             pg_sys::RelationGetNumberOfBlocksInFork(
                 index_relation,
@@ -1826,6 +1920,8 @@ unsafe fn write_chunk_pages(
         } else {
             pg_sys::InvalidBlockNumber
         };
+        // SAFETY: the requested block is the exact section cursor or append
+        // sentinel; RBM_ZERO_AND_LOCK returns an exclusive pinned buffer.
         let buffer = unsafe {
             pg_sys::ReadBufferExtended(
                 index_relation,
@@ -1835,14 +1931,19 @@ unsafe fn write_chunk_pages(
                 ptr::null_mut(),
             )
         };
+        // SAFETY: `buffer` is pinned and exclusively locked until the page WAL
+        // record finishes or the mismatch path releases it.
         if unsafe { pg_sys::BufferGetBlockNumber(buffer) } != target_block {
+            // SAFETY: this mismatch path owns the one exclusive pin and lock.
             unsafe { pg_sys::UnlockReleaseBuffer(buffer) };
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
                 "IVFFlat section writer lost its publication cursor",
             );
         }
+        // SAFETY: the caller owns the live relation and exclusive data buffer.
         let wal = unsafe { pg_sys::GenericXLogStart(index_relation) };
+        // SAFETY: `wal` is new and `buffer` is pinned and exclusively locked.
         let page = unsafe {
             pg_sys::GenericXLogRegisterBuffer(
                 wal,
@@ -1923,6 +2024,8 @@ unsafe fn write_chunk_pages_from_temp(
                     "IVFFlat posting block range overflow",
                 )
             });
+        // SAFETY: the caller owns the live relation and reads only its current
+        // main-fork block count before selecting append versus overwrite.
         let relation_blocks = unsafe {
             pg_sys::RelationGetNumberOfBlocksInFork(
                 index_relation,
@@ -1934,6 +2037,8 @@ unsafe fn write_chunk_pages_from_temp(
         } else {
             pg_sys::InvalidBlockNumber
         };
+        // SAFETY: the requested block is the exact posting cursor or append
+        // sentinel; RBM_ZERO_AND_LOCK returns an exclusive pinned buffer.
         let buffer = unsafe {
             pg_sys::ReadBufferExtended(
                 index_relation,
@@ -1943,14 +2048,19 @@ unsafe fn write_chunk_pages_from_temp(
                 ptr::null_mut(),
             )
         };
+        // SAFETY: `buffer` is pinned and exclusively locked until the page WAL
+        // record finishes or the mismatch path releases it.
         if unsafe { pg_sys::BufferGetBlockNumber(buffer) } != target_block {
+            // SAFETY: this mismatch path owns the one exclusive pin and lock.
             unsafe { pg_sys::UnlockReleaseBuffer(buffer) };
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
                 "IVFFlat posting writer lost its publication cursor",
             );
         }
+        // SAFETY: the caller owns the live relation and exclusive data buffer.
         let wal = unsafe { pg_sys::GenericXLogStart(index_relation) };
+        // SAFETY: `wal` is new and `buffer` is pinned and exclusively locked.
         let page = unsafe {
             pg_sys::GenericXLogRegisterBuffer(
                 wal,
@@ -1958,6 +2068,8 @@ unsafe fn write_chunk_pages_from_temp(
                 pg_sys::GENERIC_XLOG_FULL_IMAGE.cast_signed(),
             )
         };
+        // SAFETY: `page` is the private registered image of the pinned
+        // exclusive posting buffer and payload bytes remain live below.
         unsafe {
             pg_sys::PageInit(page, pg_sys::BLCKSZ as pg_sys::Size, 0);
             let offset = pg_sys::PageAddItemExtended(
@@ -1990,6 +2102,8 @@ unsafe fn write_chunk_pages_from_temp(
 }
 
 fn maintenance_work_mem_budget_bytes() -> usize {
+    // SAFETY: PostgreSQL initializes this backend-local GUC before extension
+    // callbacks run; this is a read-only snapshot.
     let budget_kib = unsafe { pg_sys::maintenance_work_mem };
     let budget_kib = usize::try_from(budget_kib).unwrap_or_else(|_| {
         raise_sql_error(
@@ -2019,10 +2133,14 @@ unsafe fn wal_log_build_pages(index_relation: pg_sys::Relation) {
     if !permanent {
         return;
     }
+    // SAFETY: the caller guarantees a live relation and this reads only its
+    // main-fork block count.
     let blocks = unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     };
     if blocks > 0 {
+        // SAFETY: the live permanent relation owns the initialized block range
+        // `[0, blocks)` for this synchronous build callback.
         unsafe {
             pg_sys::log_newpage_range(
                 index_relation,
@@ -2036,6 +2154,8 @@ unsafe fn wal_log_build_pages(index_relation: pg_sys::Relation) {
 }
 
 unsafe fn read_meta(index_relation: pg_sys::Relation) -> IvfflatMeta {
+    // SAFETY: the caller guarantees a live relation and this reads only its
+    // current main-fork block count.
     let blocks = unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     };
@@ -2045,6 +2165,7 @@ unsafe fn read_meta(index_relation: pg_sys::Relation) -> IvfflatMeta {
             "IVFFlat metapage is missing",
         );
     }
+    // SAFETY: block zero exists and the caller keeps the relation live.
     let buffer = unsafe {
         pg_sys::ReadBufferExtended(
             index_relation,
@@ -2054,9 +2175,14 @@ unsafe fn read_meta(index_relation: pg_sys::Relation) -> IvfflatMeta {
             ptr::null_mut(),
         )
     };
+    // SAFETY: `buffer` is pinned and released exactly once after the owned copy.
     unsafe { pg_sys::LockBuffer(buffer, pg_sys::BUFFER_LOCK_SHARE.cast_signed()) };
+    // SAFETY: the shared lock keeps the page stable; the helper validates the
+    // item span and returns an owned byte vector.
     let bytes =
         unsafe { crate::hnsw_am::copy_hnsw_page_item(pg_sys::BufferGetPage(buffer), FIRST_ITEM) };
+    // SAFETY: the owned page-item copy is complete and this function owns the
+    // one shared pin and lock.
     unsafe { pg_sys::UnlockReleaseBuffer(buffer) };
     let bytes = bytes
         .unwrap_or_else(|error| raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error));
@@ -2083,6 +2209,8 @@ unsafe fn read_delta_records(
     let mut records = Vec::with_capacity(capacity);
     let mut block = meta.delta_start;
     for stream_id in 0..meta.delta_count {
+        // SAFETY: each block is bounded by the validated delta extent and the
+        // caller keeps the relation live.
         let buffer = unsafe {
             pg_sys::ReadBufferExtended(
                 index_relation,
@@ -2092,10 +2220,15 @@ unsafe fn read_delta_records(
                 ptr::null_mut(),
             )
         };
+        // SAFETY: `buffer` is pinned and released once after the owned copy.
         unsafe { pg_sys::LockBuffer(buffer, pg_sys::BUFFER_LOCK_SHARE.cast_signed()) };
+        // SAFETY: the shared lock keeps the page stable; the helper validates
+        // the item span and returns owned bytes.
         let payload = unsafe {
             crate::hnsw_am::copy_hnsw_page_item(pg_sys::BufferGetPage(buffer), FIRST_ITEM)
         };
+        // SAFETY: the owned payload copy is complete and this function owns the
+        // one shared pin and lock.
         unsafe { pg_sys::UnlockReleaseBuffer(buffer) };
         let payload = payload
             .unwrap_or_else(|error| raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error));
@@ -2125,6 +2258,8 @@ unsafe fn read_delta_records(
                 "IVFFlat delta stream exceeds its published extent",
             );
         }
+        // SAFETY: the validated stream identity and metapage bound this exact
+        // delta range while the caller keeps the relation live.
         let record_bytes = unsafe {
             read_chunk_range(
                 index_relation,
@@ -2158,6 +2293,8 @@ unsafe fn read_delta_records(
 unsafe fn read_all_live_tids(index_relation: pg_sys::Relation, meta: IvfflatMeta) -> BTreeSet<u64> {
     let mut live = BTreeSet::new();
     if meta.tuples > 0 {
+        // SAFETY: the validated metapage bounds the immutable posting section
+        // and the caller keeps the relation live.
         let posting_bytes = unsafe {
             read_chunk_range(
                 index_relation,
@@ -2173,6 +2310,8 @@ unsafe fn read_all_live_tids(index_relation: pg_sys::Relation, meta: IvfflatMeta
         let codec_bytes = if meta.codec_bytes == 0 {
             None
         } else {
+            // SAFETY: the validated metapage bounds the immutable codec section
+            // and the caller keeps the relation live.
             Some(unsafe {
                 read_chunk_range(
                     index_relation,
@@ -2241,6 +2380,8 @@ unsafe fn read_all_live_tids(index_relation: pg_sys::Relation, meta: IvfflatMeta
             }
         }
     }
+    // SAFETY: `meta` is the validated publication used above and the caller
+    // keeps the relation live through chronological delta folding.
     for record in unsafe { read_delta_records(index_relation, meta) } {
         match record.kind {
             DeltaRecordKind::Live => {
@@ -2314,6 +2455,8 @@ unsafe fn read_chunk_range(
                 "IVFFlat chunk index exceeds block range",
             )
         }));
+        // SAFETY: the validated section extent contains `block` and the caller
+        // keeps the relation live throughout the range copy.
         let buffer = unsafe {
             pg_sys::ReadBufferExtended(
                 index_relation,
@@ -2323,10 +2466,15 @@ unsafe fn read_chunk_range(
                 ptr::null_mut(),
             )
         };
+        // SAFETY: `buffer` is pinned and released once after the owned copy.
         unsafe { pg_sys::LockBuffer(buffer, pg_sys::BUFFER_LOCK_SHARE.cast_signed()) };
+        // SAFETY: the shared lock keeps the page stable; the helper validates
+        // the item span and returns owned bytes.
         let payload = unsafe {
             crate::hnsw_am::copy_hnsw_page_item(pg_sys::BufferGetPage(buffer), FIRST_ITEM)
         };
+        // SAFETY: the owned payload copy is complete and this function owns the
+        // one shared pin and lock.
         unsafe { pg_sys::UnlockReleaseBuffer(buffer) };
         let payload = payload
             .unwrap_or_else(|error| raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error));
@@ -2529,6 +2677,8 @@ fn ivfflat_index_info(index: PgRelation) -> JsonB {
     // SAFETY: PgRelation holds AccessShareLock for this complete verifier.
     let meta = unsafe { read_meta(relation) };
     // The live opclass must agree with the format's metric binding.
+    // SAFETY: PgRelation holds AccessShareLock and the helper only inspects the
+    // live index's validated opclass metadata.
     let metric = unsafe { crate::hnsw_am::hnsw_score_metric(relation) };
     if meta.metric_tag != 0 && meta.metric_tag != metric.storage_tag() {
         raise_sql_error(
@@ -2538,6 +2688,8 @@ fn ivfflat_index_info(index: PgRelation) -> JsonB {
     }
     let mut occupancies = Vec::new();
     if meta.tuples > 0 {
+        // SAFETY: PgRelation keeps the index live and `meta` bounds the
+        // immutable centroid section.
         let centroids = unsafe {
             read_chunk_range(
                 relation,
@@ -2550,6 +2702,8 @@ fn ivfflat_index_info(index: PgRelation) -> JsonB {
                 meta.centroid_bytes,
             )
         };
+        // SAFETY: PgRelation keeps the index live and `meta` bounds the
+        // immutable directory section.
         let directory = unsafe {
             read_chunk_range(
                 relation,
@@ -2605,8 +2759,12 @@ fn ivfflat_index_info(index: PgRelation) -> JsonB {
         }
         // A full range read verifies every posting page checksum. Record-level
         // finite/TID validation is shared with the vacuum reader.
+        // SAFETY: PgRelation keeps the index live and the validated metapage
+        // bounds every base and delta section inspected by the helper.
         let _ = unsafe { read_all_live_tids(relation, meta) };
     } else {
+        // SAFETY: PgRelation keeps the index live and the validated metapage
+        // bounds the delta extent inspected by the helper.
         let _ = unsafe { read_delta_records(relation, meta) };
     }
     let minimum = occupancies.iter().copied().min().unwrap_or(0);
@@ -2674,6 +2832,8 @@ unsafe fn compact_ivfflat_oid(index_oid: pg_sys::Oid) -> JsonB {
     // IndexGetRelation consults catalog state without opening the index and
     // therefore cannot introduce the AccessShare-to-AccessExclusive upgrade
     // cycle this boundary exists to prevent.
+    // SAFETY: `index_oid` is the SQL-resolved OID and missing relations are
+    // requested as a nonthrowing InvalidOid result.
     let heap_oid = unsafe { pg_sys::IndexGetRelation(index_oid, true) };
     if heap_oid == pg_sys::InvalidOid {
         raise_sql_error(
@@ -2685,6 +2845,8 @@ unsafe fn compact_ivfflat_oid(index_oid: pg_sys::Oid) -> JsonB {
     // PostgreSQL DML and DDL acquire the heap before its indexes. Matching that
     // order also lets concurrent compactors serialize directly on the index's
     // AccessExclusive lock without either holding a weaker index lock.
+    // SAFETY: both OIDs were resolved and privilege-checked; transaction-scoped
+    // locks are acquired in PostgreSQL's heap-before-index order.
     unsafe {
         pg_sys::LockRelationOid(heap_oid, pg_sys::ShareLock.cast_signed());
         pg_sys::LockRelationOid(index_oid, pg_sys::AccessExclusiveLock.cast_signed());
@@ -2692,7 +2854,11 @@ unsafe fn compact_ivfflat_oid(index_oid: pg_sys::Oid) -> JsonB {
     // SAFETY: the transaction-scoped AccessExclusive lock pins the relation
     // identity and storage until transaction end; NoLock avoids re-locking.
     let index_relation = unsafe { pg_sys::index_open(index_oid, pg_sys::NoLock.cast_signed()) };
+    // SAFETY: the opened relation is protected by AccessExclusiveLock and the
+    // heap by ShareLock for the complete synchronous compaction.
     let result = unsafe { compact_ivfflat_relation(index_relation, heap_oid) };
+    // SAFETY: this function owns the opened relation reference and retains the
+    // transaction-scoped lock by closing with NoLock.
     unsafe { pg_sys::index_close(index_relation, pg_sys::NoLock.cast_signed()) };
     result
 }
@@ -2701,15 +2867,22 @@ unsafe fn compact_ivfflat_relation(
     index_relation: pg_sys::Relation,
     expected_heap_oid: pg_sys::Oid,
 ) -> JsonB {
+    // SAFETY: the caller passes the relation returned by index_open under
+    // AccessExclusiveLock; the null check precedes the rd_index dereference.
     if index_relation.is_null() || unsafe { (*index_relation).rd_index }.is_null() {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_WRONG_OBJECT_TYPE,
             "compact_ivfflat requires an index relation",
         );
     }
+    // SAFETY: the null/rd_index checks above establish the catalog pointer and
+    // it remains pinned by the open relation reference.
     let heap_oid = unsafe { (*(*index_relation).rd_index).indrelid };
+    // SAFETY: PostgreSQL is initialized and the static C string is NUL-terminated.
     let access_method = unsafe { pg_sys::get_index_am_oid(c"pgcontext_ivfflat".as_ptr(), false) };
     if heap_oid != expected_heap_oid
+        // SAFETY: the open relation pins its non-null pg_class row through this
+        // validation and `access_method` was resolved above.
         || unsafe { (*(*index_relation).rd_rel).relam } != access_method
     {
         raise_sql_error(
@@ -2719,13 +2892,19 @@ unsafe fn compact_ivfflat_relation(
     }
     // Recheck under the locked relation identity so an ownership or ACL change
     // racing the pre-lock check cannot authorize the generation rewrite.
+    // SAFETY: the open relation pins rd_id and AccessExclusiveLock prevents an
+    // identity-changing concurrent DDL operation.
     ensure_ivfflat_maintenance_privilege(unsafe { (*index_relation).rd_id }, heap_oid);
     // AccessExclusive is the generation pin: existing scans finish before an
     // inactive page slot can be reused or a superseded tail can be truncated.
     // ShareLock on the source table gives the build one stable DML-free source
     // snapshot. The OID boundary acquired both before opening this relation.
+    // SAFETY: the caller holds the heap and index locks in global order and the
+    // relation remains live throughout this function.
     unsafe { crate::hnsw_am::serialize_hnsw_insert(index_relation) };
+    // SAFETY: the locked live relation has a validated IVFFlat opclass.
     let metric = unsafe { crate::hnsw_am::hnsw_score_metric(index_relation) };
+    // SAFETY: the locked live relation owns a validated metapage at block zero.
     let prior = unsafe { read_meta(index_relation) };
     let generation = prior.generation.checked_add(1).unwrap_or_else(|| {
         raise_sql_error(
@@ -2737,16 +2916,22 @@ unsafe fn compact_ivfflat_relation(
         metric,
         collector: external_build::ExternalBuildCollector::new(
             metric.navigation_metric(),
+            // SAFETY: the locked live relation has validated reloptions.
             unsafe { options::list_count(index_relation) },
             crate::settings::ivfflat_build_parallel_workers_from_guc(),
             maintenance_work_mem_budget_bytes(),
+            // SAFETY: the locked live relation has validated reloptions.
             unsafe { options::codec_spec(index_relation) },
         ),
     };
     // SAFETY: the relation locks above retain both relations and the generated
     // IndexInfo for this synchronous source scan.
     let heap_relation = unsafe { pg_sys::table_open(heap_oid, pg_sys::NoLock.cast_signed()) };
+    // SAFETY: AccessExclusiveLock keeps the index relation and catalog metadata
+    // stable while PostgreSQL constructs IndexInfo.
     let index_info = unsafe { pg_sys::BuildIndexInfo(index_relation) };
+    // SAFETY: both relations and IndexInfo remain live and the callback copies
+    // every datum and TID during this synchronous scan.
     let heap_tuples = unsafe {
         pg_sys::table_index_build_scan(
             heap_relation,
@@ -2760,12 +2945,18 @@ unsafe fn compact_ivfflat_relation(
         )
     };
     let source_tuples = state.collector.tuple_count();
+    // SAFETY: the caller owns the locked live index relation and reads only its
+    // current main-fork block count.
     let blocks_before = unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     };
     let (published, reclaimed_pages) = if source_tuples == 0 {
         let meta = IvfflatMeta::empty_at(1, generation);
+        // SAFETY: AccessExclusiveLock gives this compaction exclusive ownership
+        // of block-zero publication.
         unsafe { publish_meta(index_relation, meta) };
+        // SAFETY: the relation is exclusively locked and block zero has just
+        // published the empty one-page generation.
         unsafe { pg_sys::RelationTruncate(index_relation, 1) };
         (meta, blocks_before.saturating_sub(1))
     } else {
@@ -2784,11 +2975,15 @@ unsafe fn compact_ivfflat_relation(
         } else {
             blocks_before
         };
+        // SAFETY: compaction holds both relations and publishes into either the
+        // inactive prefix or append-only tail before block-zero cutover.
         let meta = unsafe {
             write_ivfflat_generation(index_relation, metric, output, generation, generation_start)
         };
         let reclaimed = if reuse_inactive_prefix {
             let pages = blocks_before.saturating_sub(meta.posting_end);
+            // SAFETY: AccessExclusiveLock excludes scans and writers; the new
+            // metapage no longer references the superseded tail.
             unsafe { pg_sys::RelationTruncate(index_relation, meta.posting_end) };
             pages
         } else {
@@ -2796,7 +2991,11 @@ unsafe fn compact_ivfflat_relation(
         };
         (meta, reclaimed)
     };
+    // SAFETY: this function owns the heap relation reference and retains the
+    // transaction-scoped ShareLock by closing with NoLock.
     unsafe { pg_sys::table_close(heap_relation, pg_sys::NoLock.cast_signed()) };
+    // SAFETY: the locked live index relation owns the just-published metapage,
+    // which is decoded and validated into an owned value.
     let verified = unsafe { read_meta(index_relation) };
     if verified != published {
         raise_sql_error(

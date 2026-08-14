@@ -112,6 +112,8 @@ mod aarch64 {
             let b = unsafe { vmovl_s8(vld1_s8(right.as_ptr().add(offset))) };
             // SAFETY: all operations use initialized NEON lanes.
             let difference = unsafe { vsubq_s16(a, b) };
+            // SAFETY: every intrinsic reads initialized lanes produced above;
+            // widening i8 lanes to i16 keeps each squared product in i32.
             sums.squared_difference += i64::from(unsafe {
                 vaddvq_s32(vmull_s16(
                     vget_low_s16(difference),
@@ -121,18 +123,22 @@ mod aarch64 {
                     vget_high_s16(difference),
                 ))
             });
+            // SAFETY: `a` and `b` contain initialized widened input lanes.
             sums.dot += i64::from(unsafe {
                 vaddvq_s32(vmull_s16(vget_low_s16(a), vget_low_s16(b)))
                     + vaddvq_s32(vmull_s16(vget_high_s16(a), vget_high_s16(b)))
             });
+            // SAFETY: `a` contains initialized widened input lanes.
             sums.left_norm += i64::from(unsafe {
                 vaddvq_s32(vmull_s16(vget_low_s16(a), vget_low_s16(a)))
                     + vaddvq_s32(vmull_s16(vget_high_s16(a), vget_high_s16(a)))
             });
+            // SAFETY: `b` contains initialized widened input lanes.
             sums.right_norm += i64::from(unsafe {
                 vaddvq_s32(vmull_s16(vget_low_s16(b), vget_low_s16(b)))
                     + vaddvq_s32(vmull_s16(vget_high_s16(b), vget_high_s16(b)))
             });
+            // SAFETY: `difference` contains initialized widened input lanes.
             sums.l1 += i64::from(unsafe { vaddlvq_s16(vabsq_s16(difference)) });
             offset += 8;
         }
@@ -154,6 +160,8 @@ mod aarch64 {
             // SAFETY: values fit signed i16 exactly before subtraction.
             let difference =
                 unsafe { vsubq_s16(vreinterpretq_s16_u16(a), vreinterpretq_s16_u16(b)) };
+            // SAFETY: every intrinsic reads initialized lanes produced above;
+            // widening u8 lanes keeps each squared difference in i32.
             sums.squared_difference += i64::from(unsafe {
                 vaddvq_s32(vmull_s16(
                     vget_low_s16(difference),
@@ -163,18 +171,22 @@ mod aarch64 {
                     vget_high_s16(difference),
                 ))
             });
+            // SAFETY: `a` and `b` contain initialized widened input lanes.
             sums.dot += i64::from(unsafe {
                 vaddvq_u32(vmull_u16(vget_low_u16(a), vget_low_u16(b)))
                     + vaddvq_u32(vmull_u16(vget_high_u16(a), vget_high_u16(b)))
             });
+            // SAFETY: `a` contains initialized widened input lanes.
             sums.left_norm += i64::from(unsafe {
                 vaddvq_u32(vmull_u16(vget_low_u16(a), vget_low_u16(a)))
                     + vaddvq_u32(vmull_u16(vget_high_u16(a), vget_high_u16(a)))
             });
+            // SAFETY: `b` contains initialized widened input lanes.
             sums.right_norm += i64::from(unsafe {
                 vaddvq_u32(vmull_u16(vget_low_u16(b), vget_low_u16(b)))
                     + vaddvq_u32(vmull_u16(vget_high_u16(b), vget_high_u16(b)))
             });
+            // SAFETY: `difference` contains initialized widened input lanes.
             sums.l1 += i64::from(unsafe { vaddlvq_s16(vabsq_s16(difference)) });
             offset += 8;
         }

@@ -79,13 +79,11 @@ hnsw_am/wal_contract/critical_section.rs|fn|HnswWalRegisteredFinishPermit::finis
 hnsw_am/wal_contract/critical_section.rs|fn|HnswWalRegisteredSinglePage::register|registers one locked PostgreSQL buffer and captures its shadow page
 hnsw_am/wal_contract/critical_section.rs|fn|finish_generic_wal_state|contains the sole direct PostgreSQL Generic WAL completion call
 hnsw_am/vacuum.rs|fn|hnsw_vacuum_stats|reads a live VACUUM index relation
-hnsw_am_page_storage.rs|fn|append_hnsw_vector_record|writes a live PostgreSQL index relation
 hnsw_am_page_storage.rs|fn|append_hnsw_adjacency_record|writes bounded adjacency data to a live PostgreSQL index relation
 hnsw_am_page_storage.rs|fn|append_hnsw_directory_record|writes a bounded directory locator to a live PostgreSQL index relation
 hnsw_am_page_storage.rs|fn|append_hnsw_adjacency_revision|appends adjacency and its authoritative direct-address directory revision
 hnsw_am_page_storage.rs|fn|append_hnsw_bulk_typed_records|packs multiple bounded records into each Generic-WAL PostgreSQL page batch
 hnsw_am_page_storage.rs|fn|append_hnsw_delta_record|writes a bounded delta record to a live PostgreSQL index relation
-hnsw_am_page_storage.rs|fn|append_hnsw_node_revision|appends a node and its authoritative direct-address directory revision
 hnsw_am_page_storage.rs|fn|append_hnsw_typed_record|writes a typed record to a live PostgreSQL index relation
 hnsw_am_page_storage.rs|fn|checked_hnsw_page_item_span|validates a PostgreSQL page item before exposing its bounded span
 hnsw_am_page_storage.rs|fn|copy_hnsw_page_item|copies a checked PostgreSQL page item into Rust-owned storage
@@ -98,7 +96,6 @@ hnsw_am_graph_scan.rs|fn|read_published_mutation_overlay|reads exact frozen and 
 hnsw_am_graph_scan.rs|fn|read_consistent_hnsw_publication|retries a live metapage and overlay snapshot until their publication agrees
 hnsw_am_graph_scan.rs|fn|try_parallel_segment_search|loads PostgreSQL-backed segments before pure parallel traversal
 hnsw_am_graph_scan.rs|fn|hnsw_stored_config|reads persisted HNSW configuration from a live relation
-hnsw_am_graph_scan.rs|fn|hnsw_stored_entry_point|reads the published graph entry point from a live relation
 hnsw_am_graph_scan.rs|fn|initialize_hnsw_data_page|initializes a typed writable PostgreSQL page
 hnsw_am_graph_read.rs|fn|PgHnswGraphRead::meta|reads graph metadata from live PostgreSQL pages
 hnsw_am_graph_read.rs|fn|PgHnswGraphRead::load_directory|reads and caches authoritative directory locators from live PostgreSQL pages

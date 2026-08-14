@@ -567,6 +567,8 @@ unsafe fn read_published_mutation_overlay(
         let records = if segment.mutation_start_block == u64::MAX {
             Vec::new()
         } else {
+            // SAFETY: the publication descriptor came from a validated
+            // metapage and this scan owns the live relation.
             unsafe {
                 read_hnsw_delta_records_range(
                     index_relation,
@@ -580,6 +582,8 @@ unsafe fn read_published_mutation_overlay(
         };
         frozen.push(records);
     }
+    // SAFETY: the active range belongs to the validated metapage snapshot and
+    // the relation remains live for this scan.
     let active = unsafe { try_read_hnsw_delta_records(index_relation, meta) }?;
     Some(PublishedMutationOverlay { frozen, active })
 }
@@ -590,6 +594,8 @@ unsafe fn read_consistent_hnsw_publication(
     retained_bytes: u64,
 ) -> (HnswMetaPage, PublishedMutationOverlay) {
     for _ in 0..16 {
+        // SAFETY: the access-method callback owns a live index relation; the
+        // adapter copies and validates the metapage before returning it.
         let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
         require_hnsw_scan_memory(
             projected_mutation_overlay_bytes(meta)
@@ -597,6 +603,8 @@ unsafe fn read_consistent_hnsw_publication(
             max_memory_bytes,
             "mutation-overlay decode",
         );
+        // SAFETY: the overlay reader is bounded by the validated metapage and
+        // reads only while the callback-owned relation remains live.
         if let Some(overlay) = unsafe { read_published_mutation_overlay(index_relation, meta) } {
             return (meta, overlay);
         }
@@ -662,6 +670,8 @@ impl ParallelSegmentAdmission {
         }
         let mut keys = Vec::with_capacity(requested);
         for key in 0..i32::try_from(HNSW_MAX_SEGMENTS).unwrap_or(i32::MAX) {
+            // SAFETY: PostgreSQL is initialized in this backend and the direct
+            // call uses the exact two-int4 advisory-lock signature.
             let acquired = unsafe {
                 pgrx::direct_function_call::<bool>(
                     pg_sys::pg_try_advisory_lock_int4,
@@ -689,6 +699,8 @@ impl Drop for ParallelSegmentAdmission {
     fn drop(&mut self) {
         const NAMESPACE: i32 = 0x5047_5053;
         for key in self.keys.drain(..) {
+            // SAFETY: each key was acquired by this guard with the matching
+            // two-int4 advisory-lock function signature.
             let _ = unsafe {
                 pgrx::direct_function_call::<bool>(
                     pg_sys::pg_advisory_unlock_int4,
@@ -993,6 +1005,8 @@ unsafe fn try_parallel_segment_search(
         let result = match result_receiver.recv_timeout(Duration::from_millis(5)) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                // SAFETY: PostgreSQL initializes this signal flag before an
+                // access-method callback can run; this is a read-only poll.
                 if unsafe { pg_sys::InterruptPending != 0 } {
                     cancelled.store(true, Ordering::Relaxed);
                     interrupted = true;
@@ -1050,6 +1064,8 @@ unsafe fn hnsw_page_graph_scan_candidates(
     // Read the retirement overlay before ANN traversal. Each mutation may
     // invalidate one returned base hit, so this conservative expansion keeps
     // enough successors for the final chronological replay.
+    // SAFETY: the scan callback owns the relation and the reader validates and
+    // copies the publication before exposing it.
     let (meta, overlay) = unsafe {
         read_consistent_hnsw_publication(index_relation, max_memory_bytes, 0)
     };
@@ -1063,15 +1079,27 @@ unsafe fn hnsw_page_graph_scan_candidates(
     let query = if metric == HnswScoreMetric::Cosine {
         let prepared = metric
             .prepare_vector(query.clone())
-            .unwrap_or_else(|error| raise_core_error(error))
-            .unwrap_or_else(|| {
+            .unwrap_or_else(|error| raise_core_error(error));
+        match prepared {
+            Some(prepared) => {
+                normalized_query = prepared;
+                &normalized_query
+            }
+            // pgvector deliberately permits a zero cosine query. Its indexed
+            // nonzero vectors all have tied navigation scores and exact heap
+            // recheck returns NaN. Preserve that behavior only for a certified
+            // pgvector-owned input type; canonical pgContext types retain the
+            // fail-closed zero-vector contract.
+            // SAFETY: the active AM callback owns the live index relation and
+            // the helper only compares its certified opclass input type OID.
+            None if unsafe { hnsw_index_uses_certified_pgvector_type(index_relation) } => query,
+            None => {
                 raise_sql_error(
                     PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
                     "cosine HNSW query vectors must have a finite nonzero norm",
                 )
-            });
-        normalized_query = prepared;
-        &normalized_query
+            }
+        }
     } else {
         query
     };
@@ -1110,6 +1138,8 @@ unsafe fn hnsw_page_graph_scan_candidates(
         parallel_comparisons_admitted,
         parallel_limit,
     ) {
+        // SAFETY: the live relation and validated publication metadata remain
+        // owned by this scan while the parallel helper copies its inputs.
         unsafe {
             try_parallel_segment_search(
                 index_relation,
@@ -1220,6 +1250,8 @@ unsafe fn hnsw_unordered_scan_candidates_with_delta(
     }
     let mut candidates = BTreeMap::new();
     for (segment_index, segment) in meta.segments().iter().enumerate() {
+        // SAFETY: each segment descriptor came from the validated metapage and
+        // the callback keeps the relation live during the copy.
         let records = unsafe { read_hnsw_segment_records(index_relation, *segment) };
         for candidate in hnsw_unordered_scan_candidates(records) {
             candidates.insert(candidate.heap_tid, candidate);
@@ -1279,15 +1311,23 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
     let query = if metric == HnswScoreMetric::Cosine {
         let prepared = metric
             .prepare_vector(query.clone())
-            .unwrap_or_else(|error| raise_core_error(error))
-            .unwrap_or_else(|| {
+            .unwrap_or_else(|error| raise_core_error(error));
+        match prepared {
+            Some(prepared) => {
+                normalized_query = prepared;
+                &normalized_query
+            }
+            // Match the unmasked certified pgvector zero-query path above.
+            // SAFETY: the active AM callback owns the live index relation and
+            // the helper performs only certified relation-cache inspection.
+            None if unsafe { hnsw_index_uses_certified_pgvector_type(index_relation) } => query,
+            None => {
                 raise_sql_error(
                     PgSqlErrorCode::ERRCODE_INVALID_PARAMETER_VALUE,
                     "cosine HNSW query vectors must have a finite nonzero norm",
                 )
-            });
-        normalized_query = prepared;
-        &normalized_query
+            }
+        }
     } else {
         query
     };
@@ -1332,6 +1372,8 @@ unsafe fn hnsw_page_graph_scan_candidates_with_mask(
         parallel_comparisons_admitted,
         parallel_limit,
     ) {
+        // SAFETY: this scan owns the live relation and validated publication;
+        // the helper copies all worker inputs before returning.
         unsafe {
             try_parallel_segment_search(
                 index_relation,
@@ -1608,30 +1650,6 @@ unsafe fn hnsw_stored_config(
     // SAFETY: The caller owns a live index relation for the current callback.
     let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
     meta.stored_config(metric, runtime.ef_search())
-}
-
-#[cfg(any(test, feature = "pg_test"))]
-unsafe fn hnsw_stored_entry_point(
-    index_relation: pg_sys::Relation,
-) -> Option<HnswNodeId> {
-    // SAFETY: The caller owns a live index relation for the current callback.
-    let meta = unsafe { PgHnswGraphRead::new(index_relation).meta() };
-    if meta.entry_node_id == u64::MAX {
-        return None;
-    }
-    if meta.entry_node_id >= meta.graph_nodes {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
-            "HNSW stored entry point lies outside the published graph",
-        );
-    }
-    let entry = usize::try_from(meta.entry_node_id).unwrap_or_else(|_| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
-            "HNSW stored entry point exceeds platform range",
-        )
-    });
-    Some(HnswNodeId::new(entry))
 }
 
 unsafe fn initialize_hnsw_data_page(

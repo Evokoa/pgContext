@@ -459,6 +459,8 @@ unsafe fn postgres_parallel_assignment_runs(
 ) -> Option<(Vec<PgTempFile>, usize)> {
     // PostgreSQL chooses a safe upper bound from table size and server GUCs;
     // the extension GUC can only reduce it.
+    // SAFETY: the caller retains both live relations for the complete parallel
+    // lifecycle and their rd_id fields are immutable while locked.
     let planned = unsafe {
         pg_sys::plan_create_index_workers(
             (*assignment.heap_relation).rd_id,
@@ -493,7 +495,11 @@ unsafe fn postgres_parallel_assignment_runs(
         );
     }
 
+    // SAFETY: this backend is not already in parallel mode and every exit path
+    // below calls ExitParallelMode exactly once after successful entry.
     unsafe { pg_sys::EnterParallelMode() };
+    // SAFETY: PostgreSQL is initialized and both static C strings are
+    // NUL-terminated symbols compiled into this extension.
     let pcxt = unsafe {
         pg_sys::CreateParallelContext(
             c"pgcontext".as_ptr(),
@@ -502,15 +508,20 @@ unsafe fn postgres_parallel_assignment_runs(
         )
     };
     if pcxt.is_null() {
+        // SAFETY: parallel mode was entered above and no context was created.
         unsafe { pg_sys::ExitParallelMode() };
         return None;
     }
 
     let snapshot = if assignment.concurrent {
+        // SAFETY: the build runs in a transaction; the returned snapshot is
+        // registered until every parallel worker finishes or setup aborts.
         unsafe { pg_sys::RegisterSnapshot(pg_sys::GetTransactionSnapshot()) }
     } else {
         ptr::addr_of_mut!(pg_sys::SnapshotAnyData)
     };
+    // SAFETY: the heap relation and registered/static snapshot remain live;
+    // PostgreSQL only estimates the descriptor size here.
     let scan_bytes =
         unsafe { pg_sys::table_parallelscan_estimate(assignment.heap_relation, snapshot) };
     // SAFETY: CreateParallelContext returned one exclusive leader estimator.
@@ -519,11 +530,17 @@ unsafe fn postgres_parallel_assignment_runs(
     estimate_parallel_chunk(estimator, scan_bytes);
     estimate_parallel_chunk(estimator, centroid_bytes);
     estimate_parallel_chunk(estimator, size_of::<pg_sys::SharedFileSet>());
+    // SAFETY: the exclusive leader context estimator contains all required
+    // chunk and key reservations before DSM initialization.
     unsafe { pg_sys::InitializeParallelDSM(pcxt) };
+    // SAFETY: `pcxt` is the live leader-owned context returned above.
     if unsafe { (*pcxt).seg.is_null() } {
         if assignment.concurrent {
+            // SAFETY: this branch owns the registered snapshot and no workers
+            // were launched from the failed DSM context.
             unsafe { pg_sys::UnregisterSnapshot(snapshot) };
         }
+        // SAFETY: this branch owns the context and parallel-mode entry.
         unsafe {
             pg_sys::DestroyParallelContext(pcxt);
             pg_sys::ExitParallelMode();
@@ -531,16 +548,22 @@ unsafe fn postgres_parallel_assignment_runs(
         return None;
     }
 
+    // SAFETY: DSM initialization succeeded and the estimator reserved exactly
+    // this aligned chunk in the leader-owned TOC.
     let shared = unsafe {
         pg_sys::shm_toc_allocate((*pcxt).toc, size_of::<ParallelBuildShared>())
             .cast::<ParallelBuildShared>()
     };
+    // SAFETY: DSM initialization succeeded and the estimator reserved exactly
+    // `scan_bytes` for the parallel scan descriptor.
     let parallel_scan = unsafe {
         pg_sys::shm_toc_allocate((*pcxt).toc, scan_bytes)
             .cast::<pg_sys::ParallelTableScanDescData>()
     };
+    // SAFETY: the estimator reserved exactly `centroid_bytes`, aligned for f32.
     let shared_centroids =
         unsafe { pg_sys::shm_toc_allocate((*pcxt).toc, centroid_bytes).cast::<f32>() };
+    // SAFETY: the estimator reserved one aligned SharedFileSet chunk.
     let file_set = unsafe {
         pg_sys::shm_toc_allocate((*pcxt).toc, size_of::<pg_sys::SharedFileSet>())
             .cast::<pg_sys::SharedFileSet>()
@@ -555,6 +578,8 @@ unsafe fn postgres_parallel_assignment_runs(
             "PostgreSQL could not allocate IVFFlat parallel build state",
         );
     }
+    // SAFETY: all four allocations are non-null, properly sized and exclusively
+    // leader-owned; source slices and relations remain live through launch.
     unsafe {
         ptr::write(
             shared,
@@ -579,8 +604,11 @@ unsafe fn postgres_parallel_assignment_runs(
         pg_sys::shm_toc_insert((*pcxt).toc, PARALLEL_KEY_FILE_SET, file_set.cast());
         pg_sys::LaunchParallelWorkers(pcxt);
     }
+    // SAFETY: `pcxt` is live and LaunchParallelWorkers initialized this field.
     let launched = usize::try_from(unsafe { (*pcxt).nworkers_launched.max(0) }).unwrap_or(0);
     if launched == 0 {
+        // SAFETY: no workers launched; this branch owns the file set, context,
+        // optional snapshot registration and parallel-mode entry.
         unsafe {
             pg_sys::SharedFileSetDeleteAll(file_set);
             pg_sys::DestroyParallelContext(pcxt);
@@ -591,6 +619,8 @@ unsafe fn postgres_parallel_assignment_runs(
         }
         return None;
     }
+    // SAFETY: `pcxt` remains leader-owned and launched workers are joined before
+    // any DSM-backed state is read or destroyed.
     unsafe {
         pg_sys::WaitForParallelWorkersToAttach(pcxt);
         pg_sys::WaitForParallelWorkersToFinish(pcxt);
@@ -598,6 +628,8 @@ unsafe fn postgres_parallel_assignment_runs(
     let mut runs = Vec::with_capacity(launched);
     for worker in 0..launched {
         let name = parallel_worker_file_name(worker);
+        // SAFETY: workers finished, `file_set` remains attached, and `name` is a
+        // NUL-terminated unique file-set key.
         let file = unsafe {
             pg_sys::BufFileOpenFileSet(ptr::addr_of_mut!((*file_set).fs), name.as_ptr(), 0, false)
         };
@@ -609,6 +641,8 @@ unsafe fn postgres_parallel_assignment_runs(
         }
         runs.push(PgTempFile(file));
     }
+    // SAFETY: all worker files are opened, workers are joined, and this branch
+    // owns the file set, context, optional snapshot and parallel-mode entry.
     unsafe {
         pg_sys::SharedFileSetDeleteAll(file_set);
         pg_sys::DestroyParallelContext(pcxt);
@@ -719,15 +753,22 @@ pub unsafe extern "C-unwind" fn pgcontext_ivfflat_parallel_build_main(
 ) {
     // SAFETY: PostgreSQL entered this guarded dynamic-worker callback.
     let _scope = unsafe { crate::hnsw_am::ffi_boundary::PgCallbackScope::new() };
+    // SAFETY: PostgreSQL passes the leader-created TOC and the key maps to an
+    // aligned ParallelBuildShared allocation reserved during estimation.
     let shared = unsafe {
         pg_sys::shm_toc_lookup(toc, PARALLEL_KEY_SHARED, false).cast::<ParallelBuildShared>()
     };
+    // SAFETY: the leader inserted this key with a fully initialized parallel
+    // scan descriptor allocation.
     let parallel_scan = unsafe {
         pg_sys::shm_toc_lookup(toc, PARALLEL_KEY_SCAN, false)
             .cast::<pg_sys::ParallelTableScanDescData>()
     };
+    // SAFETY: the leader inserted this key with `dimensions * lists`
+    // initialized f32 values.
     let centroid_data =
         unsafe { pg_sys::shm_toc_lookup(toc, PARALLEL_KEY_CENTROIDS, false).cast::<f32>() };
+    // SAFETY: the leader inserted this key with an initialized SharedFileSet.
     let file_set = unsafe {
         pg_sys::shm_toc_lookup(toc, PARALLEL_KEY_FILE_SET, false).cast::<pg_sys::SharedFileSet>()
     };
@@ -738,12 +779,16 @@ pub unsafe extern "C-unwind" fn pgcontext_ivfflat_parallel_build_main(
             "IVFFlat parallel worker DSM state is incomplete",
         );
     }
+    // SAFETY: the null checks above establish a live aligned shared header for
+    // the lifetime of this worker callback.
     let shared = unsafe { &*shared };
     let dimensions = usize::try_from(shared.dimensions).unwrap_or(0);
     let lists = usize::try_from(shared.lists).unwrap_or(0);
     let values = dimensions
         .checked_mul(lists)
         .unwrap_or_else(|| build_limit("IVFFlat parallel centroid extent overflow"));
+    // SAFETY: the leader allocated and initialized exactly `values` f32 entries
+    // and DSM remains attached for this callback.
     let centroid_values = unsafe { slice::from_raw_parts(centroid_data, values) };
     let centroids = centroid_values
         .chunks_exact(dimensions)
@@ -767,6 +812,8 @@ pub unsafe extern "C-unwind" fn pgcontext_ivfflat_parallel_build_main(
         .saturating_div(usize::try_from(shared.workers).unwrap_or(1).max(1));
     let mut collector =
         ParallelWorkerCollector::new(metric, &centroids, dimensions, per_worker_budget);
+    // SAFETY: both pointers were null-checked, belong to this DSM segment, and
+    // remain live until the worker callback returns.
     unsafe { pg_sys::SharedFileSetAttach(file_set, segment) };
     let heap_lock = if shared.concurrent != 0 {
         pg_sys::ShareUpdateExclusiveLock
@@ -778,11 +825,21 @@ pub unsafe extern "C-unwind" fn pgcontext_ivfflat_parallel_build_main(
     } else {
         pg_sys::AccessExclusiveLock
     };
+    // SAFETY: the shared OIDs were copied from leader-locked relations and the
+    // selected lock levels match PostgreSQL's parallel build protocol.
     let heap = unsafe { pg_sys::table_open(shared.heap_oid, heap_lock.cast_signed()) };
+    // SAFETY: the heap was opened first and the shared index OID came from the
+    // same leader-owned build assignment.
     let index = unsafe { pg_sys::index_open(shared.index_oid, index_lock.cast_signed()) };
+    // SAFETY: `index` is live and locked for the complete synchronous scan.
     let index_info = unsafe { pg_sys::BuildIndexInfo(index) };
+    // SAFETY: IndexInfo is worker-owned and writable until scan completion.
     unsafe { (*index_info).ii_Concurrent = shared.concurrent != 0 };
+    // SAFETY: `heap` is live and the shared scan descriptor was initialized by
+    // the leader for this exact relation and snapshot.
     let scan = unsafe { pg_sys::table_beginscan_parallel(heap, parallel_scan) };
+    // SAFETY: both relations, IndexInfo, scan descriptor and collector state
+    // remain live throughout this synchronous callback-driven scan.
     unsafe {
         pg_sys::table_index_build_scan(
             heap,
@@ -796,8 +853,12 @@ pub unsafe extern "C-unwind" fn pgcontext_ivfflat_parallel_build_main(
         );
     }
     let mut run = collector.finish();
+    // SAFETY: PostgreSQL initializes the nonnegative worker number before
+    // invoking a dynamic worker entrypoint.
     let worker = usize::try_from(unsafe { pg_sys::ParallelWorkerNumber.max(0) }).unwrap_or(0);
     let name = parallel_worker_file_name(worker);
+    // SAFETY: the attached non-null SharedFileSet remains live and `name` is a
+    // NUL-terminated unique worker filename.
     let output =
         unsafe { pg_sys::BufFileCreateFileSet(ptr::addr_of_mut!((*file_set).fs), name.as_ptr()) };
     if output.is_null() {
@@ -813,9 +874,13 @@ pub unsafe extern "C-unwind" fn pgcontext_ivfflat_parallel_build_main(
         if read == 0 {
             break;
         }
+        // SAFETY: `output` is a live BufFile and the initialized prefix of
+        // `copy_buffer` remains valid for the synchronous write.
         unsafe { pg_sys::BufFileWrite(output, copy_buffer.as_ptr().cast(), read) };
         pg_sys::check_for_interrupts!();
     }
+    // SAFETY: the output file and both opened relations are worker-owned and
+    // closed/exported exactly once after the scan and copy complete.
     unsafe {
         pg_sys::BufFileExportFileSet(output);
         pg_sys::BufFileClose(output);
@@ -838,11 +903,15 @@ unsafe extern "C-unwind" fn ivfflat_parallel_build_callback(
     if !tuple_is_alive || tid.is_null() || state.is_null() {
         return;
     }
+    // SAFETY: PostgreSQL supplies values/null flags matching the live index
+    // tuple descriptor for this synchronous callback.
     let Some(vector) =
         (unsafe { crate::hnsw_am::hnsw_vector_from_index_values(index_relation, values, is_null) })
     else {
         return;
     };
+    // SAFETY: the callback rejected null state and PostgreSQL keeps the
+    // worker-owned collector alive for the synchronous scan.
     let state = unsafe { &mut *state.cast::<ParallelWorkerCollector<'_>>() };
     let Some(vector) = state
         .metric
@@ -851,6 +920,8 @@ unsafe extern "C-unwind" fn ivfflat_parallel_build_callback(
     else {
         return;
     };
+    // SAFETY: the callback rejected a null TID and PostgreSQL keeps it readable
+    // for the duration of this invocation.
     let heap_tid = pgrx::itemptr::item_pointer_to_u64(unsafe { *tid });
     state.push(heap_tid, vector.into_values());
 }

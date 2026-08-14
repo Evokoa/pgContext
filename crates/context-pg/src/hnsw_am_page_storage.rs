@@ -142,16 +142,6 @@ unsafe fn ensure_hnsw_metapage(index_relation: pg_sys::Relation) {
     }
 }
 
-#[cfg(any(test, feature = "pg_test"))]
-unsafe fn append_hnsw_vector_record(
-    index_relation: pg_sys::Relation,
-    record: &HnswVectorRecord,
-) -> HnswPageItemLocation {
-    let payload = encode_hnsw_vector_record(record);
-    // SAFETY: The owned payload is valid for the complete append call.
-    unsafe { append_hnsw_typed_record(index_relation, &payload, GraphPageKind::Node, "vector") }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct HnswPageItemLocation {
     page: u64,
@@ -225,6 +215,8 @@ unsafe fn append_hnsw_delta_record(
             return location;
         }
     }
+    // SAFETY: the caller guarantees a live index relation for this append;
+    // PostgreSQL returns only its current main-fork block count.
     let block_count = u64::from(unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(
             index_relation,
@@ -280,6 +272,8 @@ unsafe fn try_append_hnsw_delta_record_atomic(
     ensure_hnsw_page_record_fits(payload, "delta");
     // Lock block zero before the data block, matching the index-wide physical
     // lock order. The append advisory lock excludes a competing writer.
+    // SAFETY: the caller owns a live relation and block zero exists for every
+    // initialized HNSW index.
     let meta_buffer = unsafe {
         pg_sys::ReadBufferExtended(
             index_relation,
@@ -289,12 +283,16 @@ unsafe fn try_append_hnsw_delta_record_atomic(
             ptr::null_mut(),
         )
     };
+    // SAFETY: `meta_buffer` was returned by ReadBufferExtended and is released
+    // on every exit path below.
     unsafe { pg_sys::LockBuffer(meta_buffer, pg_sys::BUFFER_LOCK_EXCLUSIVE.cast_signed()) };
     let mode = if block_number == pg_sys::InvalidBlockNumber {
         pg_sys::ReadBufferMode::RBM_ZERO_AND_LOCK
     } else {
         pg_sys::ReadBufferMode::RBM_NORMAL
     };
+    // SAFETY: the block is either PostgreSQL's append sentinel or a validated
+    // published cursor in this live relation.
     let data_buffer = unsafe {
         pg_sys::ReadBufferExtended(
             index_relation,
@@ -305,9 +303,15 @@ unsafe fn try_append_hnsw_delta_record_atomic(
         )
     };
     if block_number != pg_sys::InvalidBlockNumber {
+        // SAFETY: `data_buffer` is pinned and was not already locked by
+        // RBM_ZERO_AND_LOCK in this branch.
         unsafe { pg_sys::LockBuffer(data_buffer, pg_sys::BUFFER_LOCK_EXCLUSIVE.cast_signed()) };
     }
+    // SAFETY: both buffers are pinned and exclusively locked for the complete
+    // Generic WAL transition.
     let state = unsafe { pg_sys::GenericXLogStart(index_relation) };
+    // SAFETY: the WAL state is new and both distinct buffers are pinned and
+    // exclusively locked in metapage-then-data-page order.
     let registered = unsafe {
         wal_contract::critical_section::HnswWalRegisteredTwoPages::register(
             state,
@@ -317,6 +321,8 @@ unsafe fn try_append_hnsw_delta_record_atomic(
         )
     };
     let (meta_page, data_page) = registered.pages();
+    // SAFETY: the registered metapage image is private to this WAL transition
+    // and the decoder validates its complete contents.
     let mut meta = match unsafe { read_hnsw_meta_page(meta_page) } {
         Ok(Some(meta)) => meta,
         Ok(None) => raise_sql_error(
@@ -325,9 +331,13 @@ unsafe fn try_append_hnsw_delta_record_atomic(
         ),
         Err(error) => raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error),
     };
+    // SAFETY: `data_buffer` remains pinned until the WAL transition is sealed
+    // or explicitly aborted below.
     let actual_block = u64::from(unsafe { pg_sys::BufferGetBlockNumber(data_buffer) });
     if initialize {
         if actual_block != meta.delta_end_block {
+            // SAFETY: abort owns the open WAL state and both buffers remain
+            // exclusively locked and pinned.
             unsafe {
                 pg_sys::GenericXLogAbort(state);
                 pg_sys::UnlockReleaseBuffer(data_buffer);
@@ -338,6 +348,8 @@ unsafe fn try_append_hnsw_delta_record_atomic(
                 "HNSW fresh delta page does not match the published append cursor",
             );
         }
+        // SAFETY: `data_page` is the private registered image of a fresh or
+        // reclaimed block and is initialized before any item is added.
         unsafe {
             pg_sys::PageInit(data_page, pg_sys::BLCKSZ as pg_sys::Size, 0);
             initialize_hnsw_data_page(
@@ -347,7 +359,11 @@ unsafe fn try_append_hnsw_delta_record_atomic(
                 meta.delta_generation,
             );
         }
+    // SAFETY: the registered data-page image remains private and readable;
+    // the helper validates its opaque header before access.
     } else if !unsafe { page_accepts_generation(data_page, meta.delta_generation) } {
+        // SAFETY: abort owns the open WAL state and both buffers remain locked
+        // and pinned on this rejection path.
         unsafe {
             pg_sys::GenericXLogAbort(state);
             pg_sys::UnlockReleaseBuffer(data_buffer);
@@ -358,6 +374,8 @@ unsafe fn try_append_hnsw_delta_record_atomic(
             "HNSW active delta page has the wrong generation",
         );
     }
+    // SAFETY: `data_page` is an exclusively owned registered page image and
+    // `payload` stays live for the duration of PageAddItemExtended.
     let offset = unsafe {
         pg_sys::PageAddItemExtended(
             data_page,
@@ -368,6 +386,8 @@ unsafe fn try_append_hnsw_delta_record_atomic(
         )
     };
     if offset == HNSW_INVALID_OFFSET {
+        // SAFETY: abort owns the open WAL state and both buffers remain locked
+        // and pinned on this full-page path.
         unsafe {
             pg_sys::GenericXLogAbort(state);
             pg_sys::UnlockReleaseBuffer(data_buffer);
@@ -381,12 +401,18 @@ unsafe fn try_append_hnsw_delta_record_atomic(
         meta.dimensions = dimensions;
     }
     meta.record_delta_append(actual_block.saturating_add(1));
+    // SAFETY: the registered metapage image is private to this WAL transition
+    // and `meta` has passed decode plus append-cursor validation.
     unsafe { write_hnsw_meta_page(meta_page, meta) };
     let location = HnswPageItemLocation {
         page: actual_block,
         slot: offset,
     };
+    // SAFETY: both registered images are fully initialized; sealing consumes
+    // the registration and finish commits their one WAL transition.
     unsafe { registered.seal().finish() };
+    // SAFETY: WAL finish is complete and both pinned buffers are released
+    // exactly once in reverse data-then-metapage order.
     unsafe {
         pg_sys::UnlockReleaseBuffer(data_buffer);
         pg_sys::UnlockReleaseBuffer(meta_buffer);
@@ -420,6 +446,8 @@ unsafe fn read_hnsw_delta_records(
     index_relation: pg_sys::Relation,
     meta: HnswMetaPage,
 ) -> Vec<context_storage::DeltaRecord> {
+    // SAFETY: this function forwards its live-relation contract and the
+    // supplied metapage was validated before the call.
     unsafe { try_read_hnsw_delta_records(index_relation, meta) }.unwrap_or_else(|| {
         raise_sql_error(
             PgSqlErrorCode::ERRCODE_T_R_SERIALIZATION_FAILURE,
@@ -438,6 +466,8 @@ unsafe fn try_read_hnsw_delta_records(
     if meta.delta_start_block == u64::MAX || meta.delta_record_count == 0 {
         return Some(Vec::new());
     }
+    // SAFETY: the caller guarantees a live initialized relation whose
+    // metapage is block zero.
     let meta_buffer = unsafe {
         pg_sys::ReadBufferExtended(
             index_relation,
@@ -447,7 +477,10 @@ unsafe fn try_read_hnsw_delta_records(
             ptr::null_mut(),
         )
     };
+    // SAFETY: `meta_buffer` is pinned and every return path releases it once.
     unsafe { pg_sys::LockBuffer(meta_buffer, pg_sys::BUFFER_LOCK_SHARE.cast_signed()) };
+    // SAFETY: the shared lock keeps the metapage stable while its private
+    // validated copy is decoded.
     let current = unsafe {
         let page = pg_sys::BufferGetPage(meta_buffer);
         read_hnsw_meta_page(page)
@@ -455,6 +488,7 @@ unsafe fn try_read_hnsw_delta_records(
     let current = match current {
         Ok(Some(current)) => current,
         Ok(None) => {
+            // SAFETY: this branch owns the one shared pin and lock.
             unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_DATA_CORRUPTED,
@@ -462,6 +496,7 @@ unsafe fn try_read_hnsw_delta_records(
             )
         }
         Err(error) => {
+            // SAFETY: this branch owns the one shared pin and lock.
             unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
             raise_sql_error(PgSqlErrorCode::ERRCODE_DATA_CORRUPTED, error)
         }
@@ -472,6 +507,7 @@ unsafe fn try_read_hnsw_delta_records(
         || current.delta_generation != meta.delta_generation
         || current.delta_record_count != meta.delta_record_count
     {
+        // SAFETY: this mismatch branch owns the one shared pin and lock.
         unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
         return None;
     }
@@ -488,6 +524,8 @@ unsafe fn try_read_hnsw_delta_records(
             meta.delta_record_count,
         )
     };
+    // SAFETY: the range copy completed and this function still owns the one
+    // shared metapage pin and lock.
     unsafe { pg_sys::UnlockReleaseBuffer(meta_buffer) };
     Some(records)
 }
@@ -619,39 +657,6 @@ unsafe fn read_hnsw_delta_records_range(
         );
     }
     records
-}
-
-#[cfg(any(test, feature = "pg_test"))]
-unsafe fn append_hnsw_node_revision(
-    index_relation: pg_sys::Relation,
-    record: &HnswVectorRecord,
-) -> HnswPageItemLocation {
-    // SAFETY: the caller owns a live index relation and the record remains
-    // borrowed through both append operations.
-    let location = unsafe { append_hnsw_vector_record(index_relation, record) };
-    let identity = u64::try_from(record.node_id.get()).unwrap_or_else(|_| {
-        raise_sql_error(
-            PgSqlErrorCode::ERRCODE_PROGRAM_LIMIT_EXCEEDED,
-            "HNSW node id exceeds directory storage",
-        )
-    });
-    // SAFETY: the locator is derived from the node record that was just made
-    // durable through Generic WAL on this same live relation.
-    unsafe {
-        append_hnsw_directory_record(
-            index_relation,
-            HnswDirectoryRecord {
-                key_kind: GraphDirectoryKeyKind::Node,
-                generation: HNSW_INITIAL_PAGE_GENERATION,
-                identity,
-                ordinal: 0,
-                target_page: location.page,
-                target_slot: location.slot,
-                revision: hnsw_location_revision(location),
-            },
-        )
-    };
-    location
 }
 
 /// Writes a whole base graph as page batches, stamping every page with

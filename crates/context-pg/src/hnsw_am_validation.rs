@@ -348,6 +348,8 @@ pub(crate) unsafe fn hnsw_orderby_contract(index_relation: pg_sys::Relation) -> 
     HnswOrderByContract {
         metric: certified.metric,
         result_type: certified.result_type,
+        // SAFETY: validation owns a live index relation and both helpers only
+        // inspect catalog metadata for that relation.
         exact_float8_recheck: unsafe {
             hnsw_index_uses_certified_pgvector_type(index_relation)
                 || hnsw_index_uses_integer_source_type(index_relation)

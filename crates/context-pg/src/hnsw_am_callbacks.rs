@@ -59,6 +59,8 @@ fn hnsw_build_safe(
     let segment_rows = HNSW_TARGET_SEGMENT_ROWS.max(minimum_rows).max(1);
     let original_entry = state.graph.entry_point();
     let source_snapshots = state.graph.into_node_snapshots();
+    // SAFETY: the build callback owns the live relation and the adapter copies
+    // and validates its metapage before returning it.
     let build_meta = unsafe { PgHnswGraphRead::new(index_relation.as_ptr()).meta() };
     let build_generation = build_meta.page_generation();
     let mut published_segments = Vec::with_capacity(source_rows.div_ceil(segment_rows));
@@ -98,6 +100,8 @@ fn hnsw_build_safe(
         };
         let generation =
             build_generation.saturating_add(u64::try_from(index).unwrap_or(u64::MAX));
+        // SAFETY: the build callback owns a live relation and requests only its
+        // current main-fork block count.
         let start_block = u64::from(unsafe {
             pg_sys::RelationGetNumberOfBlocksInFork(
                 index_relation.as_ptr(),
@@ -111,6 +115,8 @@ fn hnsw_build_safe(
                 write_hnsw_node_revisions_bulk(index_relation.as_ptr(), &snapshots, generation)
             };
         }
+        // SAFETY: the build callback owns the relation and the preceding write
+        // completed before reading the main-fork block count.
         let end_block = u64::from(unsafe {
             pg_sys::RelationGetNumberOfBlocksInFork(
                 index_relation.as_ptr(),
@@ -336,6 +342,8 @@ fn hnsw_insert_safe(
         // SAFETY: the callback owns the live relation and append lock.
         let rotated = unsafe { hnsw_rotate_delta_relation(index_relation.as_ptr(), score_metric) };
         if rotated {
+            // SAFETY: rotation completed under the append lock; the adapter
+            // copies and validates the newly published metapage.
             let meta = unsafe { PgHnswGraphRead::new(index_relation.as_ptr()).meta() };
             if meta.delta_accepts_insert(delta_limit) {
                 return unsafe {
@@ -359,6 +367,8 @@ fn hnsw_insert_safe(
                     hnsw_rotate_delta_relation(index_relation.as_ptr(), score_metric)
                 };
                 if rotated {
+                    // SAFETY: compaction and rotation completed under the append
+                    // lock; the adapter validates the republished metapage.
                     let meta = unsafe { PgHnswGraphRead::new(index_relation.as_ptr()).meta() };
                     if meta.delta_accepts_insert(delta_limit) {
                         return unsafe {
@@ -529,6 +539,8 @@ fn hnsw_bulk_delete_safe(
     // VACUUM already holds ShareUpdateExclusive on the parent table. Take the
     // same per-index lock as INSERT/rotation second, preserving the global
     // table -> advisory order and closing the append/publication race.
+    // SAFETY: VACUUM supplies a live relation and owns the required table lock;
+    // these helpers acquire the index lock and copy validated metadata.
     unsafe { serialize_hnsw_insert(info.as_ref().index) };
     let meta = unsafe { PgHnswGraphRead::new(info.as_ref().index).meta() };
     let score_metric = unsafe { hnsw_score_metric(info.as_ref().index) };
@@ -547,10 +559,14 @@ fn hnsw_bulk_delete_safe(
     );
     let mut segment_records = Vec::with_capacity(meta.segments().len());
     for segment in meta.segments() {
+        // SAFETY: the validated metapage supplied each descriptor and VACUUM
+        // keeps the relation live while records are copied.
         let base = unsafe { read_hnsw_segment_records(info.as_ref().index, *segment) };
         let mutations = if segment.mutation_start_block == u64::MAX {
             Vec::new()
         } else {
+            // SAFETY: the descriptor's mutation extent is validated and read
+            // while VACUUM owns the live relation.
             unsafe {
                 read_hnsw_delta_records_range(
                     info.as_ref().index,
@@ -564,6 +580,8 @@ fn hnsw_bulk_delete_safe(
         };
         segment_records.push((base, mutations));
     }
+    // SAFETY: the validated metapage owns the active delta extent and VACUUM
+    // keeps the relation live for this pass.
     let active = unsafe { read_hnsw_delta_records(info.as_ref().index, meta) };
     let chronological = segment_records
         .iter()
@@ -606,6 +624,8 @@ fn hnsw_bulk_delete_safe(
             let (block, offset) = u64_to_item_pointer_parts(row.heap_tid);
             let mut tid = pg_sys::ItemPointerData::default();
             item_pointer_set_all(&mut tid, block, offset);
+            // SAFETY: PostgreSQL supplied the callback and state for this
+            // VACUUM invocation; `tid` is initialized for the duration of it.
             if unsafe { callback(&mut tid, callback_state) } {
                 dead_tids.push(row.heap_tid);
             }
@@ -615,9 +635,13 @@ fn hnsw_bulk_delete_safe(
     if !dead_tids.is_empty() {
         let delta_limit = crate::settings::hnsw_delta_segment_limit_from_guc();
         for heap_tid in dead_tids {
+            // SAFETY: VACUUM owns the live relation and the serialization lock;
+            // the helpers validate publication state before changing it.
             let current = unsafe { PgHnswGraphRead::new(info.as_ref().index).meta() };
             if !current.delta_accepts_insert(delta_limit) {
                 if usize::from(current.segment_count) >= HNSW_MAX_SEGMENTS
+                    // SAFETY: VACUUM holds the serialization lock and the helper
+                    // validates the bounded directory before republishing it.
                     && !unsafe {
                         hnsw_compact_smallest_pair(info.as_ref().index, score_metric)
                     }
@@ -627,6 +651,8 @@ fn hnsw_bulk_delete_safe(
                         "VACUUM could not compact the bounded HNSW directory",
                     );
                 }
+                // SAFETY: VACUUM holds the serialization lock and owns the live
+                // relation throughout the bounded delta rotation.
                 if !unsafe { hnsw_rotate_delta_relation(info.as_ref().index, score_metric) } {
                     raise_sql_error(
                         PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,
@@ -634,6 +660,8 @@ fn hnsw_bulk_delete_safe(
                     );
                 }
             }
+            // SAFETY: the live relation and serialization lock remain owned;
+            // the tombstone contains a validated heap TID and no vector bytes.
             let _location = unsafe {
                 append_hnsw_delta_record(
                     info.as_ref().index,
@@ -643,6 +671,8 @@ fn hnsw_bulk_delete_safe(
             };
             record_hnsw_delta_segment_record();
         }
+        // SAFETY: the serialization lock and live VACUUM relation remain held
+        // through the final compaction and rotation checks.
         let current = unsafe { PgHnswGraphRead::new(info.as_ref().index).meta() };
         if usize::from(current.segment_count) >= HNSW_MAX_SEGMENTS
             && !unsafe { hnsw_compact_smallest_pair(info.as_ref().index, score_metric) }
@@ -652,6 +682,8 @@ fn hnsw_bulk_delete_safe(
                 "VACUUM could not compact before final HNSW tombstone rotation",
             );
         }
+        // SAFETY: the live VACUUM relation and serialization lock remain held
+        // through this final bounded publication.
         if !unsafe { hnsw_rotate_delta_relation(info.as_ref().index, score_metric) } {
             raise_sql_error(
                 PgSqlErrorCode::ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE,

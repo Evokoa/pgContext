@@ -178,6 +178,8 @@ unsafe fn hnsw_rotate_delta_relation(
         .map(|record| record.heap_tid)
         .collect::<BTreeSet<_>>();
     let residual = residual_tombstones(&delta_records, Some(&delta_owned_tids));
+    // SAFETY: compaction owns a live index relation and requests only its main
+    // fork block count through PostgreSQL's relation API.
     let graph_start = u64::from(unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     });
@@ -203,6 +205,8 @@ unsafe fn hnsw_rotate_delta_relation(
     let mutation_end = if residual.is_empty() {
         u64::MAX
     } else {
+        // SAFETY: compaction owns a live index relation and requests only its
+        // main-fork block count after writing the residual records.
         u64::from(unsafe {
             pg_sys::RelationGetNumberOfBlocksInFork(
                 index_relation,
@@ -410,6 +414,8 @@ unsafe fn hnsw_compact_smallest_pair(
     let entry_point = graph.entry_point();
     let snapshots = graph.into_node_snapshots();
     let generation = meta.next_segment_generation();
+    // SAFETY: compaction owns a live index relation and requests only its main
+    // fork block count through PostgreSQL's relation API.
     let graph_start = u64::from(unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(index_relation, pg_sys::ForkNumber::MAIN_FORKNUM)
     });
@@ -432,6 +438,8 @@ unsafe fn hnsw_compact_smallest_pair(
     let mutation_end = if residual.is_empty() {
         u64::MAX
     } else {
+        // SAFETY: compaction owns the relation and the preceding write leaves
+        // PostgreSQL's main-fork block count readable here.
         u64::from(unsafe {
             pg_sys::RelationGetNumberOfBlocksInFork(
                 index_relation,
@@ -440,6 +448,8 @@ unsafe fn hnsw_compact_smallest_pair(
         })
     };
     let active_generation = generation.saturating_add(1);
+    // SAFETY: compaction owns the relation and requests the main-fork block
+    // count used as the next active mutation cursor.
     let active_start = u64::from(unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(
             index_relation,
@@ -457,6 +467,8 @@ unsafe fn hnsw_compact_smallest_pair(
             );
         }
     }
+    // SAFETY: compaction owns the relation and requests the main-fork block
+    // count after initializing the active delta extent.
     let active_end = u64::from(unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(
             index_relation,
@@ -555,10 +567,14 @@ unsafe fn hnsw_compact_relation(
     // own mutation log, then the next segment may resurrect a reused heap TID.
     let mut segment_records = Vec::with_capacity(meta.segments().len());
     for segment in meta.segments() {
+        // SAFETY: descriptors come from the validated metapage and compaction
+        // keeps the relation live while records are copied.
         let base = unsafe { read_hnsw_segment_records(index_relation, *segment) };
         let mutations = if segment.mutation_start_block == u64::MAX {
             Vec::new()
         } else {
+            // SAFETY: the descriptor's mutation extent was validated with the
+            // metapage and is read while the relation remains live.
             unsafe {
                 read_hnsw_delta_records_range(
                     index_relation,
@@ -572,6 +588,8 @@ unsafe fn hnsw_compact_relation(
         };
         segment_records.push((base, mutations));
     }
+    // SAFETY: the validated metapage owns the active delta extent and the
+    // relation remains live for this compaction pass.
     let active_records = unsafe { read_hnsw_delta_records(index_relation, meta) };
     let chronological = segment_records
         .iter()
@@ -827,6 +845,8 @@ fn hnsw_compact_segment_pair(index: PgRelation, expected_directory_epoch: i64) -
     let expected_directory_epoch = u64::try_from(expected_directory_epoch).unwrap_or(u64::MAX);
     // A retry after publication, or a job made stale by any intervening
     // rotation/VACUUM, is a successful no-op. It must never select a new pair.
+    // SAFETY: the compaction callback owns the live relation; the adapter
+    // validates and copies the current metapage.
     if unsafe { PgHnswGraphRead::new(index_relation).meta() }.directory_epoch
         != expected_directory_epoch
     {
@@ -900,6 +920,8 @@ fn hnsw_segment_stats(
         if segment.mutation_start_block == u64::MAX {
             total
         } else {
+            // SAFETY: the segment descriptor came from a validated metapage and
+            // this inspection keeps the index relation live.
             total.saturating_add(unsafe {
                 read_hnsw_delta_records_range(
                     index_relation,
