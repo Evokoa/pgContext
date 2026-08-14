@@ -75,10 +75,10 @@ fn delta_page_rejects_structural_corruption() {
         hash
     };
     corrupt[24..32].copy_from_slice(&checksum.to_le_bytes());
-    // The exact rejection depends on what the walker hits first in the
-    // zero-filled tail (unknown flags vs truncation); failing closed is the
-    // contract, not which structural violation wins.
-    assert!(decode_delta_page(&corrupt).is_err());
+    assert_eq!(
+        decode_delta_page(&corrupt),
+        Err(DeltaSegmentError::Truncated)
+    );
 }
 
 #[test]

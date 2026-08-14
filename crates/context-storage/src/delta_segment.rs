@@ -256,7 +256,15 @@ pub fn decode_delta_page(payload: &[u8]) -> Result<(u64, Vec<DeltaRecord>), Delt
     if version != DELTA_PAGE_VERSION {
         return Err(DeltaSegmentError::UnsupportedVersion { found: version });
     }
-    let record_count = u32::from_le_bytes([payload[12], payload[13], payload[14], payload[15]]);
+    let record_count = usize::try_from(u32::from_le_bytes([
+        payload[12],
+        payload[13],
+        payload[14],
+        payload[15],
+    ]))
+    .map_err(|_| DeltaSegmentError::InvalidRecord {
+        reason: "record count exceeds usize",
+    })?;
     let generation = u64::from_le_bytes([
         payload[16],
         payload[17],
@@ -283,7 +291,11 @@ pub fn decode_delta_page(payload: &[u8]) -> Result<(u64, Vec<DeltaRecord>), Delt
         return Err(DeltaSegmentError::ChecksumMismatch);
     }
 
-    let mut records = Vec::with_capacity(record_count as usize);
+    let maximum_record_count = (payload.len() - DELTA_PAGE_HEADER_BYTES) / RECORD_FIXED_BYTES;
+    if record_count > maximum_record_count {
+        return Err(DeltaSegmentError::Truncated);
+    }
+    let mut records = Vec::with_capacity(record_count);
     let mut offset = DELTA_PAGE_HEADER_BYTES;
     for _ in 0..record_count {
         let fixed_end =
