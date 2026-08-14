@@ -63,6 +63,16 @@ cat >"${fake_bin}/pg_ctl" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'pg_ctl:%s\n' "$*" >>"${FAKE_PGRX_LOG}"
+if [[ "${1:-}" == "start" && "${FAKE_PG_CTL_START_FAILURE:-false}" == true ]]; then
+  while [[ $# -gt 0 ]]; do
+    if [[ "$1" == "-l" && $# -ge 2 ]]; then
+      printf 'simulated PostgreSQL startup failure\n' >"$2"
+      break
+    fi
+    shift
+  done
+  exit 1
+fi
 if [[ "${1:-}" == "stop" && "${FAKE_PG_CTL_STOP_FAILURE:-false}" == true ]]; then
   exit 1
 fi
@@ -97,7 +107,8 @@ grep -q \
 grep -q '^initdb:-D .*pgcontext-pgrx-pg18\..*/data --no-locale --encoding=UTF8 --username postgres$' \
   "${log_path}"
 grep -q '^pg_ctl:start -D .*pgcontext-pgrx-pg18\..*/data .*' "${log_path}"
-grep -q '^pg_ctl:start .* -o -p 28818 -h 127\.0\.0\.1$' "${log_path}"
+grep -q '^pg_ctl:start .* -o -p 28818 -h 127\.0\.0\.1 -k .*pgcontext-pgrx-pg18\.' \
+  "${log_path}"
 grep -q '^createdb:-h 127\.0\.0\.1 -p 28818 -U postgres pgcontext_runner_smoke$' \
   "${log_path}"
 grep -q '^pg_ctl:stop -D .*pgcontext-pgrx-pg18\..*/data -m fast$' "${log_path}"
@@ -151,7 +162,8 @@ grep -q \
   "${log_path}"
 grep -q '^initdb:-D .*pgcontext-pgrx-pg17\..*/data --no-locale --encoding=UTF8$' \
   "${log_path}"
-grep -q '^pg_ctl:start .* -o -p 28817 -h 127\.0\.0\.1$' "${log_path}"
+grep -q '^pg_ctl:start .* -o -p 28817 -h 127\.0\.0\.1 -k .*pgcontext-pgrx-pg17\.' \
+  "${log_path}"
 grep -q '^pg_ctl:stop -D .*pgcontext-pgrx-pg17\..*/data -m fast$' "${log_path}"
 
 : >"${log_path}"
@@ -216,3 +228,22 @@ if PATH="${fake_bin}:${PATH}" \
 fi
 grep -q 'PGRX_TEST_MODE must be in-server or native' \
   "${work_dir}/invalid-mode.err"
+
+: >"${log_path}"
+if PATH="${fake_bin}:${PATH}" \
+  REPO_ROOT="${fixture_root}" \
+  PGRX_TEST_PLATFORM=Darwin \
+  PGRX_TEST_TMPDIR="${work_dir}/start-failure-clusters" \
+  FAKE_PG_CTL_START_FAILURE=true \
+  FAKE_PGRX_LOG="${log_path}" \
+  FAKE_PGRX_BIN="${fake_bin}" \
+  FAKE_PGRX_SHARE="${fake_share}" \
+  "${fixture_root}/scripts/run-v1-pgrx-tests.sh" \
+  2>"${work_dir}/start-failure.err"; then
+  echo "failed PostgreSQL startup should fail the runner" >&2
+  exit 1
+fi
+grep -q 'test cluster failed to start; server log follows' \
+  "${work_dir}/start-failure.err"
+grep -q 'simulated PostgreSQL startup failure' \
+  "${work_dir}/start-failure.err"

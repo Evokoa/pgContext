@@ -115,8 +115,17 @@ if [[ -n "${PGUSER:-}" ]]; then
 else
   "${pg_bin}/initdb" -D "${cluster_data}" --no-locale --encoding=UTF8
 fi
-"${pg_bin}/pg_ctl" start -D "${cluster_data}" -l "${cluster_log}" \
-  -o "-p ${PGRX_TEST_PORT} -h ${PGRX_TEST_HOST}"
+if ! "${pg_bin}/pg_ctl" start -D "${cluster_data}" -l "${cluster_log}" \
+  -o "-p ${PGRX_TEST_PORT} -h ${PGRX_TEST_HOST} -k ${cluster_root}"
+then
+  echo "PostgreSQL ${PG_MAJOR} test cluster failed to start; server log follows:" >&2
+  if [[ -f "${cluster_log}" ]]; then
+    sed -n '1,240p' "${cluster_log}" >&2
+  else
+    echo "server log was not created: ${cluster_log}" >&2
+  fi
+  exit 1
+fi
 cluster_started=true
 "${pg_bin}/createdb" "${createdb_connection[@]}" "${PGRX_TEST_DBNAME}"
 "${runner_command[@]}"
