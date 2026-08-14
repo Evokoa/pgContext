@@ -27,6 +27,15 @@ assert_summary_row_count() {
   fi
 }
 
+reported_path() {
+  local path="$1"
+
+  case "${path}" in
+    "${REPO_ROOT}"/*) printf '%s\n' "${path#"${REPO_ROOT}/"}" ;;
+    *) printf '%s\n' "${path}" ;;
+  esac
+}
+
 "${REPO_ROOT}/scripts/run-security-review-report.sh" \
   --dry-run \
   --pg-major 17 \
@@ -53,13 +62,15 @@ assert_gate() {
   local boundary="$4"
   local min_tests="$5"
   local log_file="${work_dir}/report/${gate}.log"
+  local report_log_file
   local row_prefix
 
+  report_log_file="$(reported_path "${log_file}")"
   row_prefix="${gate}"$'\t'"${kind}"$'\t''dry-run'$'\t''0'
   grep -qF "${row_prefix}" "${summary}"
   grep -qF "${command}" "${summary}"
   grep -qF "${command}"$'\t''0'$'\t'"${min_tests}"$'\t' "${summary}"
-  grep -qF "| \`${gate}\` | \`${kind}\` | ${boundary} | \`dry-run\` | \`${log_file}\` |" "${report}"
+  grep -qF "| \`${gate}\` | \`${kind}\` | ${boundary} | \`dry-run\` | \`${report_log_file}\` |" "${report}"
   awk -F '\t' -v gate="${gate}" '$1 == gate && $12 ~ /^[1-9][0-9]*$/ { found = 1 } END { exit(found ? 0 : 1) }' \
     "${summary}"
   assert_file_exists "${log_file}"
