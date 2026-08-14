@@ -11,7 +11,8 @@ cd "${repo_root}"
 
 pg_major="${PG_VERSION_FEATURE:-pg17}"
 database="${DBNAME:-pgcontext_p5_quantized_1m}"
-pg_host="${PGHOST:-/Users/daltonprescott/.pgrx}"
+pg_host="${PGHOST:-localhost}"
+pgrx_home="${P5_PGRX_HOME:-${PGRX_HOME:-${HOME}/.pgrx}}"
 pg_port="${PGPORT:-28817}"
 report_path="${P5_REPORT_PATH:-${repo_root}/.temporary_files/p5-quantized-hnsw-1m.tsv}"
 manifest_path="${P5_MANIFEST_PATH:-${repo_root}/.temporary_files/p5-codec-manifest.tsv}"
@@ -51,7 +52,7 @@ if [[ -z "${release_library}" ]]; then
   echo "P5 performance gate requires a release-built extension (cargo pgrx install --release ...)" >&2
   exit 64
 fi
-pgrx_config="${P5_PGRX_CONFIG:-${pg_host}/config.toml}"
+pgrx_config="${P5_PGRX_CONFIG:-${pgrx_home}/config.toml}"
 pg_config_path="$(awk -F '"' -v key="${pg_major}" '$1 ~ "^[[:space:]]*" key "[[:space:]]*=" { print $2; exit }' "${pgrx_config}")"
 if [[ -z "${pg_config_path}" || ! -x "${pg_config_path}" ]]; then
   echo "P5 cannot resolve ${pg_major} pg_config from ${pgrx_config}" >&2
@@ -70,7 +71,7 @@ if [[ -z "${installed_library}" ]] || ! cmp -s "${release_library}" "${installed
 fi
 pg_ctl_path="$(dirname "${pg_config_path}")/pg_ctl"
 pg_isready_path="$(dirname "${pg_config_path}")/pg_isready"
-pg_data="${P5_PGDATA:-${pg_host}/data-${pg_major#pg}}"
+pg_data="${P5_PGDATA:-${pgrx_home}/data-${pg_major#pg}}"
 if [[ ! -x "${pg_ctl_path}" || ! -x "${pg_isready_path}" || ! -d "${pg_data}" ]]; then
   echo "P5 cannot resolve pg_ctl, pg_isready, or PGDATA for ${pg_major}" >&2
   exit 64
