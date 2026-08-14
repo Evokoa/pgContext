@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Run pgrx ``#[pg_test]`` wrappers inside a live PostgreSQL backend.
 
-On macOS, the standalone Rust test executable produced by ``cargo pgrx test``
-cannot resolve PostgreSQL server data symbols.  A test-enabled extension still
-contains the generated SQL wrappers, so this runner discovers the Rust tests,
-maps them to those wrappers, and preserves pgrx's transaction and expected-error
-semantics while executing them through psql.
+The standalone Rust test executable produced by ``cargo pgrx test`` can fail to
+resolve PostgreSQL server data symbols with some supported platform/linker
+combinations.  A test-enabled extension still contains the generated SQL
+wrappers, so this runner discovers the Rust tests, maps them to those wrappers,
+and preserves pgrx's transaction and expected-error semantics while executing
+them through psql.
 """
 
 from __future__ import annotations

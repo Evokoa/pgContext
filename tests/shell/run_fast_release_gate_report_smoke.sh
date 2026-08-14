@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 TMPDIR="${TMPDIR:-${REPO_ROOT}/target/tmp}"
 export PGRX_TEST_PLATFORM=Linux
+export PGRX_TEST_MODE=native
 mkdir -p "${TMPDIR}"
 work_dir="$(mktemp -d "${TMPDIR}/fast-release-gate-report-test.XXXXXX")"
 trap 'rm -rf "${work_dir}"' EXIT

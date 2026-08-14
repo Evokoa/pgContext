@@ -659,7 +659,7 @@ impl HnswMetaPage {
         })
     }
 
-    #[cfg(any(test, feature = "pg_test"))]
+    #[cfg(test)]
     fn record_insert(&mut self, dimensions: u32, entry_point: Option<HnswNodeId>) -> HnswNodeId {
         let node_id = hnsw_node_id_from_graph_count(self.graph_nodes);
         if self.dimensions == 0 {

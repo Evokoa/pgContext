@@ -158,6 +158,23 @@ grep -q '^pg_ctl:stop -D .*pgcontext-pgrx-pg17\..*/data -m fast$' "${log_path}"
 PATH="${fake_bin}:${PATH}" \
   REPO_ROOT="${fixture_root}" \
   PGRX_TEST_PLATFORM=Linux \
+  PGRX_TEST_DBNAME=pgcontext_linux_runner_smoke \
+  PGRX_TEST_TMPDIR="${work_dir}/linux-clusters" \
+  FAKE_PGRX_LOG="${log_path}" \
+  FAKE_PGRX_BIN="${fake_bin}" \
+  FAKE_PGRX_SHARE="${fake_share}" \
+  "${fixture_root}/scripts/run-v1-pgrx-tests.sh"
+grep -q \
+  '^cargo:pgrx install --test --release -p context-pg .* --no-default-features --features pg17 pg_test --sudo$' \
+  "${log_path}"
+grep -q 'python3:scripts/run_pgrx_tests_in_server.py .*--database pgcontext_linux_runner_smoke' \
+  "${log_path}"
+
+: >"${log_path}"
+PATH="${fake_bin}:${PATH}" \
+  REPO_ROOT="${fixture_root}" \
+  PGRX_TEST_PLATFORM=Linux \
+  PGRX_TEST_MODE=native \
   FAKE_PGRX_LOG="${log_path}" \
   "${fixture_root}/scripts/run-v1-pgrx-tests.sh"
 grep -q '^cargo:pgrx test --release -p context-pg pg17$' "${log_path}"
@@ -166,6 +183,7 @@ if PATH="${fake_bin}:${PATH}" \
   REPO_ROOT="${fixture_root}" \
   PG_MAJOR=16 \
   PGRX_TEST_PLATFORM=Linux \
+  PGRX_TEST_MODE=native \
   FAKE_PGRX_LOG="${log_path}" \
   "${fixture_root}/scripts/run-v1-pgrx-tests.sh" \
   2>"${work_dir}/invalid-major.err"; then
@@ -186,3 +204,15 @@ if PATH="${fake_bin}:${PATH}" \
 fi
 grep -q 'PGRX_TEST_DBNAME must be a simple SQL identifier' \
   "${work_dir}/invalid-name.err"
+
+if PATH="${fake_bin}:${PATH}" \
+  REPO_ROOT="${fixture_root}" \
+  PGRX_TEST_MODE=unsupported \
+  FAKE_PGRX_LOG="${log_path}" \
+  "${fixture_root}/scripts/run-v1-pgrx-tests.sh" \
+  2>"${work_dir}/invalid-mode.err"; then
+  echo "unsupported PGRX_TEST_MODE should fail" >&2
+  exit 1
+fi
+grep -q 'PGRX_TEST_MODE must be in-server or native' \
+  "${work_dir}/invalid-mode.err"

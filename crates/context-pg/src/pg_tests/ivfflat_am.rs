@@ -139,7 +139,7 @@ fn ivfflat_iterative_scan_widens_only_after_post_filter_exhaustion() {
     .expect("filtered IVFFlat query should execute");
     assert_eq!(id, Some(3));
 
-    let diagnostics = Spi::get_one::<pgrx::JsonB>(
+    let diagnostics = Spi::get_one::<JsonB>(
         "SELECT to_jsonb(work)
            FROM pgcontext.ivfflat_last_scan_work() AS work",
     )
@@ -205,7 +205,7 @@ fn ivfflat_relaxed_widening_applies_delta_and_tombstones_once() {
     assert_eq!(ids.iter().filter(|id| **id == 5).count(), 1);
     assert!(!ids.contains(&1), "tombstoned base tuple was returned");
 
-    let diagnostics = Spi::get_one::<pgrx::JsonB>(
+    let diagnostics = Spi::get_one::<JsonB>(
         "SELECT to_jsonb(work) FROM pgcontext.ivfflat_last_scan_work() AS work",
     )
     .expect("delta widening diagnostics should execute")
@@ -253,7 +253,7 @@ fn ivfflat_relaxed_limit_stops_after_the_initial_probe_batch() {
     )
     .expect("relaxed initial batch should execute");
     assert_eq!(id, Some(1));
-    let diagnostics = Spi::get_one::<pgrx::JsonB>(
+    let diagnostics = Spi::get_one::<JsonB>(
         "SELECT to_jsonb(work) FROM pgcontext.ivfflat_last_scan_work() AS work",
     )
     .expect("relaxed diagnostics should execute")
@@ -339,7 +339,7 @@ fn ivfflat_strict_order_materializes_the_bounded_frontier() {
     .expect("strict IVFFlat query should execute");
     assert_eq!(ids, Some(vec![1, 2, 3, 4]));
 
-    let diagnostics = Spi::get_one::<pgrx::JsonB>(
+    let diagnostics = Spi::get_one::<JsonB>(
         "SELECT to_jsonb(work)
            FROM pgcontext.ivfflat_last_scan_work() AS work",
     )
@@ -432,21 +432,21 @@ fn ivfflat_compaction_folds_delta_into_a_new_verified_generation() {
     )
     .expect("IVFFlat compaction fixture should build");
 
-    let before = Spi::get_one::<pgrx::JsonB>(
+    let before = Spi::get_one::<JsonB>(
         "SELECT pgcontext.ivfflat_index_info('ivfflat_compact_idx'::regclass)",
     )
     .expect("pre-compaction verifier should execute")
     .expect("pre-compaction verifier should return JSON");
     assert!(before.0["delta_records"].as_u64().unwrap_or_default() >= 1);
 
-    let compacted = Spi::get_one::<pgrx::JsonB>(
+    let compacted = Spi::get_one::<JsonB>(
         "SELECT pgcontext.compact_ivfflat('ivfflat_compact_idx'::regclass)",
     )
     .expect("IVFFlat compaction should execute")
     .expect("IVFFlat compaction should report publication");
     assert_eq!(compacted.0["folded_delta_records"], before.0["delta_records"]);
 
-    let after = Spi::get_one::<pgrx::JsonB>(
+    let after = Spi::get_one::<JsonB>(
         "SELECT pgcontext.ivfflat_index_info('ivfflat_compact_idx'::regclass)",
     )
     .expect("post-compaction verifier should execute")
@@ -461,7 +461,7 @@ fn ivfflat_compaction_folds_delta_into_a_new_verified_generation() {
     )
     .expect("first compacted relation size should be readable")
     .unwrap_or_default();
-    let retired = Spi::get_one::<pgrx::JsonB>(
+    let retired = Spi::get_one::<JsonB>(
         "SELECT pgcontext.compact_ivfflat('ivfflat_compact_idx'::regclass)",
     )
     .expect("second IVFFlat compaction should execute")
@@ -514,7 +514,7 @@ fn ivfflat_compaction_enforces_maintenance_privilege() {
     sql_test_reset_session_user();
 
     sql_test_set_session_user("ivfflat_compact_maintainer");
-    let maintained = Spi::get_one::<pgrx::JsonB>(
+    let maintained = Spi::get_one::<JsonB>(
         "SELECT pgcontext.compact_ivfflat('ivfflat_compact_acl_idx'::regclass)",
     )
     .expect("MAINTAIN-authorized compaction should execute")
@@ -523,7 +523,7 @@ fn ivfflat_compaction_enforces_maintenance_privilege() {
     sql_test_reset_session_user();
 
     sql_test_set_session_user("ivfflat_compact_owner");
-    let owned = Spi::get_one::<pgrx::JsonB>(
+    let owned = Spi::get_one::<JsonB>(
         "SELECT pgcontext.compact_ivfflat('ivfflat_compact_acl_idx'::regclass)",
     )
     .expect("owner compaction should execute")

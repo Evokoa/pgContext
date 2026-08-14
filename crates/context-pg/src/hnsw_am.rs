@@ -79,7 +79,7 @@ use ffi_boundary::{
     PgCallbackMut, PgCallbackRef, PgCallbackScope, PgCallbackSlice, PgMemoryContextDropSlot,
 };
 use page_codec::{PageHeaderV2, decode_page_header, encode_page_header};
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 use storage::hnsw_graph_snapshot_from_record;
 #[cfg(test)]
 use storage::hnsw_tombstone_record;

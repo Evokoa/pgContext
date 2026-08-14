@@ -25,15 +25,21 @@ PG_FEATURE="pg${PG_MAJOR}"
 # not skipped.
 cd "${REPO_ROOT}"
 PGRX_TEST_PLATFORM="${PGRX_TEST_PLATFORM:-$(uname -s)}"
-if [[ "${PGRX_TEST_PLATFORM}" != "Darwin" ]]; then
+PGRX_TEST_MODE="${PGRX_TEST_MODE:-in-server}"
+if [[ "${PGRX_TEST_MODE}" == "native" ]]; then
   cargo pgrx test --release -p context-pg "${PG_FEATURE}"
   exit 0
 fi
+if [[ "${PGRX_TEST_MODE}" != "in-server" ]]; then
+  echo "PGRX_TEST_MODE must be in-server or native" >&2
+  exit 2
+fi
 
-# cargo-pgrx links pg_test as a standalone Rust test executable. Mach-O cannot
-# resolve that executable's PostgreSQL server data symbols, so it aborts before
-# the harness starts. Install the test-enabled extension and execute the same
-# generated wrappers inside PostgreSQL, where those symbols are available.
+# A standalone Rust pg_test executable depends on linker garbage collection to
+# discard PostgreSQL server references. That is not reliable across the macOS
+# and Linux linkers used by the release matrix. Install the test-enabled
+# extension and execute its generated wrappers inside PostgreSQL, where the
+# server symbols are available by construction.
 PGRX_TEST_DBNAME="${PGRX_TEST_DBNAME:-pgcontext_pgrx_tests}"
 PGRX_TEST_HOST="${PGRX_TEST_HOST:-127.0.0.1}"
 PGRX_TEST_PORT="${PGRX_TEST_PORT:-288${PG_MAJOR}}"
@@ -67,9 +73,15 @@ if [[ -n "${PGUSER:-}" ]]; then
   runner_command+=(--user "${PGUSER}")
 fi
 
-cargo pgrx install --test --release -p context-pg \
-  --pg-config "${pgrx_pg_config}" \
+pgrx_install=(
+  pgrx install --test --release -p context-pg
+  --pg-config "${pgrx_pg_config}"
   --no-default-features --features "${PG_FEATURE} pg_test"
+)
+if [[ "${PGRX_TEST_PLATFORM}" != "Darwin" ]]; then
+  pgrx_install+=(--sudo)
+fi
+cargo "${pgrx_install[@]}"
 
 PGRX_TEST_TMPDIR="${PGRX_TEST_TMPDIR:-${TMPDIR:-/tmp}}"
 mkdir -p "${PGRX_TEST_TMPDIR}"

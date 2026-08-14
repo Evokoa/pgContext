@@ -833,7 +833,7 @@ fn query_builder_semantic_errors_use_invalid_parameter_sqlstate() {
 }
 
 fn json_value(sql: &str) -> serde_json::Value {
-    Spi::get_one::<pgrx::JsonB>(sql)
+    Spi::get_one::<JsonB>(sql)
         .expect("json query should succeed")
         .expect("json query should return a row")
         .0

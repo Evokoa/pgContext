@@ -210,7 +210,7 @@ pub(super) const fn hnsw_point_id_is_tombstoned(point_id: HnswPointId) -> bool {
     point_id.get() & HNSW_TOMBSTONE_TID_FLAG != 0
 }
 
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 const fn hnsw_graph_point_id(record: &HnswVectorRecord) -> HnswPointId {
     if hnsw_record_is_tombstoned(record) {
         // A heap TID can be reused after VACUUM. Bind traversal-only tombstones
@@ -222,7 +222,7 @@ const fn hnsw_graph_point_id(record: &HnswVectorRecord) -> HnswPointId {
     }
 }
 
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 pub(super) fn hnsw_tombstone_record(record: &HnswVectorRecord) -> HnswVectorRecord {
     let mut tombstone = record.clone();
     tombstone.heap_tid |= HNSW_TOMBSTONE_TID_FLAG;
@@ -578,7 +578,7 @@ pub(super) fn hnsw_vector_record_from_snapshot(
     }
 }
 
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 pub(super) fn hnsw_graph_snapshot_from_record(record: HnswVectorRecord) -> HnswGraphNodeSnapshot {
     let point_id = hnsw_graph_point_id(&record);
     let layers = if record.layers.is_empty() {

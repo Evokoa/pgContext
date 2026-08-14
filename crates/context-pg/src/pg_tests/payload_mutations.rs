@@ -203,7 +203,7 @@ fn payload_row(table_name: &str, id: i64) -> PayloadRow {
             priority: row.get::<i32>(2)?,
             archived: row.get::<bool>(3)?,
             metadata: row
-                .get::<pgrx::JsonB>(4)?
+                .get::<JsonB>(4)?
                 .expect("metadata should not be null")
                 .0,
         })

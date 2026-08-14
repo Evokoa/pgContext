@@ -1,7 +1,7 @@
 // Persisted-record and scan-key validation included by `hnsw_am.rs`. Values
 // become pure graph/query types only after PostgreSQL-owned inputs are checked.
 
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 fn hnsw_graph_from_records_with_config(
     records: Vec<HnswVectorRecord>,
     metric: DistanceMetric,
@@ -17,7 +17,7 @@ fn hnsw_graph_from_records_with_config(
         })
 }
 
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 fn try_hnsw_graph_from_records_with_config(
     records: Vec<HnswVectorRecord>,
     metric: DistanceMetric,
@@ -1528,7 +1528,7 @@ fn u64_to_pg_estimate_f64(value: u64) -> f64 {
     value as f64
 }
 
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 fn hnsw_node_id_from_graph_count(graph_nodes: u64) -> HnswNodeId {
     match checked_hnsw_node_id_from_graph_count(graph_nodes) {
         Ok(node_id) => node_id,
@@ -1539,7 +1539,7 @@ fn hnsw_node_id_from_graph_count(graph_nodes: u64) -> HnswNodeId {
     }
 }
 
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 fn checked_hnsw_node_id_from_graph_count(graph_nodes: u64) -> Result<HnswNodeId, u64> {
     u32::try_from(graph_nodes)
         .map(|node_id| HnswNodeId::new(node_id as usize))
