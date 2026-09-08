@@ -30,6 +30,40 @@ class BenchmarkMathTests(unittest.TestCase):
         self.assertIn("WHERE bucket_100 = %s", benchmark.query_sql("pgvector", True, "bucket_100"))
         self.assertNotIn("WHERE", benchmark.query_sql("pgvector", True, None))
 
+    def test_vector_type_is_system_aware(self):
+        self.assertEqual(benchmark.vector_type("pgcontext"), "pgcontext.vector")
+        self.assertEqual(benchmark.vector_type("pgvector"), "vector")
+        with self.assertRaisesRegex(ValueError, "unsupported PostgreSQL benchmark system"):
+            benchmark.vector_type("qdrant")
+
+    def test_items_table_uses_system_vector_type(self):
+        self.assertIn(
+            "embedding pgcontext.vector(384) NOT NULL",
+            benchmark.create_items_table_sql("pgcontext"),
+        )
+        self.assertIn(
+            "embedding vector(384) NOT NULL",
+            benchmark.create_items_table_sql("pgvector"),
+        )
+
+    def test_query_sql_uses_system_vector_cast(self):
+        self.assertIn(
+            "%s::pgcontext.vector",
+            benchmark.query_sql("pgcontext", True, None),
+        )
+        self.assertIn(
+            "%s::vector",
+            benchmark.query_sql("pgvector", True, None),
+        )
+        self.assertIn(
+            "%s::pgcontext.vector",
+            benchmark.pgcontext_masked_query_sql("tenant_id"),
+        )
+        self.assertIn(
+            "%s::pgcontext.vector",
+            benchmark.pgcontext_collection_query_sql(),
+        )
+
     def test_synthetic_corpus_is_normalized_and_seeded(self):
         import tempfile
         from pathlib import Path
