@@ -126,6 +126,23 @@ def vector_literal(values: Iterable[float]) -> str:
     return "[" + ",".join(rendered) + "]"
 
 
+def vector_type(system: str) -> str:
+    """Return the SQL vector type owned by the benchmarked extension."""
+    if system == "pgcontext":
+        return "pgcontext.vector"
+    if system == "pgvector":
+        return "vector"
+    raise ValueError(f"unsupported PostgreSQL benchmark system: {system}")
+
+
+def create_items_table_sql(system: str) -> str:
+    return (
+        "CREATE TABLE items (id bigint PRIMARY KEY, tenant_id integer NOT NULL, "
+        "bucket_100 integer NOT NULL, bucket_2 integer NOT NULL, "
+        f"embedding {vector_type(system)}({MODEL_DIMENSIONS}) NOT NULL)"
+    )
+
+
 def fetch_jsonl(filename: str) -> list[dict[str, object]]:
     tls = ssl.create_default_context(cafile=certifi.where())
     request = urllib.request.Request(
@@ -183,17 +200,14 @@ def database_dsn(admin_dsn: str, database: str) -> str:
 def load_system(
     admin_dsn: str, system: str, vectors: np.ndarray
 ) -> tuple[str, float, float, int, int]:
+    table_sql = create_items_table_sql(system)
     database = f"pgcontext_bench_{system}"
     reset_database(admin_dsn, database)
     dsn = database_dsn(admin_dsn, database)
     extension = "pgcontext" if system == "pgcontext" else "vector"
     with psycopg.connect(dsn, autocommit=True) as connection:
         connection.execute(f"CREATE EXTENSION {extension}")
-        connection.execute(
-            f"CREATE TABLE items (id bigint PRIMARY KEY, tenant_id integer NOT NULL, "
-            f"bucket_100 integer NOT NULL, bucket_2 integer NOT NULL, "
-            f"embedding vector({MODEL_DIMENSIONS}) NOT NULL)"
-        )
+        connection.execute(table_sql)
         started = time.perf_counter()
         with connection.cursor().copy(
             "COPY items (id, tenant_id, bucket_100, bucket_2, embedding) FROM STDIN"
@@ -409,7 +423,8 @@ def query_sql(system: str, approximate: bool, filter_column: str | None) -> str:
     operator = "OPERATOR(pgcontext.<=>)" if system == "pgcontext" else "<=>"
     predicate = f"WHERE {filter_column} = %s " if filter_column else ""
     return (
-        f"SELECT id FROM items {predicate}ORDER BY embedding {operator} %s::vector "
+        f"SELECT id FROM items {predicate}ORDER BY embedding {operator} "
+        f"%s::{vector_type(system)} "
         f"LIMIT {TOP_K}"
     )
 
@@ -489,21 +504,7 @@ def execute_pgcontext_masked_queries(
 ) -> tuple[list[list[int]], list[float], str]:
     """Measure pgContext's filter-aware masked traversal on the same table."""
     modulo = FILTER_MODULO[filter_column]
-    sql = (
-        "WITH candidate_mask AS MATERIALIZED ("
-        "SELECT array_agg(ctid ORDER BY ctid) AS heap_tids "
-        f"FROM items WHERE {filter_column} = %s"
-        ") "
-        "SELECT items.id "
-        "FROM candidate_mask "
-        "CROSS JOIN LATERAL pgcontext._hnsw_masked_candidates("
-        "'items_embedding_hnsw'::regclass, %s::vector, "
-        f"candidate_mask.heap_tids, {TOP_K}"
-        ") AS ann "
-        "JOIN items ON items.ctid = ann.heap_tid::tid "
-        "ORDER BY ann.score, items.id "
-        f"LIMIT {TOP_K}"
-    )
+    sql = pgcontext_masked_query_sql(filter_column)
     query_parameters = [
         (index % modulo, vector_literal(vector))
         for index, vector in enumerate(query_vectors)
@@ -531,6 +532,24 @@ def execute_pgcontext_masked_queries(
         if "_hnsw_masked_candidates" not in plan:
             raise RuntimeError(f"pgContext masked query missed its traversal function:\n{plan}")
     return results, latencies_ms, plan
+
+
+def pgcontext_masked_query_sql(filter_column: str) -> str:
+    return (
+        "WITH candidate_mask AS MATERIALIZED ("
+        "SELECT array_agg(ctid ORDER BY ctid) AS heap_tids "
+        f"FROM items WHERE {filter_column} = %s"
+        ") "
+        "SELECT items.id "
+        "FROM candidate_mask "
+        "CROSS JOIN LATERAL pgcontext._hnsw_masked_candidates("
+        "'items_embedding_hnsw'::regclass, %s::pgcontext.vector, "
+        f"candidate_mask.heap_tids, {TOP_K}"
+        ") AS ann "
+        "JOIN items ON items.ctid = ann.heap_tid::tid "
+        "ORDER BY ann.score, items.id "
+        f"LIMIT {TOP_K}"
+    )
 
 
 def setup_pgcontext_collection(dsn: str) -> None:
@@ -566,10 +585,7 @@ def execute_pgcontext_collection_queries(
     # pgcontext.search's filter parameter is TEXT (a JSON-syntax string
     # parsed internally), not jsonb -- there is no (text, vector, jsonb,
     # int) overload, so casting to ::jsonb here raises UndefinedFunction.
-    sql = (
-        "SELECT source_key FROM pgcontext.search("
-        f"'bench_items', %s::vector, %s::text, {TOP_K})"
-    )
+    sql = pgcontext_collection_query_sql()
     query_parameters = [
         (
             vector_literal(vector),
@@ -591,6 +607,13 @@ def execute_pgcontext_collection_queries(
             latencies_ms.append((time.perf_counter_ns() - started) / 1_000_000)
             results.append([int(row[0]) for row in rows])
     return results, latencies_ms
+
+
+def pgcontext_collection_query_sql() -> str:
+    return (
+        "SELECT source_key FROM pgcontext.search("
+        f"'bench_items', %s::pgcontext.vector, %s::text, {TOP_K})"
+    )
 
 
 def summarize_latency(latencies_ms: Sequence[float]) -> dict[str, float]:
@@ -1284,7 +1307,7 @@ def run_churn(
                         copy.write_row((row_id, vector_literal(vector)))
                 update_started = time.perf_counter()
                 connection.execute(
-                    "UPDATE items SET embedding = churn_batch.embedding::vector "
+                    f"UPDATE items SET embedding = churn_batch.embedding::{vector_type(system)} "
                     "FROM churn_batch WHERE items.id = churn_batch.id"
                 )
                 update_seconds = time.perf_counter() - update_started
