@@ -272,6 +272,20 @@ const HNSW_META_MAGIC: u32 = 0x4853_4e57;
 const HNSW_META_VERSION: u16 = 13;
 pub(crate) const HNSW_MAX_SEGMENTS: usize = 16;
 const HNSW_TARGET_SEGMENT_ROWS: usize = 100_000;
+/// Entries the backend-local packed-graph cache holds before it makes room.
+///
+/// One index scan visits every immutable segment of the index in turn, so a
+/// capacity below `HNSW_MAX_SEGMENTS` guarantees that a wide index misses on
+/// every segment of every query.
+///
+/// This bounds one index's working set, not the cache's. The map is keyed by
+/// `(index_oid, rel_file_number, segment_id, generation)` and is shared by
+/// every index a backend touches, while the overflow path clears the whole
+/// map rather than evicting one entry. So a backend whose live set exceeds
+/// this capacity -- two wide indexes, or one index whose generations have
+/// advanced -- still wipes mid-scan. Fixing that needs a scan-resistant
+/// eviction policy, or a cache bounded by bytes rather than entries.
+pub(crate) const HNSW_PACKED_GRAPH_CACHE_CAPACITY: usize = HNSW_MAX_SEGMENTS;
 const HNSW_FIRST_VECTOR_BLOCK: pg_sys::BlockNumber = 1;
 const HNSW_INVALID_OFFSET: pg_sys::OffsetNumber = 0;
 const HNSW_FIRST_OFFSET: pg_sys::OffsetNumber = 1;

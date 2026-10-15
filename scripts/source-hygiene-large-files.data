@@ -5,7 +5,7 @@ crates/context-index/tests/hnsw_graph_ports.rs|1039
 crates/context-pg/src/catalog_schema.rs|1123
 crates/context-pg/src/contract/contract_objects.rs|1605
 crates/context-pg/src/embedding_profiles.rs|1711
-crates/context-pg/src/hnsw_am.rs|1467
+crates/context-pg/src/hnsw_am.rs|1481
 crates/context-pg/src/hnsw_am_compaction.rs|1087
 crates/context-pg/src/hnsw_am_graph_scan.rs|1898
 crates/context-pg/src/hnsw_am_page_storage.rs|1267

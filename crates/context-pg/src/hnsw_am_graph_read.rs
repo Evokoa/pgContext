@@ -398,7 +398,7 @@ impl PgHnswGraphRead {
             } else {
             HNSW_PACKED_GRAPH_CACHE.with(|cache| {
                 let mut cache = cache.borrow_mut();
-                if cache.len() >= 4 {
+                if cache.len() >= HNSW_PACKED_GRAPH_CACHE_CAPACITY {
                     cache.clear();
                 }
                 cache.insert(
@@ -439,7 +439,7 @@ impl PgHnswGraphRead {
                 } else {
                 HNSW_PACKED_GRAPH_CACHE.with(|cache| {
                     let mut cache = cache.borrow_mut();
-                    if cache.len() >= 4 {
+                    if cache.len() >= HNSW_PACKED_GRAPH_CACHE_CAPACITY {
                         cache.clear();
                     }
                     cache.insert(
@@ -557,7 +557,7 @@ impl PgHnswGraphRead {
         };
         HNSW_PACKED_GRAPH_CACHE.with(|cache| {
             let mut cache = cache.borrow_mut();
-            if cache.len() >= 4 {
+            if cache.len() >= HNSW_PACKED_GRAPH_CACHE_CAPACITY {
                 cache.clear();
             }
             cache.insert(
