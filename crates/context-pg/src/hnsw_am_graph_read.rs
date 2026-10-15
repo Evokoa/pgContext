@@ -520,27 +520,17 @@ impl PgHnswGraphRead {
         );
         // SAFETY: this adapter owns the live relation for the current scan.
         unsafe { self.load_directory() };
-        if shared_enabled
-            && let Ok(image_bytes) = local_graph.encode_image()
-        {
-            let budget = crate::settings::hnsw_shared_serving_budget_bytes_from_guc();
-            pgrx::debug1!(
-                "pgcontext shared-publish db={database_oid} index={index_oid} epoch={} meta_lsn={meta_lsn} bytes={}",
-                meta.directory_epoch,
-                image_bytes.len()
-            );
-            let published = publish_packed_image(
+        if shared_enabled {
+            publish_shared_generation(
+                &local_graph,
                 database_oid,
                 index_oid,
                 rel_file_number,
                 segment.segment_id,
                 segment.generation,
-                segment.generation,
-                0,
-                &image_bytes,
-                budget,
+                meta.directory_epoch,
+                meta_lsn,
             );
-            record_hnsw_shared_publish(published);
         }
         if mapped_enabled {
             let published = local_graph.encode_image().is_ok_and(|image_bytes| {
@@ -706,4 +696,56 @@ impl PgHnswGraphRead {
 
 const fn hnsw_packed_projection_admitted(projected: u64, budget: u64) -> bool {
     projected <= budget
+}
+
+/// Encodes `local_graph` and publishes it to the shared serving registry,
+/// recording whether the publish landed.
+///
+/// A generation that cannot be encoded is not recorded either way, matching
+/// the behaviour of the inline form this replaces.
+#[allow(clippy::too_many_arguments)]
+fn publish_shared_generation(
+    local_graph: &PackedHnswGraph,
+    database_oid: u32,
+    index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
+    segment_generation: u64,
+    directory_epoch: u64,
+    meta_lsn: u64,
+) {
+    let budget = crate::settings::hnsw_shared_serving_budget_bytes_from_guc();
+    // Admit the publish before paying for it: encoding the image and copying
+    // it into a freshly pinned DSM segment costs as much as the pack itself,
+    // and a publish that cannot be committed throws all of it away.
+    if !shared_publish_admissible(
+        database_oid,
+        index_oid,
+        rel_file_number,
+        segment_id,
+        local_graph.projected_image_bytes(),
+        budget,
+    ) {
+        record_hnsw_shared_publish(false);
+        return;
+    }
+    let Ok(image_bytes) = local_graph.encode_image() else {
+        return;
+    };
+    pgrx::debug1!(
+        "pgcontext shared-publish db={database_oid} index={index_oid} epoch={directory_epoch} meta_lsn={meta_lsn} bytes={}",
+        image_bytes.len()
+    );
+    let published = publish_packed_image(
+        database_oid,
+        index_oid,
+        rel_file_number,
+        segment_id,
+        segment_generation,
+        segment_generation,
+        0,
+        &image_bytes,
+        budget,
+    );
+    record_hnsw_shared_publish(published);
 }

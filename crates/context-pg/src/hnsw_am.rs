@@ -21,7 +21,7 @@ use context_storage::{
     DeltaRecordKind, HnswGraphQuantization, MappedGraphIdentity, MappedPackedGraphImage,
     PackedGraphImageError, PackedGraphImageLayer, PackedGraphImageNode, PackedGraphImageView,
     SegmentHeader, SegmentKind, encode_mapped_packed_graph, encode_packed_graph_image_current,
-    write_segment_atomic,
+    packed_graph_image_len, write_segment_atomic,
 };
 use pgrx::datum::{AnyArray, AnyElement};
 use pgrx::itemptr::{

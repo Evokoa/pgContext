@@ -186,6 +186,26 @@ impl PackedHnswGraph {
         (nodes + vectors + layers + neighbors + codes + codebook) as u64
     }
 
+    /// Lower bound on this generation's encoded shared-image length, derived
+    /// from the section counts without encoding anything.
+    ///
+    /// The V1 header this counts is no longer than the current one and a
+    /// quantization artifact only adds bytes, so the result never overstates
+    /// the image. That direction is what makes it safe to admit a publish
+    /// against: a payload rejected on this figure could not have fitted the
+    /// budget once encoded either, while a payload admitted on it may still
+    /// be refused by the authoritative check at commit time.
+    fn projected_image_bytes(&self) -> u64 {
+        packed_graph_image_len(
+            self.nodes.len(),
+            self.layers.len(),
+            self.neighbors.len(),
+            self.vectors.len(),
+        )
+        .and_then(|len| u64::try_from(len).ok())
+        .unwrap_or(u64::MAX)
+    }
+
     /// Encodes this generation into the portable shared-image byte format
     /// (see `context_storage::packed_graph_image`), for publishing to the
     /// shared serving registry.

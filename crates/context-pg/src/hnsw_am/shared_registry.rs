@@ -285,6 +285,56 @@ unsafe fn commit_shared_slot(
     result
 }
 
+/// Reports whether a publish of `byte_len` bytes for this segment could be
+/// committed right now: this segment's own slot or a free slot exists, and
+/// the registry byte budget admits the payload.
+///
+/// `commit_shared_slot` remains the authority. This runs the same test
+/// read-only, under a shared lock that is released before the caller
+/// proceeds, so the answer is advisory: a racing backend may take the last
+/// slot or the last of the budget in between. That is intended. The point is
+/// not to guarantee the publish lands, but to avoid encoding an image and
+/// pinning a DSM segment for a publish that certainly cannot land, which is
+/// the common case once the registry is saturated.
+pub(crate) fn shared_publish_admissible(
+    database_oid: u32,
+    index_oid: u32,
+    rel_file_number: u32,
+    segment_id: u64,
+    byte_len: u64,
+    budget_bytes: u64,
+) -> bool {
+    // SAFETY: see `attach_shared_image`; the registry pointer is valid for
+    // this backend and the shared lock below excludes concurrent writers.
+    unsafe {
+        let header = shared_registry_ptr();
+        pg_sys::LWLockAcquire(
+            core::ptr::addr_of_mut!((*header).lock),
+            pg_sys::LWLockMode::LW_SHARED,
+        );
+        let slots = core::ptr::addr_of_mut!((*header).slots);
+        let existing_index = (0..HNSW_SHARED_REGISTRY_SLOTS).find(|&index| {
+            let slot = (*slots)[index];
+            slot.database_oid == database_oid
+                && slot.index_oid == index_oid
+                && slot.rel_file_number == rel_file_number
+                && slot.segment_id == segment_id
+        });
+        let has_slot = existing_index.is_some()
+            || (0..HNSW_SHARED_REGISTRY_SLOTS).any(|index| (*slots)[index].database_oid == 0);
+        let previous_bytes = existing_index.map_or(0, |index| (*slots)[index].byte_len);
+        // `byte_len` may be `u64::MAX`, the projection's "cannot be sized"
+        // sentinel. Saturate rather than wrap: an unchecked add would panic in
+        // a debug build inside this lock, and in a release build would wrap to
+        // a small total and *admit* the publish the sentinel exists to refuse.
+        let prospective_total = (*core::ptr::addr_of_mut!((*header).total_bytes))
+            .saturating_sub(previous_bytes)
+            .saturating_add(byte_len);
+        pg_sys::LWLockRelease(core::ptr::addr_of_mut!((*header).lock));
+        has_slot && prospective_total <= budget_bytes
+    }
+}
+
 /// Removes and returns the slot for `(database_oid, index_oid)` if present,
 /// for callers that must retract a publish they cannot complete.
 ///
